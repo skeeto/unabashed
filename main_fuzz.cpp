@@ -1,5 +1,6 @@
 // Fuzz test: runs each input as a -c script on a virtual OS
 // $ afl-clang-fast++ -std=c++20 -g3 -fsanitize=undefined -fsanitize-trap -o fuzz main_fuzz.cpp
+// $ afl-clang-fast++ -DFUZZ_PARSE ... (print/reparse fixed point)
 // $ afl-fuzz -i fuzzin -o fuzzout ./fuzz
 //
 // The fuzzed shell can never reach the real file system or start a
@@ -12,6 +13,7 @@
 #include <unistd.h>
 #include "unabashed.cpp"
 #include "fibers.cpp"
+#include "check.cpp"
 
 __AFL_FUZZ_INIT();
 
@@ -84,6 +86,19 @@ int main()
         src = (u8 *)realloc(src, (uz)len);  // copy so overreads are caught
         memcpy(src, buf, (uz)len);
 
+        os.heapused = 0;
+        os.fibers   = {};
+        if (setjmp(oomjmp)) {
+            continue;
+        }
+        #if FUZZ_PARSE
+        // Printing and reparsing every command must reach a fixed point.
+        Arena a = newarena(&os, (iz)1<<21);
+        Fixed f = fixedpoint(&a, {src, len}, len && src[0]&1);
+        if (f.status==FIX_REPARSE || f.status==FIX_DIFFER) {
+            __builtin_trap();
+        }
+        #else
         Str args[] = {"bash", "-c", {src, len}};
         OsInfo info = {};
         info.args    = args;
@@ -91,10 +106,7 @@ int main()
         info.std[1]  = 1;
         info.std[2]  = 2;
         info.reserve = (iz)1<<20;
-        os.heapused  = 0;
-        os.fibers    = {};
-        if (!setjmp(oomjmp)) {
-            sh_main(&os, &info);
-        }
+        sh_main(&os, &info);
+        #endif
     }
 }

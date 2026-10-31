@@ -1,0 +1,2 @@
+f() { cat; } <<EOF
+body

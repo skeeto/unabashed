@@ -1,0 +1,41 @@
+== stdout 138
+f () 
+{ 
+    while read l; do
+        echo $l;
+    done <<EOF
+a
+b
+EOF
+
+    for i in 1 2;
+    do
+        cat <<END
+iter $i
+END
+
+    done
+}
+
+== stderr 0
+
+== merged 138
+f () 
+{ 
+    while read l; do
+        echo $l;
+    done <<EOF
+a
+b
+EOF
+
+    for i in 1 2;
+    do
+        cat <<END
+iter $i
+END
+
+    done
+}
+
+== status 0

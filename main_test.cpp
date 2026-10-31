@@ -11,6 +11,7 @@
 #include <string.h>
 #include "unabashed.cpp"
 #include "fibers.cpp"
+#include "check.cpp"
 
 struct Os {
     Fibers   fibers;
@@ -19,6 +20,7 @@ struct Os {
     iz       heapused;
     Str      out;      // captured standard output
     Str      err;      // captured standard error
+    Str      merged;   // both, in write order
     iz       outcap;
 };
 
@@ -64,6 +66,10 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
     }
     memcpy(dst->data+dst->len, buf, (uz)len);
     dst->len += len;
+    if (len <= os->outcap - os->merged.len) {
+        memcpy(os->merged.data+os->merged.len, buf, (uz)len);
+        os->merged.len += len;
+    }
     return 1;
 }
 
@@ -98,12 +104,13 @@ struct Test {
 struct Result {
     Str out;
     Str err;
+    Str merged;
     i32 status;
 };
 
 static void printstr(FILE *f, Str s)
 {
-    fwrite(s.data, 1, (uz)s.len, f);
+    if (s.len) fwrite(s.data, 1, (uz)s.len, f);  // data may be null
 }
 
 // Compare strings, printing both on mismatch.
@@ -143,9 +150,10 @@ static Result runshell(Test *t, Str *args, iz nargs)
 {
     Os *os = t->os;
     os->heapused = 0;
-    os->out.len  = 0;
-    os->err.len  = 0;
-    os->fibers   = {};
+    os->out.len    = 0;
+    os->err.len    = 0;
+    os->merged.len = 0;
+    os->fibers     = {};
 
     OsInfo info = {};
     info.args    = args;
@@ -159,6 +167,7 @@ static Result runshell(Test *t, Str *args, iz nargs)
     r.status = sh_main(os, &info);
     r.out    = os->out;
     r.err    = os->err;
+    r.merged = os->merged;
     return r;
 }
 
@@ -223,14 +232,119 @@ static void test_arena(Test *t)
     expectint(t, "arena oom", hit, 1);
 }
 
-int main()
+// Spec tests: run a script recorded by tools/record and compare all
+// of its outputs. The harness reads the files; the shell never does.
+
+static Str readfile(char *path)
+{
+    Str   r = {};
+    FILE *f = fopen(path, "rb");
+    if (!f) return r;
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    r.data = (u8 *)malloc((uz)len + 1);
+    r.len  = (iz)fread(r.data, 1, (uz)len, f);
+    fclose(f);
+    return r;
+}
+
+struct Spec {
+    Str out;
+    Str err;
+    Str merged;
+    i32 status;
+    b32 ok;
+};
+
+static Spec parsespec(Str s)
+{
+    Spec r = {};
+    for (i32 n = 0; n < 4; n++) {
+        Cut line = cut(s, '\n');
+        if (!startswith(line.head, "== ")) return r;
+        Cut name = cut(cuthead(line.head, 3), ' ');
+        i64 v = 0;
+        for (iz i = 0; i < name.tail.len; i++) {
+            v = v*10 + (name.tail[i] - '0');
+        }
+        s = line.tail;
+        if (name.head == "status") {
+            r.status = (i32)v;
+            continue;
+        }
+        if (v > s.len) return r;
+        Str body = takehead(s, (iz)v);
+        s = cuthead(s, (iz)v);
+        if (s.len && s[0]=='\n') s = cuthead(s, 1);
+        if (name.head == "stdout") r.out    = body;
+        if (name.head == "stderr") r.err    = body;
+        if (name.head == "merged") r.merged = body;
+    }
+    r.ok = 1;
+    return r;
+}
+
+static b32 test_spec(Test *t, char *path)
+{
+    Str  p        = {(u8 *)path, (iz)strlen(path)};
+    char specpath[1024];
+    if (p.len+3 > countof(specpath)) return 1;
+    memcpy(specpath, path, (uz)p.len - 3);
+    strcpy(specpath + p.len - 3, ".spec");
+
+    Str script = readfile(path);
+    Str spec   = readfile(specpath);
+    if (!script.data || !spec.data) {
+        fprintf(stderr, "SKIP: %s (missing script or spec)\n", path);
+        return 1;
+    }
+    Spec want = parsespec(spec);
+    if (!want.ok) {
+        fprintf(stderr, "SKIP: %s (bad spec)\n", path);
+        return 1;
+    }
+
+    Str    args[] = {"bash", "-c", script, "bash"};
+    Result r      = runshell(t, args, countof(args));
+    b32    ok     = 1;
+    ok &= expect(t, p, r.out, want.out);
+    ok &= expect(t, p, r.err, want.err);
+    ok &= expect(t, p, r.merged, want.merged);
+    ok &= expectint(t, p, r.status, want.status);
+
+    // The script's commands must also print and reparse to a fixed
+    // point (scripts with aliases are skipped: the reparse lacks them).
+    if (find(script, "alias")<0 && find(script, "# nofixedpoint")<0) {
+        t->os->heapused = 0;
+        Arena a = newarena(t->os, (iz)1<<22);
+        Fixed f = fixedpoint(&a, script, find(script, "extglob")>=0);
+        t->run++;
+        if (f.status==FIX_REPARSE || f.status==FIX_DIFFER) {
+            t->failed++;
+            ok = 0;
+            fprintf(stderr, "FAIL: %s fixed point (%s)\n  first:  [", path,
+                    f.status==FIX_REPARSE ? "reparse" : "differ");
+            printstr(stderr, f.first);
+            fprintf(stderr, "]\n  second: [");
+            printstr(stderr, f.second);
+            fprintf(stderr, "]\n");
+        }
+    }
+    free(script.data);
+    free(spec.data);
+    return ok;
+}
+
+int main(int argc, char **argv)
 {
     Os os = {};
-    os.heapcap = (iz)1<<24;
-    os.heap    = (byte *)malloc((uz)os.heapcap);
-    os.outcap  = (iz)1<<20;
-    os.out.data = (u8 *)malloc((uz)os.outcap);
-    os.err.data = (u8 *)malloc((uz)os.outcap);
+    os.heapcap     = (iz)1<<26;
+    os.heap        = (byte *)malloc((uz)os.heapcap);
+    os.outcap      = (iz)1<<20;
+    os.out.data    = (u8 *)malloc((uz)os.outcap);
+    os.err.data    = (u8 *)malloc((uz)os.outcap);
+    os.merged.data = (u8 *)malloc((uz)os.outcap);
 
     Test t = {};
     t.os = &os;
@@ -238,6 +352,44 @@ int main()
     test_fibers(&t);
     test_arena(&t);
 
+    if (argc>1 && !strcmp(argv[1], "--fixed")) {
+        // Replay fuzzer inputs through the print/reparse fixed point,
+        // with extglob chosen by the first byte as in main_fuzz.cpp.
+        i32 bad = 0;
+        for (i32 i = 2; i < argc; i++) {
+            Str src = readfile(argv[i]);
+            if (!src.data) continue;
+            os.heapused = 0;
+            Arena a = newarena(&os, (iz)1<<24);
+            Fixed f = fixedpoint(&a, src, src.len && src[0]&1);
+            if (f.status==FIX_REPARSE || f.status==FIX_DIFFER) {
+                bad++;
+                printf("== %s (%s)\n--- first\n", argv[i],
+                       f.status==FIX_REPARSE ? "reparse" : "differ");
+                printstr(stdout, f.first);
+                printf("\n--- second\n");
+                printstr(stdout, f.second);
+                printf("\n");
+            }
+            free(src.data);
+        }
+        printf("%d of %d fail\n", bad, argc-2);
+        return !!bad;
+    }
+
+    i32 specs    = 0;
+    i32 specfail = 0;
+    for (i32 i = 1; i < argc; i++) {
+        Str a = {(u8 *)argv[i], (iz)strlen(argv[i])};
+        if (endswith(a, ".sh")) {
+            specs++;
+            specfail += !test_spec(&t, argv[i]);
+        }
+    }
+
+    if (specs) {
+        printf("%d specs, %d failed\n", specs, specfail);
+    }
     printf("%d tests, %d failed\n", t.run, t.failed);
     return !!t.failed;
 }

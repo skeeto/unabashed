@@ -181,95 +181,292 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 }
 
 
-// Stand-in interpreter for M0: runs "echo" and "exit" from a -c string
-// split on ';' and newlines. Replaced by the parser in M1.
+
+
+#include "parse.cpp"
+#include "print.cpp"
+
+
+// Shell
+//
+// M1 executes only what the parser tests need: function definitions,
+// declare -f, echo, exit, alias, and shopt. The interpreter proper
+// arrives in M2.
 
 struct Shell {
-    Os     *os;
-    Output *out;
-    Output *err;
-    Str     name;  // $0
-    i32     status;
+    Os         *os;
+    Output     *out;
+    Output     *err;
+    Arena      *perm;
+    Str         name;   // $0
+    Str         iname;  // input name for parser errors: -c or the script
+    Lexer      *lexer;
+    Map<Node *> *funcs;
+    Alias      *aliases;
+    i32         status;
+    b32         exiting;
 };
 
-static Str nextword(Str *s)
+static void printmsgs(Shell *sh)
 {
-    Str t = *s;
-    for (; t.len && (t[0]==' ' || t[0]=='\t'); t = cuthead(t, 1)) {}
-    iz i = 0;
-    for (; i<t.len && t[i]!=' ' && t[i]!='\t'; i++) {}
-    *s = cuthead(t, i);
-    return takehead(t, i);
+    Lexer *L = sh->lexer;
+    for (Message *m = L->msgs; m; m = m->next) {
+        print(sh->err, sh->name);
+        if (m->kind == MSG_ERROR) {
+            if (!(sh->name == sh->iname)) {
+                print(sh->err, ": ");
+                print(sh->err, sh->iname);
+            }
+            print(sh->err, ": line ");
+            print(sh->err, (i64)m->line);
+            print(sh->err, ": ");
+        } else {
+            print(sh->err, ": line ");
+            print(sh->err, (i64)m->line);
+            print(sh->err, ": warning: ");
+        }
+        print(sh->err, m->text);
+        print(sh->err, "\n");
+    }
+    L->msgs    = 0;
+    L->msgtail = &L->msgs;
+    flush(sh->err);
 }
 
-// Run one command. Returns true if the shell should exit.
-static b32 runsimple(Shell *sh, Str cmd, i64 lineno)
+struct FuncEntry {
+    Str   name;
+    Node *body;
+};
+
+static void collectfuncs(Map<Node *> *m, Slice<FuncEntry> *s, Arena *a)
 {
-    Str name = nextword(&cmd);
-    if (!name.len) {
+    if (!m) return;
+    if (m->val) {
+        FuncEntry e = {m->key, m->val};
+        *s = push(a, *s, e);
+    }
+    for (i32 i = 0; i < 4; i++) {
+        collectfuncs(m->child[i], s, a);
+    }
+}
+
+static b32 funcless(FuncEntry *a, FuncEntry *b)
+{
+    return compare(a->name, b->name) < 0;
+}
+
+static void printfunc(Shell *sh, Arena scratch, Str name, Node *body)
+{
+    print(sh->out, printfunction(&scratch, name, body, sh->lexer->posix));
+    print(sh->out, "\n");
+}
+
+static i32 builtin_declare(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    if (nargs<2 || !(args[1] == "-f")) {
+        return 0;  // M1: only declare -f
+    }
+    i32 status = 0;
+    if (nargs == 2) {
+        Slice<FuncEntry> all = {};
+        collectfuncs(sh->funcs, &all, &scratch);
+        sort(all.data, all.len, funcless, scratch);
+        for (iz i = 0; i < all.len; i++) {
+            printfunc(sh, scratch, all[i].name, all[i].body);
+        }
         return 0;
     }
-
-    if (name == "echo") {
-        for (b32 first = 1;; first = 0) {
-            Str arg = nextword(&cmd);
-            if (!arg.len) break;
-            if (!first) print(sh->out, " ");
-            print(sh->out, arg);
+    for (iz i = 2; i < nargs; i++) {
+        Node **f = upsert(&sh->funcs, args[i], 0);
+        if (f && *f) {
+            printfunc(sh, scratch, args[i], *f);
+        } else {
+            status = 1;
         }
-        print(sh->out, "\n");
-        sh->status = 0;
-        return 0;
     }
+    return status;
+}
 
-    if (name == "exit") {
-        Str arg = nextword(&cmd);
-        if (arg.len) {
-            i64 v = 0;
-            for (iz i = 0; i < arg.len && digit(arg[i]); i++) {
-                v = (v*10 + (arg[i] - '0')) & 255;
-            }
-            sh->status = (i32)v;
+static i32 builtin_alias(Shell *sh, Str *args, iz nargs)
+{
+    for (iz i = 1; i < nargs; i++) {
+        Cut c = cut(args[i], '=');
+        if (!c.ok) continue;
+        Alias **slot = &sh->aliases;
+        Str name = clone(sh->perm, c.head);
+        for (u64 h = hash(name); *slot; h <<= 2) {
+            if ((*slot)->name == name) break;
+            slot = &(*slot)->child[h>>62];
         }
-        return 1;
+        if (!*slot) {
+            *slot = alloc<Alias>(sh->perm);
+            (*slot)->name = name;
+        }
+        (*slot)->value = clone(sh->perm, c.tail);
     }
-
-    print(sh->err, sh->name);
-    print(sh->err, ": line ");
-    print(sh->err, lineno);
-    print(sh->err, ": ");
-    print(sh->err, name);
-    print(sh->err, ": command not found\n");
-    sh->status = 127;
     return 0;
 }
 
-static void runstring(Shell *sh, Str src)
+static i32 builtin_shopt(Shell *sh, Str *args, iz nargs)
 {
-    i64 lineno = 1;
-    while (src.len) {
-        iz i = 0;
-        for (; i<src.len && src[i]!=';' && src[i]!='\n'; i++) {}
-        b32 nl = i<src.len && src[i]=='\n';
-        if (runsimple(sh, takehead(src, i), lineno)) {
-            return;
+    if (nargs < 3) return 0;
+    b32 on = args[1] == "-s";
+    for (iz i = 2; i < nargs; i++) {
+        if (args[i] == "expand_aliases") {
+            sh->lexer->expandaliases = sh->lexer->aliasopt = on;
+        } else if (args[i] == "extglob") {
+            sh->lexer->extglob = sh->lexer->extglobopt = on;
         }
-        lineno += nl;
-        src = cuthead(src, i + (i<src.len));
+    }
+    return 0;
+}
+
+static void runsimple(Shell *sh, Node *n, Arena scratch)
+{
+    iz nargs = 0;
+    for (Word *w = n->words; w; w = w->next) nargs++;
+    Str *args = alloc<Str>(&scratch, nargs);
+    iz i = 0;
+    for (Word *w = n->words; w; w = w->next) {
+        args[i++] = quoteremoval(&scratch, w->text);
+    }
+    if (!nargs) {
+        sh->status = 0;
+        return;
+    }
+
+    Str name = args[0];
+    if (name == "echo") {
+        for (iz j = 1; j < nargs; j++) {
+            if (j > 1) print(sh->out, " ");
+            print(sh->out, args[j]);
+        }
+        print(sh->out, "\n");
+        flush(sh->out);
+        sh->status = 0;
+    } else if (name == "exit") {
+        if (nargs > 1) {
+            i64 v = 0;
+            for (iz j = 0; j < args[1].len && digit(args[1][j]); j++) {
+                v = (v*10 + (args[1][j] - '0')) & 255;
+            }
+            sh->status = (i32)v;
+        }
+        sh->exiting = 1;
+    } else if (name == "declare" || name == "typeset") {
+        sh->status = builtin_declare(sh, args, nargs, scratch);
+        flush(sh->out);
+    } else if (name == "alias") {
+        sh->status = builtin_alias(sh, args, nargs);
+    } else if (name == "shopt") {
+        sh->status = builtin_shopt(sh, args, nargs);
+    } else {
+        print(sh->err, sh->name);
+        print(sh->err, ": line ");
+        print(sh->err, (i64)n->line);
+        print(sh->err, ": ");
+        print(sh->err, name);
+        print(sh->err, ": command not found\n");
+        flush(sh->err);
+        sh->status = 127;
+    }
+}
+
+static void execute(Shell *sh, Node *n, Arena scratch)
+{
+    if (!n || sh->exiting) {
+        return;
+    }
+    switch (n->kind) {
+    case N_CONNECT:
+        execute(sh, n->a, scratch);
+        switch (n->connector) {
+        case T_ANDAND:
+            if (!sh->status) execute(sh, n->b, scratch);
+            break;
+        case T_OROR:
+            if (sh->status) execute(sh, n->b, scratch);
+            break;
+        default:
+            execute(sh, n->b, scratch);
+        }
+        break;
+    case N_FUNCDEF: {
+        if (n->name->flags & (W_HASDOLLAR|W_QUOTED)) {
+            print(sh->err, sh->name);
+            print(sh->err, ": line ");
+            print(sh->err, (i64)n->line);
+            print(sh->err, ": `");
+            print(sh->err, n->name->text);
+            print(sh->err, "': not a valid identifier\n");
+            flush(sh->err);
+            sh->status = 1;
+            break;
+        }
+        Str name = clone(sh->perm, n->name->text);
+        *upsert(&sh->funcs, name, sh->perm) = copynode(sh->perm, n->a);
+        sh->status = 0;
+    } break;
+    case N_SIMPLE:
+        runsimple(sh, n, scratch);
+        break;
+    default:
+        sh->status = 0;  // M1 does not execute compound commands
+    }
+    if (n->flags & CMD_INVERT) {
+        sh->status = !sh->status;
+    }
+}
+
+static void runstring(Shell *sh, Str src, Arena scratch)
+{
+    Lexer *L = newlexer(&scratch, src);
+    L->aliases = &sh->aliases;
+    sh->lexer  = L;
+    for (;;) {
+        Parsed r = parseunit(L);
+        printmsgs(sh);
+        if (r.status == PARSE_EOF) {
+            break;
+        }
+        if (r.status == PARSE_ERROR) {
+            // A non-interactive shell exits. Under -c, an error inside
+            // a command substitution exits with 127.
+            // An end of input inside a quote or similar only prints its
+            // own message and keeps a nonzero status (bash's error
+            // yacc_EOF rule); reported errors give 2.
+            if (L->comsuberr && sh->iname=="-c") {
+                sh->status = 127;
+            } else if (L->reported || !sh->status) {
+                sh->status = 2;
+            }
+            break;
+        }
+        if (r.status == PARSE_DISCARD) {
+            sh->status = 1;
+            continue;
+        }
+        execute(sh, r.cmd, scratch);
+        if (sh->exiting) {
+            break;
+        }
     }
 }
 
 static i32 sh_main(Os *os, OsInfo *info)
 {
-    Arena   perm = newarena(os, info->reserve);
-    Output *out  = newoutput(os, &perm, info->std[1]);
-    Output *err  = newoutput(os, &perm, info->std[2]);
+    Arena   perm    = newarena(os, info->reserve);
+    Arena   scratch = newarena(os, info->reserve);
+    Output *out     = newoutput(os, &perm, info->std[1]);
+    Output *err     = newoutput(os, &perm, info->std[2]);
 
     Shell *sh = alloc<Shell>(&perm);
-    sh->os   = os;
-    sh->out  = out;
-    sh->err  = err;
-    sh->name = info->nargs ? info->args[0] : Str("bash");
+    sh->os    = os;
+    sh->out   = out;
+    sh->err   = err;
+    sh->perm  = &perm;
+    sh->name  = info->nargs ? info->args[0] : Str("bash");
+    sh->iname = "-c";
 
     Str opt = info->nargs>1 ? info->args[1] : Str{};
     if (opt == "--unabashed-selftest") {
@@ -283,7 +480,7 @@ static i32 sh_main(Os *os, OsInfo *info)
             if (info->nargs > 3) {
                 sh->name = info->args[3];
             }
-            runstring(sh, info->args[2]);
+            runstring(sh, info->args[2], scratch);
         }
     } else {
         print(err, sh->name);

@@ -15,7 +15,7 @@ WARN    = -Wall -Wextra -Wconversion -Wno-sign-conversion \
 DEBUG   = -g3 -fsanitize=undefined -fsanitize-trap
 RELEASE = -O2 -s
 WIN32   = -nostartfiles -static-libgcc
-SOURCES = base.cpp unabashed.cpp wide.cpp fibers.cpp
+SOURCES = base.cpp unabashed.cpp parse.cpp print.cpp wide.cpp fibers.cpp check.cpp
 
 default:
 	@echo "pick a target, e.g. make debug.exe or make tests" && false

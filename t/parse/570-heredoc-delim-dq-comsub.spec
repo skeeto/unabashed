@@ -1,0 +1,67 @@
+== stdout 248
+f () 
+{ 
+    cat <<'$(echo ))'
+y
+$(echo ))
+
+}
+f () 
+{ 
+    cat <<'$(echo a b)'
+y
+$(echo a b)
+
+    cat <<$(echo 'x y')
+z
+$(echo 'x y')
+
+    cat <<${x:-"q r"}
+w
+${x:-"q r"}
+
+    cat <<'${x:-q r}'
+v
+${x:-q r}
+
+    cat <<'a$(echo b)c'
+u
+a$(echo b)c
+
+}
+
+== stderr 0
+
+== merged 248
+f () 
+{ 
+    cat <<'$(echo ))'
+y
+$(echo ))
+
+}
+f () 
+{ 
+    cat <<'$(echo a b)'
+y
+$(echo a b)
+
+    cat <<$(echo 'x y')
+z
+$(echo 'x y')
+
+    cat <<${x:-"q r"}
+w
+${x:-"q r"}
+
+    cat <<'${x:-q r}'
+v
+${x:-q r}
+
+    cat <<'a$(echo b)c'
+u
+a$(echo b)c
+
+}
+
+== status 0

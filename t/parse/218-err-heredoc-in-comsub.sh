@@ -1,0 +1,3 @@
+x=$(cat <<EOF
+body
+)

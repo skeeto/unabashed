@@ -293,6 +293,30 @@ static i32 utf8decode(Str s, iz *i)
     return r;
 }
 
+// Encode a code point (at most 0x10ffff) as UTF-8, returning the length.
+static iz utf8encode(u8 *s, i32 c)
+{
+    assert(c>=0 && c<=0x10ffff);
+    if (c < 0x80) {
+        s[0] = (u8)c;
+        return 1;
+    } else if (c < 0x800) {
+        s[0] = (u8)(0xc0 | c>>6);
+        s[1] = (u8)(0x80 | (c    & 63));
+        return 2;
+    } else if (c < 0x10000) {
+        s[0] = (u8)(0xe0 | c>>12);
+        s[1] = (u8)(0x80 | (c>>6 & 63));
+        s[2] = (u8)(0x80 | (c    & 63));
+        return 3;
+    }
+    s[0] = (u8)(0xf0 | c>>18);
+    s[1] = (u8)(0x80 | (c>>12 & 63));
+    s[2] = (u8)(0x80 | (c>>6  & 63));
+    s[3] = (u8)(0x80 | (c     & 63));
+    return 4;
+}
+
 // Code point ending just before s[i], or -1 at the start.
 static i32 utf8prev(Str s, iz i, iz *start)
 {
