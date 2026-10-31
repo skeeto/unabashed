@@ -1,0 +1,9 @@
+bash-5.3.tar.gz
+third_party/
+*.exe
+*.o
+/bash
+/tests
+/fuzz
+/debug
+/unabashed

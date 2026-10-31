@@ -1,0 +1,33 @@
+# Oracle image: GNU bash 5.3 built from the repository's bash-5.3.tar.gz.
+#
+#   docker build -f tools/Dockerfile.bash53 -t unabashed/bash53 .
+#
+# Run from the repository root. BuildKit only sends the files named by
+# COPY, so the repository as build context costs just the tarball.
+
+FROM debian:trixie-slim AS build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gcc libc6-dev make \
+ && rm -rf /var/lib/apt/lists/*
+COPY bash-5.3.tar.gz /src/
+RUN echo "0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba  /src/bash-5.3.tar.gz" \
+  | sha256sum -c - \
+ && tar -xzf /src/bash-5.3.tar.gz -C /src
+WORKDIR /src/bash-5.3
+RUN ./configure \
+ && make -j"$(nproc)" \
+ && make recho zecho printenv xcase \
+ && make install DESTDIR=/out \
+ && install -m 755 recho zecho printenv xcase /out/usr/local/bin/
+
+FROM debian:trixie-slim
+COPY --from=build /out/usr/local/ /usr/local/
+# /opt/fakes/bin is reserved for the multi-call fakes binary (fakes.cpp),
+# which will replace coreutils on the PATH that tools/record passes in.
+RUN useradd --uid 1000 --user-group --no-create-home \
+      --home-dir /home/oracle --shell /usr/local/bin/bash oracle \
+ && install -d -o oracle -g oracle /home/oracle \
+ && install -d /opt/fakes/bin
+USER oracle
+WORKDIR /home/oracle
+CMD ["/usr/local/bin/bash", "--norc", "--noprofile"]

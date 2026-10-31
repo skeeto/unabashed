@@ -1,0 +1,120 @@
+#!/bin/sh
+# Record bash 5.3 behaviour for test scripts: t/foo.sh -> t/foo.spec
+#
+#   tools/record t/foo.sh [t/bar.sh ...]
+#
+# Each script runs twice, each time in a fresh container from the
+# oracle image (tools/Dockerfile.bash53): once with stdout and stderr
+# captured apart, once with 2>&1 merged. The script is the -c string
+# and $0 is "bash", so diagnostics read "bash: line N: ...". See
+# tools/README.md for the spec format.
+#
+# Environment:
+#   RECORD_IMAGE    oracle image (default unabashed/bash53)
+#   RECORD_PATH     PATH inside the container (default below)
+#   RECORD_TIMEOUT  seconds per run before the container is killed (60)
+set -eu
+
+image=${RECORD_IMAGE:-unabashed/bash53}
+path=${RECORD_PATH:-/usr/local/bin:/usr/bin:/bin}
+limit=${RECORD_TIMEOUT:-60}
+
+# Git Bash would rewrite the container paths below into Windows paths
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*';;
+esac
+
+if [ $# -eq 0 ]; then
+    echo "usage: tools/record SCRIPT..." >&2
+    exit 2
+fi
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "record: image $image not found; build it per tools/README.md" >&2
+    exit 1
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Runs inside the container. Read the script from stdin, keeping its
+# trailing newlines, then replace this shell with bash.
+inner='s=$(cat; echo .) && s=${s%.} && exec /usr/bin/env -i LANG=C TZ=UTC HOME=/home/oracle PATH="$RECORD_PATH" /usr/local/bin/bash --norc --noprofile -c "$s" bash </dev/null'
+
+# run SCRIPT OUT ERR [MERGE]: run one fresh container; sets $status
+run() {
+    name=record-$$-$(date +%s)-$n
+    n=$((n + 1))
+    cmd=$inner
+    [ $# -lt 4 ] || cmd="$inner 2>&1"
+    rm -f "$tmp/timedout"
+    (sleep "$limit" && : >"$tmp/timedout" &&
+        docker kill "$name" >/dev/null 2>&1) &
+    watchdog=$!
+    set +e
+    docker run -i --name "$name" --init --network none --read-only \
+        --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777 \
+        --tmpfs /home/oracle:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=755 \
+        --workdir /home/oracle --user oracle --hostname oracle \
+        --cap-drop ALL --security-opt no-new-privileges \
+        --pids-limit 256 --ulimit nofile=1024:1024 \
+        -e RECORD_PATH="$path" "$image" /bin/sh -c "$cmd" \
+        <"$1" >"$2" 2>"$3"
+    set -e
+    kill $watchdog 2>/dev/null || true
+    wait $watchdog 2>/dev/null || true
+    # docker run's own exit status conflates docker errors (125-127)
+    # with bash's, so ask the daemon for the container's status.
+    if ! state=$(docker inspect -f '{{.State.ExitCode}} {{.State.Error}}' \
+                 "$name" 2>/dev/null); then
+        echo "record: $1: docker run failed:" >&2
+        cat "$3" >&2
+        return 1
+    fi
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    status=${state%% *}
+    if [ "$state" != "$status " ]; then
+        echo "record: $1: container error: ${state#* }" >&2
+        return 1
+    fi
+    if [ -e "$tmp/timedout" ]; then
+        echo "record: $1: timed out after ${limit}s" >&2
+        return 1
+    fi
+}
+
+# block NAME FILE: one byte-counted block
+block() {
+    printf '== %s %d\n' "$1" $(($(wc -c <"$2")))
+    cat "$2"
+    printf '\n'
+}
+
+n=0
+fail=0
+for script; do
+    spec=${script%.sh}.spec
+    if [ ! -f "$script" ]; then
+        echo "record: $script: no such file" >&2
+        fail=1
+        continue
+    fi
+    run "$script" "$tmp/out" "$tmp/err" || { fail=1; continue; }
+    apart=$status
+    run "$script" "$tmp/all" "$tmp/all.err" merge || { fail=1; continue; }
+    if [ "$status" != "$apart" ]; then
+        echo "record: $script: status $apart apart, $status merged" >&2
+        fail=1
+        continue
+    fi
+    {
+        block stdout "$tmp/out"
+        block stderr "$tmp/err"
+        block merged "$tmp/all"
+        printf '== status %d\n' "$status"
+    } >"$tmp/spec"
+    mv "$tmp/spec" "$spec"
+    echo "$spec"
+done
+exit $fail
