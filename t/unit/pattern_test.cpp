@@ -182,6 +182,15 @@ static void rungolden(char const *path, Arena perm)
             Str pat = decode(&a, fields[2]);
             Str s   = decode(&a, fields[3]);
             b32 r   = patmatch(pat, s, flags, a);
+            PatProg p = patprog(pat, flags, &a);
+            ok  = r==(fields[4]=="1") && r==progmatch(&p, s, a);
+            got = r ? Str("1") : "0";
+        } else if (kind=="i" && nf==5) {
+            // GLOBIGNORE, as glob.cpp's globignored: a whole path with
+            // PM_PATHNAME (no . or .. components here)
+            Str pat  = decode(&a, fields[2]);
+            Str path = decode(&a, fields[3]);
+            b32 r    = patmatch(pat, path, flags|PM_PATHNAME, a);
             ok  = r == (fields[4]=="1");
             got = r ? Str("1") : "0";
         } else if (kind=="f" && nf==6) {
@@ -202,7 +211,9 @@ static void rungolden(char const *path, Arena perm)
             gf |= find(fields[1], "D")<0 ? PM_PERIOD   : 0;
             gf |= find(fields[1], "S")<0 ? PM_SKIPDOTS : 0;
             b32 r = globmatch(pat, name, gf, a);
-            ok  = r == (fields[4]=="1");
+            PatProg p = globprog(pat, gf, &a);
+            b32 r2 = !skipname(pat, name, gf, 0) && progmatch(&p, name, a);
+            ok  = r==(fields[4]=="1") && r==r2;
             got = r ? Str("1") : "0";
         } else if (kind=="h" && nf==4) {
             Str pat = decode(&a, fields[2]);

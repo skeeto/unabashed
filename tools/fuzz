@@ -2,8 +2,9 @@
 # Usage: tools/fuzz MODE [MINUTES [CORES]]
 # Build main_fuzz.cpp in one of its modes and fuzz it with AFL++ in
 # ~/fuzz-MODE, from a snapshot of the working tree. MODE is run, parse,
-# chaos or isolate (see main_fuzz.cpp), or regex, which compares
-# regex.cpp with glibc in memory (t/unit/regex_diff.cpp). Defaults: 60
+# chaos or isolate (see main_fuzz.cpp), or regex or pattern, which
+# compare regex.cpp or pattern.cpp with glibc in memory
+# (t/unit/regex_diff.cpp, t/unit/pattern_diff.cpp). Defaults: 60
 # minutes, 2 cores.
 # Run it in WSL or on Linux with AFL++ installed; crashes land in
 # ~/fuzz-MODE/out/*/crashes. To replay them, build the same mode with a
@@ -21,6 +22,7 @@ parse)   def=-DFUZZ_PARSE ;;
 chaos)   def=-DFUZZ_CHAOS ;;
 isolate) def=-DFUZZ_ISOLATE ;;
 regex)   def= ;;
+pattern) def= ;;
 *)       echo "tools/fuzz: unknown mode $mode" >&2; exit 2 ;;
 esac
 src=$(cd "$(dirname "$0")/.." && pwd)
@@ -30,6 +32,7 @@ mkdir -p "$dir/src" "$dir/in"
 (cd "$src" && git ls-files -z | xargs -0 tar cf - | tar xf - -C "$dir/src")
 target=main_fuzz.cpp
 [ "$mode" = regex ] && target=t/unit/regex_diff.cpp
+[ "$mode" = pattern ] && target=t/unit/pattern_diff.cpp
 afl-clang-fast++ -std=c++20 -fno-exceptions -fno-rtti -g3 -O1 \
     -fsanitize=undefined -fsanitize-trap $def \
     -o "$dir/fuzz" "$dir/src/$target"
@@ -46,6 +49,21 @@ if [ "$mode" = regex ]; then
 000 ^(x|y)?[^]a-c]{2,3}$ y-zz
 002 \w+\s*\<[é-ü]. é_ab_é
 000 (()|a)+\2{0,2}b.\' aab
+END
+elif [ "$mode" = pattern ]; then
+    # Seeds: a flags byte (octal: 1 extglob, 2 pathname, 4 period,
+    # 010 nocase, 020 UTF-8), a pattern, a newline, a string
+    n=0
+    while read -r flags pat subj; do
+        n=$((n + 1))
+        printf "\\$flags%s\n%s" "$pat" "$subj" >"$dir/in/$n"
+    done <<'END'
+001 *.@(c|h) foo.c
+006 [!.]*/?a ab/ca
+002 a*?b/c*d axb/cd
+011 *([[:upper:]])x ABx
+020 \**[é-ü] *aü
+000 [a-c]??\? b12?
 END
 else
     # Seeds: the small spec scripts

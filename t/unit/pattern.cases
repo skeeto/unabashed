@@ -24656,3 +24656,52 @@ f	e	//	?*()	%00
 m	eiu	**%C7%85[![:xdigit:]/-]]	%F8%88%80%80%80%F0%9F%98%80a]*
 f	u	#	%C3%84]![%F0%9F%98%80[==][:alpha:]]	%C3%89:%C3%A4.
 f	e	%%	*(@([[.NUL.]|_])@(?|%09[^]))[!]+(|?()**|)	?\
+
+# GLOBIGNORE: whole paths matched with FNM_PATHNAME
+i	-	ab/cd/efg	ab/cd/efg
+i	-	ab[/]cd/efg	ab/cd/efg
+i	-	ab[/x]cd/efg	ab/cd/efg
+i	-	ab[!x]cd/efg	ab/cd/efg
+i	-	ab[.-0]cd/efg	ab/cd/efg
+i	-	*/*/efg	ab/cd/efg
+i	-	*[/]*/efg	ab/cd/efg
+i	-	*[b]/*/efg	ab/cd/efg
+i	-	*[!x]/*/efg	ab/cd/efg
+i	-	a?/c?/e*	ab/cd/efg
+i	-	a*	ab/cd/efg
+i	-	*	ab/cd/efg
+i	-	**	ab/cd/efg
+i	-	*/**	ab/cd/efg
+i	-	**/efg	ab/cd/efg
+i	-	*?/efg	ab/cd/efg
+i	-	a*?	ab/cd/efg
+i	-	ab*efg	ab/cd/efg
+i	-	ab*?efg	ab/cd/efg
+i	-	ab?cd?efg	ab/cd/efg
+i	-	ab/c*/e?g	ab/cd/efg
+i	-	ab/cd/	ab/cd/efg
+i	-	ab/cd	ab/cd/efg
+i	-	*/cd/*	ab/cd/efg
+i	-	ab/*	ab/cd/efg
+i	-	ab/*/*	ab/cd/efg
+i	-	ab/*?/*	ab/cd/efg
+i	-	ab/**/efg	ab/cd/efg
+i	-	[a-z]b/cd/efg	ab/cd/efg
+i	-	.*	.h/x
+i	-	*	.h/x
+i	-	.h/*	.h/x
+i	-	*/x	.h/x
+i	-	?h/x	.h/x
+i	e	ab@(/)cd/efg	ab/cd/efg
+i	e	*@(/)cd/efg	ab/cd/efg
+i	e	@(ab|x)/cd/efg	ab/cd/efg
+i	e	ab/!(x)/efg	ab/cd/efg
+i	e	+(?)/cd/efg	ab/cd/efg
+i	e	*(*/)efg	ab/cd/efg
+i	e	!(x)	ab/cd/efg
+i	e	ab/?(cd/)efg	ab/cd/efg
+i	i	AB/cd/EFG	ab/cd/efg
+i	i	[A-B]*/*/efg	ab/cd/efg
+i	u	%C3%A9/?	%C3%A9/x
+i	u	?/x	%C3%A9/x
+i	-	??/x	%C3%A9/x

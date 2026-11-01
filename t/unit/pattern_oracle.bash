@@ -10,6 +10,8 @@
 #                          replacement of <> for OP in / // /# /%
 #   g FLAGS PAT NAME       does pathname expansion of PAT select NAME?
 #   h FLAGS PAT            is PAT subject to pathname expansion?
+#   i FLAGS PAT PATH       does GLOBIGNORE=PAT remove the file PATH (no
+#                          empty, . or .. components) from */*...?
 #
 # FLAGS letters: e extglob, i nocasematch/nocaseglob, u LC_ALL=C.UTF-8,
 # D dotglob, S no globskipdots, - none. Fields use %HH for bytes outside
@@ -112,6 +114,26 @@ while IFS= read -r line; do
         IFS=$' \t\n'
         r=$(( $# == 0 ))
         shopt -u nullglob
+        cd /
+        ;;
+    i)
+        dec "$a"; p=$R
+        dec "$b"; n=$R
+        mkdir "$top/i$((++ng))"
+        cd "$top/i$ng"
+        g='*'
+        d=$n
+        while [[ $d == */* ]]; do d=${d%/*}; g+='/*'; done
+        [[ $n == */* ]] && mkdir -p -- "${n%/*}"
+        : >"$n"
+        setflags "$flags"
+        shopt -u nocasematch
+        GLOBIGNORE=$p
+        r=1
+        for f in $g; do
+            [[ $f == "$n" ]] && r=0
+        done
+        unset GLOBIGNORE
         cd /
         ;;
     *)
