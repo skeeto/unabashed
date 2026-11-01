@@ -857,6 +857,29 @@ static i32 jobsusage(Shell *sh, Arena scratch, Str name, Str opt)
     return 2;
 }
 
+// jobs -x: run the command with each job spec replaced by its pid.
+static i32 jobsexec(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    if (!nargs) return 0;
+    polljobs(sh);
+    Buf b(&scratch, 128);
+    for (iz i = 0; i < nargs; i++) {
+        Str a = args[i];
+        if (a.len && a[0]=='%') {
+            b32  amb;
+            Job *j = findjob(sh, scratch, "jobs", a, &amb);
+            if (j) a = fmti64(&scratch, j->pid);  // else as it is
+        }
+        if (i) putbyte(&b, ' ');
+        print(&b, singlequote(&scratch, a));
+    }
+    Str src = finish(&b);
+    i32 depth = ++sh->capdepth;
+    runsource(sh, src, sh->iname, *scratchat(sh, depth), 0, sh->line);
+    sh->capdepth = depth - 1;
+    return sh->status;
+}
+
 static i32 b_jobs(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     i32 form = 0;
@@ -866,15 +889,19 @@ static i32 b_jobs(Shell *sh, Str *args, iz nargs, Arena scratch)
         Str a = args[i];
         if (a == "--") { i++; break; }
         for (iz k = 1; k < a.len; k++) {
+            if (a[k] == 'x') {
+                if (form || changed || running || stopped) {
+                    builtinerror(sh, scratch, "jobs", "no other options allowed with `-x'");
+                    return 1;
+                }
+                return jobsexec(sh, args+i+1, nargs-i-1, scratch);
+            }
             switch (a[k]) {
             case 'l': form = 'l'; break;
             case 'p': form = 'p'; break;
             case 'n': changed = 1; break;
             case 'r': running = 1; break;
             case 's': stopped = 1; break;
-            case 'x':
-                builtinerror(sh, scratch, "jobs", "-x: not supported");
-                return 1;
             default:
                 return jobsusage(sh, scratch, "jobs", span(a.data+k-1, a.data+k+1));
             }

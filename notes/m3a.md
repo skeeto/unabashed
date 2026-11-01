@@ -549,7 +549,8 @@ variables and closes the descriptors (`disposecoproc`), as bash's
 
 Job specs (`findjob`): `%N %% %+ %- %name %?text`, a missing `%` is
 accepted with bash's warning, ambiguity reported. `kill %N` uses
-`jobspecpid`. `jobs -x` is not done.
+`jobspecpid`. `jobs -x` substitutes the job's pid, where bash, without
+job control, substitutes its own process group.
 
 ## Timers
 
@@ -654,7 +655,7 @@ In suggested order, each with the API to use:
 
 - Jobs: no job control (`set -m` is accepted but changes nothing), so
   the jobs oracle differs where it uses `set -m` (fg, bg, stopped jobs,
-  notifications) and suspend; `jobs -x` is not done. A background vproc
+  notifications) and suspend. A background vproc
   still running when the shell exits is waited for (a fiber cannot
   outlive its process), unlike bash, which leaves it running. The
   coproc oracle differs only for lack of an awk fake and /etc/passwd.
