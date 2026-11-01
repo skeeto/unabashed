@@ -292,7 +292,8 @@ struct Escape {
 };
 
 struct BOut {         // output of the running builtin
-    Buf b;
+    Buf b;        // never grows: it shares an arena with the builtin
+    b32 failed;   // an early write failed
 };
 
 enum { NPOOL = 64 };

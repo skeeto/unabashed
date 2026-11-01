@@ -25,15 +25,32 @@ static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i3
                           b32 (*fill)(void *, Lexer *) = 0, void *fillctx = 0);
 static Str      runfunsub(Shell *, Arena *, Str src, b32 valsub, Arena);
 
-// Builtin output, written to fd 1 when the builtin returns.
+// Builtin output, written to fd 1 when the builtin returns, or when
+// the buffer fills: growing it would overrun the builtin's scratch.
 static void bprint(Shell *sh, Str s)
 {
-    print(&sh->bout->b, s);
+    BOut *o = sh->bout;
+    if (o->b.cap-o->b.len < s.len) {
+        if (o->b.len) {
+            o->failed |= !fdwrite(sh, 1, finish(&o->b));
+            o->b.len = 0;
+        }
+        if (o->b.cap < s.len) {
+            o->failed |= !fdwrite(sh, 1, s);
+            return;
+        }
+    }
+    print(&o->b, s);
 }
 
 static void bprinti(Shell *sh, i64 v)
 {
-    print(&sh->bout->b, v);
+    u8  tmp[32];
+    Buf b = {};
+    b.data = tmp;
+    b.cap  = countof(tmp);
+    print(&b, v);
+    bprint(sh, finish(&b));
 }
 
 // The scratch arena for a nesting depth, reserved on first use.
@@ -1462,14 +1479,14 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
         } else {
             BOut  b     = {};
             BOut *saved = sh->bout;
-            b.b  = Buf(a, 256);
+            b.b  = Buf(a, (iz)1<<12);
             sh->bout = &b;
             Slice<u8> savedcomp = sh->compargs;
             sh->compargs = compargs;
             sh->status = bi->fn(sh, argv.data, argv.len, scratch);
             sh->compargs = savedcomp;
             sh->bout = saved;
-            if (b.b.len && !fdwrite(sh, 1, finish(&b.b))) {
+            if ((b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed) {
                 builtinerror(sh, scratch, name, "write error: Bad file descriptor");
                 sh->status = 1;
             }
