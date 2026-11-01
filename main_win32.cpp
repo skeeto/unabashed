@@ -1654,6 +1654,8 @@ static Stat fromattrs(u32 attr, Filetime mtime, Filetime atime, i64 size)
     r.size  = size;
     r.mtime = unixns(mtime);
     r.atime = unixns(atime);
+    r.ctime = r.mtime;  // no change time before FILE_BASIC_INFO (Vista)
+    r.blocks = (size + 4095)/4096 * 8;  // whole 4 KiB clusters
     r.uid   = 1000;
     r.gid   = 1000;
     return r;

@@ -162,6 +162,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "array.cpp"
 #include "vars.cpp"
 #include "expand.cpp"
+#include "glob.cpp"
 #include "exec.cpp"
 #include "proc.cpp"
 #include "builtins.cpp"

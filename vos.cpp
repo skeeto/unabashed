@@ -33,6 +33,7 @@ struct VNode {
     i32    nlink;
     i64    ino;
     i64    mtime;
+    i64    ctime;   // status change
     i32    uid;     // owner and group: 0 for the initial tree
     Str    data;    // file contents or link target
     iz     cap;
@@ -146,6 +147,7 @@ static VNode *vnew(Vos *v, VNode *dir, Str name, i32 type, i32 mode)
     n->nlink  = 1;
     n->ino    = ++v->nextino;
     n->mtime  = v->clock;
+    n->ctime  = v->clock;
     n->uid    = v->user;
     n->parent = dir ? dir : n;
     if (dir) {
@@ -163,6 +165,13 @@ static VNode *vlookup(VNode *dir, Str name)
         if (n->name == name) return n;
     }
     return 0;
+}
+
+// The user's permission bits (r 4, w 2, x 1) on a node: the owner's
+// bits for the user's own nodes, the others' bits for the rest.
+static i32 vperm(Vos *v, VNode *n)
+{
+    return (n->uid==v->user ? n->mode>>6 : n->mode) & 7;
 }
 
 struct VResolved {
@@ -198,6 +207,10 @@ static VResolved vresolve(Vos *v, Str path, b32 follow, i32 depth = 0)
         Cut c = cut(rest, '/');
         if (cur->type != FT_DIR) {
             r.err = E_NOTDIR;
+            return r;
+        }
+        if (!(vperm(v, cur) & 1)) {
+            r.err = E_ACCES;  // a name looked up needs search permission
             return r;
         }
         VNode *n = vlookup(cur, c.head);
@@ -282,7 +295,7 @@ static void vwritenode(Vos *v, VNode *n, i64 pos, u8 *buf, iz len)
     }
     copybytes(n->data.data+pos, buf, len);
     n->data.len = n->data.len>end ? n->data.len : end;
-    n->mtime = v->clock;
+    n->mtime = n->ctime = v->clock;
 }
 
 // Append what fits; the caller checked for space.
@@ -711,6 +724,7 @@ static Opened os_open(Os *os, Arena, Str path, i32 flags, i32 mode)
         if ((flags&OF_TRUNC) && f->node->type==FT_FILE) {
             f->node->data.len = 0;
             f->node->mtime    = v->clock;
+            f->node->ctime    = v->clock;
         }
         r.h = n;
         return r;
@@ -761,6 +775,7 @@ static Opened os_open(Os *os, Arena, Str path, i32 flags, i32 mode)
     if ((flags&OF_TRUNC) && n->type==FT_FILE) {
         n->data.len = 0;
         n->mtime    = v->clock;
+        n->ctime    = v->clock;
     }
     r.h = h;
     return r;
@@ -983,6 +998,8 @@ static Stat vstat(VNode *n)
     r.size  = n->data.len;
     r.mtime = n->mtime;
     r.atime = n->mtime;  // never "modified since last read"
+    r.ctime = n->ctime;
+    r.blocks = (r.size + 4095)/4096 * 8;  // as ext4 with 4 KiB blocks
     r.dev   = 1;
     r.ino   = n->ino;
     r.uid   = n->uid;
@@ -1051,6 +1068,10 @@ static Dirent *os_list(Os *os, Arena *a, Str dir, i32 *err)
     if (!res.node) return 0;
     if (res.node->type != FT_DIR) {
         *err = E_NOTDIR;
+        return 0;
+    }
+    if (!(vperm(v, res.node) & 4)) {
+        *err = E_ACCES;
         return 0;
     }
     Dirent *head = 0;
@@ -1558,6 +1579,7 @@ static i32 os_link(Os *os, Arena, Str from, Str to)
     VNode *n = vnew(v, dir, r.base, s.node->type, s.node->mode);
     n->ino   = s.node->ino;
     n->mtime = s.node->mtime;
+    n->ctime = v->clock;
     n->prog  = s.node->prog;
     n->data  = clone(&v->a, s.node->data);
     n->cap   = n->data.len;
@@ -1640,7 +1662,8 @@ static i32 os_chmod(Os *os, Arena, Str path, i32 mode)
     vmutate(v);
     VResolved r = vresolve(v, path, 1);
     if (!r.node) return r.err;
-    r.node->mode = mode & 07777;
+    r.node->mode  = mode & 07777;
+    r.node->ctime = v->clock;
     return 0;
 }
 
@@ -1651,6 +1674,7 @@ static i32 os_utime(Os *os, Arena, Str path, i64 mtime)
     VResolved r = vresolve(v, path, 1);
     if (!r.node) return r.err;
     r.node->mtime = mtime;
+    r.node->ctime = v->clock;
     return 0;
 }
 

@@ -2011,6 +2011,8 @@ static Str globpattern(Arena *a, XField f, b32 extglob)
     return finish(&b);
 }
 
+static Slice<Str> glob(Shell *, Arena *, Str pat);  // glob.cpp
+
 static b32 strless(Str *a, Str *b)
 {
     return compare(*a, *b) < 0;
@@ -2049,111 +2051,6 @@ static Str absolute(Shell *sh, Arena *a, Str path)
 {
     if (isabsolute(sh, path)) return path;
     return joinpath(a, sh->cwd, path.len ? path : Str("."));
-}
-
-// Expand one pattern component at a time. prefix is the path so far as
-// written (relative or absolute), empty or ending with its slashes,
-// which are kept as written.
-static void globwalk(Shell *sh, Arena *a, Str prefix, Str rest, Slice<Str> *out, i32 depth)
-{
-    if (depth > 256) return;
-    // Next component
-    iz slash = 0;
-    for (; slash<rest.len && rest[slash]!='/'; slash++) {
-        if (rest[slash]=='\\' && slash+1<rest.len) slash++;
-    }
-    Str comp  = takehead(rest, slash);
-    Str after = cuthead(rest, slash);
-    iz  nsep  = 0;
-    for (; nsep<after.len && after[nsep]=='/'; nsep++) {}
-    Str sep   = takehead(after, nsep);
-    after = cuthead(after, nsep);
-    b32 trailing = sep.len > 0;
-
-    i32 pf = patflags(sh);
-    if (sh->shopt[S_NOCASEGLOB])   pf |= PM_NOCASE;
-    if (!sh->shopt[S_DOTGLOB])     pf |= PM_PERIOD;
-    if (sh->shopt[S_GLOBSKIPDOTS]) pf |= PM_SKIPDOTS;
-
-    if (!hasglob(comp, pf)) {
-        Str lit  = unquoteglob(a, comp);
-        Str path = concat3(a, prefix, lit, sep);
-        if (!after.len) {
-            Stat st = os_stat(sh->os, *a, absolute(sh, a, path), 1);
-            if (!st.err) *out = push(a, *out, path);
-            return;
-        }
-        globwalk(sh, a, path, after, out, depth+1);
-        return;
-    }
-
-    i32 err;
-    Str dir = prefix.len ? prefix : Str(".");
-    Dirent *list = os_list(sh->os, a, absolute(sh, a, dir), &err);
-    Slice<Str> names = {};
-    for (Dirent *d = list; d; d = d->next) {
-        if (d->name=="." || d->name=="..") continue;  // handled below
-        if (globmatch(comp, d->name, pf, *a)) {
-            names = push(a, names, d->name);
-        }
-    }
-    if (!err) {
-        // Whether or not the platform lists them
-        Str dots[] = {".", ".."};
-        for (iz k = 0; k < countof(dots); k++) {
-            if (globmatch(comp, dots[k], pf, *a)) {
-                names = push(a, names, dots[k]);
-            }
-        }
-    }
-    sort(names.data, names.len, strless, *a);
-    for (iz k = 0; k < names.len; k++) {
-        Str path = concat(a, prefix, names[k]);
-        if (trailing) {
-            Stat st = os_stat(sh->os, *a, absolute(sh, a, path), 1);
-            if (st.err || st.type!=FT_DIR) continue;
-            path = concat(a, path, sep);
-        }
-        if (!after.len) {
-            *out = push(a, *out, path);
-        } else {
-            globwalk(sh, a, path, after, out, depth+1);
-        }
-    }
-}
-
-// Does GLOBIGNORE (ign, non-empty) remove this match? Its patterns
-// match the whole path, and . and .. are always removed.
-static b32 globignored(Shell *sh, Str path, Str ign, Arena scratch)
-{
-    Str base = path;
-    for (iz i = path.len-1; i >= 0; i--) {
-        if (path[i] == '/') {
-            if (i+1 < path.len) base = cuthead(path, i+1);
-            break;
-        }
-    }
-    if (base=="." || base=="..") return 1;
-    i32 pf = PM_PATHNAME | patflags(sh);
-    if (sh->shopt[S_NOCASEGLOB]) pf |= PM_NOCASE;
-    for (Cut c = {}; ign.len; ign = c.tail) {
-        c = cut(ign, ':');
-        if (c.head.len && patmatch(c.head, path, pf, scratch)) return 1;
-    }
-    return 0;
-}
-
-static Slice<Str> glob(Shell *sh, Arena *a, Str pat)
-{
-    Slice<Str> out = {};
-    iz root = 0;  // leading slashes, kept as written
-    for (; root<pat.len && pat[root]=='/'; root++) {}
-    if (root && root==pat.len) {
-        out = push(a, out, pat);
-        return out;
-    }
-    globwalk(sh, a, takehead(pat, root), cuthead(pat, root), &out, 0);
-    return out;
 }
 
 
@@ -2282,14 +2179,6 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
                 Str pat = doglob && !(w->flags & W_NOGLOB) ? globpattern(a, f, extglob) : Str{};
                 if (pat.data) {
                     Slice<Str> m = glob(sh, a, pat);
-                    Str ign = getvar(sh, a, "GLOBIGNORE").value;
-                    if (ign.len) {
-                        iz keep = 0;
-                        for (iz j = 0; j < m.len; j++) {
-                            if (!globignored(sh, m[j], ign, *a)) m[keep++] = m[j];
-                        }
-                        m.len = keep;
-                    }
                     if (m.len) {
                         for (iz j = 0; j < m.len; j++) out = push(a, out, m[j]);
                         continue;

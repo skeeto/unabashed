@@ -1649,15 +1649,9 @@ static PosSet evalseq(PatCtx *x, PatSeq q, iz k, PosSet s, i32 depth, Arena *a)
 // case and [[ == ]] (which bash always matches with extglob), pass
 // PM_EXTGLOB, PM_NOCASE and PM_UTF8 as appropriate; for pathname
 // expansion, use globmatch instead.
-static b32 patmatch(Str pat, Str s, i32 flags, Arena scratch)
+static b32 runpat(PatSeq q, PatComp *k, Str s, i32 flags, b32 wide, Arena scratch)
 {
-    b32 wide = 0;
-    if ((flags&PM_UTF8) && !(allascii(pat) && allascii(s))) {
-        wide = glibcvalid(pat) && glibcvalid(s);
-    }
-    PatComp k = {};
-    PatSeq  q = patcompile(&k, pat, flags, wide, &scratch);
-    if (k.deep) {
+    if (k->deep) {
         return 0;
     }
     b32 slash = 0;
@@ -1674,11 +1668,58 @@ static b32 patmatch(Str pat, Str s, i32 flags, Arena scratch)
     }
     PatCtx x = makectx(s, flags, wide, &scratch);
     x.fixedend = s.len;
-    if (k.memo) {
+    if (k->memo) {
         addmemo(&x, &scratch);
     }
     PosSet e = evalseq(&x, q, 0, setone(&scratch, 0), 0, &scratch);
     return !x.overflow && sethas(e, s.len);
+}
+
+static b32 patmatch(Str pat, Str s, i32 flags, Arena scratch)
+{
+    b32 wide = 0;
+    if ((flags&PM_UTF8) && !(allascii(pat) && allascii(s))) {
+        wide = glibcvalid(pat) && glibcvalid(s);
+    }
+    PatComp k = {};
+    PatSeq  q = patcompile(&k, pat, flags, wide, &scratch);
+    return runpat(q, &k, s, flags, wide, scratch);
+}
+
+// A pattern compiled once for matching many strings, as pathname
+// expansion does: byte-wise, and also wide when the pattern is valid
+// UTF-8 in a UTF-8 locale.
+struct PatProg {
+    i32     flags;
+    b32     ascii;    // the pattern is all ASCII
+    b32     haswide;
+    PatComp k[2];
+    PatSeq  q[2];     // byte-wise, wide
+};
+
+static PatProg patprog(Str pat, i32 flags, Arena *a)
+{
+    PatProg p = {};
+    p.flags = flags;
+    p.ascii = allascii(pat);
+    p.q[0]  = patcompile(p.k+0, pat, flags, 0, a);
+    if ((flags&PM_UTF8) && !p.ascii && glibcvalid(pat)) {
+        p.haswide = 1;
+        p.q[1]    = patcompile(p.k+1, pat, flags, 1, a);
+    } else if (flags & PM_UTF8) {
+        p.haswide = p.ascii;
+        p.q[1]    = p.ascii ? patcompile(p.k+1, pat, flags, 1, a) : PatSeq{};
+    }
+    return p;
+}
+
+static b32 progmatch(PatProg *p, Str s, Arena scratch)
+{
+    b32 wide = 0;
+    if ((p->flags&PM_UTF8) && !(p->ascii && allascii(s))) {
+        wide = p->haswide && glibcvalid(s);
+    }
+    return runpat(p->q[wide], p->k+wide, s, p->flags, wide, scratch);
 }
 
 // Does pat contain an unquoted glob operator, so that it undergoes
@@ -1829,14 +1870,25 @@ static b32 skipname(Str pat, Str name, i32 flags, i32 depth)
 // off) and PM_SKIPDOTS (globskipdots). This includes bash's checks for
 // leading dots before matching, also inside extglob groups. A component
 // without glob characters is looked up directly instead, as in bash.
+static i32 globflags(i32 flags)
+{
+    i32 mf = flags & (PM_EXTGLOB|PM_NOCASE|PM_UTF8);
+    return mf | PM_PATHNAME | (flags&PM_PERIOD ? PM_PERIOD : PM_DOTDOT);
+}
+
 static b32 globmatch(Str pat, Str name, i32 flags, Arena scratch)
 {
     if (skipname(pat, name, flags, 0)) {
         return 0;
     }
-    i32 mf = flags & (PM_EXTGLOB|PM_NOCASE|PM_UTF8);
-    mf |= PM_PATHNAME | (flags&PM_PERIOD ? PM_PERIOD : PM_DOTDOT);
-    return patmatch(pat, name, mf, scratch);
+    return patmatch(pat, name, globflags(flags), scratch);
+}
+
+// The component pattern compiled for many globmatch calls, which are
+// then skipname plus progmatch.
+static PatProg globprog(Str pat, i32 flags, Arena *a)
+{
+    return patprog(pat, globflags(flags), a);
 }
 
 

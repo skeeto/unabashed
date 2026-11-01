@@ -16,7 +16,7 @@ DEBUG   = -g3 -fsanitize=undefined -fsanitize-trap
 RELEASE = -O2 -s
 WIN32   = -nostartfiles -static-libgcc -Wl,--stack,0x1000000
 SOURCES = base.cpp api.cpp unabashed.cpp parse.cpp print.cpp wide.cpp \
-          fibers.cpp check.cpp shell.cpp array.cpp vars.cpp expand.cpp exec.cpp \
+          fibers.cpp check.cpp shell.cpp array.cpp vars.cpp expand.cpp glob.cpp exec.cpp \
           builtins.cpp arith.cpp pattern.cpp regex.cpp brace.cpp sched.cpp proc.cpp \
           b_test.cpp b_printf.cpp trap.cpp jobs.cpp vos.cpp fakes.cpp
 

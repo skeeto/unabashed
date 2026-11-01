@@ -223,10 +223,13 @@ static Stat tostat(struct stat *s)
     #if __APPLE__
     r.mtime = (i64)s->st_mtimespec.tv_sec*1000000000 + s->st_mtimespec.tv_nsec;
     r.atime = (i64)s->st_atimespec.tv_sec*1000000000 + s->st_atimespec.tv_nsec;
+    r.ctime = (i64)s->st_ctimespec.tv_sec*1000000000 + s->st_ctimespec.tv_nsec;
     #else
     r.mtime = (i64)s->st_mtim.tv_sec*1000000000 + s->st_mtim.tv_nsec;
     r.atime = (i64)s->st_atim.tv_sec*1000000000 + s->st_atim.tv_nsec;
+    r.ctime = (i64)s->st_ctim.tv_sec*1000000000 + s->st_ctim.tv_nsec;
     #endif
+    r.blocks = (i64)s->st_blocks;
     r.dev   = (i64)s->st_dev;
     r.ino   = (i64)s->st_ino;
     r.uid   = (i64)s->st_uid;

@@ -186,7 +186,7 @@ static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
     env.shellstart = sh->start / 1000000000;
     env.error      = pferror;
     Buf out(&scratch, 256);
-    i32 status = printfmt(&env, &out, args[i], args+i+1, nargs-i-1, scratch);
+    i32 status = printfmt(&env, &out, args[i], args+i+1, nargs-i-1);
     if (var.data) {
         if (!assignto(sh, scratch, var, finish(&out))) return 1;
     } else {

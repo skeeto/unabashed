@@ -21,7 +21,7 @@ struct PrintfEnv {
     void  (*setint)(void *ctx, Str, i64);   // %n assignment, may be null
 };
 
-static i32 printfmt(PrintfEnv *, Buf *, Str fmt, Str *args, iz nargs, Arena);
+static i32 printfmt(PrintfEnv *, Buf *, Str fmt, Str *args, iz nargs);
 static Str echoescape(Arena *, Str, b32 percentb, b32 utf8, b32 *stop);
 static Str shellquote(Arena *, Str, b32 utf8);
 
@@ -1219,7 +1219,6 @@ struct Printf {
     iz         nargs;
     iz         next;     // next argument
     b32        converr;  // a conversion error was reported
-    Arena      scratch;
 };
 
 // A conversion specification as bash scans it.
@@ -1247,7 +1246,7 @@ static void diag(Printf *p, Str a, Str b = {}, Str c = {}, Str d = {})
     if (!p->env->error) {
         return;
     }
-    Arena t = p->scratch;
+    Arena t = *p->out->a;
     Buf   m(&t, 16+a.len+b.len+c.len+d.len);
     print(&m, "printf: ");
     print(&m, a);
@@ -1647,9 +1646,9 @@ static void matchparens(iz *match, Str fmt)
 // Format args with fmt, reusing fmt while arguments remain, appending
 // to out. Returns the exit status: 1 after a reported error. Invalid
 // numbers are reported without stopping the output; other errors stop
-// it, keeping what was already appended.
-static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs,
-                    Arena scratch)
+// it, keeping what was already appended. Working memory comes from
+// out's arena, ahead of out, which then grows by moving past it.
+static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs)
 {
     if (!fmt.len) {
         return 0;
@@ -1661,7 +1660,6 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs,
     p->out     = out;
     p->args    = args;
     p->nargs   = nargs;
-    p->scratch = scratch;
 
     iz *match = 0;  // see matchparens, built on the first %(
     b32 stale = 1;  // match predates a rewrite of fmt
@@ -1800,12 +1798,10 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs,
             case 'b': {
                 // Diagnostics allocate past the expansion
                 Str   s    = getstr(p);
-                Arena save = p->scratch;
-                Buf   x(&p->scratch, s.len+16);
+                Buf   x(out->a, s.len+16);
                 b32   stop = 0;
                 bexpand(env, &x, s, &stop);
                 bstr(p, &sp, finish(&x));
-                p->scratch = save;
                 if (stop) {
                     return 0;  // bash returns before folding in conversion errors
                 }
@@ -1813,7 +1809,7 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs,
 
             case '(': {
                 if (!match) {
-                    match = alloc<iz>(&p->scratch, fmt.len);
+                    match = alloc<iz>(out->a, fmt.len);
                     matchparens(match, fmt);
                     stale = 0;
                 }
@@ -1829,7 +1825,7 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs,
                         // length modifiers, then bailed before undoing
                         // it: the first modifier is now '(' for good.
                         if (!owned) {
-                            fmt   = clone(&p->scratch, fmt);
+                            fmt   = clone(out->a, fmt);
                             owned = 1;
                         }
                         fmt[mods] = '(';
@@ -1883,8 +1879,7 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs,
                         s = takehead(s, (iz)prec);
                     }
                 }
-                Arena save = p->scratch;
-                Buf   q(&p->scratch, 2*s.len+3);
+                Buf q(out->a, 2*s.len+3);
                 quote(&q, s, env->utf8, sp.alt);
                 if (sp.conv=='Q' && q.len>0x7fffffff) {
                     diag(p, "%Q: string length Numerical result out of range");
@@ -1893,7 +1888,6 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs,
                     sp.prec = (i32)q.len;  // precision applied before quoting
                 }
                 bstr(p, &sp, finish(&q));
-                p->scratch = save;
             } break;
 
             case 'd':

@@ -74,6 +74,8 @@ struct Stat {
     i64 size;
     i64 mtime;   // ns since the epoch
     i64 atime;
+    i64 ctime;   // status change
+    i64 blocks;  // 512-byte units allocated
     i64 dev;
     i64 ino;
     i64 uid;

@@ -166,9 +166,7 @@ static Result run(Arena *a, b32 utf8, Str fmt, Str *args, iz nargs)
     env.error      = onerror;
     env.setint     = onsetint;
 
-    Arena scratch = *a;
-    scratch.beg  += (scratch.end - scratch.beg)/2;  // past anything out grows into
-    r.status = printfmt(&env, out, fmt, args, nargs, scratch);
+    r.status = printfmt(&env, out, fmt, args, nargs);
     r.out = finish(out);
     r.err = finish(err);
     r.var = finish(var);
