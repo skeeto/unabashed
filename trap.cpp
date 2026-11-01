@@ -242,7 +242,8 @@ static void copytraps(Shell *c, Shell *sh)
 
 // Run a trap's action as eval would, keeping $? (unless it returns
 // from a function), the current line and the command being run.
-static void runtrap(Shell *sh, i32 idx)
+// Returns the action's own status.
+static i32 runtrap(Shell *sh, i32 idx)
 {
     if (sh->intrap>=10 || sh->capdepth+2>=NPOOL) {
         // Actions nested this deep (a trap sending its own signal):
@@ -274,6 +275,7 @@ static void runtrap(Shell *sh, i32 idx)
     if (v) v->attrs &= ~V_EXPORT;
     sh->evaldepth++;
     runsource(sh, cmd, sh->iname, a, 0, sh->line);
+    i32 own = sh->status;
     sh->evaldepth--;
     poptemp(sh, "BASH_TRAPSIG");
     sh->capdepth = depth - 1;
@@ -292,6 +294,7 @@ static void runtrap(Shell *sh, i32 idx)
     if (sh->flow != FLOW_RETURN) {
         sh->status = status;
     }
+    return own;
 }
 
 // Die by a signal: the EXIT trap runs first (except for SIGKILL), then
@@ -469,9 +472,19 @@ static void runerrtrap(Shell *sh)
 }
 
 // DEBUG: before a simple command, (( )), [[ ]] or a for iteration.
-static void rundebugtrap(Shell *sh, Arena)
+// Under extdebug, a non-zero status from the action skips the command,
+// and 2 in a function or sourced file also returns from it. Returns
+// whether to skip.
+static b32 rundebugtrap(Shell *sh, Arena)
 {
-    if (pseudotrap(sh, TRAP_DEBUG, sh->opt[O_FUNCTRACE])) runtrap(sh, TRAP_DEBUG);
+    if (!pseudotrap(sh, TRAP_DEBUG, sh->opt[O_FUNCTRACE])) return 0;
+    i32 own = runtrap(sh, TRAP_DEBUG);
+    if (!sh->shopt[S_EXTDEBUG] || !own || sh->flow) return 0;
+    if (own==2 && (sh->funcdepth || sh->sourcedepth)) {
+        sh->flow   = FLOW_RETURN;
+        sh->status = 2;
+    }
+    return 1;
 }
 
 // RETURN: as a function or a sourced file returns.

@@ -524,6 +524,7 @@ static i32 sh_main(Os *os, OsInfo *info)
             } else {
                 cmd = info->args[i++];
                 havecmd = 1;
+                setvar(sh, scratch, "BASH_EXECUTION_STRING", cmd);
                 if (i < info->nargs) sh->name = info->args[i++];
                 sh->args.v = info->args + i;
                 sh->args.n = info->nargs - i;

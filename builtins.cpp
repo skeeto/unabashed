@@ -770,13 +770,41 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         b32  wordcomp = i<sh->compargs.len && sh->compargs[i];
         Value *cur = lookup(sh, vname);
         b32 mklocal = local || (name!="export" && name!="readonly" && sh->funcdepth && !global);
+        if (wordcomp && cur && (cur->attrs & V_READONLY)) {
+            // As bash, a literal name=(...) to a readonly variable is
+            // first declared alone (with -aAiluc and the scope), while
+            // the arguments expand. An error there is reported under the
+            // stale command name, and abandons the command unless it
+            // declares a local; otherwise the assignment itself fails.
+            u32  bad    = V_ARRAY|V_ASSOC|V_INTEGER|V_LOWER|V_UPPER|V_CAPITAL;
+            b32  shadow = mklocal && cur->depth!=sh->funcdepth && !cur->depth;
+            Str  msg    = concat(&scratch, vname, ": readonly variable");
+            if (((on|off) & bad) || shadow) {
+                Str stale = {sh->cmdname, sh->cmdnamelen};
+                if (stale.len) {
+                    builtinerror(sh, scratch, stale, msg);
+                } else {
+                    shellerror(sh, scratch, msg);
+                }
+                if (!mklocal) {
+                    sh->status = 1;
+                    escape(sh, ESC_DISCARD);
+                }
+            } else {
+                shellerror(sh, scratch, msg);
+                status = 1;
+            }
+            a  = vname;  // then declared without its value
+            eq = a.len;
+        }
         if (cur && (cur->attrs & V_READONLY)) {
             // A new local may shadow a caller's readonly local, but
             // never a readonly global
             b32 shadow = mklocal && cur->depth!=sh->funcdepth;
             if (shadow ? !cur->depth : eq<a.len || (off & V_READONLY)) {
                 Str msg = concat(&scratch, vname, ": readonly variable");
-                if (name=="export" || name=="readonly") {
+                // export -a and readonly -a run declare, which names itself
+                if ((name=="export" || name=="readonly") && !(on & (V_ARRAY|V_ASSOC))) {
                     shellerror(sh, scratch, msg);
                 } else {
                     builtinerror(sh, scratch, name, msg);
@@ -814,8 +842,11 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         u32 aon = on & ~V_READONLY;
         if (hassub && !(on & V_ASSOC) && !isassoc) aon |= V_ARRAY;
         i32 sflags = (append ? SV_APPEND : 0) | (global ? SV_GLOBAL : 0);
+        // export and readonly without -a or -A assign a quoted
+        // 'name=(...)' as a string, to element 0 of an existing array
+        b32 plain    = (name=="export" || name=="readonly") && !(on & (V_ARRAY|V_ASSOC));
         b32 compound = val.len>1 && val[0]=='(' && val[val.len-1]==')' &&
-                       (wordcomp || isarr || isassoc || (on & (V_ARRAY|V_ASSOC)));
+                       (wordcomp || (!plain && (isarr || isassoc || (on & (V_ARRAY|V_ASSOC)))));
         if (eq < a.len) {
             // set the attributes first so that -i and -l apply
             if (aon || off) setattrs(sh, vname, aon, off);
@@ -840,11 +871,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             }
             if (on & V_READONLY) setattrs(sh, vname, V_READONLY, 0);
         } else if (on || off || local || hassub || !lookup(sh, vname)) {
-            Value *v = setattrs(sh, vname, on | (aon & V_ARRAY), off);
-            if ((on & V_INTEGER) && v->str.data) {
-                Arith r = evalarith(sh, &scratch, v->str);
-                setvar(sh, scratch, vname, fmti64(&scratch, r.value), SV_FORCE);
-            }
+            // Like bash, a new -i leaves the current value as it is:
+            // only later assignments are evaluated
+            setattrs(sh, vname, on | (aon & V_ARRAY), off);
         }
     }
     return status;
@@ -1153,6 +1182,10 @@ static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
         b32 *slot = oflag ? &sh->opt[idx] : &sh->shopt[idx];
         if (set || unset) {
             *slot = set;
+            if (!oflag && idx==S_EXTDEBUG) {
+                // as bash: extdebug sets errtrace and functrace with it
+                sh->opt[O_ERRTRACE] = sh->opt[O_FUNCTRACE] = set;
+            }
         } else {
             if (!*slot) status = 1;
             if (!quiet) {

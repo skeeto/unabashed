@@ -125,16 +125,35 @@ static XField xfinish(X *x)
 // Index just past a ${...} or $(...) starting at s[i] (the $).
 // An unterminated $( in a here-document, found as it is expanded: the
 // command is abandoned. The line counts on through the rest of the text.
-static void comsubeof(Shell *sh, Arena scratch, Str rest)
+// Elsewhere (a $( in a quoted ${...} word, for instance), the parse of
+// its text hits the end in a quote, or one line further on, at the
+// missing parenthesis.
+static void comsubeof(Shell *sh, Arena scratch, Str rest, b32 hd = 1)
 {
     i32 line = sh->line + 1;
     for (iz i = 0; i < rest.len; i++) line += rest[i]=='\n';
+    u8 quote = 0;
+    for (iz i = 2; !hd && i < rest.len; i++) {
+        u8 c = rest[i];
+        if (quote == '\'') {
+            quote = c=='\'' ? 0 : quote;
+        } else if (c == '\\') {
+            i++;
+        } else if (quote) {
+            quote = c=='"' ? 0 : quote;
+        } else if (c=='\'' || c=='"') {
+            quote = c;
+        }
+    }
+    line += !hd && !quote;
     flushbout(sh);
     Buf b(&scratch, 128);
     print(&b, errname(sh));
     print(&b, ": command substitution: line ");
     print(&b, (i64)line);
-    print(&b, ": unexpected EOF while looking for matching `)'\n");
+    print(&b, ": unexpected EOF while looking for matching `");
+    putbyte(&b, quote ? quote : ')');
+    print(&b, "'\n");
     fdwrite(sh, 2, finish(&b));
     sh->status = 1;
     escape(sh, ESC_DISCARD);
@@ -1564,9 +1583,9 @@ static void expandinto(X *x, Str s, i32 ctx)
             if (n == '(') {
                 b32 ended = 1;
                 iz  e = skipdollar(sh, x->a, s, i, dq||hd, &ended);
-                if (!ended && hd && !(i+2<s.len && s[i+2]=='(')) {
+                if (!ended && !(i+2<s.len && s[i+2]=='(')) {
                     // Parsed only now, as in bash
-                    comsubeof(sh, *x->a, cuthead(s, i));
+                    comsubeof(sh, *x->a, cuthead(s, i), hd);
                 }
                 if (isarith(s, i, e)) {
                     Str body = span(s.data+i+3, s.data+(e>=i+5 ? e-2 : e));
@@ -1964,6 +1983,12 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
     b32 ifsset;
     b32 extglob = sh->shopt[S_EXTGLOB];
 
+    // Per-text working memory is reused from one text to the next, so
+    // that a long brace expansion such as {1..5000} costs little more
+    // than its resulting fields: the fields' bytes stay in x->data.
+    X            *x      = 0;
+    Slice<XField> fields = {};
+    Slice<XField> split2 = {};
     for (Word *w = words; w; w = w->next) {
         Slice<Str> texts = {};
         if (braces && !(w->flags & W_NOBRACE) && hasbrace(w->text)) {
@@ -1972,19 +1997,32 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
             texts = push(a, texts, w->text);
         }
         for (iz t = 0; t < texts.len; t++) {
-            X *x = newx(sh, a);
+            if (!x) {
+                x = newx(sh, a);
+            } else {
+                Buf flagbuf = x->flags;
+                flagbuf.len = 0;
+                *x = X{};
+                x->sh    = sh;
+                x->a     = a;
+                x->data  = Buf(a, 16);
+                x->flags = flagbuf;
+            }
             x->nosplit = !split || (w->flags & W_NOSPLIT);
             x->nullmark = split && !(w->flags & W_NOSPLIT);
             // A declaration builtin's assignment argument gets tilde
             // expansion after = even in posix mode
             i32 ctx = flags&XW_ASSIGN && w->flags&W_ASSIGNMENT ? XC_ASSIGNW : wordctx(sh, w);
             expandinto(x, texts[t], ctx);
-            Slice<XField> fields = x->done;
+            fields.len = 0;
+            for (iz k = 0; k < x->done.len; k++) {
+                fields = push(a, fields, x->done[k]);
+            }
             fields = push(a, fields, xfinish(x));
 
             // Split with IFS as it is now, after any ${IFS=...}
             Str ifs = ifsvalue(sh, &ifsset);
-            Slice<XField> split2 = {};
+            split2.len = 0;
             for (iz k = 0; k < fields.len; k++) {
                 XField f = fields[k];
                 b32 dosplit = split && !(w->flags & W_NOSPLIT);

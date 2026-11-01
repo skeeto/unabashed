@@ -9907,9 +9907,190 @@ static i32 fake_expr(Os *os, FakeCtx *ctx)
 }
 
 
+// awk: only the tiny programs bash's test suite runs. A program is a
+// list of "[NR==N|BEGIN|END] { statements }", where a statement is
+// "print", "print $K[, $K...]" or "printf("%c", [0+]N)". Fields split on
+// blanks, or on the -F character.
+
+struct FkAwkRule {
+    i32 when;   // 0: every record, 1: BEGIN, 2: END, 3: NR==nr
+    i64 nr;
+    Str action;
+};
+
+static Str fkawkfield(Str rec, i64 k, u8 fs)
+{
+    if (k == 0) return rec;
+    i64 n = 0;
+    if (fs) {
+        for (Cut c = {{}, rec, 1}; c.ok;) {
+            c = cut(c.tail, fs);
+            if (++n == k) return c.head;
+        }
+        return {};
+    }
+    for (iz i = 0; i < rec.len;) {
+        for (; i<rec.len && (rec[i]==' ' || rec[i]=='\t'); i++) {}
+        if (i == rec.len) break;
+        iz beg = i;
+        for (; i<rec.len && rec[i]!=' ' && rec[i]!='\t'; i++) {}
+        if (++n == k) return span(rec.data+beg, rec.data+i);
+    }
+    return {};
+}
+
+static Str fkawktrim(Str s)
+{
+    while (s.len && (s[0]==' ' || s[0]=='\t' || s[0]=='\n')) s = cuthead(s, 1);
+    while (s.len && (s[s.len-1]==' ' || s[s.len-1]=='\t' || s[s.len-1]=='\n')) s = cuttail(s, 1);
+    return s;
+}
+
+// Run one rule's statements on a record; false for an unknown statement.
+static b32 fkawkrun(FkProg *p, Str action, Str rec, u8 fs)
+{
+    for (Cut st = {{}, action, 1}; st.ok;) {
+        st = cut(st.tail, ';');
+        Str s = fkawktrim(st.head);
+        if (!s.len) continue;
+        if (startswith(s, "printf")) {
+            // printf("%c", 0+N)
+            Str a = fkawktrim(cuthead(s, 6));
+            if (!a.len || a[0]!='(' || a[a.len-1]!=')') return 0;
+            a = fkawktrim(cuttail(cuthead(a, 1), 1));
+            Cut c = cut(a, ',');
+            if (!c.ok || fkawktrim(c.head)!="\"%c\"") return 0;
+            Str v = fkawktrim(c.tail);
+            if (startswith(v, "0+")) v = cuthead(v, 2);
+            i64 n = 0;
+            if (!v.len) return 0;
+            for (iz i = 0; i < v.len; i++) {
+                if (v[i]<'0' || v[i]>'9') return 0;
+                n = n*10 + (v[i] - '0');
+            }
+            putbyte(&p->out, (u8)n);
+            continue;
+        }
+        if (s!="print" && !startswith(s, "print ") && !startswith(s, "print$")) return 0;
+        Str args = fkawktrim(cuthead(s, 5));
+        if (!args.len) args = "$0";
+        b32 first = 1;
+        for (Cut c = {{}, args, 1}; c.ok; first = 0) {
+            c = cut(c.tail, ',');
+            Str f = fkawktrim(c.head);
+            if (f.len<2 || f[0]!='$') return 0;
+            i64 k = 0;
+            for (iz i = 1; i < f.len; i++) {
+                if (f[i]<'0' || f[i]>'9') return 0;
+                k = k*10 + (f[i] - '0');
+            }
+            if (!first) putbyte(&p->out, ' ');
+            print(&p->out, fkawkfield(rec, k, fs));
+        }
+        putbyte(&p->out, '\n');
+    }
+    return 1;
+}
+
+static i32 fake_awk(Os *os, FakeCtx *ctx)
+{
+    FkProg p = fkprog(os, ctx);
+    FkOpt  o = fkopts(&p, 0);
+    u8     fs = 0;
+    for (i32 ch; (ch = fkgetopt(&o, "F:")) != -1;) {
+        switch (ch) {
+        case 'F': fs = o.arg.len ? o.arg[0] : 0; break;
+        default:
+            print(diag(&p), "usage: awk [-F fs] 'prog' [file ...]");
+            enddiag(&p);
+            return fkexit(&p, 2);
+        }
+    }
+    if (!o.nrest) {
+        print(diag(&p), "usage: awk [-F fs] 'prog' [file ...]");
+        enddiag(&p);
+        return fkexit(&p, 2);
+    }
+
+    // Parse the rules
+    FkAwkRule rules[16];
+    i32       nrules = 0;
+    Str       prog   = o.rest[0];
+    for (;;) {
+        prog = fkawktrim(prog);
+        if (!prog.len) break;
+        Cut open = cut(prog, '{');
+        Cut body = cut(open.tail, '}');
+        if (!open.ok || !body.ok || nrules==countof(rules)) {
+            print(diag(&p), "unsupported program");
+            enddiag(&p);
+            return fkexit(&p, 2);
+        }
+        FkAwkRule r = {};
+        Str pat = fkawktrim(open.head);
+        if (pat == "BEGIN") {
+            r.when = 1;
+        } else if (pat == "END") {
+            r.when = 2;
+        } else if (startswith(pat, "NR==")) {
+            r.when = 3;
+            for (iz i = 4; i < pat.len; i++) r.nr = r.nr*10 + (pat[i] - '0');
+        } else if (pat.len) {
+            print(diag(&p), "unsupported pattern");
+            enddiag(&p);
+            return fkexit(&p, 2);
+        }
+        r.action = body.head;
+        rules[nrules++] = r;
+        prog = body.tail;
+    }
+
+    b32 bad = 0;
+    for (i32 i = 0; i < nrules; i++) {
+        if (rules[i].when == 1) bad |= !fkawkrun(&p, rules[i].action, {}, fs);
+    }
+    b32 input = 0;
+    for (i32 i = 0; i < nrules; i++) input |= rules[i].when != 1;
+    i64 nr  = 0;
+    Str last = {};
+    i32 status = 0;
+    if (!input) o.nrest = 1;  // BEGIN alone reads nothing
+    else if (o.nrest == 1) o.rest[o.nrest++] = "-";
+    for (iz f = 1; f < o.nrest; f++) {
+        Str data = fkslurp(&p, o.rest[f]);
+        if (!data.data) {
+            status = 2;
+            continue;
+        }
+        while (data.len) {
+            FkLine l = fknextline(data);
+            data = l.rest;
+            last = l.line;
+            nr++;
+            for (i32 i = 0; i < nrules; i++) {
+                FkAwkRule *r = rules + i;
+                if (r->when==0 || (r->when==3 && r->nr==nr)) {
+                    bad |= !fkawkrun(&p, r->action, l.line, fs);
+                }
+            }
+        }
+    }
+    for (i32 i = 0; i < nrules; i++) {
+        if (rules[i].when == 2) bad |= !fkawkrun(&p, rules[i].action, last, fs);
+    }
+    if (bad) {
+        print(diag(&p), "unsupported statement");
+        enddiag(&p);
+        status = 2;
+    }
+    return fkexit(&p, status);
+}
+
+
 // Program table
 
 static Fake fakes[] = {
+    {"awk",      fake_awk},
     {"basename", fake_basename},
     {"cat",      fake_cat},
     {"chmod",    fake_chmod},

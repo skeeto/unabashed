@@ -39,7 +39,7 @@ static void     hidecoproc(Shell *, Arena *);
 // Signals and traps (trap.cpp)
 static void     checksigs(Shell *, Arena);
 static void     runerrtrap(Shell *);
-static void     rundebugtrap(Shell *, Arena);
+static b32      rundebugtrap(Shell *, Arena);
 static void     runreturntrap(Shell *, Arena);
 static void     subshelltraps(Shell *);
 static void     sigenter(Shell *, Sigproc *, i64 pid, Task *);
@@ -162,7 +162,13 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
 {
     ShellArith *c = (ShellArith *)ctx;
     if (ref->hassub) {
-        X    *x = newx(c->sh, a);
+        X     *x = newx(c->sh, a);
+        Value *v = lookup(c->sh, ref->name);
+        if (!(v && v->arr && v->arr->bucket) && ref->sub.len && !allsub(ref->sub)) {
+            // Evaluate an indexed subscript once: the assignment that
+            // may follow (a[RANDOM%6]++) reuses this index
+            ref->sub = fmti64(a, subindex(x, ref->sub));
+        }
         Param p = getelems(x, ref->name, ref->sub);
         if (p.list) {
             p.value = joinparams(a, Args{p.lv, p.ln}, starsep(c->sh));
@@ -1596,6 +1602,17 @@ static Assign splitassign(Shell *sh, Arena *a, Str text)
     return r;
 }
 
+// The value of a temporary binding (NAME=value before a command): for
+// NAME+=value, appended to the current value, or added under -i.
+static Str tempvalue(Shell *sh, Arena *a, Assign as)
+{
+    if (!as.append) return as.value;
+    Value *v     = lookup(sh, as.name);
+    u32    attrs = v ? v->attrs : 0;
+    Str    old   = getvar(sh, a, as.name).value;
+    return assignedvalue(sh, a, attrs, old, as.value, SV_APPEND);
+}
+
 // Perform the assignments of a command with no command word, each
 // traced just before it happens. Returns false if one failed.
 static b32 doassignments(Shell *sh, Arena *a, Word *w, iz n)
@@ -1634,24 +1651,42 @@ static b32 doassignments(Shell *sh, Arena *a, Word *w, iz n)
 }
 
 [[gnu::noinline]]
-static void runsimple1(Shell *sh, Node *n, Arena scratch);
+static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last);
+
+// $_: after each simple command, its last word (empty for assignments
+// alone), never exported
+static void bindlastarg(Shell *sh, Arena scratch, Str last)
+{
+    Value *v = lookup(sh, "_");
+    if (v && !v->dyn && !v->arr && v->str.data && v->str==last && !(v->attrs & V_EXPORT)) {
+        return;
+    }
+    if (!last.data) last = "";
+    setvar(sh, scratch, "_", last, SV_QUIET);
+    v = lookup(sh, "_");
+    if (v) v->attrs &= ~V_EXPORT;
+}
 
 static void runsimple(Shell *sh, Node *n, Arena scratch)
 {
-    runsimple1(sh, n, scratch);
+    Str last = {};
+    runsimple1(sh, n, scratch, &last);
+    sh->cmdnamelen = 0;
+    if (last.data) bindlastarg(sh, scratch, last);
     checksigs(sh, scratch);
 }
 
-static void runsimple1(Shell *sh, Node *n, Arena scratch)
+static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
 {
     safepoint(sh->sched);
     sh->line    = n->line;
     sh->current = n;
     if (!sh->intrap) sh->cmdnode = n;  // in trap actions, what ran them
     if (sh->traps) {
-        rundebugtrap(sh, scratch);
+        b32 skip = rundebugtrap(sh, scratch);
         sh->line    = n->line;
         sh->current = n;
+        if (skip) return;
     }
     Arena *a = &scratch;
 
@@ -1702,6 +1737,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch)
     }
 
     if (!argv.len) {
+        *last = "";  // $_ becomes empty
         // Assignments only, with redirections in a temporary context.
         // The status is the last command substitution's, or zero.
         u32  nsubst = sh->nsubst;
@@ -1726,14 +1762,28 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch)
     }
 
     Str name = argv[0];
-    sh->underscore = argv[argv.len-1];
+    *last = argv[argv.len-1];
 
     // Expand assignment values now (bash does it after the words)
     Assign *as = alloc<Assign>(a, nassign);
     {
-        Word *w = assigns;
+        // Each sees those before it, bound for the time being, as in
+        // K=x A=${K#?} cmd
+        Word *w      = assigns;
+        b32  *pushed = alloc<b32>(a, nassign);
         for (iz i = 0; i < nassign; i++, w = w->next) {
             as[i] = splitassign(sh, a, w->text);
+            b32 later = 0;
+            for (Word *v = w->next; v && !later; v = v->next) {
+                later = find(v->text, "$")>=0 || find(v->text, "`")>=0;
+            }
+            Value *cur = lookup(sh, as[i].name);
+            if (later && !(cur && (cur->attrs & V_READONLY)) && validvarname(as[i].name)) {
+                pushed[i] = pushtemp(sh, *a, as[i].name, tempvalue(sh, a, as[i]));
+            }
+        }
+        for (iz i = nassign-1; i >= 0; i--) {
+            if (pushed[i]) poptemp(sh, as[i].name);
         }
     }
 
@@ -1787,10 +1837,15 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch)
                     setvar(sh, scratch, as[i].name, as[i].value, flags|SV_UNDERTEMP);
                 }
             } else {
-                pushtemp(sh, scratch, as[i].name, as[i].value);
+                pushtemp(sh, scratch, as[i].name, tempvalue(sh, &scratch, as[i]));
             }
         }
         if (fn) {
+            // Until its first simple command ends, a function's name
+            // prefixes errors from declaration arguments name=(...)
+            i32 len = (i32)(name.len<(iz)sizeof(sh->cmdname) ? name.len : 0);
+            copybytes(sh->cmdname, name.data, len);
+            sh->cmdnamelen = len;
             callfunction(sh, fn, argv.data, argv.len, scratch);
             sh->line = n->line;
         } else {
@@ -1818,7 +1873,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch)
         sh->lastbg = lastbg;
         Slice<Str> env = makeenv(sh, a);
         for (iz i = 0; i < nassign; i++) {
-            Str entry = concat3(a, as[i].name, "=", as[i].value);
+            Str entry = concat3(a, as[i].name, "=", tempvalue(sh, a, as[i]));
             b32 replaced = 0;
             for (iz k = 0; k < env.len; k++) {
                 Cut c = cut(env[k], '=');
@@ -2379,18 +2434,19 @@ static void execcase(Shell *sh, Node *n, Arena scratch)
 }
 
 // The DEBUG trap before (( )) and [[ ]], which BASH_COMMAND names.
-static void debugcompound(Shell *sh, Node *n, Arena scratch)
+static b32 debugcompound(Shell *sh, Node *n, Arena scratch)
 {
     if (!sh->intrap) sh->cmdnode = n;
-    rundebugtrap(sh, scratch);
+    b32 skip = rundebugtrap(sh, scratch);
     sh->line = n->line;
+    return skip;
 }
 
 [[gnu::noinline]]
 static void execarith(Shell *sh, Node *n, Arena scratch)
 {
     sh->line = n->line;
-    if (sh->traps) debugcompound(sh, n, scratch);
+    if (sh->traps && debugcompound(sh, n, scratch)) return;
     Str text = expandstring(sh, &scratch, n->arith->text, XC_ARITH|XC_DQUOTE);
     if (sh->opt[O_XTRACE]) {
         traceline(sh, scratch, concat3(&scratch, "(( ", text, " ))"));
@@ -2405,7 +2461,7 @@ static void execarith(Shell *sh, Node *n, Arena scratch)
 static void execcond(Shell *sh, Node *n, Arena scratch)
 {
     sh->line = n->line;
-    if (sh->traps) debugcompound(sh, n, scratch);
+    if (sh->traps && debugcompound(sh, n, scratch)) return;
     sh->status = condeval(sh, &scratch, n->cond) ? 0 : 1;
     setpstat1(sh);
     checkerrexit(sh);

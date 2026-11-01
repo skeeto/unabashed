@@ -445,7 +445,6 @@ struct Shell {
     i64      start;        // ns since the epoch
     u32      seed;         // RANDOM
     Str      cwd;          // physical working directory
-    Str      underscore;   // $_
     Str      host;
     i32      umask;
     u64      exportgen;
@@ -454,6 +453,8 @@ struct Shell {
     i32      optchar;      // getopts: next option letter in $OPTIND's word
     b32      ingetopts;    // its own OPTIND updates keep the position
     Slice<u8> compargs;    // declaration builtin: which args are name=(...)
+    u8       cmdname[32];  // bash's this_command_name: a function's name
+    i32      cmdnamelen;   // from its call until a simple command ends
     Task    *psubs;        // procsubs started at this subshell level, to join
     i64      psubpid;      // the last procsub joined, and its status,
     i32      psubstatus;   // for a repeated wait

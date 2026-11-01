@@ -1264,10 +1264,12 @@ static Str parsematched(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
         }
 
         if (open != close) {
-            if (ch=='\'' && L->posix && !wasdol && (rflags & P_DQUOTE) &&
+            if (ch=='\'' && L->posix && !wasdol && (flags & P_DQUOTE) &&
                     (flags & P_DOLBRACE) && dolstate!=DB_QUOTE && dolstate!=DB_QUOTE2) {
                 // POSIX: a single quote in a double-quoted ${...} is
-                // literal, except in a pattern
+                // literal, except in a pattern. Only quotes passed down
+                // count, not those around a command substitution (which
+                // leave the delimiter qc a double quote).
                 wasdol = gtlt = 0;
                 continue;
             }
