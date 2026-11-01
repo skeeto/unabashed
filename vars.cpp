@@ -1001,6 +1001,20 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
 {
     Store *st  = sh->store;
     Value *top = rawlookup(sh, name);
+    if ((flags & SV_GLOBAL) && !(flags & SV_NOREF)) {
+        // declare -g: only global namerefs count
+        Value *g = globalvalue(sh, name);
+        if (g && (g->attrs & V_NAMEREF) && g->str.len) {
+            Ref r = resolveref(sh, name, 1);
+            if (r.hassub) {
+                Str word = concat3(&scratch, r.name, "[", concat(&scratch, r.sub, "]"));
+                return assignelem(sh, scratch, r.name, r.sub, word, value, flags|SV_NOREF);
+            }
+            if (!r.name.data) return 0;
+            name = r.name;
+        }
+        flags |= SV_NOREF;
+    }
     if (top && !(flags & SV_NOREF) && anyref(top)) {
         Bind b = assignref(sh, name);
         if (b.fail) return 0;

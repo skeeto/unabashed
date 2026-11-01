@@ -686,6 +686,7 @@ static Str transform(X *x, Str name, Str v, u8 t)
 // ${name@A}: an assignment, as a declare command when attributes are set.
 static Str assignform(X *x, Str name, Str v)
 {
+    name = tempname(x->sh, name);  // what a nameref names
     Value *val = lookup(x->sh, name);
     u32    at  = val ? val->attrs : 0;
     Str    let = attrletters(x->a, at & ~(V_LOCAL|V_TEMP));
@@ -1035,6 +1036,7 @@ static b32 splitrefonce(Shell *sh, Str s, Str *name, Str *sub)
 static iz assignwords(X *x, Str name, Str *out)
 {
     Shell *sh  = x->sh;
+    name = tempname(sh, name);  // what a nameref names
     Value *val = lookup(sh, name);
     if (!val) return 0;
     Str let = attrletters(x->a, val->attrs & ~(V_LOCAL|V_TEMP));

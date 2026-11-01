@@ -976,7 +976,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 nv->str = {};
             }
         }
-        Value *cur = rawlookup(sh, vname);
+        Value *cur = global ? globalvalue(sh, vname) : rawlookup(sh, vname);
         b32 shadowing = mklocal && cur && cur->depth!=sh->funcdepth && cur->depth;
         if (wordcomp && cur && (cur->attrs & V_READONLY) && !shadowing) {
             // As bash, a literal name=(...) to a readonly variable is
@@ -1063,7 +1063,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             status = 1;
             continue;
         }
-        Value *self = rawlookup(sh, vname);
+        Value *self = global ? globalvalue(sh, vname) : rawlookup(sh, vname);
         if (onref && (isarr || isassoc)) {
             builtinerror(sh, scratch, name, concat(&scratch, vname, ": reference variable cannot be an array"));
             status = 1;
