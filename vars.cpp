@@ -30,6 +30,7 @@ enum : i32 {  // dynamic variables, computed when read
     DYN_EPOCHSECONDS, DYN_EPOCHREALTIME, DYN_BASHPID, DYN_BASH_SUBSHELL,
     DYN_FUNCNAME, DYN_BASH_COMMAND, DYN_HISTCMD, DYN_BASH_LINENO,
     DYN_BASH_SOURCE, DYN_BASH_ARGV0, DYN_PIPESTATUS, DYN_UNDERSCORE,
+    DYN_BASH_ARGV, DYN_BASH_ARGC,
 };
 
 struct Value {
@@ -185,6 +186,8 @@ static Str dollar0(Shell *sh)
     return sh->argv0.data ? sh->argv0 : sh->name;
 }
 
+static Array *dynarray(Shell *, Arena *, Value *);
+
 static Str dynvalue(Shell *sh, Arena *a, Value *v)
 {
     switch (v->dyn) {
@@ -208,13 +211,13 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
     case DYN_BASHPID:       return fmti64(a, sh->bashpid);
     case DYN_BASH_SUBSHELL: return fmti64(a, sh->subshell - sh->simplestages);
     case DYN_FUNCNAME:
-        return sh->frame ? sh->frame->name : Str{};
     case DYN_BASH_LINENO:
-        if (sh->frame) return fmti64(a, sh->frame->line);
-        return !sh->cflag && !sh->interactive ? Str("0") : Str{};
     case DYN_BASH_SOURCE:
-        if (sh->frame) return sh->frame->file.len ? sh->frame->file : sh->name;
-        return !sh->cflag && !sh->interactive ? sh->name : Str{};
+    case DYN_BASH_ARGV:
+    case DYN_BASH_ARGC: {
+        Array *r = dynarray(sh, a, v);
+        return r->len ? r->e[0].val : Str{};
+    }
     case DYN_BASH_COMMAND:  return cmdtext(sh, a);
     case DYN_HISTCMD:       return "1";
     case DYN_BASH_ARGV0:    return dollar0(sh);
@@ -238,7 +241,8 @@ static Got getvar(Shell *sh, Arena *a, Str name)
     if (v->dyn) {
         r.value = dynvalue(sh, a, v);
         r.set   = 1;
-        if (v->dyn==DYN_FUNCNAME || v->dyn==DYN_BASH_LINENO || v->dyn==DYN_BASH_SOURCE) {
+        if (v->dyn==DYN_FUNCNAME || v->dyn==DYN_BASH_LINENO ||
+                v->dyn==DYN_BASH_SOURCE || v->dyn==DYN_BASH_ARGV) {
             r.set = !!r.value.data;
         }
         return r;
@@ -363,6 +367,71 @@ static void assigned(Shell *sh, Value *val, Str name)
     varchanged(sh, name);
 }
 
+// Set the bottom of BASH_ARGV from the positional parameters, once:
+// when first read by name, or when extdebug is turned on, as bash.
+static void initbashargv(Shell *sh)
+{
+    if (sh->argvinit) return;
+    Store *st = sh->store;
+    iz     n  = sh->args.n;
+    sh->argvbase.v = (Str *)salloc(st, (n ? n : 1)*(iz)sizeof(Str));
+    sh->argvbase.n = n;
+    for (iz i = 0; i < n; i++) sh->argvbase.v[i] = sclone(st, sh->args.v[i]);
+    sh->argvinit = 1;
+}
+
+// BASH_ARGV (each frame's arguments, last first) and BASH_ARGC (their
+// counts), innermost first: calls made under extdebug, sourced files
+// (their arguments under extdebug, else the file's name when given
+// none), then the bottom.
+static Array *argvarray(Shell *sh, Arena *a, i32 d)
+{
+    if (!sh->argvinit && sh->listing) {
+        Array *r = alloc<Array>(a);  // a listing does not set it up
+        r->isset = 1;
+        return r;
+    }
+    initbashargv(sh);
+    iz n = 1;
+    for (Frame *f = sh->frame; f; f = f->up) n += f->argpushed ? f->args.n+1 : 0;
+    for (Srcframe *s = sh->srcframes; s; s = s->up) n += s->argpushed ? s->args.n+1 : 0;
+    n += sh->argvbase.n;
+    Array *r = alloc<Array>(a);
+    r->cap   = n;
+    r->e     = alloc<Elem>(a, n);
+    r->isset = 1;
+    Frame    *f = sh->frame;
+    Srcframe *s = sh->srcframes;
+    for (;;) {
+        Args args   = sh->argvbase;
+        b32  pushed = 1;
+        b32  last   = 0;
+        if (s && s->frame==f) {
+            args   = s->args;
+            pushed = s->argpushed;
+            s      = s->up;
+        } else if (f) {
+            args   = f->args;
+            pushed = f->argpushed;
+            f      = f->up;
+        } else {
+            last = 1;
+        }
+        if (pushed && d==DYN_BASH_ARGC) {
+            r->e[r->len].idx = r->len;
+            r->e[r->len].val = fmti64(a, args.n);
+            r->len++;
+        } else if (pushed) {
+            for (iz i = args.n-1; i >= 0; i--) {
+                r->e[r->len].idx = r->len;
+                r->e[r->len].val = args.v[i];
+                r->len++;
+            }
+        }
+        if (last) return r;
+    }
+}
+
 // The elements of FUNCNAME and BASH_LINENO, built in scratch from the
 // call frames, with "main" at the bottom when running a script. Null
 // for other variables.
@@ -380,19 +449,35 @@ static Array *dynarray(Shell *sh, Arena *a, Value *v)
         r->isset = 1;
         return r;
     }
+    if (d==DYN_BASH_ARGV || d==DYN_BASH_ARGC) return argvarray(sh, a, d);
     if (d!=DYN_FUNCNAME && d!=DYN_BASH_LINENO && d!=DYN_BASH_SOURCE) return 0;
-    iz n = 0;
+    iz n = 0, nsrc = 0;
     for (Frame *f = sh->frame; f; f = f->up) n++;
+    for (Srcframe *s = sh->srcframes; s; s = s->up) nsrc++;
+    // FUNCNAME exists only inside functions, then with the sourced
+    // files among them ("source")
+    nsrc = n || d!=DYN_FUNCNAME ? nsrc : 0;
     b32 main = !sh->cflag && !sh->interactive && (n || d!=DYN_FUNCNAME);
     Array *r = alloc<Array>(a);
-    r->cap = n + main;
+    r->cap = n + nsrc + main;
     r->e   = alloc<Elem>(a, r->cap);
-    for (Frame *f = sh->frame; f; f = f->up) {
+    Frame    *f = sh->frame;
+    Srcframe *s = nsrc ? sh->srcframes : 0;
+    while (f || s) {
         r->e[r->len].idx = r->len;
-        r->e[r->len].val = d==DYN_FUNCNAME   ? f->name
-                         : d==DYN_BASH_LINENO ? fmti64(a, f->line)
-                         : f->file.len        ? f->file
-                         :                      sh->name;
+        if (s && s->frame==f) {
+            // started in this call (or outside any): the newer
+            r->e[r->len].val = d==DYN_FUNCNAME   ? Str("source")
+                             : d==DYN_BASH_LINENO ? fmti64(a, s->line)
+                             :                      s->file;
+            s = s->up;
+        } else {
+            r->e[r->len].val = d==DYN_FUNCNAME   ? f->name
+                             : d==DYN_BASH_LINENO ? fmti64(a, f->line)
+                             : f->file.len        ? f->file
+                             :                      sh->name;
+            f = f->up;
+        }
         r->len++;
     }
     if (main) {
@@ -537,7 +622,8 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
         if ((byte *)prev.data >= st->mark) sfreestr(st, prev);
     } else if (val->dyn==DYN_LINENO || val->dyn==DYN_BASH_SUBSHELL ||
                val->dyn==DYN_FUNCNAME || val->dyn==DYN_BASH_LINENO ||
-               val->dyn==DYN_BASH_SOURCE || val->dyn==DYN_BASH_COMMAND) {
+               val->dyn==DYN_BASH_SOURCE || val->dyn==DYN_BASH_COMMAND ||
+               val->dyn==DYN_BASH_ARGV || val->dyn==DYN_BASH_ARGC) {
         // bash ignores these assignments
     } else {
         val->dyn = 0;

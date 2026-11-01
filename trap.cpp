@@ -464,6 +464,12 @@ static b32 pseudotrap(Shell *sh, i32 idx, b32 opt)
 {
     i32 k = idx - TRAP_DEBUG;
     if (!trapset(sh, idx) || (sh->trapbusy & 1<<k)) return 0;
+    Srcframe *s = idx==TRAP_DEBUG && sh->retsrc ? sh->retsrc : sh->srcframes;
+    if (idx!=TRAP_ERR && s && s->frame==sh->frame) {
+        // A sourced file, as a function: DEBUG and RETURN run only if
+        // it set them, or with functrace
+        return opt || sh->traps[idx].data!=s->trapat[k];
+    }
     if (idx!=TRAP_ERR && sh->frame && !opt) {
         // a function with the trace attribute (declare -ft) inherits
         // DEBUG and RETURN

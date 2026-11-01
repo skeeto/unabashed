@@ -278,6 +278,8 @@ struct Frame {       // a function call
     Node  *def;      // the function, for FUNCNAME and LINENO
     i32    line;     // where it was called
     Str    file;     // where the function was defined, for BASH_SOURCE
+    Args   args;     // its arguments, for BASH_ARGV and BASH_ARGC
+    b32    argpushed;  // there (extdebug was on at the call)
     Var  **locals;   // variables localized at this level
     iz     nlocals;
     iz     caplocals;
@@ -286,6 +288,17 @@ struct Frame {       // a function call
     b32    optsaved;
     u8    *trapat[3];  // DEBUG, ERR and RETURN actions at the call: those
                        // run in it only if it set them (or with -T/-E)
+};
+
+struct Srcframe {    // a file being sourced: a frame of FUNCNAME ("source"),
+    Srcframe *up;    // BASH_SOURCE and BASH_LINENO, as bash
+    Frame    *frame; // the function call it runs in, if any
+    Str       file;
+    i32       line;  // where it was sourced
+    Args      args;  // in BASH_ARGV and BASH_ARGC when argpushed
+    b32       argpushed;
+    u8       *trapat[3];  // DEBUG, ERR and RETURN actions at the start: as
+                          // in a function, only its own run in it (or -T)
 };
 
 enum : i32 {
@@ -398,6 +411,11 @@ struct Shell {
 
     // Execution state
     Frame   *frame;
+    Srcframe *srcframes;   // files being sourced, innermost first
+    Srcframe *retsrc;      // the one whose RETURN action runs
+    Args     argvbase;     // the bottom of BASH_ARGV, in the store
+    b32      argvinit;     // argvbase is set
+    b32      listing;      // listing every variable: BASH_ARGV stays as is
     Undo    *undo;
     Escape  *esc;
     Node    *current;      // simple command being run, for messages

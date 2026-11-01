@@ -352,6 +352,8 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     dynamic(sh, "FUNCNAME", DYN_FUNCNAME, V_ARRAY);
     dynamic(sh, "BASH_LINENO", DYN_BASH_LINENO, V_ARRAY);
     dynamic(sh, "BASH_SOURCE", DYN_BASH_SOURCE, V_ARRAY);
+    dynamic(sh, "BASH_ARGV", DYN_BASH_ARGV, V_ARRAY);
+    dynamic(sh, "BASH_ARGC", DYN_BASH_ARGC, V_ARRAY);
     dynamic(sh, "PIPESTATUS", DYN_PIPESTATUS, V_ARRAY);
     dynamic(sh, "_", DYN_UNDERSCORE);
     sh->npstat = 1;

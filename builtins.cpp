@@ -475,12 +475,51 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     i32 line = sh->line;
     Str srcname = sh->srcname;
     sh->srcname = file;
-    i32 status = runsource(sh, src, file, scratch);
+    Srcframe sf = {};
+    sf.up    = sh->srcframes;
+    sf.frame = sh->frame;
+    sf.file  = file;
+    sf.line  = line;
+    if (i+1 < nargs) {
+        sf.args.v    = args + i + 1;
+        sf.args.n    = nargs - i - 1;
+        sf.argpushed = sh->shopt[S_EXTDEBUG];
+    } else {
+        sf.args.v    = args + i;  // as bash: the name stands in
+        sf.args.n    = 1;
+        sf.argpushed = 1;
+    }
     if (sh->traps) {
+        for (i32 k = 0; k < 3; k++) sf.trapat[k] = sh->traps[TRAP_DEBUG+k].data;
+    }
+    sh->srcframes = &sf;
+    // Pop the frame on the way out of an escape too (exit in the file,
+    // then an EXIT action that reads BASH_SOURCE)
+    Escape e = {};
+    e.up    = sh->esc;
+    e.undo  = sh->undo;
+    e.frame = sh->frame;
+    sh->esc = &e;
+    i32 status = 0;
+    if (__builtin_setjmp(e.jmp)) {
+        sh->esc = e.up;
+        sh->srcframes = sf.up;
+        sh->retsrc    = 0;
+        escape(sh, e.why);
+    }
+    status = runsource(sh, src, file, scratch);
+    sh->srcframes = sf.up;
+    sh->srcname = srcname;
+    if (sh->traps) {
+        // As bash, RETURN runs where the file was sourced, though
+        // DEBUG in its action follows the file's rules
+        sh->line   = line;
+        sh->retsrc = &sf;
         runreturntrap(sh, scratch);
+        sh->retsrc = 0;
         status = sh->status;
     }
-    sh->srcname = srcname;
+    sh->esc = e.up;
     if (sh->flow == FLOW_RETURN) {
         // Functions have taken their own returns: this one is the file's
         sh->flow = FLOW_NONE;
@@ -763,6 +802,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
     if (i == nargs) {
         // Listing
         Slice<VarEntry> all = sortedvars(sh, &scratch);
+        sh->listing = 1;
         for (iz k = 0; k < all.len; k++) {
             Value *v = all[k].v;
             u32 want = on & ~V_LOCAL;
@@ -775,6 +815,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 printassign(sh, &scratch, all[k].name, v);
             }
         }
+        sh->listing = 0;
         return 0;
     }
 
@@ -1148,9 +1189,11 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     if (nargs == 1) {
         Slice<VarEntry> all = sortedvars(sh, &scratch);
+        sh->listing = 1;
         for (iz k = 0; k < all.len; k++) {
             printassign(sh, &scratch, all[k].name, all[k].v);
         }
+        sh->listing = 0;
         return 0;
     }
     iz i = 1;
@@ -1273,6 +1316,7 @@ static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (!oflag && idx==S_EXTDEBUG) {
                 // as bash: extdebug sets errtrace and functrace with it
                 sh->opt[O_ERRTRACE] = sh->opt[O_FUNCTRACE] = set;
+                if (set) initbashargv(sh);
             }
         } else {
             if (!*slot) status = 1;

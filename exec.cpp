@@ -1548,6 +1548,9 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     f.name = argv[0];
     f.line = sh->line;
     f.file = fn->code->file;
+    f.args.v    = argv + 1;
+    f.args.n    = argc - 1;
+    f.argpushed = sh->shopt[S_EXTDEBUG];
     if (sh->traps) {
         for (i32 k = 0; k < 3; k++) f.trapat[k] = sh->traps[TRAP_DEBUG+k].data;
     }
@@ -2496,6 +2499,7 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
                 sh->cmdtext = sclone(st, head);
                 sh->cmdnode = 0;
             }
+            sh->line = n->line;
             rundebugtrap(sh, it);
             sh->line = n->line;
         }
@@ -2564,9 +2568,30 @@ static void execarithfor(Shell *sh, Node *n, Arena scratch)
 }
 
 [[gnu::noinline]]
+// DEBUG before a compound command that BASH_COMMAND names by its
+// header, such as "case WORD in ". Returns whether to skip it.
+static b32 debugheader(Shell *sh, Str head, i32 line)
+{
+    if (!sh->traps || !sh->traps[TRAP_DEBUG].len) return 0;
+    if (!sh->intrap) {
+        Store *st = sh->store;
+        if ((byte *)sh->cmdtext.data >= st->mark) sfreestr(st, sh->cmdtext);
+        sh->cmdtext = sclone(st, head);
+        sh->cmdnode = 0;
+    }
+    sh->line = line;
+    Arena scratch = *scratchat(sh, sh->capdepth+1);
+    b32 skip = rundebugtrap(sh, scratch);
+    sh->line = line;
+    return skip;
+}
+
 static void execcase(Shell *sh, Node *n, Arena scratch)
 {
     sh->line = n->line;
+    if (sh->traps && debugheader(sh, concat3(&scratch, "case ", n->words->text, " in "), n->line)) {
+        return;
+    }
     if (sh->opt[O_XTRACE]) {
         traceline(sh, scratch, concat3(&scratch, "case ", n->words->text, " in"));
     }
@@ -2896,6 +2921,18 @@ static void selectmenu(Shell *sh, Arena scratch, Slice<Str> list)
 static void runselect(Shell *sh, Node *n, Arena scratch)
 {
     sh->line = n->line;
+    if (sh->traps) {
+        Buf b(&scratch, 64);
+        print(&b, "select ");
+        print(&b, n->name->text);
+        print(&b, " in");
+        if (!n->words && !n->inlist) print(&b, " \"$@\"");
+        for (Word *w = n->words; w; w = w->next) {
+            putbyte(&b, ' ');
+            print(&b, w->text);
+        }
+        if (debugheader(sh, finish(&b), n->line)) return;
+    }
     Slice<Str> list = {};
     if (n->words) {
         list = expandwords(sh, &scratch, n->words, 0);
@@ -2927,7 +2964,7 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
         b32 eof = 0;
         while (!(eof = fdread(sh, 0, &c, 1) != 1) && c != '\n') putbyte(&line, c);
         if (eof && !line.len) {
-            fdwrite(sh, 2, "\n");
+            fdwrite(sh, 1, "\n");  // as bash, on standard output
             sh->status = 1;
             break;
         }

@@ -150,6 +150,13 @@ static HashCmd **copyhash(Store *st, HashCmd **h)
     return r;
 }
 
+static Args copyargs(Arena *a, Args args)
+{
+    Args r = {alloc<Str>(a, args.n ? args.n : 1), args.n};
+    for (iz i = 0; i < args.n; i++) r.v[i] = clone(a, args.v[i]);
+    return r;
+}
+
 // Copy the call frames, pointing their locals at the copied variables.
 static Frame *copyframes(Shell *c, Arena *a, Frame *f)
 {
@@ -162,6 +169,7 @@ static Frame *copyframes(Shell *c, Arena *a, Frame *f)
         r->up   = 0;
         r->name = clone(a, f->name);
         r->file = clone(a, f->file);
+        r->args = copyargs(a, f->args);
         if (f->caplocals) {
             r->locals = (Var **)salloc(st, f->caplocals*(iz)sizeof(Var *));
             for (iz i = 0; i < f->nlocals; i++) {
@@ -172,6 +180,26 @@ static Frame *copyframes(Shell *c, Arena *a, Frame *f)
             r->opts = (b32 *)salloc(st, O_COUNT*(iz)sizeof(b32));
             for (i32 i = 0; i < O_COUNT; i++) r->opts[i] = f->opts[i];
         }
+        *tail = r;
+        tail  = &r->up;
+    }
+    return head;
+}
+
+// Copy the sourced files' frames, pointing them at the copied calls.
+static Srcframe *copysrcframes(Arena *a, Srcframe *s, Frame *from, Frame *to)
+{
+    Srcframe  *head = 0;
+    Srcframe **tail = &head;
+    for (; s; s = s->up) {
+        Srcframe *r = alloc<Srcframe>(a);
+        *r = *s;
+        r->up   = 0;
+        r->file = clone(a, s->file);
+        r->args = copyargs(a, s->args);
+        Frame *f = from, *g = to;
+        for (; f && f!=s->frame; f = f->up, g = g->up) {}
+        r->frame = f ? g : 0;
         *tail = r;
         tail  = &r->up;
     }
@@ -268,6 +296,9 @@ static Shell *vproccopy(Shell *sh, Vproc *m)
     c->cmdtext    = sclone(st, cmdtext(sh, &tmp));
     c->cmdnode    = 0;
     c->frame      = copyframes(c, a, sh->frame);
+    c->srcframes  = copysrcframes(a, sh->srcframes, sh->frame, c->frame);
+    c->argvbase   = copyargs(a, sh->argvbase);
+    c->retsrc     = 0;
     c->fds        = copyfdtab(c, a, sh->fds);
 
     c->undo     = 0;
