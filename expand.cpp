@@ -881,8 +881,8 @@ static Param getelems(X *x, Str name, Str sub, b32 length)
     }
     i64 idx = subindex(x, sub);
     if (idx < 0) {
-        Got g = arr ? Got{} : getvar(sh, x->a, name);
-        idx += arr ? amax(arr)+1 : g.set;
+        // counting back from the end of an array; a scalar has none
+        idx += arr ? amax(arr)+1 : 0;
         if (idx < 0) {
             badelem(x, name, sub, length);
             r.bad = 1;
