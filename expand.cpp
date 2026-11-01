@@ -2346,6 +2346,24 @@ static void badarraysub(Shell *sh, Arena a, Str word)
 // Evaluate the subscript of name[sub] for an assignment: a key if the
 // array is associative, else an index, negative ones counting back
 // from the end. word is the text for error messages.
+// Remove quotes and backslashes, expanding nothing.
+static Str unquote(Arena *a, Str s)
+{
+    Buf b(a, s.len);
+    u8  q = 0;
+    for (iz i = 0; i < s.len; i++) {
+        u8 c = s[i];
+        if (c=='\\' && q!='\'' && i+1<s.len) {
+            putbyte(&b, s[++i]);
+        } else if ((c=='\'' || c=='"') && (!q || q==c)) {
+            q = q ? 0 : c;
+        } else {
+            putbyte(&b, c);
+        }
+    }
+    return finish(&b);
+}
+
 static Sub evalsub(Shell *sh, Arena *a, Str name, Str sub, Str word, b32 raw = 0)
 {
     Sub    r = {};
@@ -2365,9 +2383,10 @@ static Sub evalsub(Shell *sh, Arena *a, Str name, Str sub, Str word, b32 raw = 0
         return r;
     }
     if (raw) {
-        // array_expand_once in a builtin: evaluated as it is, and an
-        // error abandons the command and any -c text, as in bash
-        r.idx = evalinteger(sh, a, sub).value;
+        // array_expand_once in a builtin: quotes removed but nothing
+        // expanded, then evaluated; an error abandons the command and
+        // any -c text, as in bash
+        r.idx = evalinteger(sh, a, unquote(a, sub)).value;
     } else {
         r.idx = subindex(x, sub);
     }
