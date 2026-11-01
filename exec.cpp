@@ -1825,6 +1825,30 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         nassign++;
         rest = rest->next;
     }
+    if (rest && sh->opt[O_KEYWORD]) {
+        // set -k: assignments anywhere count, gathered after the others
+        Word  *head = 0, **tail = &head;
+        Word  *words = 0, **wtail = &words;
+        for (Word *w = n->words; w; w = w->next) {
+            Word *c = alloc<Word>(a);
+            *c = *w;
+            c->next = 0;
+            b32 asg = isassignword(w) || (assignment(w->text, 0) && !(w->flags & W_COMPASSIGN));
+            if (asg) {
+                c->flags |= W_ASSIGNMENT|W_NOSPLIT;
+                *tail = c;
+                tail  = &c->next;
+            } else {
+                *wtail = c;
+                wtail  = &c->next;
+            }
+        }
+        nassign = 0;
+        for (Word *w = head; w; w = w->next) nassign++;
+        *tail   = words;
+        assigns = head ? head : words;
+        rest    = words;
+    }
 
     // Procsubs in the words close with the command's redirections
     Undo *mark = sh->undo;

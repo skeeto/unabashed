@@ -844,6 +844,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         }
         if (print) {
             Value *v = rawlookup(sh, a);
+            if (v && local && (v->depth!=sh->funcdepth || (v->attrs & V_TEMP))) {
+                v = 0;  // local -p shows this function's own only
+            }
             if (!v) {
                 builtinerror(sh, scratch, name, concat(&scratch, a, ": not found"));
                 status = 1;
