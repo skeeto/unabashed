@@ -1051,7 +1051,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 // names the stale command, a function's or none
                 Str stale = {sh->cmdname, sh->cmdnamelen};
                 builtinerror(sh, scratch, stale, msg);
-                if (global) builtinerror(sh, scratch, name, msg);  // and again
+                if (global || append) builtinerror(sh, scratch, name, msg);  // and again
             } else {
                 builtinerror(sh, scratch, name, msg);
             }
