@@ -1,0 +1,230 @@
+# Inputs for regex_diff --record, which writes regex.golden from glibc's
+# regcomp/regexec (REG_EXTENDED). Fields are tab-separated: flags (-
+# none, i REG_ICASE, u the C.UTF-8 locale), pattern, subject. Bytes
+# outside ! to ~, and %, are written %HH, and %00 is an empty field.
+
+# Literals, dot, alternation, grouping
+-	abc	xxabcxx	(2,5)
+-	a.c	abc	(0,3)
+-	a.c	a%0Ac	(0,3)
+-	a|b|c	zzc	(2,3)
+-	(ab|a)(bc|c)	abc	(0,3)(0,2)(2,3)
+-	(a|ab)(c|bcd)(d*)	abcd	(0,4)(0,1)(1,4)(4,4)
+-	(a*)(b*)	aabbb	(0,5)(0,2)(2,5)
+-	(a*)+	b	(0,0)(0,0)
+-	(a*)*	b	(0,0)(0,0)
+-	(a?)*	aa	(0,2)(1,2)
+-	(a|)*	aa	(0,2)(1,2)
+-	(|a)	a	(0,1)(0,1)
+-	(a|)	a	(0,1)(0,1)
+-	(|a)+	aa	(0,2)(1,2)
+-	()	x	(0,0)(0,0)
+-	()*	x	(0,0)(0,0)
+-	(()|a)+	aab	(0,2)(1,2)(0,0)
+-	((a)|b)*	ab	(0,2)(1,2)(0,1)
+-	((a)|b)*	ba	(0,2)(1,2)(1,2)
+-	(a|b)*c	ababc	(0,5)(3,4)
+-	x*	%00	(0,0)
+-	%00	abc	(0,0)
+-	(a)|b	b	(0,1)(-1,-1)
+-	a(b)?c	ac	(0,2)(-1,-1)
+-	(a(b)?)+	aba	(0,3)(2,3)(1,2)
+-	(.)(.)?(.)?	ab	(0,2)(0,1)(1,2)(-1,-1)
+
+# Leftmost-longest
+-	a|ab	abc	(0,2)
+-	(a|ab)(c|bcd)	abcd	(0,4)(0,1)(1,4)
+-	(a+|b+)*	aabba	(0,5)(4,5)
+-	x*y*	zz	(0,0)
+-	(wee|week)(knights|night)	weeknights	(0,10)(0,3)(3,10)
+
+# Repetition and intervals
+-	a{2}	aaa	(0,2)
+-	a{2,}	aaaa	(0,4)
+-	a{,2}	aaaa	(0,2)
+-	a{0}	aaa	(0,0)
+-	a{0}b	ab	(1,2)
+-	a{1,3}?	aaaa	(0,3)
+-	a**	aa	(0,2)
+-	a+?	aa	(0,2)
+-	(a){2}	aaa	(0,2)(1,2)
+-	(a|b){2,3}	ababa	(0,3)(2,3)
+-	(x?){2}	x	(0,1)(1,1)
+-	(x?){0,3}y	xxy	(0,3)(2,2)
+-	(a*){1,}b	aab	(0,3)(0,2)
+-	a{,}	aaa	(0,3)
+-	a{1,2,3}	a	err 10
+-	a{1\,2}	a	(0,1)
+-	a{	a	err 9
+-	a{1	a	err 9
+-	a{1,2	a	err 9
+-	a{}	a	err 10
+-	a{x}	a	err 10
+-	a{2,1}	a	err 10
+-	a{32767}	a	nomatch
+-	a{32768}	a	err 15
+-	{1}a	a	err 13
+-	*a	a	err 13
+-	a|*b	b	err 13
+-	(+a)	a	err 13
+-	^*	a	err 13
+-	$*	a	err 13
+-	a{1}{2}	aa	(0,2)
+
+# Parentheses and escapes
+-	)	a)b	(1,2)
+-	a)	a)	(0,2)
+-	(	a	err 8
+-	(a	a	err 8
+-	a\	a	err 5
+-	\(a\)	(a)	(0,3)
+-	\{	{	(0,1)
+-	\|	|	(0,1)
+-	\.	a.b	(1,2)
+-	\n	n	(0,1)
+-	\a	a	(0,1)
+-	}	}	(0,1)
+-	]	]	(0,1)
+
+# Brackets
+-	[abc]	xbx	(1,2)
+-	[^abc]	abcd	(3,4)
+-	[]a]	]	(0,1)
+-	[^]a]	]b	(1,2)
+-	[a-]	-	(0,1)
+-	[-a]	-	(0,1)
+-	[--z]	m	(0,1)
+-	[a-c-e]	a	err 11
+-	[a--]	a	err 11
+-	[z-a]	a	err 11
+-	[%80-%FF]	%E9	(0,1)
+-	[[:alpha:]]+	12ab3	(2,4)
+-	[[:digit:][:space:]]+	a1 2b	(1,4)
+-	[[:word:]]	a	err 4
+-	[[:ALPHA:]]	a	err 4
+-	[[:alpha:]-z]	a	err 11
+-	[a-[:digit:]]	a	err 11
+-	[[.a.]]	a	(0,1)
+-	[[.-.]a]	-	(0,1)
+-	[[.space.]]	%20	err 3
+-	[[..]]	a	err 3
+-	[[=a=]]	a	(0,1)
+-	[[=ab=]]	a	err 3
+-	[[:alpha:	a	err 7
+-	[a	a	err 7
+-	[	a	err 2
+-	[^	a	err 2
+-	[\]	\	(0,1)
+-	[\n]	n	(0,1)
+-	[[]	[	(0,1)
+-	[a[]	[	(0,1)
+-	[[.a.]-c]	b	(0,1)
+-	[[..]-a]	a	err 3
+-	[[:punct:]]+	a,.!b	(1,4)
+-	[[:xdigit:]]+	xDEADbeefz	(1,9)
+-	[[:upper:][:lower:]]+	1aB2	(1,3)
+-	[[:cntrl:]]	a%01b	(1,2)
+-	[[:print:]]+	%01ab%20c%7F	(1,5)
+-	[[:graph:]]+	%20ab%20	(1,3)
+-	[[:blank:]]+	a%20%09%0Ab	(1,3)
+
+# GNU extensions
+-	\w+	--ab_1--	(2,6)
+-	\W+	ab--cd	(2,4)
+-	\s+	a%20%09%0Ab	(1,4)
+-	\S+	%20ab%20	(1,3)
+-	\bab	xab%20ab	(4,6)
+-	ab\b	abx%20ab	(4,6)
+-	\Bb	ab	(1,2)
+-	\<a	ba%20a	(3,4)
+-	a\>	ab%20a	(3,4)
+-	\`a	aa	(0,1)
+-	a\'	aa	(1,2)
+-	\b	%00	nomatch
+-	\B	%00	(0,0)
+-	\B	ab	(1,1)
+-	\B	.ab	(0,0)
+-	\b	.a	(1,1)
+-	x*\B	.ab	(0,0)
+-	a*\B	ca.	(2,2)
+-	a*\B	cax	(1,2)
+-	b*\B	_b	(2,2)
+-	a*\B	cc	(1,1)
+
+# Anchors and newlines: no REG_NEWLINE, but the automaton sees a
+# newline the match consumed
+-	^b	a%0Ab	nomatch
+-	%0A^b	a%0Ab	(1,3)
+-	(.)^b	a%0Ab	(1,3)(1,2)
+-	a$	a%0Ab	nomatch
+-	a$.	a%0Ab	(0,2)
+-	(a)$.	a%0Ab	nomatch
+-	(a$.|a)	a%0Ab	nomatch
+-	a$.|a	a%0Ab	(0,2)
+-	a\'.	a%0Ab	nomatch
+-	^$	%00	(0,0)
+-	a^b	a^b	nomatch
+-	a$b	a$b	nomatch
+-	x$|y	x	(0,1)
+-	(^a|b)+	aab	nomatch
+-	($)*{1,}x	x	(0,1)(-1,-1)
+
+# Back-references
+-	(a)\1	aa	(0,2)(0,1)
+-	(a)\1	ab	nomatch
+-	(a*)\1	aaaa	(0,4)(0,2)
+-	(a|b)*\1	abb	(0,3)(1,2)
+-	(a*)*\1	aab	(0,2)(0,1)
+-	(a*)*\1	%00	(0,0)(0,0)
+-	(a*)*(b*)\1	%00	(0,0)(0,0)(-1,-1)
+-	(a*)*(b*)*\1	bb	(0,2)(0,0)(-1,-1)
+-	(a*)+(b*)*\1	%00	(0,0)(0,0)(-1,-1)
+-	()\1	x	(0,0)(0,0)
+-	(a)|\1	a	err 6
+-	(a\1)	a	err 6
+-	\1(a)	aa	err 6
+-	(a){0}\1	a	nomatch
+-	(a)(b)(c)(d)(e)(f)(g)(h)(i)\9	abcdefghii	(0,10)(0,1)(1,2)(2,3)(3,4)(4,5)(5,6)(6,7)(7,8)(8,9)
+-	((a)|b)\2	aa	(0,2)(0,1)(0,1)
+-	(a?){2}\1	aa	nomatch
+-	(a|){2}\1	aaa	(0,3)(1,2)
+-	(a|){1,2}\1	%00	(0,0)(0,0)
+-	(){2}\1	%00	nomatch
+-	.1(a*)*\1	x1a	(0,3)(2,2)
+-	(x)(y)?\2	x	nomatch
+-	(a)(b)?\2*c	ac	(0,2)(0,1)(-1,-1)
+
+# Case folding (nocasematch)
+i	abc	xABCx	(1,4)
+i	[a-c]+	xABCx	(1,4)
+i	[^a]	A	nomatch
+i	[[:lower:]]+	aBc	(0,3)
+i	[[:upper:]]+	aBc	(0,3)
+i	\a	A	nomatch
+i	\A	a	(0,1)
+i	(a)\1	aA	(0,2)(0,1)
+i	[Z-a]	a	err 11
+i	[_-a]	a	err 11
+i	[[.a.]]	A	(0,1)
+i	\w	B	(0,1)
+
+# UTF-8
+u	.	%C3%A9	(0,2)
+u	.	%FF	nomatch
+u	%FF	%FF	(0,1)
+u	..	%C3%A9	nomatch
+u	%C3.	%C3%A9	nomatch
+u	%A9	%C3%A9	(1,2)
+u	[%C3%A9]	x%C3%A9	(1,3)
+u	[^a]	%C3%A9	(0,2)
+u	[^a]	%FF	nomatch
+u	[a-%C3%A9]	b	err 3
+u	[%80-%FF]	%C3%A9	(0,2)
+u	[%80-%FF]	%E2%82%AC	nomatch
+u	%C3%A9*	%C3%A9%C3%A9	(0,4)
+u	(%C3%A9|b)+	b%C3%A9b	(0,4)(3,4)
+u	[[=%C3%A9=]]	%C3%A9	err 3
+u	[[.%C3%A9.]]	%C3%A9	err 3
+u	\w+	ab_c	(0,4)
+u	x*	%C3%A9	(0,0)
+u	a*\B	ca.	(2,2)

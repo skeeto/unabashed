@@ -2,7 +2,9 @@
 # Usage: tools/fuzz MODE [MINUTES [CORES]]
 # Build main_fuzz.cpp in one of its modes and fuzz it with AFL++ in
 # ~/fuzz-MODE, from a snapshot of the working tree. MODE is run, parse,
-# chaos or isolate (see main_fuzz.cpp). Defaults: 60 minutes, 2 cores.
+# chaos or isolate (see main_fuzz.cpp), or regex, which compares
+# regex.cpp with glibc in memory (t/unit/regex_diff.cpp). Defaults: 60
+# minutes, 2 cores.
 # Run it in WSL or on Linux with AFL++ installed; crashes land in
 # ~/fuzz-MODE/out/*/crashes. To replay them, build the same mode with a
 # plain compiler, which runs each file named on its command line:
@@ -18,6 +20,7 @@ run)     def= ;;
 parse)   def=-DFUZZ_PARSE ;;
 chaos)   def=-DFUZZ_CHAOS ;;
 isolate) def=-DFUZZ_ISOLATE ;;
+regex)   def= ;;
 *)       echo "tools/fuzz: unknown mode $mode" >&2; exit 2 ;;
 esac
 src=$(cd "$(dirname "$0")/.." && pwd)
@@ -25,13 +28,31 @@ dir=$HOME/fuzz-$mode
 rm -rf "$dir"
 mkdir -p "$dir/src" "$dir/in"
 (cd "$src" && git ls-files -z | xargs -0 tar cf - | tar xf - -C "$dir/src")
+target=main_fuzz.cpp
+[ "$mode" = regex ] && target=t/unit/regex_diff.cpp
 afl-clang-fast++ -std=c++20 -fno-exceptions -fno-rtti -g3 -O1 \
     -fsanitize=undefined -fsanitize-trap $def \
-    -o "$dir/fuzz" "$dir/src/main_fuzz.cpp"
-# Seeds: the small spec scripts
-for f in "$dir"/src/t/exec/*.sh "$dir"/src/t/parse/*.sh; do
-    [ "$(wc -c <"$f")" -lt 2000 ] && cp "$f" "$dir/in/"
-done
+    -o "$dir/fuzz" "$dir/src/$target"
+if [ "$mode" = regex ]; then
+    # Seeds: a flags byte (octal), a pattern, a newline, a subject
+    n=0
+    while read -r flags pat subj; do
+        n=$((n + 1))
+        printf "\\$flags%s\n%s" "$pat" "$subj" >"$dir/in/$n"
+    done <<'END'
+000 (a|ab)(c|bcd)(d*) abcd
+000 (a*)*\1 aab
+001 [[:upper:]]+\b x.AbC_d
+000 ^(x|y)?[^]a-c]{2,3}$ y-zz
+002 \w+\s*\<[é-ü]. é_ab_é
+000 (()|a)+\2{0,2}b.\' aab
+END
+else
+    # Seeds: the small spec scripts
+    for f in "$dir"/src/t/exec/*.sh "$dir"/src/t/parse/*.sh; do
+        [ "$(wc -c <"$f")" -lt 2000 ] && cp "$f" "$dir/in/"
+    done
+fi
 cd "$dir"
 export AFL_SKIP_CPUFREQ=1 AFL_NO_UI=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
 afl-cmin -i in -o min -- ./fuzz >/dev/null 2>&1 || cp -r in min

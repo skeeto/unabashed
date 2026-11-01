@@ -1,0 +1,230 @@
+# Inputs for regex_diff --record, which writes regex.golden from glibc's
+# regcomp/regexec (REG_EXTENDED). Fields are tab-separated: flags (-
+# none, i REG_ICASE, u the C.UTF-8 locale), pattern, subject. Bytes
+# outside ! to ~, and %, are written %HH, and %00 is an empty field.
+
+# Literals, dot, alternation, grouping
+-	abc	xxabcxx
+-	a.c	abc
+-	a.c	a%0Ac
+-	a|b|c	zzc
+-	(ab|a)(bc|c)	abc
+-	(a|ab)(c|bcd)(d*)	abcd
+-	(a*)(b*)	aabbb
+-	(a*)+	b
+-	(a*)*	b
+-	(a?)*	aa
+-	(a|)*	aa
+-	(|a)	a
+-	(a|)	a
+-	(|a)+	aa
+-	()	x
+-	()*	x
+-	(()|a)+	aab
+-	((a)|b)*	ab
+-	((a)|b)*	ba
+-	(a|b)*c	ababc
+-	x*	%00
+-	%00	abc
+-	(a)|b	b
+-	a(b)?c	ac
+-	(a(b)?)+	aba
+-	(.)(.)?(.)?	ab
+
+# Leftmost-longest
+-	a|ab	abc
+-	(a|ab)(c|bcd)	abcd
+-	(a+|b+)*	aabba
+-	x*y*	zz
+-	(wee|week)(knights|night)	weeknights
+
+# Repetition and intervals
+-	a{2}	aaa
+-	a{2,}	aaaa
+-	a{,2}	aaaa
+-	a{0}	aaa
+-	a{0}b	ab
+-	a{1,3}?	aaaa
+-	a**	aa
+-	a+?	aa
+-	(a){2}	aaa
+-	(a|b){2,3}	ababa
+-	(x?){2}	x
+-	(x?){0,3}y	xxy
+-	(a*){1,}b	aab
+-	a{,}	aaa
+-	a{1,2,3}	a
+-	a{1\,2}	a
+-	a{	a
+-	a{1	a
+-	a{1,2	a
+-	a{}	a
+-	a{x}	a
+-	a{2,1}	a
+-	a{32767}	a
+-	a{32768}	a
+-	{1}a	a
+-	*a	a
+-	a|*b	b
+-	(+a)	a
+-	^*	a
+-	$*	a
+-	a{1}{2}	aa
+
+# Parentheses and escapes
+-	)	a)b
+-	a)	a)
+-	(	a
+-	(a	a
+-	a\	a
+-	\(a\)	(a)
+-	\{	{
+-	\|	|
+-	\.	a.b
+-	\n	n
+-	\a	a
+-	}	}
+-	]	]
+
+# Brackets
+-	[abc]	xbx
+-	[^abc]	abcd
+-	[]a]	]
+-	[^]a]	]b
+-	[a-]	-
+-	[-a]	-
+-	[--z]	m
+-	[a-c-e]	a
+-	[a--]	a
+-	[z-a]	a
+-	[%80-%FF]	%E9
+-	[[:alpha:]]+	12ab3
+-	[[:digit:][:space:]]+	a1 2b
+-	[[:word:]]	a
+-	[[:ALPHA:]]	a
+-	[[:alpha:]-z]	a
+-	[a-[:digit:]]	a
+-	[[.a.]]	a
+-	[[.-.]a]	-
+-	[[.space.]]	%20
+-	[[..]]	a
+-	[[=a=]]	a
+-	[[=ab=]]	a
+-	[[:alpha:	a
+-	[a	a
+-	[	a
+-	[^	a
+-	[\]	\
+-	[\n]	n
+-	[[]	[
+-	[a[]	[
+-	[[.a.]-c]	b
+-	[[..]-a]	a
+-	[[:punct:]]+	a,.!b
+-	[[:xdigit:]]+	xDEADbeefz
+-	[[:upper:][:lower:]]+	1aB2
+-	[[:cntrl:]]	a%01b
+-	[[:print:]]+	%01ab%20c%7F
+-	[[:graph:]]+	%20ab%20
+-	[[:blank:]]+	a%20%09%0Ab
+
+# GNU extensions
+-	\w+	--ab_1--
+-	\W+	ab--cd
+-	\s+	a%20%09%0Ab
+-	\S+	%20ab%20
+-	\bab	xab%20ab
+-	ab\b	abx%20ab
+-	\Bb	ab
+-	\<a	ba%20a
+-	a\>	ab%20a
+-	\`a	aa
+-	a\'	aa
+-	\b	%00
+-	\B	%00
+-	\B	ab
+-	\B	.ab
+-	\b	.a
+-	x*\B	.ab
+-	a*\B	ca.
+-	a*\B	cax
+-	b*\B	_b
+-	a*\B	cc
+
+# Anchors and newlines: no REG_NEWLINE, but the automaton sees a
+# newline the match consumed
+-	^b	a%0Ab
+-	%0A^b	a%0Ab
+-	(.)^b	a%0Ab
+-	a$	a%0Ab
+-	a$.	a%0Ab
+-	(a)$.	a%0Ab
+-	(a$.|a)	a%0Ab
+-	a$.|a	a%0Ab
+-	a\'.	a%0Ab
+-	^$	%00
+-	a^b	a^b
+-	a$b	a$b
+-	x$|y	x
+-	(^a|b)+	aab
+-	($)*{1,}x	x
+
+# Back-references
+-	(a)\1	aa
+-	(a)\1	ab
+-	(a*)\1	aaaa
+-	(a|b)*\1	abb
+-	(a*)*\1	aab
+-	(a*)*\1	%00
+-	(a*)*(b*)\1	%00
+-	(a*)*(b*)*\1	bb
+-	(a*)+(b*)*\1	%00
+-	()\1	x
+-	(a)|\1	a
+-	(a\1)	a
+-	\1(a)	aa
+-	(a){0}\1	a
+-	(a)(b)(c)(d)(e)(f)(g)(h)(i)\9	abcdefghii
+-	((a)|b)\2	aa
+-	(a?){2}\1	aa
+-	(a|){2}\1	aaa
+-	(a|){1,2}\1	%00
+-	(){2}\1	%00
+-	.1(a*)*\1	x1a
+-	(x)(y)?\2	x
+-	(a)(b)?\2*c	ac
+
+# Case folding (nocasematch)
+i	abc	xABCx
+i	[a-c]+	xABCx
+i	[^a]	A
+i	[[:lower:]]+	aBc
+i	[[:upper:]]+	aBc
+i	\a	A
+i	\A	a
+i	(a)\1	aA
+i	[Z-a]	a
+i	[_-a]	a
+i	[[.a.]]	A
+i	\w	B
+
+# UTF-8
+u	.	%C3%A9
+u	.	%FF
+u	%FF	%FF
+u	..	%C3%A9
+u	%C3.	%C3%A9
+u	%A9	%C3%A9
+u	[%C3%A9]	x%C3%A9
+u	[^a]	%C3%A9
+u	[^a]	%FF
+u	[a-%C3%A9]	b
+u	[%80-%FF]	%C3%A9
+u	[%80-%FF]	%E2%82%AC
+u	%C3%A9*	%C3%A9%C3%A9
+u	(%C3%A9|b)+	b%C3%A9b
+u	[[=%C3%A9=]]	%C3%A9
+u	[[.%C3%A9.]]	%C3%A9
+u	\w+	ab_c
+u	x*	%C3%A9
+u	a*\B	ca.
