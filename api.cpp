@@ -171,6 +171,10 @@ static Stat    os_fstat(Os *, Handle);
 static Dirent *os_list(Os *, Arena *, Str dir, i32 *err);
 // Start a program. The child's descriptors are exactly those listed.
 static Spawned os_spawn(Os *, Arena scratch, Spawn *);
+// Replace the process with a program, as os_spawn would start it (its
+// descriptors exactly those listed). Returns only on failure, with the
+// process as it was: an E_* error, E_NOSYS where the platform cannot.
+static i32     os_exec(Os *, Arena scratch, Spawn *);
 // Wait for a spawned program: 0-255 on exit, 128+N|WSIGNALED on signal N.
 static i32     os_waitproc(Os *, Handle proc);
 // Begin an operation without blocking. It may complete at once (done
@@ -206,5 +210,13 @@ static Fiber  *os_fiber(Os *, Arena *, iz stack, void (*)(Os *, void *), void *)
 static void    os_switch(Os *, Fiber *);
 // Release a fiber other than the current one.
 static void    os_fiberfree(Os *, Fiber *);
+// Test layers, for the chaos fuzzer (no-ops elsewhere): the running
+// task's identity, the same under every chaos seed, and how many tasks
+// the scheduler has; called when either changes.
+static void    os_tasktag(Os *, u64 tag, iz ntasks);
+// Test layers: what the shell just did may legitimately depend on the
+// schedule (a write that found no reader), so runs under different
+// chaos seeds need not agree.
+static void    os_racy(Os *);
 // Entry point, called by the platform after it fills in OsInfo.
 static i32     sh_main(Os *, OsInfo *);

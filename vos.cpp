@@ -49,6 +49,7 @@ struct VPipe {
     iz   len;      // end of the buffered bytes
     i32  readers;
     i32  writers;
+    u64  rkey;     // tracing: the last reader's identity, or 0
 };
 
 struct VFile {      // open file description
@@ -61,6 +62,16 @@ struct VFile {      // open file description
 };
 
 enum { VOS_HANDLES = 1024 };
+
+struct VWriter {
+    u64 key;
+    u64 hash[2];   // FNV-1a of what it wrote to stdout and stderr
+};
+
+struct VCount {
+    u64 key;
+    u64 n;
+};
 
 enum : i32 { VP_FREE, VP_RUN, VP_BLOCK, VP_EXIT };
 enum : i32 { VW_NONE, VW_READ, VW_WRITE, VW_PROC, VW_IO, VW_YIELD, VW_SLEEP, VW_TTY };
@@ -84,6 +95,9 @@ struct VProc {
     VPipe  *wpipe;
     Handle  wproc;
     Io     *ios;      // submitted and not yet completed
+    u64     lid;      // tracing: identity, the same under every seed
+    u64     tag;      // tracing: a shell's running task (os_tasktag)
+    iz      ntasks;   // tracing: a shell's task count
     FakeCtx ctx;
     Arena   mem;      // a fixed block: the program's memory
 };
@@ -112,6 +126,15 @@ struct Vos {
     Str     in;          // its standard input
     iz      inpos;
     b32     ttyin;       // or else a terminal that never delivers input
+    // Tracing for the chaos fuzzer: output per writer, as hashes, and
+    // whether the run did something whose outcome may depend on the
+    // schedule, such as changing a file while tasks run concurrently
+    b32     trace;
+    b32     racy;
+    VWriter writers[256];
+    i32     nwriters;
+    VCount  spawns[256];   // programs started per (process, task)
+    i32     nspawns;
 };
 
 static VNode *vnew(Vos *v, VNode *dir, Str name, i32 type, i32 mode)
@@ -285,10 +308,18 @@ static iz vpipewrite(Vos *v, VPipe *p, u8 *buf, iz len)
     return n;
 }
 
-static iz vpiperead(VPipe *p, u8 *buf, iz len)
+static u64 vkey(Vos *);
+
+static iz vpiperead(Vos *v, VPipe *p, u8 *buf, iz len)
 {
     iz n = p->len - p->pos;
     n = n<len ? n : len;
+    if (v->trace && n) {
+        // Readers sharing a pipe may split its bytes any way
+        u64 key = vkey(v);
+        if (p->rkey && p->rkey!=key) v->racy = 1;
+        p->rkey = key;
+    }
     copybytes(buf, p->buf+p->pos, n);
     p->pos += n;
     if (p->pos == p->len) p->pos = p->len = 0;
@@ -305,6 +336,65 @@ static u32 vrand(Vos *v)
     return (u32)((x * 0x2545f4914f6cdd1dull) >> 32);
 }
 
+
+static u64 vmix(u64 a, u64 b)
+{
+    u64 h = (a ^ b*0x9e3779b97f4a7c15u) * 0xbf58476d1ce4e5b9u;
+    return h ^ h>>31;
+}
+
+// Tracing: the identity of the running process and task.
+static u64 vkey(Vos *v)
+{
+    VProc *p = v->procs + v->cur;
+    return vmix(p->lid, p->tag);
+}
+
+// Tracing: record output to the outermost standard streams by writer.
+static void vtraceout(Vos *v, Handle h, u8 *buf, iz len)
+{
+    u64 key = vkey(v);
+    i32 i = 0;
+    for (; i<v->nwriters && v->writers[i].key!=key; i++) {}
+    if (i == countof(v->writers)) {
+        v->racy = 1;  // too many to tell apart
+        return;
+    }
+    if (i == v->nwriters) {
+        v->nwriters++;
+        v->writers[i].key     = key;
+        v->writers[i].hash[0] = v->writers[i].hash[1] = 0xcbf29ce484222325u;
+    }
+    u64 *hash = v->writers[i].hash + (h==2);
+    for (iz j = 0; j < len; j++) {
+        *hash = (*hash ^ buf[j]) * 0x100000001b3u;
+    }
+}
+
+// Tracing: is more than one task able to run now? A process waiting
+// for a program it started counts as that program.
+static b32 vconcurrent(Vos *v)
+{
+    iz n = 0;
+    for (i32 i = 0; i < v->nprocs; i++) {
+        VProc *p = v->procs + i;
+        if (p->state!=VP_RUN && p->state!=VP_BLOCK) continue;
+        iz k = p->ntasks;
+        if (p->state==VP_BLOCK && p->wait==VW_PROC) k--;
+        if (p->state==VP_BLOCK && p->wait==VW_IO) {
+            for (Io *io = p->ios; io; io = io->next) k -= io->op==IO_PROC;
+        }
+        n += k;
+    }
+    return n > 1;
+}
+
+// Tracing: the file system changes. Concurrent tasks may see it in
+// either order.
+static void vmutate(Vos *v)
+{
+    if (v->trace && vconcurrent(v)) v->racy = 1;
+}
 
 static Handle vnewhandle(Vos *v)
 {
@@ -592,6 +682,7 @@ static Opened os_open(Os *os, Arena, Str path, i32 flags, i32 mode)
             r.err = E_MFILE;
             return r;
         }
+        if (flags & (OF_WRITE|OF_TRUNC)) vmutate(v);
         VFile *nf = v->files + n;
         nf->kind  = f->kind;
         nf->flags = flags;
@@ -613,6 +704,7 @@ static Opened os_open(Os *os, Arena, Str path, i32 flags, i32 mode)
     }
     VResolved res = vresolve(v, path, 1);
     VNode *n = res.node;
+    if (flags & (OF_WRITE|OF_CREATE|OF_TRUNC)) vmutate(v);
     if (!n) {
         if (res.err!=E_NOENT || !(flags&OF_CREATE) || !res.dir) {
             r.err = res.err;
@@ -731,6 +823,7 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
 {
     Vos *v = osvos(os);
     if (h==1 || h==2) {
+        if (v->trace) vtraceout(v, h, buf, len);
         Str *dst = h==1 ? &v->out : &v->err;
         if (len > v->outcap - dst->len) {
             return 0;
@@ -753,6 +846,7 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
         if (!(f->flags & OF_WRITE)) return 0;
         if (f->flags & OF_APPEND) f->pos = f->node->data.len;
         if (len > ((iz)1<<26) - f->pos) return 0;  // file too large
+        vmutate(v);
         vwritenode(v, f->node, f->pos, buf, len);
         f->pos += len;
         return 1;
@@ -762,6 +856,7 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
         if (v->chaos && vrand(v)%4==0) vyield(os, v);
         while (len > 0) {
             if (!p->readers) {
+                v->racy = 1;  // whether the reader was gone yet
                 if (!me->shell && !(me->sigign>>12 & 1)) {
                     vexit(os, v, WSIGNALED|(128+13));  // SIGPIPE
                 }
@@ -829,7 +924,7 @@ static iz os_read(Os *os, Handle h, u8 *buf, iz len)
                 return -1;
             }
         }
-        return vpiperead(p, buf, len);
+        return vpiperead(v, p, buf, len);
     }
     }
     return -1;
@@ -981,6 +1076,18 @@ static u64 os_sigpending(Os *os)
     return r;
 }
 
+static void os_tasktag(Os *os, u64 tag, iz ntasks)
+{
+    Vos *v = osvos(os);
+    v->procs[v->cur].tag    = tag;
+    v->procs[v->cur].ntasks = ntasks;
+}
+
+static void os_racy(Os *os)
+{
+    osvos(os)->racy = 1;
+}
+
 static void os_sigmode(Os *, i32, i32)
 {
     // shells take every signal through os_sigpending
@@ -1084,12 +1191,33 @@ static Spawned os_spawn(Os *os, Arena, Spawn *s)
     p->wait   = VW_NONE;
     p->ios    = 0;
     p->ctx    = ctx;
+    p->tag    = 0;
+    p->ntasks = 1;
+    if (v->trace) {
+        // Identified by its starter and how many that task started
+        VProc *me  = v->procs + v->cur;
+        u64    key = vmix(me->lid, me->tag);
+        i32    i   = 0;
+        for (; i<v->nspawns && v->spawns[i].key!=key; i++) {}
+        if (i == countof(v->spawns)) {
+            v->racy = 1;
+            i = 0;
+        } else if (i == v->nspawns) {
+            v->spawns[v->nspawns++].key = key;
+        }
+        p->lid = vmix(key, ++v->spawns[i].n);
+    }
     p->stack  = p->shell ? (iz)1<<25 : (iz)1<<20;
     p->own    = p->fiber = os_fiber(os, &v->a, p->stack, vprocentry, p);
     v->live++;
     r.proc = (Handle)id;
     r.pid  = p->pid;
     return r;
+}
+
+static i32 os_exec(Os *, Arena, Spawn *)
+{
+    return E_NOSYS;  // a vos process is a fiber: start a child instead
 }
 
 static i32 os_waitproc(Os *os, Handle proc)
@@ -1120,7 +1248,7 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
         if (f && f->kind==VK_PIPEREAD) {
             VPipe *p = f->pipe;
             if (p->len==p->pos && p->writers) return 0;
-            if (perform) io->n = vpiperead(p, io->buf, io->len);
+            if (perform) io->n = vpiperead(v, p, io->buf, io->len);
         } else if (perform) {
             io->n = os_read(os, io->h, io->buf, io->len);
             io->err = io->n<0 ? E_BADF : 0;
@@ -1130,6 +1258,7 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
         if (f && f->kind==VK_PIPEWRITE) {
             VPipe *p = f->pipe;
             if (!p->readers) {
+                v->racy = 1;
                 io->err = E_PIPE;
                 return 1;
             }
@@ -1164,6 +1293,7 @@ static void os_submit(Os *os, Io *io)
     VProc *me = v->procs + v->cur;
     io->done = 0;
     io->next = 0;
+    io->plt[0] = me->tag;  // tracing: done later, perhaps for another task
     if (!v->chaos || vrand(v)%2) {
         if (vio(os, v, io, 1)) {
             io->done = 1;
@@ -1187,7 +1317,11 @@ static Io *os_wait(Os *os, i64 deadline)
         }
         for (Io **p = &me->ios; *p; p = &(*p)->next) {
             Io *io = *p;
-            if (vio(os, v, io, 1)) {
+            u64 tag = me->tag;
+            me->tag = io->plt[0];  // tracing: as the task that submitted it
+            b32 ok = vio(os, v, io, 1);
+            me->tag = tag;
+            if (ok) {
                 *p = io->next;
                 io->done = 1;
                 return io;
@@ -1276,6 +1410,8 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes)
     v->procs[0].state = VP_RUN;
     v->procs[0].shell = 1;
     v->procs[0].pid   = 2;  // as the harnesses' OsInfo
+    v->procs[0].lid   = 1;
+    v->procs[0].ntasks = 1;
 
     v->root = vnew(v, 0, "", FT_DIR, 0755);
     vmkdirs(v, "home/oracle")->uid = 1000;
@@ -1331,6 +1467,7 @@ static VNode *vcreatable(Vos *v, Str path, VResolved *r, i32 *err)
 static i32 os_mkdir(Os *os, Arena, Str path, i32 mode)
 {
     Vos      *v = osvos(os);
+    vmutate(v);
     VResolved r;
     i32       err;
     VNode    *dir = vcreatable(v, path, &r, &err);
@@ -1342,6 +1479,7 @@ static i32 os_mkdir(Os *os, Arena, Str path, i32 mode)
 static i32 os_mkfifo(Os *os, Arena, Str path, i32 mode)
 {
     Vos      *v = osvos(os);
+    vmutate(v);
     VResolved r;
     i32       err;
     VNode    *dir = vcreatable(v, path, &r, &err);
@@ -1353,6 +1491,7 @@ static i32 os_mkfifo(Os *os, Arena, Str path, i32 mode)
 static i32 os_symlink(Os *os, Arena, Str target, Str path)
 {
     Vos      *v = osvos(os);
+    vmutate(v);
     VResolved r;
     i32       err;
     VNode    *dir = vcreatable(v, path, &r, &err);
@@ -1366,6 +1505,7 @@ static i32 os_symlink(Os *os, Arena, Str target, Str path)
 static i32 os_link(Os *os, Arena, Str from, Str to)
 {
     Vos      *v = osvos(os);
+    vmutate(v);
     VResolved s = vresolve(v, from, 0);
     if (!s.node) return s.err;
     if (s.node->type == FT_DIR) return E_PERM;
@@ -1386,6 +1526,7 @@ static i32 os_link(Os *os, Arena, Str from, Str to)
 static i32 os_unlink(Os *os, Arena, Str path)
 {
     Vos      *v = osvos(os);
+    vmutate(v);
     VResolved r = vresolve(v, path, 0);
     v->clock += 1000;
     if (!r.node) return r.err;
@@ -1398,6 +1539,7 @@ static i32 os_unlink(Os *os, Arena, Str path)
 static i32 os_rmdir(Os *os, Arena, Str path)
 {
     Vos      *v = osvos(os);
+    vmutate(v);
     VResolved r = vresolve(v, path, 0);
     v->clock += 1000;
     if (!r.node) return r.err;
@@ -1415,6 +1557,7 @@ static i32 os_rmdir(Os *os, Arena, Str path)
 static i32 os_rename(Os *os, Arena, Str from, Str to)
 {
     Vos      *v = osvos(os);
+    vmutate(v);
     VResolved a = vresolve(v, from, 0);
     VResolved b = vresolve(v, to, 0);
     v->clock += 1000;
@@ -1452,6 +1595,7 @@ static i32 os_rename(Os *os, Arena, Str from, Str to)
 static i32 os_chmod(Os *os, Arena, Str path, i32 mode)
 {
     Vos      *v = osvos(os);
+    vmutate(v);
     VResolved r = vresolve(v, path, 1);
     if (!r.node) return r.err;
     r.node->mode = mode & 07777;
@@ -1461,6 +1605,7 @@ static i32 os_chmod(Os *os, Arena, Str path, i32 mode)
 static i32 os_utime(Os *os, Arena, Str path, i64 mtime)
 {
     Vos      *v = osvos(os);
+    vmutate(v);
     VResolved r = vresolve(v, path, 1);
     if (!r.node) return r.err;
     r.node->mtime = mtime;

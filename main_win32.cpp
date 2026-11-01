@@ -1031,6 +1031,19 @@ static void os_sigmode(Os *, i32, i32)
 {
 }
 
+static void os_tasktag(Os *, u64, iz)
+{
+}
+
+static void os_racy(Os *)
+{
+}
+
+static i32 os_exec(Os *, Arena, Spawn *)
+{
+    return E_NOSYS;  // no exec on Windows: start a child instead
+}
+
 static i32 os_waitproc(Os *, Handle proc)
 {
     i32 code = 127;

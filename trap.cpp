@@ -426,7 +426,9 @@ static void runexittrap(Shell *sh, Arena)
     // A fresh arena: the caller's may hold the commands just run, to
     // which BASH_COMMAND may still point (so keep its text first)
     keepcmdtext(sh, 0, (byte *)-1);
-    Arena scratch = *scratchat(sh, sh->capdepth+1);
+    // Its depth is taken, so that traps it runs (ERR) use the next
+    i32   depth   = ++sh->capdepth;
+    Arena scratch = *scratchat(sh, depth);
     Str cmd = clone(&scratch, sh->traps[TRAP_EXIT]);
     sfreestr(sh->store, sh->traps[TRAP_EXIT]);
     sh->traps[TRAP_EXIT] = {};
@@ -445,9 +447,10 @@ static void runexittrap(Shell *sh, Arena)
     Value *v = lookup(sh, "BASH_TRAPSIG");
     if (v) v->attrs &= ~V_EXPORT;
     if (!__builtin_setjmp(e.jmp)) {
-        runsource(sh, cmd, sh->iname, scratch, 0, sh->line);
+        runsource(sh, cmd, sh->iname, scratch, 0, 1);  // as bash: line 1
         sh->status = status;
     }
+    sh->capdepth = depth - 1;
     poptemp(sh, "BASH_TRAPSIG");
     sh->intrap--;
     sh->esc     = e.up;

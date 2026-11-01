@@ -1134,6 +1134,8 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
 {
     Sched *s = sh->sched;
     Fdtab *t = sh->fds;
+    b32 execing = sh->execing;  // for this program only
+    sh->execing = 0;
     SpawnFd *fds = alloc<SpawnFd>(&a, t->top ? t->top : 1);
     iz nfds = 0;
     Handle *closeafter = alloc<Handle>(&a, t->top ? t->top : 1);
@@ -1218,6 +1220,16 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     sp.fds   = fds;
     sp.nfds  = nfds;
     sp.sigign = ignoredsigs(sh);
+    if (execing && !sh->subshell && !sh->capdepth && s->ntasks==1 &&
+            !npumps && !capfile && !sh->spawnto) {
+        // exec while nothing else runs in this process: become the
+        // program (it keeps the shell's pid), else start it as a child
+        i32 err = os_exec(sh->os, a, &sp);
+        if (err != E_NOSYS) {
+            for (i32 i = 0; i < nclose; i++) os_close(sh->os, closeafter[i]);
+            return -err;
+        }
+    }
     Spawned r = os_spawn(sh->os, a, &sp);
     for (i32 i = 0; i < nclose; i++) {
         os_close(sh->os, closeafter[i]);

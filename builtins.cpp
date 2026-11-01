@@ -1609,7 +1609,32 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     b32 eof = 0;
     b32 timedout = 0;
     i64 count = 0;
-    for (;;) {
+    Str s = {}, e = {};
+    b32 done = 0;
+    if (in && in->kind==F_MEM && (in->flags & OF_READ)) {
+        // Text in memory (a here-document or here-string): scan it in
+        // place, unless an escape needs the general loop
+        Str rest = cuthead(in->mem, in->pos<in->mem.len ? in->pos : in->mem.len);
+        iz  lim  = rest.len;
+        b32 capped = nchars>=0 && nchars<=lim;  // stops at the count, not EOF
+        lim = capped ? (iz)nchars : lim;
+        iz  k = 0;
+        b32 slash = 0;
+        if (exact) {
+            k = lim;
+        } else {
+            for (; k<lim && rest[k]!=delim; k++) slash |= rest[k]=='\\';
+        }
+        if (raw || !slash) {
+            b32 found = k < lim;
+            s = clone(&scratch, takehead(rest, k));
+            e = {alloc<u8>(&scratch, k), k};
+            in->pos += k + found;
+            eof  = !found && !capped;
+            done = 1;
+        }
+    }
+    for (; !done;) {
         if (nchars>=0 && count>=nchars) break;
         sh->intrread = self->introk = 1;
         self->deadline = deadline;
@@ -1653,8 +1678,10 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         putbyte(&esc, 0);
         count++;
     }
-    Str s = finish(&line);
-    Str e = finish(&esc);
+    if (!done) {
+        s = finish(&line);
+        e = finish(&esc);
+    }
 
     b32 ifsset;
     Str ifs = clone(&scratch, ifsvalue(sh, &ifsset));  // read may assign IFS
@@ -1698,12 +1725,13 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         return timedout ? 128+14 : eof;
     }
     // Split into the variables; the last takes the rest of the line
+    u8 isifs[256] = {};
+    for (iz j = 0; j < ifs.len; j++) isifs[ifs[j]] = 1;
     iz pos = 0;
     for (iz v = 0; v < nvars; v++) {
         // skip leading IFS whitespace
         while (pos<s.len && !e[pos] && ifswhite(s[pos])) {
-            b32 inifs = 0;
-            for (iz j = 0; j < ifs.len; j++) inifs |= ifs[j]==s[pos];
+            b32 inifs = isifs[s[pos]];
             if (!inifs) break;
             pos++;
         }
@@ -1716,26 +1744,22 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             // One more field ending the line, less its delimiter...
             iz end = pos;
             while (end < s.len) {
-                b32 inifs = 0;
-                if (!e[end]) for (iz j = 0; j < ifs.len; j++) inifs |= ifs[j]==s[end];
+                b32 inifs = !e[end] && isifs[s[end]];
                 if (inifs) break;
                 end++;
             }
             iz next = end;
             while (next<s.len && !e[next] && ifswhite(s[next])) {
-                b32 inifs = 0;
-                for (iz j = 0; j < ifs.len; j++) inifs |= ifs[j]==s[next];
+                b32 inifs = isifs[s[next]];
                 if (!inifs) break;
                 next++;
             }
             if (next < s.len && !e[next] && !ifswhite(s[next])) {
-                b32 inifs = 0;
-                for (iz j = 0; j < ifs.len; j++) inifs |= ifs[j]==s[next];
+                b32 inifs = isifs[s[next]];
                 if (inifs) next++;
             }
             while (next<s.len && !e[next] && ifswhite(s[next])) {
-                b32 inifs = 0;
-                for (iz j = 0; j < ifs.len; j++) inifs |= ifs[j]==s[next];
+                b32 inifs = isifs[s[next]];
                 if (!inifs) break;
                 next++;
             }
@@ -1747,8 +1771,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             // ...or else the rest, minus trailing IFS whitespace
             end = s.len;
             while (end > pos) {  // escaped or not
-                b32 inifs = 0;
-                for (iz j = 0; j < ifs.len; j++) inifs |= ifs[j]==s[end-1];
+                b32 inifs = isifs[s[end-1]];
                 if (!inifs || !ifswhite(s[end-1])) break;
                 end--;
             }
@@ -1757,22 +1780,19 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         } else {
             iz start = pos;
             while (pos < s.len) {
-                b32 inifs = 0;
-                if (!e[pos]) for (iz j = 0; j < ifs.len; j++) inifs |= ifs[j]==s[pos];
+                b32 inifs = !e[pos] && isifs[s[pos]];
                 if (inifs) break;
                 pos++;
             }
             val = span(s.data+start, s.data+pos);
             // consume one delimiter with surrounding IFS whitespace
             while (pos<s.len && !e[pos] && ifswhite(s[pos])) {
-                b32 inifs = 0;
-                for (iz j = 0; j < ifs.len; j++) inifs |= ifs[j]==s[pos];
+                b32 inifs = isifs[s[pos]];
                 if (!inifs) break;
                 pos++;
             }
             if (pos < s.len && !e[pos]) {
-                b32 inifs = 0;
-                for (iz j = 0; j < ifs.len; j++) inifs |= ifs[j]==s[pos];
+                b32 inifs = isifs[s[pos]];
                 if (inifs && !ifswhite(s[pos])) pos++;
             }
         }
@@ -2034,6 +2054,7 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
 
     i32 status = 127;
     b32 failed = 1;
+    b32 tried  = 0;  // found: a failure ends the shell as a failed execve
     if (!haspath(sh, name) && !(found = pathlookup(sh, &scratch, name)).data) {
         Stat st = os_stat(sh->os, scratch, absolute(sh, &scratch, name), 1);
         if (!st.err && st.type==FT_DIR) {
@@ -2044,6 +2065,7 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
     } else {
         if (!found.data) found = name;
+        tried = 1;
         Str  full = absolute(sh, &scratch, found);
         Stat st   = os_stat(sh->os, scratch, full, 1);
         failed = !canexec(sh, st);
@@ -2052,15 +2074,19 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
             shellerror(sh, scratch, concat(&scratch, canonpath(&scratch, full), ": Is a directory"));
             status = 126;
         } else {
+            // Replacing the process keeps $$ for the program, as bash;
+            // runprogram decides whether nothing else stops it
+            sh->execing = !sh->shopt[S_EXECFAIL] && !sh->interactive;
             status = runexternal(sh, scratch, argv, nargs-i, env, found);
+            sh->execing = 0;
         }
     }
-    if (failed && (sh->shopt[S_EXECFAIL] || sh->interactive)) {
-        return status;  // a failed exec leaves the shell running
+    if (failed && ((sh->shopt[S_EXECFAIL] && !sh->subshell) || sh->interactive)) {
+        return status;  // a failed exec leaves the shell (not a subshell) running
     }
     sh->status  = status;
     sh->exiting = 1;
-    sh->execed  = !failed;  // replaced: no EXIT trap
+    sh->execed  = !failed || tried;  // replaced, or died trying: no EXIT trap
     if (sh->childsig) {
         // the program died by a signal: so does the replaced shell
         sh->killsig  = sh->childsig;

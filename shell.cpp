@@ -490,6 +490,7 @@ struct Shell {
     b32      noreport;     // in command and process substitutions: no reports
     b32      intrread;     // in the read builtin: trap actions run at once
     b32      execed;       // replaced by exec: no EXIT trap
+    b32      execing;      // exec's program may replace the process
     b32      errexited;    // set -e is ending this level
     i32      writeerr;     // why the last fdwrite failed
 };

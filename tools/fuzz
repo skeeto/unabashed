@@ -1,0 +1,49 @@
+#!/bin/sh
+# Usage: tools/fuzz MODE [MINUTES [CORES]]
+# Build main_fuzz.cpp in one of its modes and fuzz it with AFL++ in
+# ~/fuzz-MODE, from a snapshot of the working tree. MODE is run, parse,
+# chaos or isolate (see main_fuzz.cpp). Defaults: 60 minutes, 2 cores.
+# Run it in WSL or on Linux with AFL++ installed; crashes land in
+# ~/fuzz-MODE/out/*/crashes. To replay them, build the same mode with a
+# plain compiler, which runs each file named on its command line:
+#   g++ -std=c++20 -g3 -DFUZZ_CHAOS -o replay main_fuzz.cpp
+#   ./replay ~/fuzz-chaos/out/*/crashes/id*
+# Every mode runs scripts only on the virtual OS.
+set -e
+mode=${1:?usage: tools/fuzz MODE [MINUTES [CORES]]}
+mins=${2:-60}
+cores=${3:-2}
+case $mode in
+run)     def= ;;
+parse)   def=-DFUZZ_PARSE ;;
+chaos)   def=-DFUZZ_CHAOS ;;
+isolate) def=-DFUZZ_ISOLATE ;;
+*)       echo "tools/fuzz: unknown mode $mode" >&2; exit 2 ;;
+esac
+src=$(cd "$(dirname "$0")/.." && pwd)
+dir=$HOME/fuzz-$mode
+rm -rf "$dir"
+mkdir -p "$dir/src" "$dir/in"
+(cd "$src" && git ls-files -z | xargs -0 tar cf - | tar xf - -C "$dir/src")
+afl-clang-fast++ -std=c++20 -fno-exceptions -fno-rtti -g3 -O1 \
+    -fsanitize=undefined -fsanitize-trap $def \
+    -o "$dir/fuzz" "$dir/src/main_fuzz.cpp"
+# Seeds: the small spec scripts
+for f in "$dir"/src/t/exec/*.sh "$dir"/src/t/parse/*.sh; do
+    [ "$(wc -c <"$f")" -lt 2000 ] && cp "$f" "$dir/in/"
+done
+cd "$dir"
+export AFL_SKIP_CPUFREQ=1 AFL_NO_UI=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1
+afl-cmin -i in -o min -- ./fuzz >/dev/null 2>&1 || cp -r in min
+secs=$((mins * 60))
+afl-fuzz -V $secs -t 2000 -i min -o out -M m ./fuzz >m.log 2>&1 &
+i=1
+while [ $i -lt "$cores" ]; do
+    afl-fuzz -V $secs -t 2000 -i min -o out -S s$i ./fuzz >s$i.log 2>&1 &
+    i=$((i + 1))
+done
+wait
+for d in out/*/; do
+    n=$(ls "$d/crashes" 2>/dev/null | grep -c '^id' || true)
+    echo "$d: $n crashes"
+done

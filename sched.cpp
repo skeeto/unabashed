@@ -40,6 +40,8 @@ struct Task {
     Task   *joiner;    // a task waiting for this one to finish
     Task   *sib;       // its creator's list of procsubs to join later
     i64     pid;       // a procsub's BASHPID, for $! and wait
+    u64     tag;       // identity: its creator's tag and spawn count
+    u64     nspawn;    // tasks it has started
     void  (*fn)(Task *);
     void   *arg;
     Io      io;        // its pending OS operation
@@ -60,6 +62,8 @@ struct Pipe {
     Handle osr;        // its OS form once a program reads it (pipeosread)
     Task  *pump;       // feeding osr until the last reader closes
     b32    pumping;    // the pump still holds a reader reference
+    u64    rtag;       // the tag of the last task that read it
+    b32    read;       // rtag is set
 };
 
 enum : iz {
@@ -219,6 +223,7 @@ static void schedule(Sched *s)
             t->state = TS_RUNNING;
             if (t != self) {
                 s->cur = t;
+                os_tasktag(s->os, t->tag, s->ntasks);
                 os_switch(s->os, t->fiber);
                 // resumed by whichever task switched back here
             }
@@ -424,7 +429,12 @@ static Task *taskspawn(Sched *s, void (*fn)(Task *), void *arg, iz stack)
     t->sib    = 0;
     t->pid    = 0;
     t->state  = 0;
+    // Its identity follows from its creator's, never from the schedule
+    u64 h = (s->cur->tag ^ ++s->cur->nspawn) * 0x9e3779b97f4a7c15u;
+    t->tag    = h ^ h>>31;
+    t->nspawn = 0;
     s->ntasks++;
+    os_tasktag(s->os, s->cur->tag, s->ntasks);
     wake(s, t);
     return t;
 }
@@ -659,7 +669,13 @@ static iz pipereadraw(Sched *s, Pipe *p, u8 *buf, iz len)
         if (!waiton(s, &p->rwait)) return -1;
     }
     iz n = len<p->len ? len : p->len;
-    if (s->chaos && n>1) n = 1 + chaosrand(s)%(u32)n;
+    if (s->chaos) {
+        if (n > 1) n = 1 + chaosrand(s)%(u32)n;
+        // Readers sharing a pipe may split its bytes any way
+        if (n && p->read && p->rtag!=s->cur->tag) os_racy(s->os);
+        p->rtag = s->cur->tag;
+        p->read = 1;
+    }
     for (iz i = 0; i < n; i++) {
         buf[i] = p->buf[(p->head + i) & (PIPECAP - 1)];
     }
@@ -690,7 +706,10 @@ static iz piperead(Sched *s, Pipe *p, u8 *buf, iz len)
 static i32 pipewrite(Sched *s, Pipe *p, u8 *buf, iz len)
 {
     while (len > 0) {
-        if (!p->readers) return E_PIPE;
+        if (!p->readers) {
+            os_racy(s->os);  // whether the reader was gone yet
+            return E_PIPE;
+        }
         iz space = PIPECAP - p->len;
         if (!space) {
             if (!waiton(s, &p->wwait)) return E_DEADLK;

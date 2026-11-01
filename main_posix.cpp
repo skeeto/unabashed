@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -277,6 +278,21 @@ static Dirent *os_list(Os *, Arena *a, Str dir, i32 *err)
     return head;
 }
 
+// Close descriptors lo to hi, or lo up with hi -1, as close_range(2)
+// where the kernel has it.
+static void closefds(i32 lo, i32 hi)
+{
+    #ifdef SYS_close_range
+    if (!syscall(SYS_close_range, (unsigned)lo, (unsigned)hi, 0)) return;
+    #endif
+    for (i32 fd = lo; fd <= (hi<0 ? 1023 : hi); fd++) close(fd);
+}
+
+// Started with vfork: the child borrows the parent's memory until it
+// execs, so it only makes system calls on what was prepared before, and
+// reports a failed exec through err. Signals stay blocked until the
+// child has reset its dispositions, so no handler of the shell's runs
+// in it.
 static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
 {
     Spawned r = {};
@@ -287,35 +303,30 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
     for (iz i = 0; i < s->argc; i++) argv[i] = cpath(&scratch, s->argv[i]);
     char **envp = alloc<char *>(&scratch, s->nenv+1);
     for (iz i = 0; i < s->nenv; i++) envp[i] = cpath(&scratch, s->env[i]);
+    i32 *src = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
+    i32 *dst = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
+    for (iz i = 0; i < s->nfds; i++) {
+        src[i] = (i32)s->fds[i].h;
+        dst[i] = s->fds[i].fd;
+    }
+    i32 nfds = (i32)s->nfds;
+    b32 pipedfl = !sigos || !sigos->pipeign;
+    u64 changed = sigos ? sigos->changed : 0;
+    u64 ign     = s->sigign | (sigos ? sigos->entryign : 0);
 
-    // Report exec failure through a close-on-exec pipe
-    i32 report[2];
-    if (pipe(report)) {
-        r.err = errno;
-        return r;
-    }
-    fcntl(report[1], F_SETFD, FD_CLOEXEC);
-    pid_t pid = fork();
-    if (pid < 0) {
-        r.err = errno;
-        close(report[0]);
-        close(report[1]);
-        return r;
-    }
+    sigset_t all, old;
+    sigfillset(&all);
+    sigprocmask(SIG_SETMASK, &all, &old);
+    i32 volatile err = 0;
+    pid_t pid = vfork();
     if (!pid) {
-        close(report[0]);
         // Move sources out of the way first, then install the map
-        i32 *src = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
-        for (iz i = 0; i < s->nfds; i++) {
-            src[i] = fcntl((i32)s->fds[i].h, F_DUPFD, 256);
+        for (i32 i = 0; i < nfds; i++) {
+            src[i] = fcntl(src[i], F_DUPFD, 256);
         }
-        for (i32 fd = 0; fd < 256; fd++) {
-            if (fd != report[1]) close(fd);
-        }
-        for (iz i = 0; i < s->nfds; i++) {
-            dup2(src[i], s->fds[i].fd);
-        }
-        for (iz i = 0; i < s->nfds; i++) close(src[i]);
+        closefds(0, 255);
+        for (i32 i = 0; i < nfds; i++) dup2(src[i], dst[i]);
+        closefds(256, -1);
         if (chdir(cwd)) {
             // run anyway: bash reports nothing here
         }
@@ -323,10 +334,8 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
         // catches or ignores what its traps say: the child starts with
         // defaults, except what it was told to ignore (trap '' in the
         // spawning subshell) and what was ignored on entry
-        if (!sigos || !sigos->pipeign) signal(SIGPIPE, SIG_DFL);
+        if (pipedfl) signal(SIGPIPE, SIG_DFL);
         signal(SIGCHLD, SIG_DFL);
-        u64 changed = sigos ? sigos->changed : 0;
-        u64 ign = s->sigign | (sigos ? sigos->entryign : 0);
         for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
             u64 bit = (u64)1 << (sig-1);
             if (ign & bit) {
@@ -335,26 +344,106 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
                 signal(sig, SIG_DFL);
             }
         }
+        sigprocmask(SIG_SETMASK, &old, 0);
         execve(path, argv, envp);
-        i32 e = errno;
-        writeall(report[1], (u8 *)&e, sizeof(e));
+        err = errno ? errno : E_NOEXEC;
         _exit(127);
     }
-    close(report[1]);
-    i32 e = 0;
-    iz  n;
-    do {
-        n = read(report[0], &e, sizeof(e));
-    } while (n<0 && errno==EINTR);
-    close(report[0]);
-    if (n == (iz)sizeof(e)) {
+    i32 e = pid<0 ? errno : err;
+    sigprocmask(SIG_SETMASK, &old, 0);
+    if (pid>=0 && e) {
         waitpid(pid, 0, 0);
+    }
+    if (e) {
         r.err = e;
         return r;
     }
     r.proc = (Handle)pid;
     r.pid  = pid;
     return r;
+}
+
+// As os_spawn's child, but in this process. Everything is undone if
+// execve fails (a script without #!, which the shell then runs itself):
+// the targets were saved first, the other descriptors are only marked
+// close-on-exec, the directory and signal actions are put back.
+static i32 os_exec(Os *, Arena scratch, Spawn *s)
+{
+    char *path = cpath(&scratch, s->path);
+    char *cwd  = cpath(&scratch, s->cwd);
+    char **argv = alloc<char *>(&scratch, s->argc+1);
+    for (iz i = 0; i < s->argc; i++) argv[i] = cpath(&scratch, s->argv[i]);
+    char **envp = alloc<char *>(&scratch, s->nenv+1);
+    for (iz i = 0; i < s->nenv; i++) envp[i] = cpath(&scratch, s->env[i]);
+    iz   n    = s->nfds;
+    i32 *src  = alloc<i32>(&scratch, n ? n : 1);
+    i32 *save = alloc<i32>(&scratch, n ? n : 1);
+    i32  err  = 0;
+    for (iz i = 0; i < n; i++) {
+        src[i] = save[i] = -1;
+    }
+    for (iz i = 0; i<n && !err; i++) {
+        src[i] = fcntl((i32)s->fds[i].h, F_DUPFD_CLOEXEC, 256);
+        err = src[i]<0 ? errno : 0;
+    }
+    for (iz i = 0; i<n && !err; i++) {
+        save[i] = fcntl(s->fds[i].fd, F_DUPFD_CLOEXEC, 256);  // -1 if closed
+    }
+    i32 dot = open(".", O_RDONLY|O_CLOEXEC);
+    if (err || dot<0) {
+        err = err ? err : errno;
+        for (iz i = 0; i < n; i++) {
+            if (src[i] >= 0) close(src[i]);
+            if (save[i] >= 0) close(save[i]);
+        }
+        if (dot >= 0) close(dot);
+        return err;
+    }
+
+    for (i32 fd = 0; fd < 1024; fd++) {
+        b32 target = 0;
+        for (iz i = 0; i < n; i++) target |= s->fds[i].fd == fd;
+        if (!target) fcntl(fd, F_SETFD, FD_CLOEXEC);
+    }
+    for (iz i = 0; i < n; i++) dup2(src[i], s->fds[i].fd);
+    if (chdir(cwd)) {
+        // run anyway, as os_spawn
+    }
+    // Signal actions as os_spawn's child gets them
+    struct sigaction old[NSIGNAL] = {};
+    u64 touched = 0;
+    u64 changed = sigos ? sigos->changed : 0;
+    u64 ign     = s->sigign | (sigos ? sigos->entryign : 0);
+    if (!sigos || !sigos->pipeign) changed |= (u64)1 << (SIGPIPE-1);
+    changed |= (u64)1 << (SIGCHLD-1);
+    for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
+        u64 bit = (u64)1 << (sig-1);
+        if (sig==SIGKILL || sig==SIGSTOP || !((ign|changed) & bit)) continue;
+        struct sigaction sa = {};
+        sa.sa_handler = ign&bit ? SIG_IGN : SIG_DFL;
+        if (!sigaction(sig, &sa, old+sig)) touched |= bit;
+    }
+
+    execve(path, argv, envp);
+
+    err = errno;
+    for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
+        if (touched>>(sig-1) & 1) sigaction(sig, old+sig, 0);
+    }
+    if (fchdir(dot)) {
+        // nothing better to do
+    }
+    close(dot);
+    for (iz i = 0; i < n; i++) {
+        if (save[i] >= 0) {
+            dup2(save[i], s->fds[i].fd);
+            close(save[i]);
+        } else {
+            close(s->fds[i].fd);
+        }
+        close(src[i]);
+    }
+    return err;
 }
 
 static i32 waitstatus(i32 status)
@@ -407,6 +496,14 @@ static i32 os_kill(Os *, i64 pid, i32 sig)
 static u64 os_sigpending(Os *)
 {
     return __atomic_exchange_n(&sigbits, (u64)0, __ATOMIC_RELAXED);
+}
+
+static void os_tasktag(Os *, u64, iz)
+{
+}
+
+static void os_racy(Os *)
+{
 }
 
 static void os_sigmode(Os *os, i32 sig, i32 mode)
