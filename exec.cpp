@@ -2045,6 +2045,16 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
                     // binding, so the value outlives the call
                     setvar(sh, scratch, as[i].name, as[i].value, flags|SV_UNDERTEMP);
                 }
+                // and exported, as the temporary binding bash makes and
+                // then keeps is
+                for (i32 k = 0; k < 2; k++) {
+                    i32    f = SV_QUIET|SV_FORCE|(k ? SV_UNDERTEMP : 0);
+                    Value *t = assignslot(sh, scratch, as[i].name, f);
+                    if (t && !(t->attrs & V_EXPORT)) {
+                        t->attrs |= V_EXPORT;
+                        sh->exportgen++;
+                    }
+                }
             } else {
                 pushtemp(sh, scratch, as[i].name, tempvalue(sh, &scratch, as[i]));
             }
