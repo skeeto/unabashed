@@ -602,9 +602,30 @@ static iz vstack(Os *os)
 }
 
 // Free the fibers of processes left over after a run.
+// After the top shell exits: the programs it left running finish, as
+// they would on a real system, until none can run. A program that
+// never ends (yes &) makes the run racy rather than endless.
+static void vdrain(Os *os, Vos *v)
+{
+    VProc *me = v->procs + v->cur;
+    vcloseall(os, me);  // EOF for whoever reads what it wrote
+    for (i32 steps = 0;; steps++) {
+        i32 next = vpick(v, 0);
+        if (next < 0) return;
+        if (steps == 1<<14) {
+            v->racy = 1;
+            return;
+        }
+        me->state = VP_BLOCK;
+        me->wait  = VW_YIELD;
+        vrun(os, v, next);
+    }
+}
+
 static void vfinish(Os *os)
 {
     Vos *v = osvos(os);
+    vdrain(os, v);
     for (i32 i = 1; i < v->nprocs; i++) {
         VProc *p = v->procs + i;
         if (p->own) os_fiberfree(os, p->own);
