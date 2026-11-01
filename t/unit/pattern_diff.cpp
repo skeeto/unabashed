@@ -222,8 +222,12 @@ static b32 knowngap(Str pat, Str s, i32 flags, Arena scratch)
     // bash; with case folding bash folds [. .] and [= =] too; in UTF-8
     // with non-ASCII characters, glibc matches brackets its own way
     // bash's own reading of [. .] and [= =], terminated or not, also
-    // differs. glibc fails a bracket after a run of * and ? holding
-    // both when FNM_PERIOD is on and the string holds a dot.
+    // differs, even after a backslash (a range ending in \[.x.] takes a
+    // collating symbol). glibc fails a bracket after a run of * and ?
+    // holding both when FNM_PERIOD is on and the string holds a dot.
+    for (iz i = 0; i+1 < pat.len; i++) {
+        if (pat[i]=='[' && (pat[i+1]=='.' || pat[i+1]=='=')) return 1;
+    }
     b32 bracket = 0;
     b32 starq   = 0;
     for (iz i = 0; i < pat.len; i++) {
@@ -232,7 +236,6 @@ static b32 knowngap(Str pat, Str s, i32 flags, Arena scratch)
         } else if (pat[i] == '[') {
             bracket = 1;
             if ((flags&DF_PATH) && hasbyte(cuthead(pat, i), '/')) return 1;
-            if (i+1<pat.len && (pat[i+1]=='.' || pat[i+1]=='=')) return 1;
         } else if (pat[i]=='*' || pat[i]=='?') {
             b32 star = 0, q = 0;
             for (; i<pat.len && (pat[i]=='*' || pat[i]=='?'); i++) {
