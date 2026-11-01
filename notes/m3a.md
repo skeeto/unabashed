@@ -612,7 +612,8 @@ void os_racy(Os *);                    // test layers: the outcome may be racy
   shell ignores SIGPIPE so that a broken pipe in an in-process subshell
   is an `EPIPE` (status 141), and children get SIGPIPE back at its
   default unless it was ignored on entry.
-- **Win32** (the M3a simple approach; M3b replaces it): process exits
+- **Win32** (the M3a simple approach, replaced in M3b: see
+  notes/m3b.md): process exits
   through the process handle; a pipe read completes at once when
   `PeekNamedPipe` reports data or a broken pipe; a pipe write completes
   at once when `NtQueryInformationFile(FilePipeLocalInformation)`
@@ -932,9 +933,8 @@ DEBUG before case and select; EXIT actions run at line 1).
   still running when the shell exits is waited for (a fiber cannot
   outlive its process), unlike bash, which leaves it running. The
   coproc oracle differs only for lack of an awk fake and /etc/passwd.
-- Win32: `read -t` on an empty pipe or console cannot time out once a
-  helper thread owns the read (it ends when data or EOF arrives); M3b's
-  File state machine (or `CancelSynchronousIo`) fixes that.
+- Win32: `read -t` on an empty pipe or console could not time out once
+  a helper thread owned the read. Fixed in M3b (notes/m3b.md).
 
 - Win32: a program cannot open `/dev/fd/N`, so `diff <(a) <(b)` and
   `cat <(f)` fail there ("No such file or directory"); builtins,
@@ -950,9 +950,9 @@ DEBUG before case and select; EXIT actions run at line 1).
   jobs together, nested shells included), and more abort with
   "unexpected out of memory".
 
-- Win32 helper threads issue whole-length reads; the File state machine
-  and Peek-exact reads are M3b. A helper read in flight on a handle
-  blocks other operations on that handle (critique M3).
+- Win32 helper threads issued whole-length reads, and a helper read in
+  flight blocked other operations on its handle (critique M3). Fixed
+  in M3b's state machine and peek-exact reads (notes/m3b.md).
 - POSIX: if another process reads the same pipe as a shell task, a read
   after poll may block the whole shell until data arrives.
 - The vos runs nested shells on fibers; a deadlock inside a nested
