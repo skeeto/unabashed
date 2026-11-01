@@ -1024,13 +1024,18 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         }
         b32 isarr   = cur && cur->arr && !cur->arr->bucket;
         b32 isassoc = cur && cur->arr && cur->arr->bucket;
-        if ((on & V_ASSOC) && isarr) {
-            builtinerror(sh, scratch, name, concat(&scratch, vname, ": cannot convert indexed to associative array"));
-            status = 1;
-            continue;
-        }
-        if ((on & V_ARRAY) && isassoc) {
-            builtinerror(sh, scratch, name, concat(&scratch, vname, ": cannot convert associative to indexed array"));
+        if (((on & V_ASSOC) && isarr) || ((on & V_ARRAY) && isassoc)) {
+            Str msg = concat(&scratch, vname, isarr ? Str(": cannot convert indexed to associative array")
+                                                    : Str(": cannot convert associative to indexed array"));
+            if (wordcomp && eq<a.len) {
+                // found while a literal name=(...) expands, as bash
+                // names the stale command, a function's or none
+                Str stale = {sh->cmdname, sh->cmdnamelen};
+                builtinerror(sh, scratch, stale, msg);
+                if (global) builtinerror(sh, scratch, name, msg);  // and again
+            } else {
+                builtinerror(sh, scratch, name, msg);
+            }
             status = 1;
             continue;
         }
@@ -1125,7 +1130,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 ok = assigncompound(sh, scratch, vname, cuttail(cuthead(val, 1), 1),
                                     sflags, wordcomp);
             } else if (hassub) {
-                ok = assignelem(sh, scratch, vname, sub, takehead(a, eq), val, sflags);
+                i32 raw = sh->shopt[S_ARRAY_EXPAND_ONCE] ? SV_RAWKEY : 0;
+                ok = assignelem(sh, scratch, vname, sub, takehead(a, eq), val, sflags|raw);
             } else {
                 ok = setvar(sh, scratch, vname, val, sflags);
             }
@@ -1220,7 +1226,12 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
         varchanged(sh, name);
         return 0;
     }
-    i64 idx = allsub(sub) ? 0 : subindex(x, sub);
+    i64 idx = 0;
+    if (!allsub(sub) && raw) {
+        idx = evalinteger(sh, &scratch, sub).value;  // array_expand_once
+    } else if (!allsub(sub)) {
+        idx = subindex(x, sub);
+    }
     if (!cur->arr) {
         if (idx && quiet) {
             return 0;

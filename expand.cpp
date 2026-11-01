@@ -1011,6 +1011,17 @@ static b32 onewordarg(Shell *sh, Str s)
     return 0;
 }
 
+// Is s an argument of the running builtin, whose subscript then is not
+// expanded again under array_expand_once?
+static b32 builtinarg(Shell *sh, Str s)
+{
+    if (!sh->shopt[S_ARRAY_EXPAND_ONCE]) return 0;
+    for (iz i = 0; i < sh->nbltargs; i++) {
+        if (sh->bltargs[i].data == s.data) return 1;
+    }
+    return 0;
+}
+
 static b32 splitrefonce(Shell *sh, Str s, Str *name, Str *sub)
 {
     if (splitref(s, name, sub)) return 1;
@@ -1237,7 +1248,10 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         if (op == '-') {
             expandinto(x, word, wctx);
         } else if (op == '=') {
-            if (!validvarname(name) || (hassub && !elem)) {
+            // an associative array takes @ and * as keys
+            Value *av   = hassub && !elem ? lookup(sh, name) : 0;
+            b32    akey = av && av->arr && av->arr->bucket;
+            if (!validvarname(name) || (hassub && !elem && !akey)) {
                 Arena a = *x->a;
                 Str   m = concat3(&a, "$", hassub ? uname : name, ": cannot assign in this way");
                 expansionerror(sh, a, m);
@@ -1245,8 +1259,9 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             Str v = expandword(x, word, wctx);
             Value *self = elem ? 0 : rawlookup(sh, name);
             b32 refself = self && (self->attrs & V_NAMEREF) && !self->str.len;
-            b32 ok = elem ? assignelem(sh, *x->a, name, sub, uname, v, 0)
-                          : setvar(sh, *x->a, name, v);
+            b32 ok = akey ? setelem(sh, *x->a, name, 0, sub, v)
+                   : elem ? assignelem(sh, *x->a, name, sub, uname, v, 0)
+                   :        setvar(sh, *x->a, name, v);
             if (!ok) {
                 // A readonly variable: status 2, or fatal in POSIX mode
                 if (sh->opt[O_POSIX] && !sh->interactive) {
@@ -1259,8 +1274,12 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             if (refself) {
                 putvalue(x, v, ctx);  // it gave the nameref its value
             } else {
-                Param q = elem ? getelems(x, name, sub) : getparam(x, name);
-                putvalue(x, q.value, ctx);
+                Param q = elem || akey ? getelems(x, name, sub) : getparam(x, name);
+                if (q.list) {
+                    putlist(x, q.lv, q.ln, q.star, ctx);
+                } else {
+                    putvalue(x, q.value, ctx);
+                }
             }
         } else {
             Str msg = word.len ? expandword(x, word, wctx)
@@ -1588,8 +1607,9 @@ static iz arithsubscript(X *x, Str s, iz i)
     for (iz k = 0; k < v.data.len; k++) {
         u8 c = v.data[k];
         u8 f = v.flags[k] & ~XF_NULL;
-        if (c=='[' || c==']' || c=='$' || c=='`' || c=='~' || c=='\\' ||
-                c=='\'' || c=='"') {
+        // brackets written as they are stay: $(( a[a[0]] ))
+        b32 bracket = (c=='[' || c==']') && f;
+        if (bracket || c=='$' || c=='`' || c=='~' || c=='\\' || c=='\'' || c=='"') {
             xputc(x, '\\', f);
         }
         xputc(x, c, f);
@@ -2341,7 +2361,13 @@ static Sub evalsub(Shell *sh, Arena *a, Str name, Str sub, Str word, b32 raw = 0
         if (word.data) badarraysub(sh, *a, word);
         return r;
     }
-    r.idx = subindex(x, sub);
+    if (raw) {
+        // array_expand_once in a builtin: evaluated as it is, and an
+        // error abandons the command and any -c text, as in bash
+        r.idx = evalinteger(sh, a, sub).value;
+    } else {
+        r.idx = subindex(x, sub);
+    }
     if (r.idx < 0) {
         i64 top = v && v->arr ? amax(v->arr) : v && v->str.data ? 0 : -1;
         r.idx += top + 1;
@@ -2368,7 +2394,7 @@ static b32 assignto(Shell *sh, Arena scratch, Str lhs, Str value, i32 flags = 0)
 {
     Str name, sub;
     if (splitrefonce(sh, lhs, &name, &sub)) {
-        flags |= onewordarg(sh, lhs) ? SV_RAWKEY : 0;
+        flags |= builtinarg(sh, lhs) ? SV_RAWKEY : 0;
         return assignelem(sh, scratch, name, sub, lhs, value, flags);
     }
     return setvar(sh, scratch, lhs, value, flags);

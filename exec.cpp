@@ -161,16 +161,15 @@ struct ShellArith {
 };
 
 // An indexed subscript as arithmetic expanded it (arithsubscript): its
-// double quotes and brackets are backslash-quoted, but as in bash they
-// are still removed when it is evaluated: $(( a[a[0]] )).
+// double quotes are backslash-quoted, but as in bash they are still
+// removed when it is evaluated.
 static Str arithindex(Shell *sh, Arena *a, Str name, Str sub)
 {
     Value *v = lookup(sh, name);
-    if ((v && v->arr && v->arr->bucket) || find(sub, "\\")<0) return sub;
+    if ((v && v->arr && v->arr->bucket) || find(sub, "\\\"")<0) return sub;
     Buf b(a, sub.len);
     for (iz i = 0; i < sub.len; i++) {
-        u8 n = i+1<sub.len ? sub[i+1] : 0;
-        i += sub[i]==0x5c && (n=='"' || n=='[' || n==']');
+        i += sub[i]==0x5c && i+1<sub.len && sub[i+1]==0x22;
         putbyte(&b, sub[i]);
     }
     return finish(&b);
@@ -205,6 +204,12 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
             // may follow (a[RANDOM%6]++) reuses this index
             ref->sub = fmti64(a, arithsubindex(c, x, a, ref->sub));
         }
+        if (assoc && c->rawsub && !allsub(ref->sub)) {
+            // let under array_expand_once: the key as it is
+            HItem *t = hfind(v->arr, ref->sub);
+            *isset = !!t;
+            return t ? t->val : Str{};
+        }
         Param p = getelems(x, ref->name, ref->sub);
         if (p.list) {
             p.value = joinparams(a, Args{p.lv, p.ln}, starsep(c->sh));
@@ -235,7 +240,7 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
         if (!assoc && c->rawsub && !allsub(ref->sub)) {
             ref->sub = fmti64(a, arithsubindex(c, 0, a, ref->sub));
         }
-        Sub s = evalsub(c->sh, a, ref->name, ref->sub, {});
+        Sub s = evalsub(c->sh, a, ref->name, ref->sub, {}, assoc && c->rawsub);
         if (!s.ok) {
             return concat3(a, ref->name, "[", concat(a, ref->sub, "]: bad array subscript"));
         }
@@ -2160,6 +2165,9 @@ static b32 envvarset(void *ctx, Str name)
             if (v && v->arr && v->arr->bucket && (allsub(rs) || sh->shopt[S_ARRAY_EXPAND_ONCE])) {
                 return !!hfind(v->arr, rs);  // a key as it is (array_expand_once)
             }
+            if (sh->shopt[S_ARRAY_EXPAND_ONCE] && !allsub(rs) && !(v && v->arr && v->arr->bucket)) {
+                rs = fmti64(&a, evalarith(sh, &a, rs).value);  // an index as it is
+            }
             return getelems(x, rn, rs).set;
         }
         Buf   b(&a, rs.len);
@@ -2184,7 +2192,7 @@ static b32 envvarset(void *ctx, Str name)
 static b32 envnameref(void *ctx, Str name)
 {
     Shell *sh = ((TestCtx *)ctx)->sh;
-    Value *v = lookup(sh, name);
+    Value *v = rawlookup(sh, name);
     return v && (v->attrs & V_NAMEREF);
 }
 
