@@ -396,7 +396,9 @@ static void vprocmain(Task *t)
             runexittrap(sh, *scratchat(sh, 0));
         }
     }
-    b32 tail = sh->childsig && sh->taillevel==sh->subshell+1;  // its last program's
+    // its last program's death, if that is still its status
+    b32 tail = sh->childsig && sh->taillevel==sh->subshell+1 &&
+               (sh->status & 255)==128+sh->childsig;
     t->status = (sh->status & 255) | (sh->killsig || tail ? WSIGNALED : 0);
     sigleave(sh, &m->sig);
 
@@ -835,7 +837,8 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             extbad |= st != 0;
         }
         statuses[k] = st;
-        if (st & WSIGNALED) died |= sigbit((st & 255) - 128);
+        i32 sig = (st & 255) - 128;
+        if ((st & WSIGNALED) && sig>0 && sig<NSIGNAL) died |= sigbit(sig);
         if (!failed) failed = st & 255;
     }
     waitdone(sh, died, extbad);
