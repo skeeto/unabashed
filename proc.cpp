@@ -357,19 +357,71 @@ static b32 likelyexternal(Shell *sh, Node *n)
     return !findbuiltin(name) && !findfunc(sh, name);
 }
 
+// May a stage start directly, with no vproc? A likely external with
+// no redirections, whose words run no shell code when expanded, and
+// no descriptor that would need a pump.
+static b32 directstage(Shell *sh, Arena scratch, Node *n, b32 first)
+{
+    if (!likelyexternal(sh, n) || n->redirs) return 0;
+    for (Word *w = n->words; w; w = w->next) {
+        Str t = w->text;
+        if (find(t, "$(")>=0 || find(t, "`")>=0 || find(t, "<(")>=0 || find(t, ">(")>=0) {
+            return 0;
+        }
+    }
+    Fdtab *t = sh->fds;
+    for (i32 fd = first ? 0 : 2; fd < t->top; fd++) {
+        if (fd!=1 && t->fd[fd] && t->fd[fd]->kind!=F_OS) return 0;
+    }
+    Word *w = n->words;
+    while (isassignword(w)) w = w->next;
+    return haspath(sh, w->text) || commandpath(sh, &scratch, w->text, 0).data;
+}
+
+// Start an external stage: its words expand in a synchronous subshell
+// with the stage's descriptors, then the program starts and the
+// subshell is rolled back. Returns its process, or BADHANDLE with
+// *status set if it did not start, or with *retry set if it turned out
+// to be shell code after all.
+static Handle spawndirect(Shell *sh, Node *stage, File *in, File *out,
+                          Arena scratch, i32 *status, b32 *retry)
+{
+    Undo *mark = sh->undo;
+    if (in) {
+        in->refs++;
+        fdset(sh, 0, in, 0, &scratch);
+    }
+    out->refs++;
+    fdset(sh, 1, out, 0, &scratch);
+    Spawnto sp = {BADHANDLE, 0};
+    SubJob  j  = {};
+    j.kind = SUB_NODE;
+    j.node = stage;
+    i32   depth = ++sh->capdepth;
+    Arena child = *scratchat(sh, depth);
+    sh->spawnto = &sp;
+    sh->simplestages++;
+    *status = subshell(sh, &j, child, 0);
+    sh->simplestages--;
+    sh->spawnto  = 0;
+    sh->capdepth = depth - 1;
+    unwind(sh, mark);
+    *retry = sp.retry;
+    return sp.proc;
+}
+
 static void runpipeline(Shell *sh, Node *n, Arena scratch)
 {
-    // Flatten the left-nested chain, left to right
-    Node *rev[256];
+    // Flatten the right-nested chain, left to right
+    Node *stages[256];
     i32   nstages = 0;
     Node *cur = n;
-    while (cur->kind==N_CONNECT && cur->connector=='|' && nstages<255) {
-        rev[nstages++] = cur->b;
-        cur = cur->a;
+    while (cur->kind==N_CONNECT && cur->connector=='|' && nstages<255 &&
+           (cur==n || (!cur->flags && !cur->redirs))) {
+        stages[nstages++] = cur->a;
+        cur = cur->b;
     }
-    rev[nstages++] = cur;
-    Node *stages[256];
-    for (i32 k = 0; k < nstages; k++) stages[k] = rev[nstages-1-k];
+    stages[nstages++] = cur;
 
     Sched *s      = sh->sched;
     i32    before = sh->status;  // what $? is in every stage
@@ -404,19 +456,30 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         }
     }
 
-    // Every stage but the last on a fiber vproc
-    Task *tasks[256];
+    // Every stage but the last: externals started directly, the rest
+    // on fiber vprocs, each getting going at once, as forked children
+    Task  *tasks[256] = {};
+    Handle procs[256];
+    i32    statuses[256];
     for (i32 k = 0; k+1 < nstages; k++) {
         sh->status = before;
-        b32 newloops = stages[k]->kind != N_SIMPLE;  // as bash: break | x is silent
-        tasks[k] = spawnvproc(sh, stages[k], in[k], out[k], newloops);
+        procs[k] = BADHANDLE;
+        b32 retry = 1;
+        if (ext[k] && directstage(sh, scratch, stages[k], !k)) {
+            procs[k] = spawndirect(sh, stages[k], in[k], out[k], scratch,
+                                   statuses+k, &retry);
+            sh->status = before;
+        }
+        if (retry) {
+            b32 newloops = stages[k]->kind != N_SIMPLE;  // as bash: break | x is silent
+            tasks[k] = spawnvproc(sh, stages[k], in[k], out[k], newloops);
+            yield(s);
+        }
     }
     for (i32 k = 0; k+1 < nstages; k++) {
         fileunref(sh, in[k]);
         fileunref(sh, out[k]);
     }
-    // As forked children do, the earlier stages get going first
-    yield(s);
 
     // The last stage here, reading the previous stage's output
     i32   last  = nstages - 1;
@@ -466,7 +529,12 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
 
     i32 failed = status;
     for (i32 k = last-1; k >= 0; k--) {
-        i32 st = taskjoin(s, tasks[k]);
+        i32 st = statuses[k];
+        if (tasks[k]) {
+            st = taskjoin(s, tasks[k]);
+        } else if (procs[k] != BADHANDLE) {
+            st = taskwaitproc(s, procs[k]);
+        }
         if (!failed) failed = st;
     }
     sh->status = status;

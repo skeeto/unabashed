@@ -1004,6 +1004,12 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     for (i32 i = 0; i < nclose; i++) {
         os_close(sh->os, closeafter[i]);
     }
+    if (sh->spawnto) {
+        // A pipeline stage started directly: its waiter is runpipeline
+        assert(!npumps && !capfile);
+        sh->spawnto->proc = r.err ? BADHANDLE : r.proc;
+        return r.err ? -r.err : 0;
+    }
     if (capfile) {
         u8 buf[4096];
         for (;;) {
@@ -1109,8 +1115,14 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         }
     }
     i32 st = runprogram(sh, a, path, argv, argc, env);
+    Spawnto *direct = sh->spawnto;
+    sh->spawnto = 0;
     if (st >= 0) return st;
     i32 err = -st;
+    if (err==E_NOEXEC && direct && isshellscript(sh, a, path)) {
+        direct->retry = 1;  // run as shell code, concurrently
+        return 0;
+    }
     if (err == E_NOEXEC && isshellscript(sh, a, path)) {
         // No #! line: bash runs it as a shell script in a subshell
         Str src = readwholefile(sh, &a, path, &err);

@@ -313,6 +313,13 @@ struct HashCmd {
     uz       hits;   // pointer-sized for jwrite
 };
 
+// Where runprogram leaves a program it started without waiting, for a
+// pipeline stage spawned directly (runpipeline).
+struct Spawnto {
+    Handle proc;   // BADHANDLE if it did not start
+    b32    retry;  // not a program after all: run the stage as a vproc
+};
+
 struct Shell {
     Os      *os;
     Sched   *sched;        // shared by every vproc of the process
@@ -320,6 +327,7 @@ struct Shell {
     Fdtab   *fds;
     Lexer   *lexer;        // the innermost parser, for its options
     BOut    *bout;
+    Spawnto *spawnto;      // start the next program without waiting
     Arena   *pool[NPOOL];  // scratch arenas for nested captures, by depth
     iz       reserve;      // address space for each pool arena
     i32      capdepth;     // nesting of captures and pipeline stages
