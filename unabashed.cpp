@@ -538,6 +538,7 @@ static i32 sh_main(Os *os, OsInfo *info)
 
     if (!__builtin_setjmp(top.jmp)) {
         initvars(sh, info, scratch);
+        entrytraps(sh);
 
         // Options before the command string or script
         iz  i = 1;

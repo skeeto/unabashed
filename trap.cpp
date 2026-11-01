@@ -191,6 +191,16 @@ static void settrap(Shell *sh, i32 idx, Str cmd)
     }
 }
 
+// Signals ignored on entry are listed as ignored traps, as bash does.
+static void entrytraps(Shell *sh)
+{
+    if (!sh->hardign) return;
+    sh->traps = (Str *)salloc(sh->store, NTRAP*(iz)sizeof(Str));
+    for (i32 sig = 1; sig < NSIGNAL; sig++) {
+        if (sh->hardign & sigbit(sig)) sh->traps[sig] = sclone(sh->store, "");
+    }
+}
+
 // A subshell's table: the caught signals reset to their defaults and
 // the ignored ones kept. ERR stays with errtrace, DEBUG and RETURN with
 // functrace. Until it changes a trap, trap lists the parent's table.
