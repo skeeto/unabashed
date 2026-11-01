@@ -27,6 +27,7 @@ static Str usage(Str name)
         {"trap",     "trap [-Plp] [[action] signal_spec ...]"},
         {"kill",     "kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]"},
         {"return",   "return [n]"},
+        {"caller",   "caller [expr]"},
         {"exit",     "exit [n]"},
         {"source",   "source [-p path] filename [arguments]"},
         {".",        ". [-p path] filename [arguments]"},
@@ -39,7 +40,6 @@ static Str usage(Str name)
         {"disown",   "disown [-h] [-ar] [jobspec ... | pid ...]"},
         {"suspend",  "suspend [-f]"},
         {"builtin",  "builtin [shell-builtin [arg ...]]"},
-        {"caller",   "caller [expr]"},
     };
     for (iz i = 0; i < countof(usages); i++) {
         if (usages[i].name == name) return usages[i].text;
@@ -164,6 +164,11 @@ static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         var = args[i+1];
         i += 2;
+        Str rn, rs;
+        if (!validvarname(var) && !splitref(var, &rn, &rs)) {
+            notident(sh, scratch, "printf", var);  // before any output
+            return 2;
+        }
     } else if (i<nargs && args[i].len>1 && args[i][0]=='-' && args[i]!="--") {
         invalidoption(sh, scratch, "printf", takehead(args[i], 2));
         return 2;
@@ -183,11 +188,6 @@ static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
     Buf out(&scratch, 256);
     i32 status = printfmt(&env, &out, args[i], args+i+1, nargs-i-1, scratch);
     if (var.data) {
-        Str rn, rs;
-        if (!validvarname(var) && !splitref(var, &rn, &rs)) {
-            notident(sh, scratch, "printf", var);
-            return 2;
-        }
         if (!assignto(sh, scratch, var, finish(&out))) return 1;
     } else {
         bprint(sh, finish(&out));
@@ -235,6 +235,58 @@ static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
     sh->status  = status;
     sh->exiting = 1;
     escape(sh, ESC_EXIT);
+}
+
+// Element i of an indexed (or dynamic) array variable, or null.
+static Str arrayelem(Shell *sh, Arena *a, Str name, i64 i)
+{
+    Array *arr = varray(sh, a, lookup(sh, name));
+    if (!arr || arr->bucket || i<0) return {};
+    iz k = afind(arr, i);
+    return k<0 ? Str{} : arr->e[k].val;
+}
+
+// caller [n]: "line file" of the current call, or "line func file" of
+// frame n, from BASH_LINENO, FUNCNAME and BASH_SOURCE.
+static i32 b_caller(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    // As bash, empty arrays fail before the options are looked at
+    Str line0 = arrayelem(sh, &scratch, "BASH_LINENO", 0);
+    Str src1  = arrayelem(sh, &scratch, "BASH_SOURCE", 0);
+    if (!line0.data || !src1.data) return 1;
+    iz i = 1;
+    if (i<nargs && args[i]=="--") {
+        i++;
+    } else if (i<nargs && args[i].len>1 && args[i][0]=='-' && args[i]!="-") {
+        invalidoption(sh, scratch, "caller", takehead(args[i], 2));
+        return 2;
+    }
+    if (i == nargs) {
+        Str src = arrayelem(sh, &scratch, "BASH_SOURCE", 1);
+        bprint(sh, line0);
+        bprint(sh, " ");
+        bprint(sh, src.data ? src : Str("NULL"));
+        bprint(sh, "\n");
+        return 0;
+    }
+    if (!arrayelem(sh, &scratch, "FUNCNAME", 0).data) return 1;
+    i64 n = 0;
+    if (!parsei64(args[i], &n)) {
+        builtinerror(sh, scratch, "caller", concat(&scratch, args[i], ": invalid number"));
+        usageerror(sh, scratch, "caller");
+        return 2;
+    }
+    Str line = arrayelem(sh, &scratch, "BASH_LINENO", n);
+    Str src  = arrayelem(sh, &scratch, "BASH_SOURCE", n+1);
+    Str func = arrayelem(sh, &scratch, "FUNCNAME", n+1);
+    if (!line.data || !src.data || !func.data) return 1;
+    bprint(sh, line);
+    bprint(sh, " ");
+    bprint(sh, func);
+    bprint(sh, " ");
+    bprint(sh, src);
+    bprint(sh, "\n");
+    return 0;
 }
 
 static i32 b_return(Shell *sh, Str *args, iz nargs, Arena scratch)
@@ -770,7 +822,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         b32  wordcomp = i<sh->compargs.len && sh->compargs[i];
         Value *cur = lookup(sh, vname);
         b32 mklocal = local || (name!="export" && name!="readonly" && sh->funcdepth && !global);
-        if (wordcomp && cur && (cur->attrs & V_READONLY)) {
+        b32 shadowing = mklocal && cur && cur->depth!=sh->funcdepth && cur->depth;
+        if (wordcomp && cur && (cur->attrs & V_READONLY) && !shadowing) {
             // As bash, a literal name=(...) to a readonly variable is
             // first declared alone (with -aAiluc and the scope), while
             // the arguments expand. An error there is reported under the
@@ -2428,16 +2481,6 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
 static i32 b_times(Shell *sh, Str *, iz, Arena)
 {
     bprint(sh, "0m0.000s 0m0.000s\n0m0.000s 0m0.000s\n");
-    return 0;
-}
-
-static i32 b_caller(Shell *sh, Str *, iz, Arena)
-{
-    if (!sh->frame) return 1;
-    bprinti(sh, sh->frame->line);
-    bprint(sh, " ");
-    bprint(sh, sh->frame->up ? sh->frame->up->name : Str("main"));
-    bprint(sh, "\n");
     return 0;
 }
 

@@ -260,6 +260,9 @@ static Shell *vproccopy(Shell *sh, Vproc *m)
     c->srcname    = sclone(st, sh->srcname);
     c->argv0      = sclone(st, sh->argv0);
     c->cwd        = sclone(st, sh->cwd);
+    c->lastargcap = sh->lastarg.len>32 ? sh->lastarg.len : 32;
+    c->lastarg    = {(u8 *)salloc(st, c->lastargcap), sh->lastarg.len};
+    copybytes(c->lastarg.data, sh->lastarg.data, sh->lastarg.len);
     c->host       = sclone(st, sh->host);
     Arena tmp = *a;
     c->cmdtext    = sclone(st, cmdtext(sh, &tmp));

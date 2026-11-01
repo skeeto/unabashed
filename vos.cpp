@@ -1194,8 +1194,13 @@ static Io *os_wait(Os *os, i64 deadline)
             }
         }
         if (deadline == WAIT_POLL) {
-            // Polling: let the other processes make progress once
+            // Polling: let the other processes make progress once. A
+            // shell polls from a busy loop's safe points: let that stand
+            // for time passing (1 ms), or a sleeper it waits for, as in
+            // { sleep 1; kill -USR1 $$; } & while :; do :; done, would
+            // never wake, since time only jumps when nothing can run
             if (yielded) return 0;
+            v->clock += 1000000;
             vyield(os, v);
             yielded = 1;
             continue;

@@ -1526,9 +1526,19 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     sh->esc = &e;
     b32 escaped = __builtin_setjmp(e.jmp);
     if (!escaped) {
+        // As bash, DEBUG runs as the function starts, at its body's
+        // line, where it applies (a traced function, set -T, extdebug)
+        b32 skip = 0;
+        if (sh->traps) {
+            sh->line = code->body->line;
+            skip = rundebugtrap(sh, scratch) || sh->flow;
+        }
         if (code->body->redirs) sh->line = code->body->line;
-        execute(sh, code->body, scratch);
-        if (sh->traps) runreturntrap(sh, scratch);
+        if (!skip) execute(sh, code->body, scratch);
+        if (sh->traps) {
+            sh->line = code->body->line;  // RETURN sees it too
+            runreturntrap(sh, scratch);
+        }
     }
     sh->esc = e.up;
 
@@ -1671,17 +1681,39 @@ static b32 doassignments(Shell *sh, Arena *a, Word *w, iz n)
 static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last);
 
 // $_: after each simple command, its last word (empty for assignments
-// alone), never exported
+// alone), never exported. The dynamic variable _ reads it from a buffer,
+// so binding is a copy; only after a script assigned, unset or declared
+// _ is the variable itself made dynamic again, as bash rebinds it.
 static void bindlastarg(Shell *sh, Arena scratch, Str last)
 {
-    Value *v = lookup(sh, "_");
-    if (v && !v->dyn && !v->arr && v->str.data && v->str==last && !(v->attrs & V_EXPORT)) {
-        return;
+    // A buffer below the store's mark belongs to the level around a
+    // synchronous subshell, which gets it back as it was: replace it
+    Store *st  = sh->store;
+    b32    own = sh->lastarg.data && (byte *)sh->lastarg.data>=st->mark;
+    if (!own || last.len>sh->lastargcap) {
+        if (own) sfree(st, sh->lastarg.data, sh->lastargcap);
+        iz cap = last.len>2*sh->lastargcap ? last.len : 2*sh->lastargcap;
+        cap = cap<32 ? 32 : cap;
+        sh->lastarg.data = (u8 *)salloc(st, cap);
+        sh->lastargcap   = cap;
     }
-    if (!last.data) last = "";
-    setvar(sh, scratch, "_", last, SV_QUIET);
-    v = lookup(sh, "_");
-    if (v) v->attrs &= ~V_EXPORT;
+    copybytes(sh->lastarg.data, last.data, last.len);
+    sh->lastarg.len = last.len;
+    if (sh->lastargdirty) {
+        sh->lastargdirty = 0;
+        Value *v = lookup(sh, "_");
+        if (v && (v->attrs & V_READONLY)) return;
+        if (!v || v->arr) {
+            unsetvar(sh, "_");
+            v = setattrs(sh, "_", 0, 0);
+        }
+        Str old = v->str;
+        v->str    = {};
+        v->dyn    = DYN_UNDERSCORE;
+        v->attrs &= ~V_EXPORT;
+        if (old.data && (byte *)old.data >= st->mark) sfreestr(st, old);
+        sh->lastargdirty = 0;
+    }
 }
 
 static void runsimple(Shell *sh, Node *n, Arena scratch)
@@ -1746,7 +1778,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             } else if (decl && (w->flags & W_ASSIGNMENT)) {
                 // Brace expanded, but not split or globbed
                 more = expandwords(sh, a, &one2, XW_NOSPLIT|XW_NOGLOB|XW_ASSIGN);
-            } else if (argv[0]=="unset" && arrayrefword(sh, *a, w->text)) {
+            } else if (argv.len && argv[0]=="unset" && arrayrefword(sh, *a, w->text)) {
                 // compargs 2: its subscript was expanded and quoted
                 more = expandwords(sh, a, &one2, XW_SUBQ);
                 while (compargs.len < argv.len) compargs = push(a, compargs, (u8)0);
@@ -1905,6 +1937,19 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
                 }
             }
             if (!replaced) env = push(a, env, entry);
+        }
+        // As bash, a program finds its own path in $_
+        Str path = find(name, "/")>=0 ? name : pathlookup(sh, a, name);
+        if (path.len) {
+            Str  entry = concat(a, "_=", path);
+            b32  done  = 0;
+            for (iz k = 0; k<env.len && !done; k++) {
+                if (startswith(env[k], "_=")) {
+                    env[k] = entry;
+                    done   = 1;
+                }
+            }
+            if (!done) env = push(a, env, entry);
         }
         sh->childsig = 0;
         sh->status = runexternal(sh, scratch, argv.data, argv.len, env);
@@ -2419,13 +2464,31 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
 }
 
 [[gnu::noinline]]
+// DEBUG before one of an arithmetic for's expressions, BASH_COMMAND
+// naming it as (( expr )).
+static void debugarithfor(Shell *sh, Node *n, Word *part, Arena scratch)
+{
+    if (!sh->intrap) {
+        Store *st = sh->store;
+        if ((byte *)sh->cmdtext.data >= st->mark) sfreestr(st, sh->cmdtext);
+        Str t = part ? part->text : Str{};
+        sh->cmdtext = sclone(st, concat3(&scratch, "((", t, "))"));
+        sh->cmdnode = 0;
+    }
+    sh->line = n->line;
+    rundebugtrap(sh, scratch);
+    sh->line = n->line;
+}
+
 static void execarithfor(Shell *sh, Node *n, Arena scratch)
 {
     sh->line = n->line;
     Word *init = n->arith;
     Word *test = init ? init->next : 0;
     Word *step = test ? test->next : 0;
-    // As with (( )), an arithmetic error fails the loop with status 1
+    // As with (( )), an arithmetic error fails the loop with status 1.
+    // DEBUG runs before each of the three expressions, as in bash.
+    if (sh->traps) debugarithfor(sh, n, init, scratch);
     if (!arithpart(sh, scratch, init)) {
         sh->status = 1;
         return;
@@ -2436,12 +2499,14 @@ static void execarithfor(Shell *sh, Node *n, Arena scratch)
         Arena it = scratch;
         safepoint(sh->sched);
         Arith r = {};
+        if (sh->traps) debugarithfor(sh, n, test, it);
         if (!arithpart(sh, it, test, &r)) status = 1;
         if (!r.ok || !r.value) break;
         execute(sh, n->b, it);
         status = sh->status;
         if (sh->flow && loopflow(sh)) break;
         if (sh->exiting) break;
+        if (sh->traps) debugarithfor(sh, n, step, it);
         if (!arithpart(sh, it, step)) {
             status = 1;
             break;

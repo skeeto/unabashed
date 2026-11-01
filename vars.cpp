@@ -29,7 +29,7 @@ enum : i32 {  // dynamic variables, computed when read
     DYN_NONE, DYN_LINENO, DYN_RANDOM, DYN_SRANDOM, DYN_SECONDS,
     DYN_EPOCHSECONDS, DYN_EPOCHREALTIME, DYN_BASHPID, DYN_BASH_SUBSHELL,
     DYN_FUNCNAME, DYN_BASH_COMMAND, DYN_HISTCMD, DYN_BASH_LINENO,
-    DYN_BASH_SOURCE, DYN_BASH_ARGV0, DYN_PIPESTATUS,
+    DYN_BASH_SOURCE, DYN_BASH_ARGV0, DYN_PIPESTATUS, DYN_UNDERSCORE,
 };
 
 struct Value {
@@ -219,6 +219,7 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
     case DYN_HISTCMD:       return "1";
     case DYN_BASH_ARGV0:    return dollar0(sh);
     case DYN_PIPESTATUS:    return fmti64(a, sh->npstat ? sh->pstat[0] : 0);
+    case DYN_UNDERSCORE:    return sh->lastarg.data ? sh->lastarg : Str("");
     }
     return v->str;
 }

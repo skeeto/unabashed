@@ -47,6 +47,11 @@ Done (core foundation):
   `suspend` without job control; timers in the scheduler and `read -t`
   (see "Timers" below); tests `t/exec/631`-`636`.
 
+- Oracle pass (see "Bash test suite on the vos" below): category a
+  green except for M4/M8 features, a bash bug and two quirk sets; chaos
+  check (every t/exec spec, 20 seeds); benchmarks b8 and b12; tests
+  `t/exec/637`-`645`.
+
 Remaining M3a work (see "Plan for the rest of M3a" below): launcher
 fibers for external stages with comsubs, fork-on-exec, the isolate
 fuzzer.
@@ -650,6 +655,150 @@ In suggested order, each with the API to use:
    (loadable in bash) can use `Task.deadline` with no wait.
 9. **Fuzzers**: chaos (same output for every seed, per writer) and
    isolate (`( S ); declare -p` equals `declare -p`), both vos only.
+
+## Bash test suite on the vos
+
+`tests.exe --oracle SUITE NAME...` runs bash 5.3's run-NAME on the vos
+(any output but "warning:" lines fails). Status of every run-* test at
+the end of the oracle pass; category letters from
+notes/research/tests.md.
+
+| test | cat | status | reason when failing |
+|---|---|---|---|
+| alias | b | FAIL | `alias '\$'` not rejected as an invalid name; an alias expansion detail |
+| appendop | a | PASS | |
+| arith | a | FAIL | arith10.sub: bash's quirks for empty subscripts (`(( a[""]=1 ))` says "not a valid identifier" and succeeds) and for `let` under assoc_expand_once |
+| arith-for | a | PASS | |
+| array | b | FAIL | `declare -p` lacks BASH_ARGC, BASH_ARGV, DIRSTACK (not implemented), and more |
+| array2 | a | PASS | |
+| assoc | b | FAIL | BASH_ALIASES and BASH_CMDS missing, and more |
+| attr | a | PASS | |
+| braces | a | PASS | |
+| builtins | c | FAIL | symbolic umask modes, enable, other builtin details |
+| case | a | PASS | |
+| casemod | a | PASS | |
+| complete | a | FAIL | complete, compgen -A (M8) |
+| comsub | b | FAIL | `let --` reports an error bash does not |
+| comsub-eof | a | PASS | |
+| comsub-posix | a | PASS | |
+| comsub2 | b | FAIL | aliases defined inside `$( )` |
+| cond | b | FAIL | `=~` (M4); the `[[: ` error prefix |
+| coproc | d | FAIL | no /etc/passwd on the vos |
+| cprint | a | PASS | |
+| dbg-support | a | FAIL | under extdebug `source` is not a FUNCNAME/BASH_SOURCE frame; BASH_ARGV and BASH_ARGC |
+| dbg-support2 | a | PASS | |
+| dirstack | b | FAIL | pushd, popd, dirs not implemented |
+| dollars | a | FAIL | bash bug recorded in the .right file: with IFS='', `${*:1}` in an assignment drops a lone DEL (CTLNUL) |
+| dynvar | c | PASS | |
+| errors | d | FAIL | many builtin error messages (alias -x, unalias, set -i, ...) |
+| execscript | c | FAIL | exec and PATH details (`command -p`, ENOEXEC messages) |
+| exp-tests | a | PASS | |
+| exportfunc | c | FAIL | exported-function import checks, eval line numbers |
+| extglob | b | FAIL | one extglob pattern result |
+| extglob2 | a | PASS | |
+| extglob3 | a | PASS | |
+| func | b | PASS | |
+| getopts | a | PASS | |
+| glob-bracket | c | FAIL | needs loadable builtins built in BUILD_DIR (skip) |
+| glob-test | b | FAIL | locale and zh_TW.big5 (category e), glob details |
+| globstar | b | FAIL | needs the bash build tree's lib/ object files |
+| heredoc | b | PASS | |
+| herestr | a | PASS | |
+| histexpand | b | FAIL | history expansion (M7) |
+| history | b | FAIL | history builtin (M7) |
+| ifs | b | PASS | |
+| ifs-posix | a | PASS | |
+| input-test | a | PASS | |
+| intl | e | FAIL | locale command, UTF-8 locales, /usr/bin/printf |
+| invert | a | PASS | |
+| invocation | c | FAIL | command-line options (--badopt, --initfile, ...) |
+| iquote | a | PASS | |
+| jobs | d | FAIL | job control (`set -m`, fg and bg messages) |
+| lastpipe | b | PASS | |
+| mapfile | b | FAIL | mapfile (M4) |
+| minimal | - | FAIL | a driver that always prints its banner; each test it runs passes alone |
+| more-exp | a | PASS | |
+| nameref | a | FAIL | namerefs (M4) |
+| new-exp | b | FAIL | `${!9}`-style indirection, and more |
+| nquote | a | PASS | |
+| nquote1 | a | PASS | |
+| nquote2 | a | PASS | |
+| nquote3 | a | PASS | |
+| nquote4 | e | PASS | |
+| nquote5 | a | PASS | |
+| parser | a | PASS | |
+| posix2 | b | PASS | |
+| posixexp | c | FAIL | copies $THIS_SH to $TMPDIR/sh and runs the copy |
+| posixexp2 | a | PASS | |
+| posixpat | a | PASS | |
+| posixpipe | a | PASS | |
+| precedence | a | PASS | |
+| printf | e | FAIL | floats (M4); the `%n` error comes before output formatted earlier |
+| procsub | c | FAIL | ulimit missing; procsub details |
+| quote | b | PASS | |
+| quotearray | a | FAIL | only namerefs remain (`declare -n nref=assoc[@]`, M4) |
+| read | d | PASS | |
+| redir | b | FAIL | /etc/passwd, ulimit, redirection details |
+| rhs-exp | a | PASS | |
+| rsh | c | FAIL | restricted shell (`set -r`) |
+| set-e | a | PASS | |
+| set-x | a | PASS | |
+| shopt | b | FAIL | compgen -A shopt (M8) |
+| strip | a | PASS | |
+| test | b | FAIL | chgrp missing; setgid and permission tests |
+| tilde | a | PASS | |
+| tilde2 | a | PASS | |
+| trap | d | FAIL | SIGCHLD traps (job control); the rest matches |
+| type | b | PASS | |
+| varenv | c | FAIL | temporary-environment scoping of local and declare in functions |
+| vredir | b | FAIL | `{v}>` onto a readonly variable, and more |
+
+47 of 87 pass (category a: 37 of 43). Category a fails only for
+complete (M8), nameref and quotearray (namerefs, M4), dollars (a bash
+bug in the .right file), arith (arith10.sub's empty-subscript quirks)
+and dbg-support (extdebug's `source` frames, BASH_ARGV).
+
+What the pass changed, besides small fixes (see the commit log):
+- **Array subscripts expand once.** In arithmetic text, in `[[ ]]`'s
+  `-v` and arithmetic operators (`XC_SUBQ`), and for `unset name[sub]`
+  (`XW_SUBQ`, compargs 2), a subscript is expanded as a word of its own
+  when the expander meets its `[`, quotes removed, and the result's
+  special characters (brackets, `$`, backquote, `~`, backslash and
+  quotes) backslash-quoted (`arithsubscript`), so that evaluating the
+  reference expands it to itself. `[[ -v ]]` only dequotes; test -v and
+  quoted unset arguments still expand, except under array_expand_once
+  (one option with assoc_expand_once). Indexed subscripts in arithmetic
+  are evaluated once (`arithget` rewrites the reference).
+- **$_** is the dynamic variable `_` over `Shell.lastarg`, a store
+  buffer that `bindlastarg` overwrites after each simple command (never
+  in place when the buffer belongs to the level around a synchronous
+  subshell, below the store's mark). Assigning, unsetting or declaring
+  `_` makes it plain until the next binding restores it. Programs get
+  `_=PATH` in their environment.
+- **extdebug**: a DEBUG action returning non-zero skips the command (2
+  also returns from a function); DEBUG runs as a function starts and
+  before each expression of `for ((;;))`; RETURN uses the body's line
+  and is not inherited by functions called from the DEBUG action;
+  `declare -ft` functions inherit DEBUG and RETURN; extdebug sets
+  errtrace and functrace; `caller`.
+- **vos clock**: each `os_wait(WAIT_POLL)` (a busy shell's safe point)
+  advances the virtual clock 1 ms, so that a busy loop waiting for a
+  background `sleep N; kill -USR1 $$` (trap9.sub) ends; otherwise time
+  jumps only when nothing can run.
+- shellerror and builtinerror allocate past a message built in the
+  caller's copy of the same scratch arena: the unspecified evaluation
+  order garbled `printf -v` errors.
+
+Chaos: `tests.exe --chaos 20 t/exec/*.sh` (546 specs, 20 seeds each)
+differs from the plain run in nothing; the concurrency specs 606-636
+also pass with 24 seeds.
+
+Benchmarks (bench/run on Linux in WSL against bash 5.3 built from the
+tarball, TMPDIR in the scratch area), unabashed vs bash: b1 1.04s vs
+3.15s, b2 1.86 vs 29.3, b7 0.11 vs 30.9, b8 0.19 vs 10.1, b9 1.14 vs
+5.78, b10 0.06 vs 0.44, b12 5.40 vs 20.4. b8 (perf.md B8) and b12 (B12,
+with a 32 KB body in place of 64 KB so that both shells use pipes
+rather than temporary files) are new in bench/.
 
 ## Known limits
 

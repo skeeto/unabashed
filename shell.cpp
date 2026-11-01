@@ -455,6 +455,9 @@ struct Shell {
     Slice<u8> compargs;    // declaration builtin: which args are name=(...)
     u8       cmdname[32];  // bash's this_command_name: a function's name
     i32      tracefd;      // BASH_XTRACEFD, or 2 (or 0 when never set)
+    Str      lastarg;      // $_, in a store buffer of lastargcap bytes,
+    iz       lastargcap;   // read through the dynamic variable _ while
+    b32      lastargdirty; // no one assigned, unset or declared _
     i32      cmdnamelen;   // from its call until a simple command ends
     Task    *psubs;        // procsubs started at this subshell level, to join
     i64      psubpid;      // the last procsub joined, and its status,
@@ -605,9 +608,21 @@ static void msgprefix(Shell *sh, Buf *b)
 }
 
 // Report an error on the shell's standard error.
+// A message built with the caller's copy of scratch, as in
+// f(sh, scratch, concat(&scratch, ...)), may sit where this copy starts
+// (the order of evaluation is unspecified): allocate past it.
+static void skipmsg(Arena *scratch, Str msg)
+{
+    byte *end = (byte *)(msg.data + msg.len);
+    if ((byte *)msg.data>=scratch->beg && end>scratch->beg && end<=scratch->end) {
+        scratch->beg = end;
+    }
+}
+
 static void shellerror(Shell *sh, Arena scratch, Str msg)
 {
     flushbout(sh);
+    skipmsg(&scratch, msg);
     Buf b(&scratch, msg.len+64);
     msgprefix(sh, &b);
     print(&b, msg);
@@ -619,6 +634,8 @@ static void shellerror(Shell *sh, Arena scratch, Str msg)
 static void builtinerror(Shell *sh, Arena scratch, Str cmd, Str msg)
 {
     flushbout(sh);
+    skipmsg(&scratch, msg);
+    skipmsg(&scratch, cmd);
     Buf b(&scratch, msg.len+cmd.len+64);
     msgprefix(sh, &b);
     if (cmd.len) {

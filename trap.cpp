@@ -461,6 +461,12 @@ static b32 pseudotrap(Shell *sh, i32 idx, b32 opt)
 {
     i32 k = idx - TRAP_DEBUG;
     if (!trapset(sh, idx) || (sh->trapbusy & 1<<k)) return 0;
+    if (idx!=TRAP_ERR && sh->frame && !opt) {
+        // a function with the trace attribute (declare -ft) inherits
+        // DEBUG and RETURN
+        Func *f = findfunc(sh, sh->frame->name);
+        opt = f && (f->attrs & V_TRACE);
+    }
     return !sh->funcdepth || opt || !sh->frame || sh->traps[idx].data!=sh->frame->trapat[k];
 }
 
@@ -490,6 +496,10 @@ static b32 rundebugtrap(Shell *sh, Arena)
 // RETURN: as a function or a sourced file returns.
 static void runreturntrap(Shell *sh, Arena)
 {
+    // As bash, functions called while the DEBUG action runs do not
+    // inherit RETURN
+    b32 indebug = sh->trapbusy & 1<<(TRAP_DEBUG-TRAP_DEBUG);
+    if (indebug && sh->funcdepth>sh->trapfuncs) return;
     if (!pseudotrap(sh, TRAP_RETURN, sh->opt[O_FUNCTRACE])) return;
     i32 flow = sh->flow;
     sh->flow = FLOW_NONE;

@@ -187,6 +187,8 @@ static void varchanged(Shell *sh, Str name)
         }
         if (sh->lexer) sh->lexer->utf8 = utf8;
         sh->utf8 = utf8;
+    } else if (name == "_") {
+        sh->lastargdirty = 1;  // no longer the dynamic $_
     } else if (name == "BASH_XTRACEFD") {
         // Traces go to an open descriptor it names, else to stderr
         Arena none = {};
@@ -351,6 +353,7 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     dynamic(sh, "BASH_LINENO", DYN_BASH_LINENO, V_ARRAY);
     dynamic(sh, "BASH_SOURCE", DYN_BASH_SOURCE, V_ARRAY);
     dynamic(sh, "PIPESTATUS", DYN_PIPESTATUS, V_ARRAY);
+    dynamic(sh, "_", DYN_UNDERSCORE);
     sh->npstat = 1;
     static Str versinfo[] = {"5", "3", "0", "1", "release", "x86_64-pc-linux-gnu"};
     for (iz i = 0; i < countof(versinfo); i++) {
