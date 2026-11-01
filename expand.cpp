@@ -2322,6 +2322,93 @@ static Str expandpattern(Shell *sh, Arena *a, Str text, i32 ctx = 0)
     return expandpat(x, text, ctx);
 }
 
+static b32 erespecial(u8 c)
+{
+    switch (c) {
+    case '.': case '[': case '\\': case '(': case ')': case '*': case '+':
+    case '?': case '{': case '|': case '^': case '$':
+        return 1;
+    }
+    return 0;
+}
+
+// Expand the right side of =~ as bash's quote_string_for_globbing does
+// for a regular expression: a quoted character special in an ERE gets
+// a backslash, except inside a bracket expression, where quoted
+// characters are left as they are. Its class, equivalence class and
+// collating symbol states carry from one bracket to the next, as in
+// bash, and a bracket without its ] is rescanned as plain text. A [
+// just after a \001 byte opens no bracket (bash sees it quoted).
+static Str expandregex(Shell *sh, Arena *a, Str text, i32 ctx = 0)
+{
+    X *x = newx(sh, a);
+    x->nosplit = 1;
+    expandinto(x, text, ctx | XC_PATTERN);
+    XField f = xfinish(x);
+    Str    d = f.data;
+    Buf    b(a, d.len*2);
+    b32    cclass = 0, equiv = 0, collsym = 0;
+    for (iz i = 0; i < d.len; i++) {
+        u8  c = d[i];
+        b32 q = f.flags[i] & XF_QUOTED;
+        if (q) {
+            if (erespecial(c)) putbyte(&b, '\\');
+            putbyte(&b, c);
+            continue;
+        }
+        if (c!='[' || (i && d[i-1]==1)) {
+            putbyte(&b, c);
+            continue;
+        }
+
+        // Copy a bracket expression through its ], if it has one
+        iz mark = b.len;
+        iz j    = i + 1;
+        putbyte(&b, '[');
+        #define UNQ(k, ch) ((k)<d.len && d[k]==(ch) && !(f.flags[k] & XF_QUOTED))
+        if (UNQ(j, '^')) putbyte(&b, d[j++]);
+        if (UNQ(j, ']')) putbyte(&b, d[j++]);
+        b32 closed = 0;
+        for (; j < d.len; j++) {
+            u8 e = d[j];
+            if (f.flags[j] & XF_QUOTED) {
+                putbyte(&b, e);
+            } else if (e == ']') {
+                closed = 1;
+                break;
+            } else if (e=='[' && UNQ(j+1, ':')) {
+                print(&b, "[:");
+                j++;
+                cclass = 1;
+            } else if (cclass && e==':' && UNQ(j+1, ']')) {
+                print(&b, ":]");
+                j++;
+                cclass = 0;
+            } else if (e=='[' && (UNQ(j+1, '=') || UNQ(j+1, '.'))) {
+                putbyte(&b, e);
+                putbyte(&b, d[++j]);
+                if (d[j] == '=') equiv = 1; else collsym = 1;
+                if (UNQ(j+1, ']')) putbyte(&b, d[++j]);
+            } else if ((equiv && e=='=' && UNQ(j+1, ']')) ||
+                       (collsym && e=='.' && UNQ(j+1, ']'))) {
+                putbyte(&b, e);
+                putbyte(&b, d[++j]);
+                if (e == '=') equiv = 0; else collsym = 0;
+            } else {
+                putbyte(&b, e);
+            }
+        }
+        #undef UNQ
+        if (closed) {
+            putbyte(&b, ']');
+            i = j;
+        } else {
+            b.len = mark + 1;  // just the [, and on from there
+        }
+    }
+    return finish(&b);
+}
+
 // Expand a here-document body.
 static Str expandheredoc(Shell *sh, Arena *a, Str body)
 {

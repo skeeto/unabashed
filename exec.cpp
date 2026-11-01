@@ -2150,7 +2150,7 @@ static b32 casematch(Shell *sh, Arena *a, Str word, Word *patterns)
     return 0;
 }
 
-static b32 condeval(Shell *sh, Arena *a, Cond *c);
+static i32 condeval(Shell *sh, Arena *a, Cond *c);
 
 struct TestCtx {
     Shell *sh;
@@ -2319,15 +2319,63 @@ static void tracecond(Shell *sh, Arena a, b32 invert, Str op, Str lhs, Str *rhs)
     traceline(sh, a, finish(&b));
 }
 
-static b32 condeval(Shell *sh, Arena *a, Cond *c)
+// [[ s =~ re ]]: 0 for a match, 1 for none, 2 for an invalid regular
+// expression. BASH_REMATCH is emptied, then gets the match and its
+// groups, an unset group as an empty string, as bash's sh_regmatch.
+static i32 condregex(Shell *sh, Arena a, Str s, Str re)
 {
-    b32 r = 0;
+    i32 flags = 0;
+    if (sh->shopt[S_NOCASEMATCH]) flags |= REX_ICASE;
+    if (sh->utf8) flags |= REX_UTF8;
+    RxComp rc = rxcompile(re, flags, &a);
+    if (!rc.re) {
+        Str msg = concat3(&a, "invalid regular expression `", re, "': ");
+        builtinerror(sh, a, "[[", concat(&a, msg, rxerrors[rc.err]));
+        return 2;
+    }
+    i32      ng = rc.re->nsub + 1;
+    RxMatch *m  = alloc<RxMatch>(&a, ng);
+    b32      ok = rxexec(rc.re, s, m, a) == 1;
+
+    i32 aflags = SV_FORCE;
+    Str name   = arraytarget(sh, a, "BASH_REMATCH", &aflags, 1);
+    if (!name.data) return !ok;
+    Value *val = assignslot(sh, a, name, aflags & ~SV_FORCE);
+    if (!val || (val->attrs & V_NOASSIGN)) return !ok;
+    if (val->arr && val->arr->bucket) {
+        builtinerror(sh, a, "[[", concat(&a, name, ": not an indexed array"));
+        return !ok;
+    }
+    toarray(sh, val);
+    aclear(sh->store, val->arr);
+    val->arr->isset = 1;
+    for (i32 i = 0; ok && i < ng; i++) {
+        // bash copies eo-so bytes from so: an unclosed group (eo < so)
+        // copies the rest of the string
+        Str v = {};
+        if (m[i].so >= 0) {
+            v = cuthead(s, m[i].so);
+            if (m[i].eo >= m[i].so) v = takehead(v, m[i].eo-m[i].so);
+        }
+        setelem(sh, a, name, i, {}, v, aflags);
+    }
+    return !ok;
+}
+
+// The status of a [[ ]] expression: 0 true, 1 false, 2 for an error
+// (the -t operand's or a regular expression's), which || and ! treat as
+// false, as bash does.
+static i32 condeval(Shell *sh, Arena *a, Cond *c)
+{
+    i32 r = 1;
     switch (c->kind) {
     case C_AND:
-        r = condeval(sh, a, c->left) && condeval(sh, a, c->right);
+        r = condeval(sh, a, c->left);
+        if (!r) r = condeval(sh, a, c->right);
         break;
     case C_OR:
-        r = condeval(sh, a, c->left) || condeval(sh, a, c->right);
+        r = condeval(sh, a, c->left);
+        if (r) r = condeval(sh, a, c->right);
         break;
     case C_EXPR:
         r = condeval(sh, a, c->left);
@@ -2335,7 +2383,7 @@ static b32 condeval(Shell *sh, Arena *a, Cond *c)
     case C_TERM: {
         Str arg = condword(sh, a, c->op);
         tracecond(sh, *a, c->invert, "-n", arg, 0);
-        r = arg.len > 0;
+        r = arg.len == 0;
     } break;
     case C_UNARY: {
         TestCtx tc = {sh, a, 1};
@@ -2344,9 +2392,9 @@ static b32 condeval(Shell *sh, Arena *a, Cond *c)
         tracecond(sh, *a, c->invert, c->op->text, arg, 0);
         TestResult t = testunary(&e, a, c->op->text, arg);
         if (t.status == 2) {
-            shellerror(sh, *a, t.err);
+            builtinerror(sh, *a, "[[", t.err);
         }
-        r = t.status == 0;
+        r = t.status;
     } break;
     case C_BINARY: {
         Str op = c->op->text;
@@ -2358,32 +2406,31 @@ static b32 condeval(Shell *sh, Arena *a, Cond *c)
             tracecond(sh, *a, c->invert, op, lhs, &pat);
             i32 pf  = patflags(sh) | PM_EXTGLOB;  // always, as in bash
             if (sh->shopt[S_NOCASEMATCH]) pf |= PM_NOCASE;
-            r = patmatch(pat, lhs, pf, *a);
-            if (op == "!=") r = !r;
+            b32 m = patmatch(pat, lhs, pf, *a);
+            r = (op=="!=") == m;
         } else if (op == "=~") {
-            Str rhs = expandpattern(sh, a, c->right->op->text, wordctx(sh, c->right->op));
+            Str rhs = expandregex(sh, a, c->right->op->text, wordctx(sh, c->right->op));
             tracecond(sh, *a, c->invert, op, lhs, &rhs);
-            shellerror(sh, *a, "=~: regular expressions arrive in M4");
-            r = 0;
+            r = condregex(sh, *a, lhs, rhs);
         } else if (arith) {
             Str rhs = condword(sh, a, c->right->op, 1);
             tracecond(sh, *a, c->invert, op, lhs, &rhs);
             // An arithmetic error makes just this primary false
             Arith x = evalarithcmd(sh, a, lhs, "[[");
             Arith y = x.ok ? evalarithcmd(sh, a, rhs, "[[") : x;
-            r = x.ok && y.ok && testintcmp(op, x.value, y.value);
+            r = !(x.ok && y.ok && testintcmp(op, x.value, y.value));
         } else {
             Str rhs = condword(sh, a, c->right->op);
             tracecond(sh, *a, c->invert, op, lhs, &rhs);
             TestCtx tc = {sh, a, 1};
             TestEnv e = testenv(&tc);
             TestResult t = testbinary(&e, a, op, lhs, rhs);
-            if (t.status == 2) shellerror(sh, *a, t.err);
-            r = t.status == 0;
+            if (t.status == 2) builtinerror(sh, *a, "[[", t.err);
+            r = t.status;
         }
     } break;
     }
-    return c->invert ? !r : r;
+    return c->invert ? r==0 : r;
 }
 
 static b32 loopflow(Shell *sh)
@@ -2786,7 +2833,7 @@ static void execcond(Shell *sh, Node *n, Arena scratch)
 {
     sh->line = n->line;
     if (sh->traps && debugcompound(sh, n, scratch)) return;
-    sh->status = condeval(sh, &scratch, n->cond) ? 0 : 1;
+    sh->status = condeval(sh, &scratch, n->cond);
     setpstat1(sh);
     checkerrexit(sh);
 }

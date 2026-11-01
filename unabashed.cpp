@@ -153,6 +153,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "print.cpp"
 #include "arith.cpp"
 #include "pattern.cpp"
+#include "regex.cpp"
 #include "brace.cpp"
 #include "b_test.cpp"
 #include "b_printf.cpp"
