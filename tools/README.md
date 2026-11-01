@@ -83,6 +83,18 @@ keeps the format exact when output has no final newline or contains
 `==` lines. `== status N` is a single line holding the exit status;
 death by signal records 128+N.
 
+## fuzz (WSL or Linux, AFL++)
+
+    tools/fuzz MODE [MINUTES [CORES]]
+
+Builds `main_fuzz.cpp` in one of its modes (`run`, `parse`, `chaos`,
+`isolate`; see its header) with `afl-clang-fast++` from a snapshot of
+the working tree in `~/fuzz-MODE`, seeds it with the small spec scripts
+and runs AFL++ on CORES cores (default 60 minutes, 2 cores), then counts
+the crashes. Every mode runs scripts only on the vos. A plain build of
+the same mode replays files: `g++ -std=c++20 -g3 -DFUZZ_CHAOS -o replay
+main_fuzz.cpp; ./replay crash...`.
+
 ## sandbox (Windows)
 
 `sandbox.cpp` confines the curated Windows integration tests, which need

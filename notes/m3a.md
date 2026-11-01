@@ -52,9 +52,13 @@ Done (core foundation):
   check (every t/exec spec, 20 seeds); benchmarks b8 and b12; tests
   `t/exec/637`-`645`.
 
+- Exit criteria pass (see "Closing M3a" below): the chaos and isolate
+  fuzzers (`main_fuzz.cpp`, `tools/fuzz`), fork-on-exec on POSIX, B12
+  at 12x bash, and the arith and dbg-support oracles; tests
+  `t/exec/646`-`654`.
+
 Remaining M3a work (see "Plan for the rest of M3a" below): launcher
-fibers for external stages with comsubs, fork-on-exec, the isolate
-fuzzer.
+fibers for external stages with comsubs (an optimization).
 
 ## Model
 
@@ -591,6 +595,12 @@ void os_submit(Os *, Io *);        // may complete at once (done)
 Io  *os_wait(Os *, i64 deadline);  // WAIT_FOREVER, WAIT_POLL or an os_now time
 b32  os_cancel(Os *, Io *);        // false if it may still complete
 ```
+Closing M3a added (see "Closing M3a"):
+```
+i32  os_exec(Os *, Arena, Spawn *);    // replace the process; E_NOSYS: spawn instead
+void os_tasktag(Os *, u64 tag, iz n);  // test layers: running task, task count
+void os_racy(Os *);                    // test layers: the outcome may be racy
+```
 - **vos**: an `Io` completes when the vos pipe has data/room, the file
   is a regular file, or the child exited. `os_wait` blocks the calling
   vos process; at `WAIT_POLL` it lets the other processes run once.
@@ -649,12 +659,10 @@ In suggested order, each with the API to use:
    "Materialization"); `&` must use `capturewriter`.
 5. **Traps and SIGPIPE**: done (see "Signals and traps").
 6. **Interim `&`, wait and coproc**: done (see "Jobs").
-7. **Fork-on-exec** (POSIX): `exec ext` while other tasks are alive
-   forks so that `$$` is kept; otherwise `execve` directly.
+7. **Fork-on-exec** (POSIX): done (see "Closing M3a").
 8. **Timers**: done for `read -t` (see "Timers"); a `sleep` builtin
    (loadable in bash) can use `Task.deadline` with no wait.
-9. **Fuzzers**: chaos (same output for every seed, per writer) and
-   isolate (`( S ); declare -p` equals `declare -p`), both vos only.
+9. **Fuzzers**: done (see "Closing M3a").
 
 ## Bash test suite on the vos
 
@@ -667,7 +675,7 @@ notes/research/tests.md.
 |---|---|---|---|
 | alias | b | FAIL | `alias '\$'` not rejected as an invalid name; an alias expansion detail |
 | appendop | a | PASS | |
-| arith | a | FAIL | arith10.sub: bash's quirks for empty subscripts (`(( a[""]=1 ))` says "not a valid identifier" and succeeds) and for `let` under assoc_expand_once |
+| arith | a | PASS | |
 | arith-for | a | PASS | |
 | array | b | FAIL | `declare -p` lacks BASH_ARGC, BASH_ARGV, DIRSTACK (not implemented), and more |
 | array2 | a | PASS | |
@@ -685,7 +693,7 @@ notes/research/tests.md.
 | cond | b | FAIL | `=~` (M4); the `[[: ` error prefix |
 | coproc | d | FAIL | no /etc/passwd on the vos |
 | cprint | a | PASS | |
-| dbg-support | a | FAIL | under extdebug `source` is not a FUNCNAME/BASH_SOURCE frame; BASH_ARGV and BASH_ARGC |
+| dbg-support | a | PASS | |
 | dbg-support2 | a | PASS | |
 | dirstack | b | FAIL | pushd, popd, dirs not implemented |
 | dollars | a | FAIL | bash bug recorded in the .right file: with IFS='', `${*:1}` in an assignment drops a lone DEL (CTLNUL) |
@@ -753,10 +761,10 @@ notes/research/tests.md.
 | varenv | c | FAIL | temporary-environment scoping of local and declare in functions |
 | vredir | b | FAIL | `{v}>` onto a readonly variable, and more |
 
-47 of 87 pass (category a: 37 of 43). Category a fails only for
-complete (M8), nameref and quotearray (namerefs, M4), dollars (a bash
-bug in the .right file), arith (arith10.sub's empty-subscript quirks)
-and dbg-support (extdebug's `source` frames, BASH_ARGV).
+49 of 87 pass (category a: 39 of 43). Category a fails only for
+complete (M8), nameref and quotearray (namerefs, M4) and dollars (a
+bash bug in the .right file). (47 at the end of the oracle pass; arith
+and dbg-support were fixed while closing M3a.)
 
 What the pass changed, besides small fixes (see the commit log):
 - **Array subscripts expand once.** In arithmetic text, in `[[ ]]`'s
@@ -796,9 +804,125 @@ also pass with 24 seeds.
 Benchmarks (bench/run on Linux in WSL against bash 5.3 built from the
 tarball, TMPDIR in the scratch area), unabashed vs bash: b1 1.04s vs
 3.15s, b2 1.86 vs 29.3, b7 0.11 vs 30.9, b8 0.19 vs 10.1, b9 1.14 vs
-5.78, b10 0.06 vs 0.44, b12 5.40 vs 20.4. b8 (perf.md B8) and b12 (B12,
+5.78, b10 0.06 vs 0.44, b12 5.40 vs 20.4. At the close of M3a (a
+quieter machine, so bash is faster too): b1 0.78 vs 2.34, b2 1.48 vs
+22.5, b7 0.07 vs 23.4, b8 0.13 vs 8.21, b9 0.75 vs 4.63, b10 0.03 vs
+0.32, b12 1.29 vs 15.7. b8 (perf.md B8) and b12 (B12,
 with a 32 KB body in place of 64 KB so that both shells use pipes
 rather than temporary files) are new in bench/.
+
+## Closing M3a
+
+**Chaos fuzzer** (`main_fuzz.cpp -DFUZZ_CHAOS`, vos only). Each input
+runs as `bash -c` once with the plain schedule, then under
+`CHAOS_SEEDS` (3) chaos seeds; a mismatch traps so that AFL records it.
+Compared: the exit status, whether a deadlock was reported, and what
+each *writer* wrote to the outermost stdout and stderr (FNV hashes per
+writer, so legitimately racing writers are compared each on its own,
+never interleaved). A writer is a vos process plus a task in it, with
+identities that do not depend on the schedule:
+- `Task.tag` (sched.cpp): a task's tag mixes its creator's tag with the
+  creator's count of tasks started (`nspawn`); the main task's is 0.
+  The scheduler reports the running task's tag and the task count to
+  the platform (`os_tasktag`, called at each switch and spawn; a no-op
+  on POSIX and Win32).
+- A vos process's identity (`VProc.lid`) mixes its starter's identity
+  and task tag with how many programs that task started (`Vos.spawns`).
+  An `Io` remembers the submitting task's tag (`Io.plt[0]`), because
+  the vos may perform it later while another task of the process waits
+  in `os_wait`.
+
+Runs are not compared when the outcome legitimately depends on the
+schedule, in bash too:
+- inputs with constructs that observe timing or jobs (`chaosexempt`):
+  a lone `&`, coproc, wait, jobs, kill, disown, fg, bg, suspend, sleep,
+  SECONDS, EPOCH*, TMOUT, `-t` (read timeouts), time, date, mkfifo,
+  `$$` (a nested shell's pid is a vos pid, handed out in start order
+  across tasks), `-nt`/`-ot`/`-N` (mtimes follow the vos clock);
+- runs that did something racy (`Vos.racy`, also `os_racy` from the
+  core): a write that found its reader gone (vos pipes and in-memory
+  Pipes: whether `true` exited first in `echo x | true`), bytes of one
+  pipe read by two different readers (`{ head -n1; cat; }`), and a file
+  system change while more than one task could run (`vconcurrent`: the
+  sum of every live process's tasks, not counting a task waiting for a
+  program it started).
+A deadlock under one schedule only is a bug; one under every schedule
+is a script that hangs under bash too (reading a terminal that never
+types: `select ... </dev/tty`), which the vos reports instead.
+On the spec corpus (556 scripts): 474 compared, 61 exempt, 10 racy, 1
+out of memory, no mismatch.
+
+**Isolate fuzzer** (`-DFUZZ_ISOLATE`): one shell prints a state dump,
+runs `(eval "$1") </dev/null >/dev/null 2>&1` with the input as `$1`,
+and prints the dump again; they must be equal. The dump is `declare
+-p; declare -f; alias; trap -p; set +o; shopt -p; umask` (pwd is left
+out: the subshell may remove the directory, which the parent then
+notices). Excluded variables, which change on their own: `_ RANDOM
+SRANDOM SECONDS EPOCHSECONDS EPOCHREALTIME LINENO BASH_COMMAND
+PIPESTATUS BASH_LINENO HISTCMD`. If the parent dies (`kill $$`) the
+input is skipped.
+
+**Harness fixes.** Every mode now has a 64 MiB heap (half for shells):
+with 8 MiB, the arenas of a shell plus its scheduler (four of
+`info.reserve` and a pool arena per capture depth) left so little that
+most inputs ran out of memory, and every one with a pipeline did, so
+earlier run campaigns explored little past startup and simple
+commands. OOM exits use `__builtin_longjmp` (it works from fibers) and
+free the fiber stacks a run left behind. A plain build (no AFL) replays
+the files named on its command line, saying what became of each
+(`same`, `racy`, `exempt`, `out of memory`).
+
+**Campaigns** (`tools/fuzz MODE [MINUTES [CORES]]`, WSL, 2 cores each,
+from a snapshot in `~/fuzz-MODE`): about an hour of chaos and 50
+minutes of isolate, in rounds; the last round of each found nothing. Found: an EXIT action that fails ran the ERR trap in the
+same pool arena as itself (`runexittrap` took `capdepth+1` without
+claiming it), corrupting its lexer (isolate, `trap 'e' EXIT ERR`).
+Chaos crashes were harness false positives: consistent `/dev/tty`
+deadlocks (hence the rule above), and background jobs written `\|&`,
+which the exemption scan took for `|&` (it now skips escaped
+characters). The last isolate rounds found nothing; hangs are infinite
+loops.
+
+**Fork-on-exec** (`os_exec`): `exec prog` replaces the process when
+the shell is at its top level (no subshell, no capture), its scheduler
+has one task, and no pump or capture is needed, so the program keeps
+the shell's pid (`$$`), as bash. Otherwise it starts a child as before
+(on Win32 and the vos `os_exec` returns `E_NOSYS`). The POSIX layer
+saves every target descriptor, marks the others close-on-exec, installs
+the map, the directory and the signal actions, and calls `execve`; if
+that fails (a script without `#!`, which the shell then runs itself)
+everything is put back. Only used when a failed exec ends the shell
+(no execfail, not interactive). With a procsub alive (`exec prog <
+<(...)`) it forks, so the program's pid differs from bash's. Related
+fixes: a found program that fails to exec ends the shell without its
+EXIT trap; execfail does not apply in subshells.
+
+**Spawning on POSIX** uses `vfork`: arguments are prepared first, the
+child only makes system calls (descriptor moves, `close_range`, signal
+actions) and reports a failed exec through a variable it shares with
+the parent; signals are blocked around it. 2000 spawns of `/bin/true`
+went from 1.59 to 1.02 s.
+
+**B12**: here-documents read by builtins were already in memory
+(`F_MEM`); the cost was `read` itself, which now scans text in memory
+in place (`b_read`'s fast path when no escape is involved) and splits
+fields with a byte table. With the faster spawns, b12 is 1.27 s against
+bash's 15.5 s (12x; 5.40 vs 20.4 before). Its external half (2500
+`cat`s) is bound by process creation, about 0.5 ms each in WSL for
+both shells; the builtin half is 15x.
+
+**Oracle fixes**: arith (empty subscripts: assigning one says "not a
+valid identifier" and goes on, reading one says "bad array subscript"
+twice and reads unset; `let` under assoc_expand_once evaluates
+subscripts as they are; an error evaluating a subscript abandons the
+whole -c, eval or source text) and dbg-support (`Srcframe`: a sourced
+file is a frame of FUNCNAME ("source"), BASH_SOURCE and BASH_LINENO;
+DEBUG and RETURN in a sourced file follow the function rules, RETURN
+runs where it was sourced, and DEBUG in that action follows the file's
+rules (`Shell.retsrc`); BASH_ARGV/BASH_ARGC, built from the frames'
+arguments and a bottom set up from the positional parameters when
+first read by name (not by a listing) or when extdebug is turned on;
+DEBUG before case and select; EXIT actions run at line 1).
 
 ## Known limits
 
@@ -835,3 +959,10 @@ rather than temporary files) are new in bench/.
   shell's own scheduler is reported by that shell.
 - A fiber stage's stack limit is its parent's (`stackmax`), at most the
   fiber stack (8 MiB reserved).
+- `exit` unwinds the call and source frames before the EXIT action
+  runs, so FUNCNAME and BASH_SOURCE are empty there; bash runs the
+  action from inside exit, with them in place.
+- The chaos fuzzer's exemptions are coarse (a lone `&` anywhere, even
+  quoted, exempts an input) and its file-system rule flags some
+  deterministic runs as racy (`ls | sort >out`), so background jobs and
+  file races get little coverage from it.

@@ -253,14 +253,22 @@ static b32 chaosexempt(Str s)
     for (iz i = 0; i < countof(words); i++) {
         if (find(s, words[i]) >= 0) return 1;
     }
-    // & alone: a background job (not &&, >&, <&, |&, &>)
+    // & alone: a background job (not &&, >&, <&, |&, &>), where an
+    // escaped character is no operator (\|& is | then &)
+    u8 prev = 0;  // the previous character if unescaped, else 0
     for (iz i = 0; i < s.len; i++) {
-        if (s[i] != '&') continue;
-        u8 prev = i ? s[i-1] : 0;
+        if (s[i] == '\\') {
+            i++;
+            prev = 0;
+            continue;
+        }
         u8 next = i+1<s.len ? s[i+1] : 0;
-        if (prev=='&' || prev=='>' || prev=='<' || prev=='|') continue;
-        if (next=='&' || next=='>') continue;
-        return 1;
+        if (s[i]=='&' && prev!='&' && prev!='>' && prev!='<' && prev!='|' &&
+                next!='&' && next!='>') {
+            return 1;
+        }
+        // && is one operator: its second & is no |& or >& prefix
+        prev = s[i]=='&' && prev=='&' ? 0 : s[i];
     }
     return 0;
 }
