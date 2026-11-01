@@ -242,6 +242,18 @@ prompt and 130. Not done on Windows 11's conhost: the desktop was in use
 by a fullscreen program, and winctl brings the window to the
 foreground for every key.
 
+## Numbers at the end of M3b
+
+- vos: t/parse 2915 tests, 0 failed; t/exec 560 specs, only
+  213-trailing-backslash fails; `--chaos 3` the same; oracle 49 of 86
+  run-* (minimal excluded), as at the end of M3a.
+- Linux (WSL): the same suites pass; warning-free; bench/run against
+  bash 5.3: b1 0.80 vs 2.49 s, b2 1.47 vs 23.6, b7 0.08 vs 25.2, b8 0.12
+  vs 8.62, b9 0.80 vs 4.87, b10 0.04 vs 0.36, b12 1.49 vs 16.6 (no
+  change from M3a beyond noise).
+- Windows: t/win32 10 of 10 on Windows 11 (x64 in both code paths,
+  i686) and on XP (i686).
+
 ## Decisions to revisit
 
 - **Ctrl-C ignored at the top level still interrupts**: the platform
