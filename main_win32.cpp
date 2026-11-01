@@ -2097,8 +2097,10 @@ static void os_submit(Os *os, Io *io)
     }
 
     Wobj *w = lookup(os, io->h);
-    if (!w || w->kind==K_CHAR || (w->kind==K_CONOUT) != (io->op==IO_WRITE)) {
-        // A file or device: at once
+    if (!w || w->kind==K_CHAR || w->kind==K_CONOUT ||
+            (w->kind==K_CONIN && io->op==IO_WRITE)) {
+        // A file, a device, console output: at once (pipes in either
+        // direction and console input go through the state machine)
         if (io->op == IO_READ) {
             io->n   = os_read(os, io->h, io->buf, io->len);
             io->err = io->n<0 ? E_IO : 0;
