@@ -2839,6 +2839,7 @@ static i32 b_times(Shell *sh, Str *, iz, Arena)
 enum : u32 {
     CG_ALIAS = 1<<0, CG_BUILTIN = 1<<1, CG_EXPORT = 1<<2,
     CG_FUNCTION = 1<<3, CG_KEYWORD = 1<<4, CG_VARIABLE = 1<<5,
+    CG_SETOPT = 1<<6, CG_SHOPT = 1<<7,
 };
 
 static void compaliases(Alias *t, Arena *a, Slice<Str> *out)
@@ -2873,6 +2874,7 @@ static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
         {"alias", CG_ALIAS}, {"builtin", CG_BUILTIN}, {"enabled", CG_BUILTIN},
         {"export", CG_EXPORT}, {"function", CG_FUNCTION},
         {"keyword", CG_KEYWORD}, {"variable", CG_VARIABLE},
+        {"setopt", CG_SETOPT}, {"shopt", CG_SHOPT},
     };
     Arena *a = &scratch;
     u32 want = 0;
@@ -2935,7 +2937,7 @@ static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
     Slice<Str> names = {};
     // Each action's names in turn, as bash: tables in their own order,
     // the others sorted
-    for (u32 bit = 1; bit <= CG_VARIABLE; bit <<= 1) {
+    for (u32 bit = 1; bit <= CG_SHOPT; bit <<= 1) {
         iz start = names.len;
         switch (want & bit) {
         case CG_ALIAS:    compaliases(sh->aliases, a, &names); break;
@@ -2947,6 +2949,12 @@ static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
             for (iz j = 0; j < countof(reserved); j++) {
                 names = push(a, names, reserved[j].word);
             }
+            break;
+        case CG_SETOPT:
+            for (i32 k = 0; k < O_COUNT; k++) names = push(a, names, setoptions[k].name);
+            break;
+        case CG_SHOPT:
+            for (i32 k = 0; k < S_COUNT; k++) names = push(a, names, shoptnames[k]);
             break;
         }
         if (bit!=CG_BUILTIN && bit!=CG_KEYWORD) {
