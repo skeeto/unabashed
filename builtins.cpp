@@ -1678,13 +1678,42 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             done = 1;
         }
     }
+    // A pipe the platform can look into is read a line at a time:
+    // exactly through the delimiter, so nothing past it is consumed
+    b32 peekable = in && in->kind==F_OS && (in->flags & OF_READ);
+    u8 *ahead = peekable ? alloc<u8>(&scratch, 1<<12) : 0;
+    iz  alen = 0, aoff = 0;
     for (; !done;) {
         if (nchars>=0 && count>=nchars) break;
-        sh->intrread = self->introk = 1;
-        self->deadline = deadline;
-        i32 c = readbyte(sh, fd);
-        self->deadline = 0;
-        sh->intrread = self->introk = 0;
+        if (aoff==alen && peekable) {
+            iz n = os_peek(sh->os, in->h, ahead, 1<<12);
+            peekable = n >= 0;
+            iz want = n;
+            for (iz k = 0; k<n && !exact; k++) {
+                if (ahead[k] == delim) {
+                    want = k + 1;
+                    break;
+                }
+            }
+            if (nchars>=0 && want>nchars-count) want = (iz)(nchars - count);
+            alen = aoff = 0;
+            if (want > 0) {
+                self->deadline = deadline;
+                alen = fdread(sh, fd, ahead, want);
+                self->deadline = 0;
+                alen = alen<0 ? 0 : alen;
+            }
+        }
+        i32 c;
+        if (aoff < alen) {
+            c = ahead[aoff++];
+        } else {
+            sh->intrread = self->introk = 1;
+            self->deadline = deadline;
+            c = readbyte(sh, fd);
+            self->deadline = 0;
+            sh->intrread = self->introk = 0;
+        }
         if (self->timedout) {
             self->timedout = 0;
             timedout = 1;
@@ -1700,9 +1729,14 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         if (c==delim && !exact) break;
         if (c=='\\' && !raw) {
-            self->deadline = deadline;
-            i32 d = readbyte(sh, fd);
-            self->deadline = 0;
+            i32 d;
+            if (aoff < alen) {
+                d = ahead[aoff++];
+            } else {
+                self->deadline = deadline;
+                d = readbyte(sh, fd);
+                self->deadline = 0;
+            }
             if (self->timedout) {
                 self->timedout = 0;
                 timedout = 1;

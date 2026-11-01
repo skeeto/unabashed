@@ -310,6 +310,7 @@ enum : i32 {  // reasons to unwind to an escape point
     ESC_DISCARD,    // abandon the current command (expansion errors)
     ESC_FATAL,      // abandon the shell (unbound variable, ${x?})
     ESC_ABORT,      // abandon -c, eval and source text (integer assignment)
+    ESC_INTR,       // interactive: Ctrl-C abandons the command line
 };
 
 struct Escape {
@@ -540,6 +541,9 @@ static void capturedrain(Sched *s, Capture *c)
 }
 
 static b32  sigtaken(Shell *);
+static void waitdone(Shell *, u64 died, b32 failed);
+static void takeossigs(Shell *);
+static u64  sigbit(i32);
 static void runsigs(Shell *, Arena);
 static void runexittrap(Shell *, Arena);
 

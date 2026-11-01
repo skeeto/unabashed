@@ -436,6 +436,9 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sh->status   = status;
     sh->childsig = killed;
     sh->childpid = pid;
+    if (sh->sig->waitsig && !sh->sig->fgwait) {
+        waitdone(sh, killed ? sigbit(killed) : 0, 0);
+    }
     return status;
 }
 
@@ -1285,8 +1288,14 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         }
         os_close(sh->os, capread);
     }
+    takeossigs(sh);  // those from before the wait are this level's own
+    sh->sig->fgwait = !r.err;
     i32 status = r.err ? -r.err : taskwaitproc(s, r.proc);
     sh->childsig = 0;
+    if (!r.err) {
+        b32 died = status>=0 && (status & WSIGNALED);
+        waitdone(sh, died ? sigbit((status & 255) - 128) : 0, status!=0);
+    }
     if (s->cur->intr) {
         sigtaken(sh);  // killed while waiting: the program runs on
     }
@@ -1469,6 +1478,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
             sh->childsig = killed;
             sh->childpid = pid;
         }
+        if (sh->sig->waitsig) waitdone(sh, killed ? sigbit(killed) : 0, 0);
         return status;
     }
     Stat s = os_stat(sh->os, a, absolute(sh, &a, path), 1);
@@ -3013,7 +3023,8 @@ static void runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
         return;
     }
     sh->esc = e.up;
-    b32 resume = e.why==ESC_DISCARD || (e.why==ESC_ABORT && reader);
+    b32 resume = e.why==ESC_DISCARD || (e.why==ESC_ABORT && reader) ||
+                 (e.why==ESC_INTR && reader);
     if (!resume || sh->subshell) {
         if (e.why==ESC_DISCARD && !reader) sh->status = 1;
         escape(sh, e.why);
@@ -3044,6 +3055,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
     Lexer *L = newlexer(&scratch, src);
     L->fill          = fill;
     L->fillctx       = fillctx;
+    L->newunit       = 1;
     L->lineno        = line - 1;
     L->aliases       = &sh->aliases;
     L->stackmax      = (iz)1<<20;
@@ -3133,6 +3145,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             keepcmdtext(sh, unit.beg, end);
             L->line = {};
             L->idx  = 0;
+            L->newunit = 1;
             *L->a   = unit;
         }
     }

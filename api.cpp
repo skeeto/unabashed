@@ -163,6 +163,10 @@ static Handle  os_dup(Os *, Handle);
 static OsPipe  os_pipe(Os *);
 // Bytes a fresh pipe accepts before a write blocks.
 static iz      os_pipecap(Os *);
+// Copy up to len bytes that a read would return now, without
+// consuming them: the count, 0 when nothing is waiting (or at end of
+// file), -1 where the platform cannot look ahead on this handle.
+static iz      os_peek(Os *, Handle, u8 *, iz);
 // Reposition; whence is 0 (set), 1 (current) or 2 (end). -1 on error.
 static i64     os_seek(Os *, Handle, i64, i32 whence);
 static Stat    os_stat(Os *, Arena scratch, Str path, b32 follow);
@@ -195,6 +199,11 @@ static i32     os_kill(Os *, i64 pid, i32 sig);
 // for signal n), and cleared. os_wait returns null early when one
 // arrives. The core decides what each does (traps, default actions).
 static u64     os_sigpending(Os *);
+// Signals the terminal sent to the whole foreground process group
+// (Ctrl-C at a console) since the last call, as a mask, and cleared.
+// Every level of the shell gets them, as every process of bash's
+// foreground job would. os_wait returns null early when one arrives.
+static u64     os_siggroup(Os *);
 // How the process itself handles a real signal (SIGM_*): the main
 // shell's trap table. Signals ignored on entry stay ignored. Layers
 // that deliver every signal through os_sigpending ignore it.

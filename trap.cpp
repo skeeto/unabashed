@@ -264,6 +264,9 @@ static i32 runtrap(Shell *sh, i32 idx)
     // replaced while the action runs (keepcmdtext)
     Str   cmdtext_ = cmdnode ? Str{} : clone(&a, sh->cmdtext);
     i32   funcs    = sh->trapfuncs;
+    i32   npstat   = sh->npstat;  // PIPESTATUS survives it, as $? does
+    u8   *pstat    = alloc<u8>(&a, countof(sh->pstat));
+    copybytes(pstat, sh->pstat, countof(sh->pstat));
     sh->trapstatus = status;
     sh->trapfuncs  = sh->funcdepth;
     sh->intrap++;
@@ -294,7 +297,24 @@ static i32 runtrap(Shell *sh, i32 idx)
     if (sh->flow != FLOW_RETURN) {
         sh->status = status;
     }
+    if (!sh->pstatdirty) {
+        sh->npstat = npstat;
+        copybytes(sh->pstat, pstat, countof(sh->pstat));
+    }
     return own;
+}
+
+// The outermost level of an interactive shell: there INT abandons the
+// command for the next prompt, and TERM and QUIT do nothing, as bash.
+static b32 interactivetop(Shell *sh)
+{
+    return sh->interactive && sh->sig==sh->sched->top;
+}
+
+// Does the default action of sig do nothing at this level?
+static b32 signoop(Shell *sh, i32 sig)
+{
+    return sigharmless(sig) || ((sig==3 || sig==15) && interactivetop(sh));
 }
 
 // Die by a signal: the EXIT trap runs first (except for SIGKILL), then
@@ -306,6 +326,18 @@ static i32 runtrap(Shell *sh, i32 idx)
     sh->status  = 128 + sig;
     sh->exiting = 1;
     escape(sh, ESC_EXIT);
+}
+
+// The default action of a signal that does something: an interactive
+// shell's outermost level abandons the command on INT (status 130),
+// anything else dies.
+[[noreturn]] static void sigdefault(Shell *sh, i32 sig, Arena scratch)
+{
+    if (sig==2 && interactivetop(sh)) {
+        sh->status = 128 + 2;
+        escape(sh, ESC_INTR);
+    }
+    sigdie(sh, sig, scratch);
 }
 
 // Act on this level's pending signals, lowest first.
@@ -320,16 +352,58 @@ static void runsigs(Shell *sh, Arena scratch)
             runtrap(sh, sig);
             continue;
         }
-        if (!sigharmless(sig)) sigdie(sh, sig, scratch);
+        if (!signoop(sh, sig)) sigdefault(sh, sig, scratch);
     }
 }
 
-// Take the signals that arrived from outside the process: they belong
-// to the outermost level.
+static void sigsend(Shell *, Sigproc *, i32);
+
+// Take the signals that arrived from outside the process. Those sent
+// to the process belong to its outermost level. Those the terminal
+// sent to its foreground group (Ctrl-C) go to every level that runs,
+// as to every process of bash's foreground job, while a level waiting
+// for a foreground child only notes them (see waitdone). True if any
+// arrived.
+static b32 ossignals(Sched *s)
+{
+    u64 own = os_sigpending(s->os);
+    u64 grp = os_siggroup(s->os);
+    if (own && s->top) {
+        // interrupting a wait builtin, or ending a read
+        s->top->pending |= own;
+        if (s->top->task) taskinterrupt(s, s->top->task, 0);
+    }
+    for (Sigproc *p = s->sigprocs; grp && p; p = p->next) {
+        if (p->sh->sig!=p || p->fgwait) {
+            p->waitsig |= grp;  // an outer level, or waiting for a program
+        } else {
+            for (u64 m = grp; m; m &= m-1) {
+                sigsend(p->sh, p, __builtin_ctzll(m)+1);
+            }
+        }
+    }
+    return own || grp;
+}
+
 static void takeossigs(Shell *sh)
 {
-    u64 m = os_sigpending(sh->os);
-    if (m) sh->sched->top->pending |= m;
+    ossignals(sh->sched);
+}
+
+// A level's foreground child finished. Bash's cooperative rule for the
+// terminal's signals that came meanwhile: the level acts on those the
+// child died of (died, a mask), and drops the others, assuming the
+// child handled them. On Windows a program's nonzero status (failed)
+// counts as death by INT: a native program may end any way it likes
+// on Ctrl-C (0xC000013A, 130, a Cygwin status, an error).
+static void waitdone(Shell *sh, u64 died, b32 failed)
+{
+    Sigproc *p = sh->sig;
+    takeossigs(sh);  // those that came during the wait were noted
+    if (failed && sh->windows) died |= sigbit(2);
+    p->pending |= p->waitsig & died;
+    p->waitsig  = 0;
+    p->fgwait   = 0;
 }
 
 // A safe point for signals.
@@ -347,19 +421,15 @@ static b32 sigtaken(Shell *sh)
     Task *t = sh->sched->cur;
     b32 intr = t->intr;
     t->intr = 0;
-    u64 m = os_sigpending(sh->os);
-    if (m) {
-        sh->sched->top->pending |= m;
-        intr = 1;
-    }
+    intr |= ossignals(sh->sched);
     if (!intr) return 0;
     u64 pend = sh->sig->pending;
     for (u64 m2 = pend; m2; m2 &= m2-1) {
         i32 sig = __builtin_ctzll(m2) + 1;
-        if (!trapignored(sh, sig) && !trapset(sh, sig) && !sigharmless(sig)) {
+        if (!trapignored(sh, sig) && !trapset(sh, sig) && !signoop(sh, sig)) {
             sh->sig->pending &= ~sigbit(sig);
             Arena a = *scratchat(sh, sh->capdepth+1);
-            sigdie(sh, sig, a);
+            sigdefault(sh, sig, a);
         }
     }
     return 1;
@@ -373,7 +443,7 @@ static void sigsend(Shell *sh, Sigproc *p, i32 sig)
     Shell *target = p->sh;
     if (target->sig != p) return;  // an outer level, busy with its child
     if (trapignored(target, sig) || (!target->traps || !target->traps[sig].data)) {
-        if (trapignored(target, sig) || sigharmless(sig)) {
+        if (trapignored(target, sig) || signoop(target, sig)) {
             p->pending &= ~sigbit(sig);
             return;
         }
@@ -401,6 +471,8 @@ static void sigenter(Shell *sh, Sigproc *p, i64 pid, Task *task)
     p->pending = 0;
     p->task    = task;
     p->sh      = sh;
+    p->waitsig = 0;
+    p->fgwait  = 0;
     p->next    = s->sigprocs;
     s->sigprocs = p;
     sh->sig    = p;

@@ -930,6 +930,18 @@ static iz os_read(Os *os, Handle h, u8 *buf, iz len)
     return -1;
 }
 
+static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
+{
+    Vos   *v = osvos(os);
+    VFile *f = h ? vfile(v, h) : 0;
+    if (!f || f->kind!=VK_PIPEREAD || vistty(v, h)) return -1;
+    VPipe *p = f->pipe;
+    iz     n = p->len - p->pos;
+    n = n<len ? n : len;
+    copybytes(buf, p->buf+p->pos, n);
+    return n;
+}
+
 static i64 os_seek(Os *os, Handle h, i64 off, i32 whence)
 {
     Vos   *v = osvos(os);
@@ -1074,6 +1086,11 @@ static u64 os_sigpending(Os *os)
     u64    r  = me->sigpend;
     me->sigpend = 0;
     return r;
+}
+
+static u64 os_siggroup(Os *)
+{
+    return 0;  // no terminal sends signals to a group
 }
 
 static void os_tasktag(Os *os, u64 tag, iz ntasks)

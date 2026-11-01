@@ -770,6 +770,8 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
                       : stage->kind==N_SUBSHELL ? tailcommand(stage->a) : 0;
         sh->taillevel = sh->subshell + 2;
         sh->childsig  = 0;
+        takeossigs(sh);  // those from before are this level's own
+        sh->sig->fgwait = 1;
         status = subshell(sh, &j, child, 0);
         sh->tailnode  = 0;
         sh->taillevel = 0;
@@ -784,16 +786,22 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
 
     i32 failed = status;
     statuses[last] = status | (lastsig ? WSIGNALED : 0);
+    sh->sig->fgwait = 1;
+    u64 died   = lastsig ? sigbit(lastsig) : 0;
+    b32 extbad = ext[last] && stage->kind==N_SIMPLE && status;  // a program failed
     for (i32 k = last-1; k >= 0; k--) {
         i32 st = statuses[k];
         if (tasks[k]) {
             st = taskjoin(s, tasks[k]);
         } else if (procs[k] != BADHANDLE) {
             st = taskwaitproc(s, procs[k]);
+            extbad |= st != 0;
         }
         statuses[k] = st;
+        if (st & WSIGNALED) died |= sigbit((st & 255) - 128);
         if (!failed) failed = st & 255;
     }
+    waitdone(sh, died, extbad);
     if (lastsig) reportpipeline(sh, scratch, stages, nstages, statuses, pids, n);
     for (i32 k = 0; k < nstages; k++) statuses[k] &= 255;
     sh->status = status;

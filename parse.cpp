@@ -326,6 +326,7 @@ struct Lexer {
     // returns false at the end of input
     b32    (*fill)(void *ctx, Lexer *);
     void    *fillctx;
+    b32      newunit;    // the next fill starts a command (PS1, not PS2)
 
     // Token history and state
     i32      current;

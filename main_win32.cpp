@@ -24,6 +24,7 @@ enum : i32 {
     ERROR_FILE_NOT_FOUND         = 2,
     ERROR_INVALID_PARAMETER      = 87,
     ERROR_NO_DATA                = 232,
+    ERROR_OPERATION_ABORTED      = 995,
     ERROR_PATH_NOT_FOUND         = 3,
     FILE_APPEND_DATA             = 4,
     FILE_ATTRIBUTE_DIRECTORY     = 0x10,
@@ -52,6 +53,7 @@ enum : i32 {
     IO_REPARSE_TAG_NAME_SURROGATE = 0x20000000,  // symlinks, junctions
     MEM_COMMIT                   = 0x1000,
     MEM_RESERVE                  = 0x2000,
+    MEM_RELEASE                  = 0x8000,
     OPEN_ALWAYS                  = 4,
     OPEN_EXISTING                = 3,
     PAGE_NOACCESS                = 1,
@@ -163,6 +165,8 @@ W32(b32,    GetComputerNameW(c16 *, i32 *));
 W32(b32,    GetConsoleMode(uz, i32 *));
 W32(i32,    GetCurrentDirectoryW(i32, c16 *));
 W32(uz,     GetCurrentProcess());
+W32(uz,     GetCurrentThread());
+W32(b32,    GetNumberOfConsoleInputEvents(uz, i32 *));
 W32(i32,    GetCurrentProcessId());
 W32(i32,    GetTempPathW(i32, c16 *));
 W32(c16 *,  GetEnvironmentStringsW());
@@ -181,6 +185,10 @@ W32(void,   GetSystemTimeAsFileTime(Filetime *));
 W32(b32,    ReadConsoleW(uz, c16 *, i32, i32 *, uz));
 W32(b32,    PeekNamedPipe(uz, u8 *, i32, i32 *, i32 *, i32 *));
 W32(b32,    ReadFile(uz, u8 *, i32, i32 *, uz));
+W32(b32,    RegisterWaitForSingleObject(uz *, uz, void (__stdcall *)(void *, u8),
+                                        void *, i32, i32));
+W32(void,   SetLastError(i32));
+W32(b32,    UnregisterWaitEx(uz, uz));
 W32(b32,    SetEndOfFile(uz));
 W32(b32,    SetFilePointerEx(uz, i64, i64 *, i32));
 W32(b32,    SetHandleInformation(uz, i32, i32));
@@ -252,15 +260,126 @@ extern "C" i32 memcmp(void const *a, void const *b, uz len)
 
 #include "fibers.cpp"
 
-// A thread that performs one blocking read or write at a time for the
-// main thread, which waits on its done event (M3a; notes/m3a.md).
+// Asynchronous I/O (M3b, notes/m3b.md). Every handle the shell holds
+// to a pipe or a console is registered with a Wobj, the state of its
+// file object, shared by its duplicates. A synchronous file object
+// serializes I/O: while a helper thread blocks in a read on it, a
+// peek, a second read or the last CloseHandle would block too. So
+// while a helper operation is in flight, every operation on the Wobj
+// goes through its state machine and never touches the handle:
+// - reads take read-ahead bytes first, then PeekNamedPipe and read
+//   exactly what is there (never more than asked); with nothing there,
+//   a helper reads one byte (a console line) into the read-ahead, so
+//   that an abandoned read (read -t, a signal) loses nothing;
+// - other operations queue behind the one in flight;
+// - closing the last handle hands the private duplicate to the helper
+//   side, closed once the operation ends;
+// - a child given the object while a read is in flight or bytes are
+//   read ahead reads through a fresh pipe (Interpose) fed by a pump,
+//   and what it leaves is drained back into the read-ahead when it
+//   exits; a child given it directly (lent) may block in its own reads
+//   meanwhile, so the shell then reads it only through helpers.
+// Helpers, process wait callbacks and the console control handler
+// push onto the wake queue and set the wake event, the only thing the
+// main thread waits on.
+
+struct Wnode {  // an entry of the wake queue
+    Wnode *next;
+    i32    kind;  // WN_*
+};
+enum : i32 { WN_HELPER = 1, WN_PROC };
+
+enum : i32 {
+    K_PIPE = 1,  // either end of a pipe
+    K_CONIN,     // console input
+    K_CONOUT,    // console output
+    K_CHAR,      // another character device (NUL)
+};
+
+enum : i32 {  // Helper operations
+    H_READ = 1,  // one byte from a pipe
+    H_CONREAD,   // a console line
+    H_WRITE,     // the core's bytes
+    H_PUMP,      // the object into an Interpose's pipe
+};
+
+enum : i32 { P_READING = 1, P_WRITING, P_DONE };  // a pump's state
+
+struct Wobj;
+struct Os;
+
 struct Helper {
+    Wnode   node;    // pushed when its operation ends
     Helper *next;    // idle list
     Os     *os;
-    Io     *io;
+    Wobj   *obj;
+    i32     op;      // H_*
+    u8     *wbuf;    // H_WRITE: the core's bytes
+    iz      wlen;
+    iz      n;       // result: bytes in buf, or written
+    i32     code;    // GetLastError of a failure, else 0
+    b32     eof;     // the source reached its end
+    uz      iw;      // H_PUMP: the interposed pipe's write end
     uz      thread;
     uz      go;      // auto-reset: an operation is ready
-    uz      done;    // auto-reset: it completed
+    i32     live;    // atomic: issued and not yet pushed
+    i32     inio;    // atomic: in a call CancelSynchronousIo may end
+    i32     stop;    // atomic: H_PUMP should stop
+    i32     pstate;  // atomic: P_*
+    u8      buf[1<<12];
+};
+
+struct Interpose {
+    Interpose *next;      // free list
+    uz         ir;        // the shell's read end, drained when unused
+    uz         iw;        // write end, until the pump takes it
+    i32        children;  // live children reading through it
+    b32        started;   // the pump runs (else after the read in flight)
+};
+
+struct Lend {  // a child holding a registered object
+    Lend *next;
+    uz    proc;  // the core's handle of the child process
+    Wobj *obj;
+    b32   ip;    // through obj->ip
+};
+
+struct Wobj {
+    Wobj      *next;     // free list
+    i32        refs;     // registered handles
+    i32        kind;     // K_*
+    b32        closing;  // no handle left: release once unused
+    uz         own;      // private duplicate the helpers use, or 0
+    Helper    *helper;   // its operation in flight, or null
+    Io        *active;   // the Io it serves, null once abandoned
+    Io        *queue;    // waiting for it to be idle (linked by next)
+    u8        *ahead;    // read but not yet consumed
+    iz         aoff;
+    iz         alen;
+    iz         acap;
+    b32        eof;      // an end of file to report once
+    i32        lent;     // children holding it directly
+    Interpose *ip;
+};
+
+struct Hent {  // handle registration
+    Hent *next;
+    uz    h;
+    Wobj *obj;
+};
+
+struct Pwait {  // an IO_PROC waited for by the thread pool
+    Wnode  node;
+    Pwait *next;   // free list
+    Os    *os;
+    Io    *io;     // null once withdrawn
+    uz     wait;
+    i32    fired;  // atomic: the callback ran
+    b32    gone;   // the wait was unregistered already
+};
+
+enum : uz {  // Io.plt[0]: where an Io is
+    S_NONE, S_ACTIVE, S_QUEUED, S_DONE, S_PROC, S_ZERO,
 };
 
 struct IoStatusBlock {
@@ -279,17 +398,31 @@ struct Os {
     Fibers fibers;
     void (__stdcall *now)(Filetime *);  // precise clock where available
     NtQueryInformationFileFn queryfile;  // ntdll, resolved at run time
-    Io     *pending;  // submitted, oldest first
-    Helper *idle;
-    Helper  helpers[64];
-    i32     nhelpers;
-
-    // Console input converted to UTF-8 but not yet consumed
-    uz     conh;
-    u8     conbuf[1024];
-    iz     conlen;
-    iz     conoff;
+    b32  (__stdcall *cancelsync)(uz);    // CancelSynchronousIo, Vista
+    Arena      perm;       // platform records, recycled through free lists
+    uz         wake;       // auto-reset event for the main thread
+    Wnode     *wakeq;      // atomic stack pushed by other threads
+    Io        *done;       // completed, not yet returned by os_wait
+    Io       **donetail;
+    Io        *zero;       // zero-length reads not ready (read -t 0)
+    i32        nwait;      // Ios that will complete by themselves
+    Helper    *idle;
+    i32        nhelpers;
+    Hent      *htab[64];
+    Hent      *freehent;
+    Wobj      *freeobj;
+    Lend      *lends;
+    Lend      *freelend;
+    Pwait     *freepwait;
+    Interpose *freeip;
+    u64        sigown;     // atomic: signals for the process
+    u64        siggrp;     // atomic: signals for the console group
+    uz         mainthread;
+    i32        mainio;     // atomic: odd while the main thread blocks in
+                           // a read Ctrl-C may cancel
 };
+
+enum : i32 { MAXHELPERS = 64 };
 
 static Fibers *osfibers(Os *os)
 {
@@ -438,6 +571,795 @@ static b32 exename(Str path)
     return 0;
 }
 
+// Asynchronous I/O machinery (see the comment on Wobj above)
+
+static void wakepush(Os *os, Wnode *n)
+{
+    Wnode *head = __atomic_load_n(&os->wakeq, __ATOMIC_RELAXED);
+    do {
+        n->next = head;
+    } while (!__atomic_compare_exchange_n(&os->wakeq, &head, n, 1,
+                                          __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+    SetEvent(os->wake);
+}
+
+static b32 sigwaiting(Os *os)
+{
+    return (__atomic_load_n(&os->sigown, __ATOMIC_SEQ_CST) |
+            __atomic_load_n(&os->siggrp, __ATOMIC_SEQ_CST)) != 0;
+}
+
+static Hent **hslot(Os *os, uz h)
+{
+    return os->htab + ((h>>2) & (countof(os->htab) - 1));
+}
+
+static Wobj *lookup(Os *os, uz h)
+{
+    for (Hent *e = *hslot(os, h); e; e = e->next) {
+        if (e->h == h) return e->obj;
+    }
+    return 0;
+}
+
+static void reg(Os *os, uz h, Wobj *w)
+{
+    Hent *e = os->freehent;
+    if (e) {
+        os->freehent = e->next;
+    } else {
+        e = alloc<Hent>(&os->perm);
+    }
+    Hent **slot = hslot(os, h);
+    e->h    = h;
+    e->obj  = w;
+    e->next = *slot;
+    *slot   = e;
+    w->refs++;
+}
+
+static Wobj *unreg(Os *os, uz h)
+{
+    for (Hent **p = hslot(os, h); *p; p = &(*p)->next) {
+        Hent *e = *p;
+        if (e->h == h) {
+            *p = e->next;
+            e->next = os->freehent;
+            os->freehent = e;
+            e->obj->refs--;
+            return e->obj;
+        }
+    }
+    return 0;
+}
+
+static Wobj *newobj(Os *os, i32 kind)
+{
+    Wobj *w = os->freeobj;
+    if (w) {
+        os->freeobj = w->next;
+        u8 *ahead = w->ahead;
+        iz  acap  = w->acap;
+        *w = {};
+        w->ahead = ahead;
+        w->acap  = acap;
+    } else {
+        w = alloc<Wobj>(&os->perm);
+    }
+    w->kind = kind;
+    return w;
+}
+
+static b32 busy(Wobj *w)
+{
+    return w->helper || w->ip;
+}
+
+// Release an object nothing refers to any more.
+static void maybefree(Os *os, Wobj *w)
+{
+    if (w->refs || busy(w) || w->lent || w->queue || w->closing==2) return;
+    if (w->own) CloseHandle(w->own);
+    w->own     = 0;
+    w->closing = 2;  // released: never twice
+    w->next    = os->freeobj;
+    os->freeobj = w;
+}
+
+// What kind of object a handle refers to: 0 for files, which never
+// block and need no state.
+static i32 classify(uz h)
+{
+    i32 mode = 0;
+    switch (GetFileType(h)) {
+    case FILE_TYPE_PIPE:
+        return K_PIPE;
+    case FILE_TYPE_CHAR:
+        if (!GetConsoleMode(h, &mode)) return K_CHAR;
+        return GetNumberOfConsoleInputEvents(h, &mode) ? K_CONIN : K_CONOUT;
+    }
+    return 0;
+}
+
+// Register a new handle that is not a duplicate of a registered one.
+static Wobj *track(Os *os, uz h)
+{
+    i32 kind = h==INVALID_HANDLE_VALUE ? 0 : classify(h);
+    if (!kind) return 0;
+    Wobj *w = newobj(os, kind);
+    reg(os, h, w);
+    return w;
+}
+
+static void reserveahead(Wobj *w, iz extra)
+{
+    iz len = w->alen - w->aoff;
+    if (w->aoff) {
+        for (iz i = 0; i < len; i++) w->ahead[i] = w->ahead[w->aoff+i];
+        w->aoff = 0;
+        w->alen = len;
+    }
+    if (w->acap-len >= extra) return;
+    iz cap = (len + extra + 0xffff) & ~(iz)0xffff;
+    u8 *buf = (u8 *)VirtualAlloc(0, cap, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+    if (!buf) os_oom();
+    copybytes(buf, w->ahead, len);
+    if (w->ahead) VirtualFree((byte *)w->ahead, 0, MEM_RELEASE);
+    w->ahead = buf;
+    w->acap  = cap;
+}
+
+static void appendahead(Wobj *w, u8 *buf, iz len)
+{
+    if (!len) return;
+    reserveahead(w, len);
+    copybytes(w->ahead+w->alen, buf, len);
+    w->alen += len;
+}
+
+static iz takeahead(Wobj *w, u8 *buf, iz len)
+{
+    iz avail = w->alen - w->aoff;
+    iz n     = avail<len ? avail : len;
+    copybytes(buf, w->ahead+w->aoff, n);
+    w->aoff += n;
+    if (w->aoff == w->alen) w->aoff = w->alen = 0;
+    return n;
+}
+
+// Console input, converted to UTF-8 with line endings as LF, into out
+// (3 bytes per UTF-16 unit at most). -1 if Ctrl-Z begins it (end of
+// file).
+static iz conconvert(c16 *tmp, i32 n, u8 *out)
+{
+    if (n && tmp[0]==0x1a) return -1;
+    Str s = {out, 0};
+    for (i32 i = 0; i < n; i++) {
+        if (tmp[i]=='\r' && i+1<n && tmp[i+1]=='\n') continue;
+        i32 c = tmp[i];
+        if (c>=0xd800 && c<=0xdbff && i+1<n && tmp[i+1]>=0xdc00 && tmp[i+1]<=0xdfff) {
+            c = 0x10000 + ((c - 0xd800)<<10) + (tmp[++i] - 0xdc00);
+        }
+        s.len += utf8encode(s.data+s.len, c);
+    }
+    return s.len;
+}
+
+enum : i32 { CONUNITS = 1024 };  // UTF-16 units per console read
+
+// Read a console line into out (3*CONUNITS bytes): the byte count, 0
+// at end of file, -1 on error with *code set (ERROR_OPERATION_ABORTED
+// for Ctrl-C, which ends the read with nothing).
+static iz conline(uz h, u8 *out, i32 *code)
+{
+    c16 tmp[CONUNITS];
+    i32 n = 0;
+    SetLastError(0);
+    b32 ok = ReadConsoleW(h, tmp, countof(tmp), &n, 0);
+    *code = GetLastError();
+    if (!ok || (!n && *code==ERROR_OPERATION_ABORTED)) {
+        *code = ok ? ERROR_OPERATION_ABORTED : *code;
+        return -1;
+    }
+    *code = 0;
+    iz r = conconvert(tmp, n, out);
+    return r<0 ? 0 : r;
+}
+
+// One read of the object by a helper, into its buffer: bytes, 0 at
+// the end, -1 on failure (code set).
+static iz srcread(Helper *hp, iz len)
+{
+    Wobj *w = hp->obj;
+    iz    r = 0;
+    __atomic_store_n(&hp->inio, 1, __ATOMIC_SEQ_CST);
+    if (w->kind == K_CONIN) {
+        r = conline(w->own, hp->buf, &hp->code);
+    } else {
+        i32 n = 0;
+        if (ReadFile(w->own, hp->buf, (i32)len, &n, 0)) {
+            r = n;
+        } else {
+            hp->code = GetLastError();
+            r = hp->code==ERROR_BROKEN_PIPE ? 0 : -1;
+            hp->code = r ? hp->code : 0;
+        }
+    }
+    __atomic_store_n(&hp->inio, 0, __ATOMIC_SEQ_CST);
+    return r;
+}
+
+// Copy the object into the interposed pipe until it ends or the shell
+// asks to stop (stopinterpose). Bytes read after the request stay in
+// buf for the read-ahead. The write end is closed at the end, so that
+// the children see end of file.
+static void pumploop(Helper *hp)
+{
+    for (;;) {
+        __atomic_store_n(&hp->pstate, P_READING, __ATOMIC_SEQ_CST);
+        if (__atomic_load_n(&hp->stop, __ATOMIC_SEQ_CST)) break;
+        iz n = srcread(hp, countof(hp->buf));
+        if (n <= 0) {
+            hp->eof = !n;
+            break;
+        }
+        // Announce the write before the last look at stop, so that
+        // the shell, having asked, never sees P_READING while a write
+        // is still to come
+        __atomic_store_n(&hp->pstate, P_WRITING, __ATOMIC_SEQ_CST);
+        if (__atomic_load_n(&hp->stop, __ATOMIC_SEQ_CST)) {
+            hp->n = n;
+            break;
+        }
+        if (!writeall(hp->iw, hp->buf, n)) {
+            hp->n = n;  // cannot happen while the shell holds the read end
+            break;
+        }
+    }
+    CloseHandle(hp->iw);
+    hp->iw = 0;
+    __atomic_store_n(&hp->pstate, P_DONE, __ATOMIC_SEQ_CST);
+}
+
+static u32 __stdcall helpermain(void *arg)
+{
+    Helper *hp = (Helper *)arg;
+    Os     *os = hp->os;
+    for (;;) {
+        WaitForSingleObject(hp->go, INFINITE);
+        hp->n    = 0;
+        hp->code = 0;
+        hp->eof  = 0;
+        switch (hp->op) {
+        case H_READ:
+        case H_CONREAD: {
+            iz n = srcread(hp, 1);
+            hp->n   = n<0 ? 0 : n;
+            hp->eof = !n;
+        } break;
+        case H_WRITE: {
+            i32 n = 0;
+            if (WriteFile(hp->obj->own, hp->wbuf, chunk(hp->wlen), &n, 0) && n) {
+                hp->n = n;
+            } else {
+                hp->code = GetLastError();
+                hp->code = hp->code ? hp->code : ERROR_NO_DATA;
+            }
+        } break;
+        case H_PUMP:
+            pumploop(hp);
+            break;
+        }
+        __atomic_store_n(&hp->live, 0, __ATOMIC_SEQ_CST);
+        wakepush(os, &hp->node);  // the last use of hp
+    }
+}
+
+// An idle helper, or null if none can be had.
+static Helper *gethelper(Os *os)
+{
+    Helper *hp = os->idle;
+    if (hp) {
+        os->idle = hp->next;
+        return hp;
+    }
+    if (os->nhelpers == MAXHELPERS) return 0;
+    hp = alloc<Helper>(&os->perm);
+    hp->os        = os;
+    hp->node.kind = WN_HELPER;
+    hp->go        = CreateEventW(0, 0, 0, 0);
+    hp->thread    = CreateThread(0, 1<<16, helpermain, hp, 0x10000, 0);
+    if (!hp->go || !hp->thread) return 0;  // leaked, as it is rare
+    os->nhelpers++;
+    return hp;
+}
+
+// Hand an operation on w to a helper. False if no helper or private
+// duplicate can be had.
+static b32 issue(Os *os, Wobj *w, uz h, i32 op, Io *io, uz iw = 0)
+{
+    if (!w->own) {
+        uz self = GetCurrentProcess();
+        if (!DuplicateHandle(self, h, self, &w->own, 0, 0, DUPLICATE_SAME_ACCESS)) {
+            w->own = 0;
+            return 0;
+        }
+    }
+    Helper *hp = gethelper(os);
+    if (!hp) return 0;
+    hp->obj    = w;
+    hp->op     = op;
+    hp->stop   = 0;
+    hp->pstate = 0;
+    hp->iw     = iw;
+    if (io && op==H_WRITE) {
+        hp->wbuf = io->buf;
+        hp->wlen = io->len;
+    }
+    w->helper = hp;
+    w->active = io;
+    if (io) {
+        io->plt[0] = S_ACTIVE;
+        io->plt[1] = (uz)w;
+        os->nwait++;
+    }
+    __atomic_store_n(&hp->live, 1, __ATOMIC_SEQ_CST);
+    SetEvent(hp->go);
+    return 1;
+}
+
+// Try for a while to end a helper's blocking call, where the system
+// can (Vista and later). A cancel can come before the call starts, so
+// it is repeated while the operation lasts, for at most about 20 ms;
+// otherwise the operation simply runs on, abandoned.
+static void cancelhelper(Os *os, Helper *hp)
+{
+    if (!os->cancelsync) return;
+    for (i32 i = 0; i<20 && __atomic_load_n(&hp->live, __ATOMIC_SEQ_CST); i++) {
+        if (__atomic_load_n(&hp->inio, __ATOMIC_SEQ_CST) && os->cancelsync(hp->thread)) {
+            return;
+        }
+        Sleep(1);
+    }
+}
+
+// Read what a pipe holds now, without blocking, at most len bytes.
+static iz peekread(uz h, u8 *buf, iz len)
+{
+    i32 avail = 0;
+    if (len<=0 || !PeekNamedPipe(h, 0, 0, 0, &avail, 0) || !avail) return 0;
+    i32 n = 0;
+    if (!ReadFile(h, buf, chunk(avail<len ? avail : len), &n, 0)) return 0;
+    return n;
+}
+
+static void pushdone(Os *os, Io *io)
+{
+    io->plt[0] = S_DONE;
+    io->next   = 0;
+    *os->donetail = io;
+    os->donetail  = &io->next;
+}
+
+// Complete a read from the read-ahead, and whatever the pipe holds
+// beyond it while that is safe (h), or with the pending end of file.
+static void readahead(Wobj *w, uz h, Io *io)
+{
+    iz n = takeahead(w, io->buf, io->len);
+    if (!n && w->eof) {
+        w->eof = 0;
+    } else if (n && h && w->kind==K_PIPE && !busy(w) && !w->lent) {
+        n += peekread(h, io->buf+n, io->len-n);
+    }
+    io->n   = n;
+    io->err = 0;
+}
+
+// Perform a read or write on an idle object, completing it, or start a
+// helper for it. False if it is in flight now.
+static b32 startio(Os *os, Wobj *w, Io *io)
+{
+    uz h = io->h;
+    if (io->op == IO_READ) {
+        if (w->alen>w->aoff || w->eof) {
+            readahead(w, h, io);
+            return 1;
+        }
+        if (w->kind==K_PIPE && !w->lent) {
+            i32 avail = 0;
+            if (!PeekNamedPipe(h, 0, 0, 0, &avail, 0)) {
+                io->n   = 0;
+                io->err = GetLastError()==ERROR_BROKEN_PIPE ? 0 : E_IO;
+                return 1;
+            }
+            if (avail) {
+                i32 n = 0;
+                if (!ReadFile(h, io->buf, chunk(avail<io->len ? avail : io->len), &n, 0)) {
+                    io->err = GetLastError()==ERROR_BROKEN_PIPE ? 0 : E_IO;
+                }
+                io->n = n;
+                return 1;
+            }
+        }
+        if (!io->len) {
+            // read -t 0: not ready, and nothing to wait for
+            io->plt[0] = S_ZERO;
+            io->next   = os->zero;
+            os->zero   = io;
+            return 0;
+        }
+        if (issue(os, w, h, w->kind==K_CONIN ? H_CONREAD : H_READ, io)) return 0;
+        io->n   = os_read(os, h, io->buf, io->len);  // no helper: block
+        io->err = io->n<0 ? E_IO : 0;
+        io->n   = io->n<0 ? 0 : io->n;
+        return 1;
+    }
+
+    if (w->kind == K_PIPE) {
+        if (!w->lent && os->queryfile) {
+            IoStatusBlock iosb = {};
+            PipeLocalInfo info = {};
+            if (!os->queryfile(h, &iosb, &info, sizeof(info), 24) && info.writequota) {
+                i32 n = 0;
+                iz  len = io->len<(iz)info.writequota ? io->len : (iz)info.writequota;
+                if (WriteFile(h, io->buf, chunk(len), &n, 0) && n) {
+                    io->n = n;
+                } else {
+                    i32 code = GetLastError();
+                    io->err = code==ERROR_NO_DATA || code==ERROR_BROKEN_PIPE ? E_PIPE : E_IO;
+                }
+                return 1;
+            }
+        }
+        if (issue(os, w, h, H_WRITE, io)) return 0;
+    }
+    io->n   = io->len;  // a console, or no helper: block
+    io->err = os_write(os, h, io->buf, io->len) ? 0 : E_PIPE;
+    return 1;
+}
+
+// Start what waits for an object that became idle, or release it.
+static void runqueue(Os *os, Wobj *w)
+{
+    while (w->queue && !busy(w)) {
+        Io *io = w->queue;
+        w->queue = io->next;
+        os->nwait--;
+        io->plt[0] = S_NONE;
+        if (startio(os, w, io) && io->plt[0]!=S_ZERO) pushdone(os, io);
+    }
+    maybefree(os, w);
+}
+
+// A helper's operation ended (main thread).
+static void helperdone(Os *os, Helper *hp)
+{
+    Wobj *w  = hp->obj;
+    Io   *io = w->active;
+    w->helper = 0;
+    w->active = 0;
+    if (io) os->nwait--;
+    b32 reuse = 0;
+    switch (hp->op) {
+    case H_READ:
+    case H_CONREAD:
+        if (hp->n && !io && w->ip && !w->ip->started && w->ip->iw) {
+            // An interposition waited for this read: its byte goes
+            // through the pipe, then the pump takes over
+            writeall(w->ip->iw, hp->buf, hp->n);
+            hp->n = 0;
+        }
+        appendahead(w, hp->buf, hp->n);
+        w->eof |= hp->eof;
+        if (io) {
+            readahead(w, w->own, io);
+            io->err = !io->n && !hp->eof && hp->code ? E_INTR : 0;
+            pushdone(os, io);
+        }
+        if (w->ip && !w->ip->started && w->ip->iw) {
+            Interpose *ip = w->ip;
+            ip->started = 1;
+            hp->op     = H_PUMP;
+            hp->iw     = ip->iw;
+            hp->stop   = 0;
+            hp->pstate = 0;
+            ip->iw     = 0;
+            w->helper  = hp;
+            __atomic_store_n(&hp->live, 1, __ATOMIC_SEQ_CST);
+            SetEvent(hp->go);
+            reuse = 1;
+        }
+        break;
+    case H_WRITE:
+        io->n   = hp->n;
+        io->err = !hp->code ? 0 :
+                  hp->code==ERROR_NO_DATA || hp->code==ERROR_BROKEN_PIPE ? E_PIPE : E_IO;
+        pushdone(os, io);
+        break;
+    case H_PUMP:
+        appendahead(w, hp->buf, hp->n);  // read after the stop
+        break;
+    }
+    if (!reuse) {
+        hp->next = os->idle;
+        os->idle = hp;
+    }
+    runqueue(os, w);
+}
+
+static void releaselends(Os *os, uz proc);
+static i32  exitstatus(u32 code);
+
+// A process's exit status, releasing its handle.
+static i32 procexit(Os *os, uz proc)
+{
+    i32 code = 127;
+    if (!GetExitCodeProcess(proc, &code)) code = 127;
+    CloseHandle(proc);
+    releaselends(os, proc);
+    return exitstatus((u32)code);
+}
+
+static void __stdcall procfired(void *arg, u8)
+{
+    Pwait *pw = (Pwait *)arg;
+    __atomic_store_n(&pw->fired, 1, __ATOMIC_SEQ_CST);
+    wakepush(pw->os, &pw->node);
+}
+
+static void procwaited(Os *os, Pwait *pw)
+{
+    if (!pw->gone) UnregisterWaitEx(pw->wait, INVALID_HANDLE_VALUE);
+    Io *io = pw->io;
+    if (io) {
+        os->nwait--;
+        io->n = procexit(os, io->h);
+        pushdone(os, io);
+    }
+    pw->next = os->freepwait;
+    os->freepwait = pw;
+}
+
+// Act on everything the other threads pushed, oldest first.
+static void drainwake(Os *os)
+{
+    Wnode *list = __atomic_exchange_n(&os->wakeq, (Wnode *)0, __ATOMIC_ACQUIRE);
+    Wnode *fifo = 0;
+    while (list) {
+        Wnode *next = list->next;
+        list->next = fifo;
+        fifo = list;
+        list = next;
+    }
+    while (fifo) {
+        Wnode *n = fifo;
+        fifo = n->next;
+        switch (n->kind) {
+        case WN_HELPER: helperdone(os, (Helper *)n); break;
+        case WN_PROC:   procwaited(os, (Pwait *)n);  break;
+        }
+    }
+}
+
+// Wait until an object is idle, or a signal comes: false then.
+static b32 waitidle(Os *os, Wobj *w)
+{
+    for (;;) {
+        drainwake(os);
+        if (!busy(w)) return 1;
+        if (sigwaiting(os)) return 0;
+        WaitForSingleObject(os->wake, INFINITE);
+    }
+}
+
+// Read a pipe on the main thread, blocking, where Ctrl-C can cancel it
+// (onctrl): -1 then, or on error.
+static iz mainread(Os *os, uz h, u8 *buf, iz len)
+{
+    __atomic_add_fetch(&os->mainio, 1, __ATOMIC_SEQ_CST);  // odd
+    if (sigwaiting(os)) {
+        __atomic_add_fetch(&os->mainio, 1, __ATOMIC_SEQ_CST);
+        return -1;
+    }
+    i32 n  = 0;
+    b32 ok = ReadFile(h, buf, chunk(len), &n, 0);
+    i32 code = ok ? 0 : GetLastError();
+    __atomic_add_fetch(&os->mainio, 1, __ATOMIC_SEQ_CST);  // even
+    if (ok) return n;
+    return code==ERROR_BROKEN_PIPE ? 0 : -1;
+}
+
+// Read a console line into the read-ahead on the main thread: its
+// length, 0 at end of file, -1 for Ctrl-C or an error.
+static iz conread(Os *os, Wobj *w, uz h)
+{
+    reserveahead(w, 3*CONUNITS);
+    i32 code = 0;
+    iz  n    = conline(h, w->ahead+w->alen, &code);
+    if (n<0 && code==ERROR_OPERATION_ABORTED) {
+        // The control handler runs on a thread of its own, perhaps not
+        // yet: give it a moment to note the signal
+        for (i32 i = 0; i<100 && !sigwaiting(os); i++) Sleep(1);
+    }
+    if (n > 0) w->alen += n;
+    return n;
+}
+
+// Drain an interposed pipe into the read-ahead.
+static void drainpipe(Wobj *w, uz ir)
+{
+    for (;;) {
+        reserveahead(w, 1<<16);
+        iz n = peekread(ir, w->ahead+w->alen, w->acap-w->alen);
+        if (!n) return;
+        w->alen += n;
+    }
+}
+
+// The children reading through an interposition are gone: stop the
+// pump and drain what they left into the read-ahead.
+static void stopinterpose(Os *os, Wobj *w)
+{
+    Interpose *ip = w->ip;
+    Helper    *hp = w->helper && w->helper->op==H_PUMP ? w->helper : 0;
+    if (hp) {
+        __atomic_store_n(&hp->stop, 1, __ATOMIC_SEQ_CST);
+        for (i32 i = 0;; i++) {
+            drainpipe(w, ip->ir);  // lets a blocked write finish
+            if (__atomic_load_n(&hp->pstate, __ATOMIC_SEQ_CST) != P_WRITING) break;
+            Sleep(i<4 ? 0 : 1);
+        }
+        cancelhelper(os, hp);  // if blocked reading the object
+    } else if (ip->iw) {
+        CloseHandle(ip->iw);  // the read in flight is not forwarded
+        ip->iw = 0;
+    }
+    drainpipe(w, ip->ir);
+    CloseHandle(ip->ir);
+    w->ip    = 0;
+    ip->next = os->freeip;
+    os->freeip = ip;
+}
+
+// A child is to inherit h. If the shell read bytes ahead the child
+// must see first, or a read on it is in flight, the child gets an
+// interposed pipe instead (the returned handle). Otherwise the child
+// holds the object directly (lent). *out is the object, if any.
+static uz lend(Os *os, uz h, Wobj **out, b32 *viaip)
+{
+    *out   = 0;
+    *viaip = 0;
+    Wobj *w = lookup(os, h);
+    if (!w || (w->kind!=K_PIPE && w->kind!=K_CONIN)) return h;
+    drainwake(os);
+    *out = w;
+    if (!w->ip && w->helper && w->helper->op!=H_WRITE && !w->active && os->cancelsync) {
+        // An abandoned read: end it if possible, so that the child can
+        // have the object itself
+        Helper *hp = w->helper;
+        cancelhelper(os, hp);
+        for (i32 i = 0; i<20 && __atomic_load_n(&hp->live, __ATOMIC_SEQ_CST); i++) {
+            Sleep(1);
+        }
+        drainwake(os);
+    }
+    b32 reading = w->helper && w->helper->op!=H_WRITE;
+    if (!w->ip && !reading && w->alen==w->aoff && !w->eof) {
+        return h;
+    }
+    if (!w->ip) {
+        uz ir = 0;
+        uz iw = 0;
+        iz pending = w->alen - w->aoff;
+        if (!CreatePipe(&ir, &iw, 0, (i32)(pending + (1<<16)))) {
+            return h;  // as good as it gets
+        }
+        writeall(iw, w->ahead+w->aoff, pending);  // fits the pipe
+        w->aoff = w->alen = 0;
+        Interpose *ip = os->freeip;
+        if (ip) {
+            os->freeip = ip->next;
+            *ip = {};
+        } else {
+            ip = alloc<Interpose>(&os->perm);
+        }
+        ip->ir = ir;
+        ip->iw = iw;
+        w->ip  = ip;
+        if (w->eof) {
+            // The children see the end of file the shell would have
+            w->eof = 0;
+            CloseHandle(iw);
+            ip->iw = 0;
+            ip->started = 1;
+        } else if (!reading) {
+            if (issue(os, w, h, H_PUMP, 0, iw)) {
+                ip->iw = 0;
+                ip->started = 1;
+            }
+        }
+        // else the pump starts once the read in flight ends (helperdone)
+    }
+    w->ip->children++;
+    *viaip = 1;
+    return w->ip->ir;
+}
+
+static void addlend(Os *os, uz proc, Wobj *w, b32 viaip)
+{
+    Lend *l = os->freelend;
+    if (l) {
+        os->freelend = l->next;
+    } else {
+        l = alloc<Lend>(&os->perm);
+    }
+    l->proc = proc;
+    l->obj  = w;
+    l->ip   = viaip;
+    l->next = os->lends;
+    os->lends = l;
+    w->lent += !viaip;
+}
+
+static void droplend(Os *os, Lend *l)
+{
+    Wobj *w = l->obj;
+    if (!l->ip) {
+        w->lent--;
+    } else if (!--w->ip->children) {
+        stopinterpose(os, w);
+    }
+    l->next = os->freelend;
+    os->freelend = l;
+    runqueue(os, w);
+}
+
+// A child exited (its handle, now closed): its holds end.
+static void releaselends(Os *os, uz proc)
+{
+    for (Lend **p = &os->lends; *p;) {
+        Lend *l = *p;
+        if (l->proc == proc) {
+            *p = l->next;
+            droplend(os, l);
+        } else {
+            p = &l->next;
+        }
+    }
+}
+
+// Console control events, on a thread the system creates: Ctrl-C is
+// SIGINT and Ctrl-Break SIGQUIT for every level of the shell (the
+// whole console group gets them), closing the console SIGHUP. A main
+// thread blocked in a pipe read is woken with CancelSynchronousIo.
+static Os *ctrlos;
+
+static b32 __stdcall onctrl(u32 type)
+{
+    Os *os = ctrlos;
+    i32 sig = 0;
+    switch (type) {
+    case 0:  sig = 2; break;  // CTRL_C_EVENT
+    case 1:  sig = 3; break;  // CTRL_BREAK_EVENT
+    case 2:  sig = 1; break;  // CTRL_CLOSE_EVENT
+    default: return 0;
+    }
+    __atomic_fetch_or(&os->siggrp, (u64)1<<(sig-1), __ATOMIC_SEQ_CST);
+    SetEvent(os->wake);
+    i32 t = __atomic_load_n(&os->mainio, __ATOMIC_SEQ_CST);
+    if ((t&1) && os->cancelsync) {
+        for (i32 i = 0; i<1000 && __atomic_load_n(&os->mainio, __ATOMIC_SEQ_CST)==t; i++) {
+            if (os->cancelsync(os->mainthread)) break;
+            Sleep(1);
+        }
+    }
+    if (type == 2) {
+        Sleep(10000);  // the shell exits meanwhile, else the system ends it
+    }
+    return 1;
+}
+
+
 
 // Platform API
 
@@ -451,10 +1373,11 @@ static b32 os_commit(Os *, byte *p, iz len)
     return !!VirtualAlloc(p, len, MEM_COMMIT, PAGE_READWRITE);
 }
 
-static b32 os_write(Os *, Handle h, u8 *buf, iz len)
+static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
 {
-    i32 mode = 0;
-    if (!GetConsoleMode(h, &mode)) {
+    Wobj *w    = lookup(os, h);
+    i32   mode = 0;
+    if (w ? w->kind!=K_CONOUT : !GetConsoleMode(h, &mode)) {
         return writeall(h, buf, len);
     }
 
@@ -476,50 +1399,80 @@ static b32 os_write(Os *, Handle h, u8 *buf, iz len)
     return 1;
 }
 
-// Read a console as UTF-8 regardless of code page, with line endings
-// as LF. Ctrl-Z at the start of a line is end of file, as with ReadFile.
-static iz readconsole(Os *os, uz h, u8 *buf, iz len)
+static iz rawread(uz h, u8 *buf, iz len)
 {
-    if (os->conh!=h || os->conoff==os->conlen) {
-        c16 tmp[256];  // UTF-8 is at most 3 bytes per unit: fits conbuf
-        i32 n = 0;
-        if (!ReadConsoleW(h, tmp, countof(tmp), &n, 0)) {
-            return -1;
-        }
-        if (!n || tmp[0]==0x1a) {
-            return 0;
-        }
-        Str s = {};
-        s.data = os->conbuf;
-        for (i32 i = 0; i < n; i++) {
-            if (tmp[i]=='\r' && i+1<n && tmp[i+1]=='\n') continue;
-            i32 c = tmp[i];
-            if (c>=0xd800 && c<=0xdbff && i+1<n && tmp[i+1]>=0xdc00 && tmp[i+1]<=0xdfff) {
-                c = 0x10000 + ((c - 0xd800)<<10) + (tmp[++i] - 0xdc00);
-            }
-            s.len += utf8encode(s.data+s.len, c);
-        }
-        os->conh   = h;
-        os->conlen = s.len;
-        os->conoff = 0;
-    }
-    iz avail = os->conlen - os->conoff;
-    iz n     = len<avail ? len : avail;
-    copybytes(buf, os->conbuf+os->conoff, n);
-    os->conoff += n;
-    return n;
-}
-
-static iz os_read(Os *os, Handle h, u8 *buf, iz len)
-{
-    i32 mode = 0;
-    if (GetConsoleMode(h, &mode)) {
-        return readconsole(os, h, buf, len);
-    }
-
     i32 n = 0;
     if (!ReadFile(h, buf, chunk(len), &n, 0)) {
         return GetLastError()==ERROR_BROKEN_PIPE ? 0 : -1;
+    }
+    return n;
+}
+
+// Pipes are read exactly: whatever was read ahead, then what the pipe
+// holds, at most len bytes. With nothing there, the main thread blocks
+// where Ctrl-C can cancel the read (Vista and later), else a helper
+// waits for a byte while the main thread waits for it or a signal.
+// Consoles are read a line at a time, as UTF-8 regardless of code page
+// with line endings as LF; Ctrl-Z at the start of a line is end of
+// file, as with ReadFile, and Ctrl-C ends the read (-1).
+static iz os_read(Os *os, Handle h, u8 *buf, iz len)
+{
+    Wobj *w = lookup(os, h);
+    i32   mode = 0;
+    if (!w && GetConsoleMode(h, &mode)) w = track(os, h);
+    if (!w || w->kind==K_CONOUT || w->kind==K_CHAR) {
+        return rawread(h, buf, len);
+    }
+    drainwake(os);
+    for (;;) {
+        iz n = takeahead(w, buf, len);
+        if (n) {
+            if (w->kind==K_PIPE && !busy(w) && !w->lent) n += peekread(h, buf+n, len-n);
+            return n;
+        }
+        if (w->eof) {
+            w->eof = 0;
+            return 0;
+        }
+        if (!len) return 0;
+        if (busy(w) || w->lent) {
+            // Its handle is off limits: a helper reads for us
+            i32 op = w->kind==K_CONIN ? H_CONREAD : H_READ;
+            if (!busy(w) && !issue(os, w, h, op, 0)) {
+                return w->kind==K_PIPE ? rawread(h, buf, len) : conread(os, w, h);
+            }
+            if (!waitidle(os, w)) return -1;
+            continue;
+        }
+        if (sigwaiting(os)) return -1;
+        if (w->kind == K_CONIN) {
+            n = conread(os, w, h);
+            if (n <= 0) return n;
+            continue;
+        }
+        i32 avail = 0;
+        if (!PeekNamedPipe(h, 0, 0, 0, &avail, 0)) {
+            return GetLastError()==ERROR_BROKEN_PIPE ? 0 : -1;
+        }
+        if (avail) return rawread(h, buf, avail<len ? avail : len);
+        if (os->cancelsync) return mainread(os, h, buf, len);
+        if (!issue(os, w, h, H_READ, 0)) return rawread(h, buf, len);
+        if (!waitidle(os, w)) return -1;
+    }
+}
+
+static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
+{
+    Wobj *w = lookup(os, h);
+    if (!w || (w->kind!=K_PIPE && w->kind!=K_CONIN)) return -1;
+    drainwake(os);
+    iz n = w->alen - w->aoff;
+    n = n<len ? n : len;
+    copybytes(buf, w->ahead+w->aoff, n);
+    if (w->kind==K_PIPE && !busy(w) && !w->lent && !w->eof && n<len) {
+        i32 got   = 0;
+        i32 avail = 0;
+        if (PeekNamedPipe(h, buf+n, chunk(len-n), &got, &avail, 0)) n += got;
     }
     return n;
 }
@@ -562,7 +1515,7 @@ static Opened os_tempfile(Os *os, Arena)
     return r;
 }
 
-static Opened os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode)
+static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
     Opened r = {};
     r.h = BADHANDLE;
@@ -616,24 +1569,37 @@ static Opened os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode)
             return r;
         }
     }
+    track(os, h);
     r.h = h;
     return r;
 }
 
+// Never the last handle of an object in an operation: helpers use a
+// private duplicate (Wobj.own), released once the object is unused.
 static void os_close(Os *os, Handle h)
 {
-    if (h == os->conh) {
-        os->conh = os->conlen = os->conoff = 0;
+    if (h == BADHANDLE) return;
+    Wobj *w = unreg(os, h);
+    if (w) {
+        drainwake(os);
+        w->closing |= !w->refs;
+        maybefree(os, w);
     }
-    if (h != BADHANDLE) CloseHandle(h);
+    CloseHandle(h);
 }
 
-static Handle os_dup(Os *, Handle h)
+static Handle os_dup(Os *os, Handle h)
 {
     uz self = GetCurrentProcess();
     uz r    = 0;
     if (!DuplicateHandle(self, h, self, &r, 0, 0, DUPLICATE_SAME_ACCESS)) {
         return BADHANDLE;
+    }
+    Wobj *w = lookup(os, h);
+    if (w) {
+        reg(os, r, w);  // the same file object
+    } else {
+        track(os, r);
     }
     return r;
 }
@@ -643,7 +1609,7 @@ static iz os_pipecap(Os *)
     return 1<<15;  // CreatePipe is asked for 64 KiB; stay well under
 }
 
-static OsPipe os_pipe(Os *)
+static OsPipe os_pipe(Os *os)
 {
     OsPipe r = {};
     uz rd = 0;
@@ -655,15 +1621,17 @@ static OsPipe os_pipe(Os *)
         r.r = r.w = BADHANDLE;
         return r;
     }
+    reg(os, rd, newobj(os, K_PIPE));
+    reg(os, wr, newobj(os, K_PIPE));
     r.r = rd;
     r.w = wr;
     return r;
 }
 
-static i64 os_seek(Os *, Handle h, i64 off, i32 whence)
+static i64 os_seek(Os *os, Handle h, i64 off, i32 whence)
 {
     i64 pos = 0;
-    if (GetFileType(h) != FILE_TYPE_DISK) {
+    if (lookup(os, h) || GetFileType(h)!=FILE_TYPE_DISK) {
         return -1;
     }
     return SetFilePointerEx(h, off, &pos, whence) ? pos : -1;
@@ -796,9 +1764,19 @@ static Stat os_stat(Os *, Arena scratch, Str path, b32 follow)
     return r;
 }
 
-static Stat os_fstat(Os *, Handle h)
+static Stat os_fstat(Os *os, Handle h)
 {
-    return handlestat(h);
+    // Registered objects are described without touching the handle,
+    // which an operation in flight may hold
+    Wobj *w = lookup(os, h);
+    if (!w) return handlestat(h);
+    Stat r  = {};
+    r.type  = w->kind==K_PIPE ? FT_PIPE : FT_CHAR;
+    r.mode  = w->kind==K_PIPE ? 0600 : 0666;
+    r.nlink = 1;
+    r.uid   = 1000;
+    r.gid   = 1000;
+    return r;
 }
 
 static Dirent *os_list(Os *, Arena *a, Str dir, i32 *err)
@@ -859,7 +1837,7 @@ static Str envget(Str *env, iz nenv, Str name)
     return {};
 }
 
-static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
+static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 {
     Spawned r = {};
     r.proc = BADHANDLE;
@@ -935,13 +1913,18 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
     Str16 cwd = s->cwd.len ? widepath(&scratch, s->cwd) : Str16{};
 
     // Inheritable duplicates of the standard handles, closed right after
-    // creation. Descriptors above 2 are not passed (yet).
-    uz self   = GetCurrentProcess();
-    uz std[3] = {};
+    // creation. Descriptors above 2 are not passed (yet). A pipe or
+    // console the child gets is lent to it (see Wobj), perhaps through
+    // an interposed pipe.
+    uz    self    = GetCurrentProcess();
+    uz    std[3]  = {};
+    Wobj *objs[3] = {};
+    b32   viaip[3] = {};
     for (iz i = 0; i < s->nfds; i++) {
         i32 fd = s->fds[i].fd;
         uz  h  = s->fds[i].h;
         if (fd<0 || fd>2 || h==BADHANDLE || std[fd]) continue;
+        h = lend(os, h, objs+fd, viaip+fd);
         if (!DuplicateHandle(self, h, self, std+fd, 0, 1, DUPLICATE_SAME_ACCESS)) {
             std[fd] = 0;
         }
@@ -973,8 +1956,11 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
     if (noint) SetConsoleCtrlHandler(0, 0);
     for (i32 i = 0; i < 3; i++) {
         if (std[i]) CloseHandle(std[i]);
+        if (!objs[i]) continue;
+        addlend(os, ok ? pi.process : 0, objs[i], viaip[i]);
     }
     if (!ok) {
+        releaselends(os, 0);
         r.err = errnum(code);
         return r;
     }
@@ -1022,9 +2008,14 @@ static i32 os_kill(Os *, i64 pid, i32 sig)
     return ok ? 0 : E_PERM;
 }
 
-static u64 os_sigpending(Os *)
+static u64 os_sigpending(Os *os)
 {
-    return 0;
+    return __atomic_exchange_n(&os->sigown, (u64)0, __ATOMIC_SEQ_CST);
+}
+
+static u64 os_siggroup(Os *os)
+{
+    return __atomic_exchange_n(&os->siggrp, (u64)0, __ATOMIC_SEQ_CST);
 }
 
 static void os_sigmode(Os *, i32, i32)
@@ -1044,84 +2035,65 @@ static i32 os_exec(Os *, Arena, Spawn *)
     return E_NOSYS;  // no exec on Windows: start a child instead
 }
 
-static i32 os_waitproc(Os *, Handle proc)
+// Waits on the process and the wake queue together, so that helpers
+// and interpositions keep going meanwhile. Signals do not end it.
+static i32 os_waitproc(Os *os, Handle proc)
 {
-    i32 code = 127;
-    WaitForSingleObject(proc, INFINITE);
-    if (!GetExitCodeProcess(proc, &code)) {
-        code = 127;
-    }
-    CloseHandle(proc);
-    return exitstatus((u32)code);
-}
-
-// Asynchronous operations (M3a): process exits through the process
-// handle, pipe reads through PeekNamedPipe when data is waiting, pipe
-// writes directly when the pipe has room, and otherwise a helper
-// thread performs the blocking call. Disk files and consoles complete
-// at once. The main thread waits on process handles and helpers' done
-// events together (at most 64 at a time).
-
-static u32 __stdcall helpermain(void *arg)
-{
-    Helper *h = (Helper *)arg;
     for (;;) {
-        WaitForSingleObject(h->go, INFINITE);
-        Io *io = h->io;
-        if (io->op == IO_READ) {
-            io->n   = os_read(h->os, io->h, io->buf, io->len);
-            io->err = io->n<0 ? E_IO : 0;
-            io->n   = io->n<0 ? 0 : io->n;
-        } else {
-            i32 n = 0;
-            if (WriteFile(io->h, io->buf, chunk(io->len), &n, 0) && n) {
-                io->n = n;
-            } else {
-                i32 code = GetLastError();
-                io->err = code==ERROR_NO_DATA || code==ERROR_BROKEN_PIPE ? E_PIPE : E_IO;
-            }
+        uz  hs[2] = {proc, os->wake};
+        i32 r = WaitForMultipleObjects(2, hs, 0, INFINITE);
+        if (r != 1) break;
+        drainwake(os);
+    }
+    return procexit(os, proc);
+}
+
+// Asynchronous operations (M3b): process exits through thread pool
+// waits (RegisterWaitForSingleObject, no 64-handle limit), reads and
+// writes on pipes and consoles through their Wobj (see above). Files
+// and other devices complete at once.
+
+static void os_submit(Os *os, Io *io)
+{
+    io->done   = 0;
+    io->next   = 0;
+    io->plt[0] = S_NONE;
+    io->plt[1] = 0;
+    drainwake(os);
+    if (io->op == IO_PROC) {
+        if (!WaitForSingleObject(io->h, 0)) {
+            io->n    = procexit(os, io->h);
+            io->done = 1;
+            return;
         }
-        SetEvent(h->done);
+        Pwait *pw = os->freepwait;
+        if (pw) {
+            os->freepwait = pw->next;
+        } else {
+            pw = alloc<Pwait>(&os->perm);
+        }
+        pw->node.kind = WN_PROC;
+        pw->os    = os;
+        pw->io    = io;
+        pw->fired = 0;
+        pw->gone  = 0;
+        io->plt[0] = S_PROC;
+        io->plt[1] = (uz)pw;
+        os->nwait++;
+        // WT_EXECUTEONLYONCE|WT_EXECUTEINWAITTHREAD
+        if (!RegisterWaitForSingleObject(&pw->wait, io->h, procfired, pw, INFINITE, 0xc)) {
+            os->nwait--;
+            pw->next = os->freepwait;
+            os->freepwait = pw;
+            io->n    = os_waitproc(os, io->h);  // block here
+            io->done = 1;
+        }
+        return;
     }
-}
 
-static b32 tohelper(Os *os, Io *io)
-{
-    Helper *h = os->idle;
-    if (h) {
-        os->idle = h->next;
-    } else {
-        if (os->nhelpers == countof(os->helpers)) return 0;
-        h = os->helpers + os->nhelpers;
-        h->os   = os;
-        h->go   = CreateEventW(0, 0, 0, 0);
-        h->done = CreateEventW(0, 0, 0, 0);
-        h->thread = CreateThread(0, 1<<16, helpermain, h, 0x10000, 0);
-        if (!h->go || !h->done || !h->thread) return 0;
-        os->nhelpers++;
-    }
-    h->io = io;
-    io->plt[0] = (uz)h;
-    SetEvent(h->go);
-    return 1;
-}
-
-static b32 procdone(Io *io, i32 timeout)
-{
-    if (WaitForSingleObject(io->h, timeout)) return 0;
-    i32 code = 127;
-    if (!GetExitCodeProcess(io->h, &code)) code = 127;
-    CloseHandle(io->h);
-    io->n = exitstatus((u32)code);
-    return 1;
-}
-
-// Try to complete a read or write without blocking.
-static b32 trypipeio(Os *os, Io *io)
-{
-    i32 type = GetFileType(io->h);
-    if (type != FILE_TYPE_PIPE) {
-        if (type==FILE_TYPE_CHAR && io->op==IO_READ) return 0;
+    Wobj *w = lookup(os, io->h);
+    if (!w || w->kind==K_CHAR || (w->kind==K_CONOUT) != (io->op==IO_WRITE)) {
+        // A file or device: at once
         if (io->op == IO_READ) {
             io->n   = os_read(os, io->h, io->buf, io->len);
             io->err = io->n<0 ? E_IO : 0;
@@ -1130,119 +2102,100 @@ static b32 trypipeio(Os *os, Io *io)
             io->n   = io->len;
             io->err = os_write(os, io->h, io->buf, io->len) ? 0 : E_IO;
         }
-        return 1;
-    }
-    if (io->op == IO_READ) {
-        i32 avail = 0;
-        if (!PeekNamedPipe(io->h, 0, 0, 0, &avail, 0)) {
-            io->n   = 0;
-            io->err = GetLastError()==ERROR_BROKEN_PIPE ? 0 : E_IO;
-            return 1;
-        }
-        if (!avail) return 0;
-        i32 n = 0;
-        if (!ReadFile(io->h, io->buf, chunk(avail<io->len ? avail : io->len), &n, 0)) {
-            io->err = GetLastError()==ERROR_BROKEN_PIPE ? 0 : E_IO;
-        }
-        io->n = n;
-        return 1;
-    }
-    if (!os->queryfile) return 0;
-    IoStatusBlock iosb = {};
-    PipeLocalInfo info = {};
-    if (os->queryfile(io->h, &iosb, &info, sizeof(info), 24) || !info.writequota) {
-        return 0;
-    }
-    i32 n = 0;
-    iz  len = io->len<(iz)info.writequota ? io->len : (iz)info.writequota;
-    if (WriteFile(io->h, io->buf, chunk(len), &n, 0) && n) {
-        io->n = n;
-    } else {
-        i32 code = GetLastError();
-        io->err = code==ERROR_NO_DATA || code==ERROR_BROKEN_PIPE ? E_PIPE : E_IO;
-    }
-    return 1;
-}
-
-static void os_submit(Os *os, Io *io)
-{
-    io->done   = 0;
-    io->next   = 0;
-    io->plt[0] = 0;
-    b32 now = io->op==IO_PROC ? procdone(io, 0) : trypipeio(os, io);
-    if (now) {
         io->done = 1;
         return;
     }
-    if (io->op!=IO_PROC && !tohelper(os, io)) {
-        // no helper: block here
-        if (io->op == IO_READ) {
-            io->n   = os_read(os, io->h, io->buf, io->len);
-            io->err = io->n<0 ? E_IO : 0;
-            io->n   = io->n<0 ? 0 : io->n;
-        } else {
-            io->n   = io->len;
-            io->err = os_write(os, io->h, io->buf, io->len) ? 0 : E_PIPE;
-        }
-        io->done = 1;
+    if (busy(w) || w->queue) {
+        Io **tail = &w->queue;
+        while (*tail) tail = &(*tail)->next;
+        *tail = io;
+        io->plt[0] = S_QUEUED;
+        io->plt[1] = (uz)w;
+        os->nwait++;
         return;
     }
-    Io **tail = &os->pending;
-    while (*tail) tail = &(*tail)->next;
-    *tail = io;
+    if (startio(os, w, io)) io->done = 1;
 }
 
 static Io *os_wait(Os *os, i64 deadline)
 {
-    uz  handles[64];
-    Io *ios[64];
-    i32 n = 0;
-    for (Io *io = os->pending; io && n<countof(handles); io = io->next) {
-        Helper *h = (Helper *)io->plt[0];
-        handles[n] = h ? h->done : io->h;
-        ios[n++]   = io;
-    }
-    i32 timeout = INFINITE;
-    if (deadline == WAIT_POLL) {
-        timeout = 0;
-    } else if (deadline > 0) {
-        i64 left = (deadline - os_now(os) + 999999) / 1000000;
-        timeout = left<0 ? 0 : left>(1<<30) ? (1<<30) : (i32)left;
-    }
-    if (!n) {
-        if (deadline > 0) Sleep(timeout);  // a timer alone
-        return 0;
-    }
-    i32 r = WaitForMultipleObjects(n, handles, 0, timeout);
-    if (r<0 || r>=n) return 0;
-    Io *io = ios[r];
-    Helper *h = (Helper *)io->plt[0];
-    if (h) {
-        h->next  = os->idle;
-        os->idle = h;
-    } else {
-        procdone(io, 0);
-    }
-    for (Io **p = &os->pending; *p; p = &(*p)->next) {
-        if (*p == io) {
-            *p = io->next;
-            break;
+    for (;;) {
+        drainwake(os);
+        Io *io = os->done;
+        if (io) {
+            os->done = io->next;
+            if (!os->done) os->donetail = &os->done;
+            io->next   = 0;
+            io->plt[0] = S_NONE;
+            io->done   = 1;
+            return io;
+        }
+        if (sigwaiting(os) || deadline==WAIT_POLL) return 0;
+        i32 timeout = INFINITE;
+        if (deadline > 0) {
+            i64 left = (deadline - os_now(os) + 999999) / 1000000;
+            timeout = left<0 ? 0 : left>(1<<30) ? (1<<30) : (i32)left;
+        } else if (!os->nwait) {
+            return 0;  // nothing can complete
+        }
+        if (WaitForSingleObject(os->wake, timeout)) {
+            drainwake(os);
+            if (!os->done) return 0;  // the deadline
         }
     }
-    io->done = 1;
-    return io;
 }
 
 static b32 os_cancel(Os *os, Io *io)
 {
-    if (io->plt[0]) return 0;  // a helper owns it until it completes
-    for (Io **p = &os->pending; *p; p = &(*p)->next) {
-        if (*p == io) {
-            *p = io->next;
-            return 1;
+    switch (io->plt[0]) {
+    case S_QUEUED: {
+        Wobj *w = (Wobj *)io->plt[1];
+        for (Io **p = &w->queue; *p; p = &(*p)->next) {
+            if (*p == io) {
+                *p = io->next;
+                break;
+            }
         }
+        os->nwait--;
+        io->plt[0] = S_NONE;
+        maybefree(os, w);
+        return 1;
     }
-    return 0;
+    case S_ZERO:
+        for (Io **p = &os->zero; *p; p = &(*p)->next) {
+            if (*p == io) {
+                *p = io->next;
+                break;
+            }
+        }
+        io->plt[0] = S_NONE;
+        return 1;
+    case S_ACTIVE: {
+        Wobj *w = (Wobj *)io->plt[1];
+        if (io->op != IO_READ) return 0;  // the core's bytes are in use
+        // Abandoned: what the helper reads goes to the read-ahead
+        w->active = 0;
+        os->nwait--;
+        io->plt[0] = S_NONE;
+        cancelhelper(os, w->helper);
+        return 1;
+    }
+    case S_PROC: {
+        Pwait *pw = (Pwait *)io->plt[1];
+        UnregisterWaitEx(pw->wait, INVALID_HANDLE_VALUE);  // after any callback
+        os->nwait--;
+        io->plt[0] = S_NONE;
+        if (__atomic_load_n(&pw->fired, __ATOMIC_SEQ_CST)) {
+            pw->io   = 0;  // queued: procwaited finds nothing to do
+            pw->gone = 1;
+        } else {
+            pw->next = os->freepwait;
+            os->freepwait = pw;
+        }
+        return 1;
+    }
+    }
+    return 0;  // completed, or completing
 }
 
 static i64 os_now(Os *os)
@@ -1290,6 +2243,31 @@ static Str fromwidez(Arena *a, c16 *s)
     return fromwide(a, s, len);
 }
 
+// Was the process started with Ctrl-C ignored (inherited from
+// SetConsoleCtrlHandler(0, 1) in its parent)? The flag is bit 0 of
+// RTL_USER_PROCESS_PARAMETERS.ConsoleFlags, reached through the PEB.
+static b32 ctrlcignored()
+{
+    byte *peb = 0;
+    #if defined(__x86_64__)
+    __asm volatile ("mov %%gs:0x60, %0" : "=r"(peb));
+    byte *params = 0;
+    __builtin_memcpy(&params, peb+0x20, sizeof(params));
+    u32 flags = 0;
+    __builtin_memcpy(&flags, params+0x18, 4);
+    return flags & 1;
+    #elif defined(__i386__)
+    __asm volatile ("mov %%fs:0x30, %0" : "=r"(peb));
+    byte *params = 0;
+    __builtin_memcpy(&params, peb+0x10, sizeof(params));
+    u32 flags = 0;
+    __builtin_memcpy(&flags, params+0x14, 4);
+    return flags & 1;
+    #else
+    return 0;
+    #endif
+}
+
 extern "C" __attribute((force_align_arg_pointer))
 void mainCRTStartup()
 {
@@ -1303,6 +2281,15 @@ void mainCRTStartup()
     if (precise) {
         os.now = (void (__stdcall *)(Filetime *))precise;  // Windows 8
     }
+    os.cancelsync = (b32 (__stdcall *)(uz))dynamic(u"kernel32.dll", "CancelSynchronousIo");
+    os.perm     = newarena(&os, (iz)1<<24);
+    os.wake     = CreateEventW(0, 0, 0, 0);
+    os.donetail = &os.done;
+    uz self = GetCurrentProcess();
+    DuplicateHandle(self, GetCurrentThread(), self, &os.mainthread, 0, 0,
+                    DUPLICATE_SAME_ACCESS);
+    ctrlos = &os;
+    SetConsoleCtrlHandler((void *)onctrl, 1);
 
     // Startup data lives in its own small arena.
     Arena a = newarena(&os, (iz)1<<26);
@@ -1328,6 +2315,9 @@ void mainCRTStartup()
     FreeEnvironmentStringsW(block);
     info.env  = env.data;
     info.nenv = env.len;
+    if (envget(env.data, env.len, "unabashed_xpio").data) {
+        os.cancelsync = 0;  // for tests: the XP code paths
+    }
 
     i32  cap = GetCurrentDirectoryW(0, 0);
     c16 *cwd = alloc<c16>(&a, cap+1);
@@ -1371,9 +2361,23 @@ void mainCRTStartup()
         h = h ? h : BADHANDLE;
         if (h != BADHANDLE) {
             SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+            Wobj *w = 0;
+            for (i32 j = 0; j<i && !w; j++) {
+                w = info.std[j]==h ? lookup(&os, h) : 0;
+            }
+            if (w) {
+                reg(&os, h, w);  // the same handle twice: one object
+            } else {
+                track(&os, h);
+            }
         }
         info.std[i] = h;
     }
+    if (ctrlcignored()) info.sigign |= (u64)1 << (2-1);
     info.stack = stackreserve();
-    ExitProcess(sh_main(&os, &info) & 255);
+
+    // A shell killed by SIGINT exits as Ctrl-C ends a native program,
+    // which Cygwin's processes also take for death by SIGINT
+    i32 status = sh_main(&os, &info);
+    ExitProcess(status==(WSIGNALED|(128+2)) ? 0xc000013a : status&255);
 }

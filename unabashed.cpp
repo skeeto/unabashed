@@ -386,6 +386,47 @@ struct StdinSource {
     Buf    buf;
 };
 
+// Show PS1 or PS2 on standard error, expanded as ${PS1@P} would be. An
+// expansion error shows nothing.
+static void showprompt(Shell *sh, b32 first)
+{
+    Arena  a = *scratchat(sh, sh->capdepth+1);
+    Escape e = {};
+    e.up    = sh->esc;
+    e.undo  = sh->undo;
+    e.frame = sh->frame;
+    sh->esc = &e;
+    i32 status = sh->status;
+    if (!__builtin_setjmp(e.jmp)) {
+        Str ps = expandstring(sh, &a, first ? Str("${PS1@P}") : "${PS2@P}");
+        fdwrite(sh, 2, ps);
+    } else {
+        unwind(sh, e.undo);
+    }
+    sh->esc    = e.up;
+    sh->status = status;
+}
+
+// Read the next bytes of the command input. At an interactive shell's
+// prompt, Ctrl-C discards the line: -2.
+static iz readstdin(Shell *sh, File *f, u8 *buf, iz len)
+{
+    if (!sh->interactive) return fileread(sh, f, buf, len);
+    Escape e = {};
+    e.up    = sh->esc;
+    e.undo  = sh->undo;
+    e.frame = sh->frame;
+    sh->esc = &e;
+    if (__builtin_setjmp(e.jmp)) {
+        sh->esc = e.up;
+        if (e.why != ESC_INTR) escape(sh, e.why);
+        return -2;
+    }
+    iz n = fileread(sh, f, buf, len);
+    sh->esc = e.up;
+    return n;
+}
+
 static b32 fillstdin(void *ctx, Lexer *L)
 {
     StdinSource *in = (StdinSource *)ctx;
@@ -394,27 +435,43 @@ static b32 fillstdin(void *ctx, Lexer *L)
     Buf   *b     = &in->buf;
     iz     start = b->len;
     b32 seekable = f && f->kind==F_OS && os_seek(sh->os, f->h, 0, 1)>=0;
+    if (sh->interactive) {
+        showprompt(sh, L->newunit);
+        L->newunit = 0;
+    }
     for (b32 done = 0; !done;) {
+        iz n = 0;
         if (seekable) {
             reserve(b, 4096);
-            iz n = fileread(sh, f, b->data+b->len, 4096);
-            if (n <= 0) break;
-            iz keep = n;
-            for (iz i = 0; i < n; i++) {
-                if (b->data[b->len+i] == '\n') {
-                    keep = i + 1;
-                    done = 1;
-                    break;
-                }
-            }
-            if (keep < n) os_seek(sh->os, f->h, keep-n, 1);
-            b->len += keep;
+            n = readstdin(sh, f, b->data+b->len, 4096);
         } else {
             u8 c;
-            if (fileread(sh, f, &c, 1) != 1) break;
-            putbyte(b, c);
-            done = c == '\n';
+            n = readstdin(sh, f, &c, 1);
+            if (n == 1) {
+                putbyte(b, c);
+                done = c == '\n';
+                continue;
+            }
         }
+        if (n == -2) {
+            // Ctrl-C at the prompt: an empty line instead, status 130
+            fdwrite(sh, 2, "\n");
+            sh->status = 128 + 2;
+            b->len = start;
+            putbyte(b, '\n');
+            break;
+        }
+        if (!seekable || n<=0) break;  // end of input, or an error
+        iz keep = n;
+        for (iz i = 0; i < n; i++) {
+            if (b->data[b->len+i] == '\n') {
+                keep = i + 1;
+                done = 1;
+                break;
+            }
+        }
+        if (keep < n) os_seek(sh->os, f->h, keep-n, 1);
+        b->len += keep;
     }
     L->src = {b->data, b->len};
     return b->len > start;
@@ -526,6 +583,8 @@ static i32 sh_main(Os *os, OsInfo *info)
 
         if (sh->interactive) {
             sh->shopt[S_EXPAND_ALIASES] = 1;
+            if (!getvar(sh, &scratch, "PS1").set) setvar(sh, scratch, "PS1", "\\s-\\v\\$ ");
+            if (!getvar(sh, &scratch, "PS2").set) setvar(sh, scratch, "PS2", "> ");
         } else if (!selftest_) {
             sourcebashenv(sh, scratch);
         }

@@ -84,6 +84,9 @@ struct Sigproc {
     u64      pending;  // bit n-1 for signal n
     Task    *task;     // the task running it, or null if not started
     Shell   *sh;       // the Shell that runs it
+    u64      waitsig;  // terminal signals that came while it waited
+                       // for a foreground child (see waitdone)
+    b32      fgwait;   // waiting for a foreground program or stages
 };
 
 struct Sched {
@@ -183,6 +186,7 @@ static void wake(Sched *s, Task *t)
 }
 
 static void deadlock(Sched *s);
+static b32  ossignals(Sched *s);
 static void taskinterrupt(Sched *s, Task *t, b32 all);
 static b32  taskfail(Sched *s, Task *t, i32 err);
 
@@ -237,16 +241,7 @@ static void schedule(Sched *s)
                 wake(s, (Task *)io->ctx);
                 continue;
             }
-            u64 m = os_sigpending(s->os);
-            if (m) {
-                // A signal for the process: its outermost level takes
-                // it, interrupting a wait builtin or ending a read
-                if (s->top) {
-                    s->top->pending |= m;
-                    if (s->top->task) taskinterrupt(s, s->top->task, 0);
-                }
-                continue;
-            }
+            if (ossignals(s)) continue;  // interrupting waits it fails
             if (deadline) {
                 expiretimers(s);
                 continue;

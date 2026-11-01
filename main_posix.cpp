@@ -195,6 +195,11 @@ static OsPipe os_pipe(Os *)
     return r;
 }
 
+static iz os_peek(Os *, Handle, u8 *, iz)
+{
+    return -1;  // pipes cannot be peeked
+}
+
 static i64 os_seek(Os *, Handle h, i64 off, i32 whence)
 {
     return lseek((i32)h, off, whence==0 ? SEEK_SET : whence==1 ? SEEK_CUR : SEEK_END);
@@ -496,6 +501,11 @@ static i32 os_kill(Os *, i64 pid, i32 sig)
 static u64 os_sigpending(Os *)
 {
     return __atomic_exchange_n(&sigbits, (u64)0, __ATOMIC_RELAXED);
+}
+
+static u64 os_siggroup(Os *)
+{
+    return 0;  // terminal signals arrive as the process's own
 }
 
 static void os_tasktag(Os *, u64, iz)
