@@ -55,8 +55,9 @@ static Vproc *newvproc(Sched *s)
     Arena sa = m->store.a;
     sa.beg   = m->storebase;
     m->store = {};
-    m->store.a    = sa;
-    m->store.base = sa.beg;
+    m->store.a     = sa;
+    m->store.base  = sa.beg;
+    m->store.vproc = 1;
     return m;
 }
 
@@ -92,6 +93,30 @@ static Var *copyvars(Store *st, Var *v)
 }
 
 // Function bodies are shared: each copy holds a reference.
+// Does a body outlive every vproc? The top store does (the shell joins
+// all vprocs before it exits), except above a subshell's watermark,
+// which rollback frees; a vproc's store may end before a background
+// job it started.
+static b32 lastingcode(Code *c)
+{
+    Store *st = c->store;
+    return !st->vproc && (!st->floor || (byte *)c<st->floor);
+}
+
+// Copy a body into store st, in a block of the same size.
+static Code *copycode(Store *st, Code *c)
+{
+    Arena block = {};
+    block.beg = (byte *)salloc(st, c->size);
+    block.end = block.beg + c->size;
+    Code *r = alloc<Code>(&block);
+    r->store = st;
+    r->size  = c->size;
+    r->body  = copynode(&block, c->body);
+    r->file  = clone(&block, c->file);
+    return r;
+}
+
 static Func *copyfuncs(Store *st, Func *f)
 {
     if (!f) return 0;
@@ -100,7 +125,12 @@ static Func *copyfuncs(Store *st, Func *f)
     c->body  = f->body;
     c->code  = f->code;
     c->attrs = f->attrs;
-    if (c->code) c->code->refs++;
+    if (c->code && !lastingcode(c->code)) {
+        c->code = copycode(st, c->code);
+        c->body = c->body ? c->code->body : 0;
+    } else if (c->code) {
+        c->code->refs++;
+    }
     for (i32 i = 0; i < 4; i++) {
         c->child[i] = copyfuncs(st, f->child[i]);
     }

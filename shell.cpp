@@ -104,6 +104,8 @@ struct Store {
     Journal *log;           // innermost first
     Free    *free[NFREE];   // by size class: 16 << i bytes
     u32      serial;        // innermost subshell, for deduplication
+    byte    *floor;         // outermost subshell's watermark, or 0
+    b32      vproc;         // a vproc's: may end before vprocs it starts
 };
 
 static i32 sizeclass(iz size)
@@ -196,8 +198,9 @@ static Watermark storeenter(Store *st)
         w.free[i]   = st->free[i];
         st->free[i] = 0;
     }
-    st->mark = st->a.beg;
-    st->log  = 0;
+    st->mark  = st->a.beg;
+    st->floor = st->floor ? st->floor : st->mark;
+    st->log   = 0;
     st->serial++;
     return w;
 }
@@ -209,6 +212,7 @@ static void storeleave(Store *st, Watermark *w)
     }
     st->a.beg  = w->a.beg;
     st->mark   = w->mark;
+    st->floor  = w->mark ? st->floor : 0;
     st->log    = w->log;
     st->serial = w->serial;
     for (i32 i = 0; i < NFREE; i++) {
