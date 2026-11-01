@@ -1870,9 +1870,25 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
     escape(sh, ESC_EXIT);
 }
 
-static i32 b_wait(Shell *, Str *, iz, Arena)
+// Interim: wait knows process substitutions only. Without arguments,
+// as bash, it waits for the last one if $! names it.
+static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena)
 {
-    return 0;
+    iz  i = nargs>1 && args[1]=="--" ? 2 : 1;
+    b32 found;
+    if (i == nargs) {
+        waitpsub(sh, sh->lastbg, &found);
+        return 0;
+    }
+    i32 status = 0;
+    for (; i < nargs; i++) {
+        i64 pid;
+        if (parsei64(args[i], &pid)) {
+            i32 st = waitpsub(sh, pid, &found);
+            status = found ? st : 0;
+        }
+    }
+    return status;
 }
 
 static i32 b_true(Shell *, Str *, iz, Arena)

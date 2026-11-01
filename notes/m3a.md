@@ -30,12 +30,15 @@ Done (core foundation):
   with N chaos seeds, comparing stdout, stderr and status (a spec
   containing `# nochaos` is exempt: its stages race on one stream);
   `tests.exe --run FILE [SEED]`.
+- Process substitution, materialization of here-documents, in-memory
+  pipes and captures for programs, `wait` for procsubs (see "Process
+  substitution" and "Materialization" below); `os_tempfile` on every
+  layer, `/dev/fd/N` in the vos; tests `t/exec/616`-`621`.
 
 Remaining M3a work (see "Plan for the rest of M3a" below): launcher
-fibers for external stages with comsubs, procsub, heredoc and
-capture materialization through pumps everywhere, traps and
-SIGPIPE dispositions, fork-on-exec, interim fiber `&`/wait/coproc, the
-isolate fuzzer, timers.
+fibers for external stages with comsubs, traps and SIGPIPE
+dispositions, fork-on-exec, interim fiber `&`/wait/coproc, the isolate
+fuzzer, timers.
 
 ## Model
 
@@ -154,7 +157,9 @@ Scheduler (sched.cpp):
 | `i32 taskwaitproc(Sched *, Handle proc)` | exit status |
 | `Pipe *newpipe(Sched *)` | one reader, one writer |
 | `iz piperead(Sched *, Pipe *, u8 *, iz)` / `i32 pipewrite(...)` / `void pipeclose(Sched *, Pipe *, b32 writer)` | |
-| `Task *spawnpump(Sched *, Pump *)` | `PUMP_TOHANDLE` (Pipe → handle), `PUMP_FROMHANDLE` (handle → Pipe), `PUMP_TEXT` (string → handle); the pump owns `h` and its pipe end |
+| `Task *spawnpump(Sched *, Pump *)` | `PUMP_TOHANDLE` (Pipe → handle), `PUMP_FROMHANDLE` (handle → Pipe), `PUMP_TEXT` (string → handle, unused now), `PUMP_TOBUF` (handle → capture); the pump owns `h` and its pipe end |
+| `Pump *newpump(Sched *)` / `void endpump(Sched *, Task *)` | a pooled Pump that outlives its starter's arena / cancel, join and recycle it |
+| `Handle pipeosread(Sched *, Pipe *)` | give a Pipe its shared OS form for programs (Materialization) |
 
 Shell I/O never calls `os_read`/`os_write` directly: `fileread` and
 `fdwrite` (shell.cpp) route `F_OS` through `taskread`/`taskwrite` and
@@ -169,6 +174,10 @@ Vprocs (proc.cpp):
 |---|---|
 | `Task *spawnvproc(Shell *, Node *, File *in, File *out, b32 newloops)` | run `node` concurrently in a subshell of `sh` (a deep copy), with fd 0/1 replaced when `in`/`out` are given; join the task for its status |
 | `Shell *vproccopy(Shell *, Vproc *)` | the copier, if a feature needs a vproc with a different entry point (procsub, `&`, coproc) |
+| `Vproc *vprocwith(Shell *, File *in, File *out)` | a copied vproc not yet started: set `node` or `src`, then `taskspawn(s, vprocmain, m, BIGSTACK)` |
+| `Str procsubst(Shell *, Arena *, Str body, b32 output)` | start a procsub, return `/dev/fd/N` |
+| `void joinpsubs(Shell *)` / `i32 waitpsub(Shell *, i64 pid, b32 *found)` | join this level's procsubs / one by pid |
+| `Handle capturewriter(Shell *, File *cap)` | an OS write handle into a capture, pumped (exec.cpp) |
 
 Rules for code that runs in a vproc: allocate only from the vproc's
 own arenas (`sh->store`, `scratchat(sh, …)`), never keep pointers to
@@ -206,16 +215,99 @@ reports `subshell - simplestages`.
    with `taskjoin`, direct externals with `taskwaitproc`). `$?` is the
    last stage's status, or with pipefail the rightmost nonzero.
 
-`runprogram` (exec.cpp), for every descriptor of an external:
-- `F_OS`: passed as is;
-- `F_MEM` (here-documents, here-strings): an OS pipe, filled now up to
-  `os_pipecap`, the rest by a `PUMP_TEXT` task;
-- `F_PIPE`: an OS pipe plus a pump in the right direction. Input pumps
-  are cancelled once the program exits (what it did not read stays in
-  the Pipe); output pumps are joined, so the program's output precedes
-  anything the shell writes next;
-- `F_CAPTURE`: an OS pipe read here until EOF.
+`runprogram` (exec.cpp) gives every descriptor of an external an OS
+object; see "Materialization".
 
+## Materialization
+
+What a program is given must behave as one shared open file would
+under bash: what it leaves unread is there for the next reader, shell
+or program, and what it writes comes before what the shell writes
+next. `runprogram`, for every descriptor:
+- `F_OS`: passed as is.
+- `F_MEM` (here-documents, here-strings): converted **in place** to
+  `F_OS` (`materialize`), as bash 5.3 makes them: an empty document is
+  `/dev/null`; one of at most `HEREDOCPIPE` (64 KiB) that also fits
+  `os_pipecap` is a pipe filled before the program starts (bash checks
+  `F_GETPIPE_SZ` the same way); a larger one is an `os_tempfile`
+  (deleted on close, mode 0400) seeked to the File's position. Since
+  the File itself changes, builtins and later programs read on from
+  where the program stopped (`{ head -c3; wc -c; } <<<"$big"`). Until
+  then the text stays in memory, and `test` reports the type a program
+  would see (`memfiletype`). A vproc's copy of an `F_MEM` File is a
+  separate copy (invariant 1), so a pipeline stage consuming a
+  here-document does not advance its parent's copy (bash's forked
+  stage would): a known difference.
+- `F_PIPE` read end: the **Pipe** gets an OS form (`pipeosread`): an
+  OS pipe fed by a pump (`Pipe.osr`, `Pipe.pump`) from which every
+  reader of that Pipe reads from then on (`piperead` switches to
+  `taskread(osr)`), in every vproc. The pump ends at the Pipe's EOF, or
+  is stopped (`endpump`) when the last reader File closes. This keeps
+  `printf 'a\nb\n' | { ext; read x; }` giving `a`: the earlier
+  per-call input pump moved data into a pipe that died with the call.
+- `F_PIPE` write end: an OS pipe plus a `PUMP_FROMHANDLE` task joined
+  after the program, so its output precedes the shell's next write.
+- `F_CAPTURE`: an OS pipe read in place until EOF (every writer gone,
+  including the program's own background children). A program not
+  waited for in place (a direct pipeline stage, `Shell.spawnto`) gets
+  `capturewriter`: an OS pipe whose `PUMP_TOBUF` pump appends to the
+  capture. A capture's File points at a `Capture` (`Buf` first, plus
+  its pumps); `runcapture` joins the pumps before taking the result
+  (`x=$(... &)` waits for every writer), and `fdwrite` drains whatever
+  they have received before the shell appends (`capturedrain`), so
+  `$(exec 2>&1; ls /x | cat; echo after)` keeps its order. **For
+  interim `&`:** a background vproc must not share a capture `Buf`
+  (invariant 3); give its copy of the descriptor `capturewriter`'s
+  handle as an `F_OS` File instead.
+
+## Process substitution
+
+`<(list)` and `>(list)` (`procsubst`, proc.cpp; expanded in
+`expandinto` wherever the parser left `<(`, except in double quotes,
+here-documents and arithmetic, so also in assignments and `${x:-...}`,
+as in bash):
+1. Pick a free descriptor from 63 down (bash's `move_to_high_fd`), else
+   the lowest free from 64.
+2. Make the pipe: an OS pipe if the body starts with a likely external
+   (`likelyexternaltext`), else an in-memory `Pipe` (which a program
+   later materializes, see above).
+3. Start a fiber vproc (`vprocwith` + `Vproc.src`) that parses and runs
+   the body text like a command substitution (`runsource` with
+   "process substitution", `tracedepth+1` for `++` traces, `-v` off),
+   with its fd 1 (or 0 for `>(...)`) on the other end. It does not
+   yield first: as a forked child, it runs after the command started.
+4. Open the shell's end at the descriptor with an **Undo record in the
+   store** (`fdsetpsub`, `Undo.psub`), so it closes when the command's
+   redirections unwind: `runsimple` now takes its undo mark before
+   expanding words, and compound commands unwind theirs (`for` words,
+   `done < <(...)`). Escapes unwind it too. `exec 3< <(f)` keeps fd 3
+   but closes 63 (`closepsubs` before committing).
+5. The word becomes `/dev/fd/N`, which `openfile` (redirections),
+   `readwholefile` (`source`, `$(<...)`), `test` (`envstat`), and the
+   vos's `os_open`/`os_stat` for programs (`/dev/fd/N`, `/dev/std*`,
+   reopening a file as a new description as Linux does) resolve; POSIX
+   children inherit fd N.
+
+The vproc is not waited for at the end of the command (bash does not
+either): it goes on its creator's list (`Shell.psubs`, linked by
+`Task.sib`, pid in `Task.pid`, which is also `$!`). Finished ones are
+reaped when the next procsub starts (after a `yield`, so that earlier
+ones can finish as forked children would; otherwise a run of
+non-blocking commands piles up vprocs). `wait PID` and `wait` (the last
+one, if `$!` names it, as bash) join one (`waitpsub`; the last joined
+status is remembered for a repeated `wait`). The end of the creating
+level joins the rest once its descriptors are closed: a synchronous
+subshell (`subshell()` saves and clears `psubs`), a fiber vproc
+(`vprocmain`: `closeall` then `joinpsubs`), a script run without `#!`,
+and `sh_main` (closing every descriptor but the platform's own). A
+procsub in a redirection of an external does not set `$!` (bash
+redirects in the forked child).
+
+Bash's `-c` mode keeps procsub descriptors open across top-level
+builtins until something forks, so its later procsubs there are
+`/dev/fd/62`, `61`, ...; scripts (and functions and loops everywhere)
+close them per command as unabashed does. Specs avoid printing such
+numbers.
 ## PIPESTATUS and SIGPIPE
 
 PIPESTATUS is a dynamic array (`DYN_PIPESTATUS`, vars.cpp) over
@@ -318,17 +410,10 @@ In suggested order, each with the API to use:
    copy-on-first-write (M8). The last stage, when external, could also
    be started directly instead of in a synchronous subshell.
 2. **PIPESTATUS**: done (see above).
-3. **Process substitution** `<(f)`/`>(f)`: a fiber vproc (`spawnvproc`
-   with `out`/`in` set to a `Pipe` end) whose other end is a `File` in
-   the parent named `/dev/fd/N`; for an external, materialize as an OS
-   pipe (`os_pipe`) plus pump, or a named pipe on Win32 (needs an
-   `os_pipe(named)` addition). The fiber outlives the command when
-   `exec 3< <(f)`: copy everything it references (invariant 3) and
-   join it at shell exit or when the descriptor closes.
-4. **Here-documents and captures for externals**: already pumped in
-   `runprogram`; heredocs over 64 KiB should become a delete-on-close
-   temp file (needs `os_tempfile`). `x=$(sleep 9 &)` must wait for
-   every writer of the capture.
+3. **Process substitution**: done (see above), except on Win32 for
+   programs (Known limits).
+4. **Here-documents and captures for externals**: done (see
+   "Materialization"); `&` must use `capturewriter`.
 5. **Traps and SIGPIPE**: subshells reset caught traps; `sigpipe()`
    must run a PIPE trap, or with `trap '' PIPE` report
    "write error: Broken pipe" instead.
@@ -344,6 +429,19 @@ In suggested order, each with the API to use:
    isolate (`( S ); declare -p` equals `declare -p`), both vos only.
 
 ## Known limits
+
+- Win32: a program cannot open `/dev/fd/N`, so `diff <(a) <(b)` and
+  `cat <(f)` fail there ("No such file or directory"); builtins,
+  redirections, `source` and shell code work. The fix belongs with
+  M5a's argument conversion: give a native child a named pipe path
+  (`\\.\pipe\unabashed-PID-N`) in place of the `/dev/fd/N`
+  argument, bridged by a pump, which needs an `os_pipe(named)` whose
+  first write waits for the client (`ConnectNamedPipe` in a helper,
+  cancelled when the program exits without opening it).
+- Each vproc reserves two arenas plus scratch pools (about 16 MiB of
+  address space); the test harness's 128 MiB of reservations allows
+  about a dozen live vprocs (procsubs and shell stages together), and
+  more abort with "unexpected out of memory".
 
 - Win32 helper threads issue whole-length reads; the File state machine
   and Peek-exact reads are M3b. A helper read in flight on a handle

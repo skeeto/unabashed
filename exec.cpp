@@ -23,6 +23,8 @@ static void     execute(Shell *, Node *, Arena);
 static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i32 line = 1,
                           b32 (*fill)(void *, Lexer *) = 0, void *fillctx = 0);
 static Str      runfunsub(Shell *, Arena *, Str src, b32 valsub, Arena);
+static void     joinpsubs(Shell *);
+static void     closeall(Shell *);
 
 // Builtin output, written to fd 1 when the builtin returns, or when
 // the buffer fills: growing it would overrun the builtin's scratch.
@@ -262,6 +264,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sh->esc = &e;
     sh->subshell++;
     sh->bashpid = ++sh->lastpid;
+    sh->psubs   = 0;
     // The frame is not in the store, so local's changes to its list of
     // locals are not journaled: restore it by hand
     Frame frame = sh->frame ? *sh->frame : Frame{};
@@ -276,6 +279,10 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     }
     i32 status = sh->status;
     unwind(sh, saved.undo);
+    if (sh->psubs) {
+        // Its procsubs end with it, once their descriptors are closed
+        joinpsubs(sh);
+    }
     storeleave(sh->store, &w);
     // Keep the scratch arenas the subshell reserved for deeper levels:
     // they are not store memory, and dropping them leaks reservations
@@ -350,8 +357,9 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
             return capresult(sh, *a, data);
         }
     }
-    Buf *cap = alloc<Buf>(a);
-    *cap = Buf(a, 256);
+    Capture *capture = alloc<Capture>(a);
+    capture->b = Buf(a, 256);
+    Buf *cap = &capture->b;
 
     i32   depth = ++sh->capdepth;
     Arena child = *scratchat(sh, depth);
@@ -385,7 +393,35 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
     }
     sh->capdepth = depth - 1;
     sh->current = 0;
+    // EOF waits for every writer
+    while (capture->pumps) {
+        Task *t = capture->pumps;
+        capture->pumps = t->sib;
+        Pump *p = (Pump *)t->arg;
+        taskjoin(sh->sched, t);
+        p->next = sh->sched->freepumps;
+        sh->sched->freepumps = p;
+    }
     return capresult(sh, *a, finish(cap));
+}
+
+// An OS handle writing into a capture, for a writer the shell does not
+// wait for in place: a pump appends what it delivers, and the capture
+// waits for the pump. The caller owns the handle.
+static Handle capturewriter(Shell *sh, File *f)
+{
+    OsPipe p = os_pipe(sh->os);
+    if (p.err) return BADHANDLE;
+    Sched   *s  = sh->sched;
+    Pump    *pp = newpump(s);
+    pp->kind = PUMP_TOBUF;
+    pp->h    = p.r;
+    pp->buf  = f->cap;
+    Task    *t  = spawnpump(s, pp);
+    Capture *c  = (Capture *)f->cap;
+    t->sib   = c->pumps;
+    c->pumps = t;
+    return p.w;
 }
 
 
@@ -403,19 +439,13 @@ static Str redirtarget(Shell *sh, Arena *a, Word *w, b32 *ok)
     return r[0];
 }
 
-static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
+// The descriptor named by bash's own /dev/fd/N, /dev/stdin and
+// friends, which the shell emulates, or -1 (FDMAX if out of range).
+static i32 devfdnum(Str name)
 {
-    if (!name.len) {
-        // absolute() would turn it into the working directory
-        shellerror(sh, *a, concat(a, name, ": No such file or directory"));
-        return 0;
-    }
-    Str path = absolute(sh, a, name);
-    // bash's own /dev/fd, /dev/stdin and friends
-    i32 dupfd = -1;
-    if (name == "/dev/stdin")  dupfd = 0;
-    if (name == "/dev/stdout") dupfd = 1;
-    if (name == "/dev/stderr") dupfd = 2;
+    if (name == "/dev/stdin")  return 0;
+    if (name == "/dev/stdout") return 1;
+    if (name == "/dev/stderr") return 2;
     if (startswith(name, "/dev/fd/") && name.len>8) {
         i64 n = 0;
         b32 num = 1;
@@ -424,8 +454,20 @@ static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
             n = n*10 + (name[i] - '0');
             if (n > FDMAX) num = 0;
         }
-        if (num) dupfd = (i32)n;
+        if (num) return n<FDMAX ? (i32)n : FDMAX;
     }
+    return -1;
+}
+
+static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
+{
+    if (!name.len) {
+        // absolute() would turn it into the working directory
+        shellerror(sh, *a, concat(a, name, ": No such file or directory"));
+        return 0;
+    }
+    Str path = absolute(sh, a, name);
+    i32 dupfd = devfdnum(name);
     if (dupfd >= 0) {
         File *f = dupfd<FDMAX ? sh->fds->fd[dupfd] : 0;
         if (!f) {
@@ -903,6 +945,63 @@ static Str commandpath(Shell *sh, Arena *a, Str name, b32 enter)
     return path;
 }
 
+// What a here-document or here-string is to programs, as in bash 5.3:
+// an empty one is /dev/null, one that fits a pipe (64 KiB, and the
+// platform's pipe capacity) a pipe filled before the command runs, and
+// a larger one a deleted temporary file, readable by its owner.
+enum : iz { HEREDOCPIPE = (iz)1<<16 };
+
+static i32 memfiletype(Shell *sh, File *f)
+{
+    iz cap = os_pipecap(sh->os);
+    cap = cap<HEREDOCPIPE ? cap : HEREDOCPIPE;
+    return !f->mem.len ? FT_CHAR : f->mem.len<=cap ? FT_PIPE : FT_FILE;
+}
+
+// Turn a here-document an external is given into its OS form, in
+// place: the File then reads through the handle, so that what the
+// program leaves unread stays for whoever reads next, as with bash's
+// pipe or file. (An in-memory pipe gets an OS form shared by all its
+// Files instead: pipeosread.) False on failure.
+static b32 materialize(Shell *sh, Arena a, File *f)
+{
+    Handle h = BADHANDLE;
+    if (f->kind == F_MEM) {
+        Str rest = cuthead(f->mem, f->pos<f->mem.len ? f->pos : f->mem.len);
+        switch (memfiletype(sh, f)) {
+        case FT_CHAR: {
+            Opened o = os_open(sh->os, a, "/dev/null", OF_READ, 0);
+            if (o.err) return 0;
+            h = o.h;
+        } break;
+        case FT_PIPE: {
+            OsPipe p = os_pipe(sh->os);
+            if (p.err) return 0;
+            os_write(sh->os, p.w, rest.data, rest.len);  // it fits
+            os_close(sh->os, p.w);
+            h = p.r;
+        } break;
+        case FT_FILE: {
+            Opened o = os_tempfile(sh->os, a);
+            if (o.err) return 0;
+            if (!os_write(sh->os, o.h, f->mem.data, f->mem.len) ||
+                    os_seek(sh->os, o.h, f->pos, 0) < 0) {
+                os_close(sh->os, o.h);
+                return 0;
+            }
+            h = o.h;
+        } break;
+        }
+        // The text stays until the File goes: the store may not free
+        // memory the parent of a subshell owns
+    } else {
+        return 0;
+    }
+    f->kind = F_OS;
+    f->h    = h;
+    return 1;
+}
+
 // Run a program and wait for it. Returns its status, or the negated
 // error that kept it from starting. Shell objects on its descriptors
 // become OS pipes: text and in-memory pipes are fed by pump tasks, and
@@ -917,7 +1016,6 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     Handle *closeafter = alloc<Handle>(&a, t->top ? t->top : 1);
     i32     nclose = 0;
     Task   *pumps[16];
-    b32     input[16];
     i32     npumps = 0;
     File   *capfile = 0;
     Handle  capread = BADHANDLE;
@@ -941,26 +1039,18 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         case F_OS:
             sf.h = f->h;
             break;
-        case F_MEM: {
-            OsPipe p = os_pipe(sh->os);
-            if (p.err) continue;
-            Str rest = cuthead(f->mem, f->pos<f->mem.len ? f->pos : f->mem.len);
-            iz  now  = rest.len<os_pipecap(sh->os) ? rest.len : os_pipecap(sh->os);
-            os_write(sh->os, p.w, rest.data, now);
-            if (now<rest.len && npumps<countof(pumps)) {
-                Pump *pp = alloc<Pump>(&a);
-                pp->kind = PUMP_TEXT;
-                pp->h    = p.w;
-                pp->text = cuthead(rest, now);
-                input[npumps] = 1;
-                pumps[npumps++] = spawnpump(s, pp);
-            } else {
-                os_close(sh->os, p.w);
-            }
-            sf.h = p.r;
-            closeafter[nclose++] = p.r;
-        } break;
+        case F_MEM:
+            if (!materialize(sh, a, f)) continue;
+            sf.h = f->h;
+            break;
         case F_CAPTURE: {
+            if (sh->spawnto) {
+                // Not waited for here: a pump fills the capture
+                sf.h = capturewriter(sh, f);
+                if (sf.h == BADHANDLE) continue;
+                closeafter[nclose++] = sf.h;
+                break;
+            }
             OsPipe p = os_pipe(sh->os);
             if (p.err) continue;
             capfile = f;
@@ -969,22 +1059,21 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
             closeafter[nclose++] = p.w;
         } break;
         case F_PIPE: {
+            if (f->flags & OF_READ) {
+                sf.h = pipeosread(s, f->pipe);
+                if (sf.h == BADHANDLE) continue;
+                break;
+            }
+            // Output is pumped while the program runs, and joined after
             if (npumps == countof(pumps)) continue;
             OsPipe p = os_pipe(sh->os);
             if (p.err) continue;
             Pump *pp = alloc<Pump>(&a);
             pp->pipe = f->pipe;
-            if (f->flags & OF_READ) {
-                pp->kind = PUMP_TOHANDLE;
-                pp->h    = p.w;
-                sf.h     = p.r;
-            } else {
-                pp->kind = PUMP_FROMHANDLE;
-                pp->h    = p.r;
-                sf.h     = p.w;
-            }
+            pp->kind = PUMP_FROMHANDLE;
+            pp->h    = p.r;
+            sf.h     = p.w;
             closeafter[nclose++] = sf.h;
-            input[npumps] = pp->kind == PUMP_TOHANDLE;
             pumps[npumps++] = spawnpump(s, pp);
         } break;
         }
@@ -1020,11 +1109,8 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         os_close(sh->os, capread);
     }
     i32 status = r.err ? -r.err : taskwaitproc(s, r.proc);
-    // What the program did not read stays unread; what it wrote is
-    // passed on before anything the shell writes next
-    for (i32 i = 0; i < npumps; i++) {
-        if (input[i]) taskcancel(s, pumps[i]);
-    }
+    // What the program wrote is passed on before anything the shell
+    // writes next
     for (i32 i = 0; i < npumps; i++) {
         taskjoin(s, pumps[i]);
     }
@@ -1057,6 +1143,22 @@ static b32 binaryfile(Str s)
 
 static Str readwholefile(Shell *sh, Arena *a, Str path, i32 *err)
 {
+    i32   fd = devfdnum(path);
+    File *f  = fd>=0 && fd<FDMAX ? sh->fds->fd[fd] : 0;
+    if (f) {
+        // One of the shell's descriptors, such as a procsub's, read to
+        // its end. Others are the platform's (a nested shell's script).
+        *err = f->flags & OF_READ ? 0 : E_BADF;
+        if (*err) return {};
+        Buf b(a, 4096);
+        for (;;) {
+            reserve(&b, 4096);
+            iz n = fileread(sh, f, b.data+b.len, b.cap-b.len);
+            if (n <= 0) break;
+            b.len += n;
+        }
+        return finish(&b);
+    }
     Opened o = os_open(sh->os, *a, absolute(sh, a, path), OF_READ, 0);
     *err = o.err;
     if (o.err) return {};
@@ -1142,12 +1244,14 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->srcname     = {};
         sh->evaldepth   = 0;
         sh->sourcedepth = 0;
+        sh->psubs       = 0;
         sh->capdepth++;
         if (!__builtin_setjmp(e.jmp)) {
             runsource(sh, src, name, *scratchat(sh, sh->capdepth), 1);
         }
         i32 status = sh->status;
         unwind(sh, saved.undo);
+        joinpsubs(sh);
         storeleave(sh->store, &w);
         for (i32 i = 0; i < NPOOL; i++) saved.pool[i] = sh->pool[i];
         *sh = saved;
@@ -1395,6 +1499,9 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
         rest = rest->next;
     }
 
+    // Procsubs in the words close with the command's redirections
+    Undo *mark = sh->undo;
+
     // Is the command a declaration builtin? Then its assignment-looking
     // arguments expand as assignments.
     Slice<Str> argv = {};
@@ -1429,23 +1536,19 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
         }
     }
 
-    Undo *mark = sh->undo;
-
     if (!argv.len) {
         // Assignments only, with redirections in a temporary context.
         // The status is the last command substitution's, or zero.
         u32  nsubst = sh->nsubst;
         b32  ok     = doassignments(sh, a, assigns, nassign);
         i32  laststatus = sh->nsubst==nsubst ? 0 : sh->status;
-        if (n->redirs) {
-            if (!doredirs(sh, n->redirs, a, 0)) {
-                unwind(sh, mark);
-                sh->status = 1;
-                checkerrexit(sh);
-                return;
-            }
+        if (n->redirs && !doredirs(sh, n->redirs, a, 0)) {
             unwind(sh, mark);
+            sh->status = 1;
+            checkerrexit(sh);
+            return;
         }
+        unwind(sh, mark);
         sh->status = ok ? laststatus : 1;
         if (!ok && !sh->interactive && sh->opt[O_POSIX]) {
             sh->exiting = 1;
@@ -1481,11 +1584,15 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
     // undoes the rest, as in bash)
     b32 execonly = name=="exec" && (argv.len==1 || (argv.len==2 && argv[1]=="--"));
     b32 commit   = execonly && !sh->subshell;
+    i64 lastbg   = sh->lastbg;
     if (!doredirs(sh, n->redirs, a, execonly && !commit)) {
         unwind(sh, mark);
         sh->status = 1;
         checkerrexit(sh);
         return;
+    }
+    if (execonly) {
+        closepsubs(sh, mark);  // exec 3< <(f) keeps 3, not 63
     }
     if (commit) {
         commitredirs(sh, mark);
@@ -1539,6 +1646,9 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
             for (iz i = nassign-1; i >= 0; i--) poptemp(sh, as[i].name);
         }
     } else {
+        // bash redirects a program in its forked child, so a procsub
+        // there does not set $! here
+        sh->lastbg = lastbg;
         Slice<Str> env = makeenv(sh, a);
         for (iz i = 0; i < nassign; i++) {
             Str entry = concat3(a, as[i].name, "=", as[i].value);
@@ -1607,8 +1717,10 @@ static Stat envstat(void *ctx, Str path, b32 follow)
         } else if (f->kind == F_OS) {
             s = os_fstat(sh->os, f->h);
         } else {
-            s.type  = FT_PIPE;
-            s.mode  = 0600;
+            // What a program would find there (materialize)
+            s.type  = f->kind==F_MEM ? memfiletype(sh, f) : FT_PIPE;
+            s.mode  = s.type==FT_FILE ? 0400 : s.type==FT_CHAR ? 0666 : 0600;
+            s.size  = s.type==FT_FILE ? f->mem.len : 0;
             s.nlink = 1;
             s.uid   = sh->euid;
             s.gid   = sh->egid;

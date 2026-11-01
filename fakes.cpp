@@ -16,7 +16,7 @@ struct FakeCtx {
     Str    *env;
     iz      nenv;
     Str     cwd;
-    Handle  fd[10];  // BADHANDLE when closed
+    Handle  fd[64];  // BADHANDLE when closed; procsubs use up to 63
     Arena   scratch;
 };
 

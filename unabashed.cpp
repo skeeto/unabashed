@@ -579,6 +579,22 @@ static i32 sh_main(Os *os, OsInfo *info)
     } else if (top.why==ESC_FATAL && sh->cflag) {
         sh->status = 127;  // as bash's -c reports a fatal error
     }
+    if (sh->psubs) {
+        // Procsubs still running end on EOF once the shell's ends of
+        // their pipes close, as at a process exit. The platform's own
+        // handles stay open.
+        Fdtab *t = sh->fds;
+        for (i32 fd = 0; fd < t->top; fd++) {
+            File *f = t->fd[fd];
+            b32 std = f && f->kind==F_OS &&
+                      (f->h==info->std[0] || f->h==info->std[1] || f->h==info->std[2]);
+            if (f && !std) {
+                fileunref(sh, f);
+                t->fd[fd] = 0;
+            }
+        }
+        joinpsubs(sh);
+    }
     freesched(sh->sched);
     return sh->status & 255;
 }

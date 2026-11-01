@@ -32,6 +32,8 @@ struct Task {
     b32     failed;    // woken by deadlock recovery
     b32     cancel;    // asked to stop at its next wait (pumps)
     Task   *joiner;    // a task waiting for this one to finish
+    Task   *sib;       // its creator's list of procsubs to join later
+    i64     pid;       // a procsub's BASHPID, for $! and wait
     void  (*fn)(Task *);
     void   *arg;
     Io      io;        // its pending OS operation
@@ -41,14 +43,17 @@ struct Task {
 // ends. Reads block while empty and writers remain; writes block while
 // full and readers remain, and fail with E_PIPE once none do.
 struct Pipe {
-    Pipe *next;        // free list
-    u8   *buf;
-    iz    head;        // first unread byte
-    iz    len;         // bytes buffered
-    i32   readers;
-    i32   writers;
-    Task *rwait;       // tasks waiting to read
-    Task *wwait;       // tasks waiting to write
+    Pipe  *next;       // free list
+    u8    *buf;
+    iz     head;       // first unread byte
+    iz     len;        // bytes buffered
+    i32    readers;
+    i32    writers;
+    Task  *rwait;      // tasks waiting to read
+    Task  *wwait;      // tasks waiting to write
+    Handle osr;        // its OS form once a program reads it (pipeosread)
+    Task  *pump;       // feeding osr until the last reader closes
+    b32    pumping;    // the pump still holds a reader reference
 };
 
 enum : iz {
@@ -58,6 +63,7 @@ enum : iz {
 };
 
 struct Vproc;
+struct Pump;
 
 struct Sched {
     Os     *os;
@@ -70,6 +76,7 @@ struct Sched {
     Task   *freebig;     // finished tasks whose fibers can be reused
     Task   *freesmall;
     Pipe   *freepipes;
+    Pump   *freepumps;
     Vproc  *freevprocs;  // pooled vproc memory (proc.cpp)
     iz      reserve;     // address space for each arena of a vproc
     iz      ntasks;      // live tasks, including the main task
@@ -299,6 +306,8 @@ static Task *taskspawn(Sched *s, void (*fn)(Task *), void *arg, iz stack)
     t->failed = 0;
     t->cancel = 0;
     t->joiner = 0;
+    t->sib    = 0;
+    t->pid    = 0;
     t->state  = 0;
     s->ntasks++;
     wake(s, t);
@@ -431,6 +440,7 @@ static Pipe *newpipe(Sched *s)
     }
     p->readers = 1;
     p->writers = 1;
+    p->osr     = BADHANDLE;
     return p;
 }
 
@@ -458,8 +468,9 @@ static b32 waiton(Sched *s, Task **list)
     return ok;
 }
 
-// Read up to len bytes: 0 at end of file, -1 if the wait failed.
-static iz piperead(Sched *s, Pipe *p, u8 *buf, iz len)
+// Read up to len bytes from the ring: 0 at end of file, -1 if the
+// wait failed.
+static iz pipereadraw(Sched *s, Pipe *p, u8 *buf, iz len)
 {
     while (!p->len && p->writers) {
         if (!waiton(s, &p->rwait)) return -1;
@@ -473,6 +484,16 @@ static iz piperead(Sched *s, Pipe *p, u8 *buf, iz len)
     p->len -= n;
     wakeall(s, &p->wwait);
     return n;
+}
+
+// Read up to len bytes: 0 at end of file, -1 on failure. Once the
+// pipe has an OS form, every reader reads that.
+static iz piperead(Sched *s, Pipe *p, u8 *buf, iz len)
+{
+    if (p->osr != BADHANDLE) {
+        return taskread(s, p->osr, buf, len);
+    }
+    return pipereadraw(s, p, buf, len);
 }
 
 // Write all bytes. Returns 0 or an E_* error: E_PIPE without readers.
@@ -500,6 +521,8 @@ static i32 pipewrite(Sched *s, Pipe *p, u8 *buf, iz len)
     return 0;
 }
 
+static void endpump(Sched *, Task *);
+
 // Close one end of a pipe, waking whoever waits on the other side.
 static void pipeclose(Sched *s, Pipe *p, b32 writer)
 {
@@ -509,6 +532,17 @@ static void pipeclose(Sched *s, Pipe *p, b32 writer)
     } else {
         p->readers--;
         wakeall(s, &p->wwait);
+        if (p->pump && p->readers==p->pumping) {
+            // The last reader of its OS form: stop the pump, which then
+            // drops its own reference
+            b32   pumping = p->pumping;
+            Task *t = p->pump;
+            p->pump = 0;
+            os_close(s->os, p->osr);
+            p->osr = BADHANDLE;
+            endpump(s, t);
+            if (pumping) return;
+        }
     }
     if (!p->readers && !p->writers) {
         p->next = s->freepipes;
@@ -520,14 +554,29 @@ static void pipeclose(Sched *s, Pipe *p, b32 writer)
 // Pumps: tasks that copy between an in-memory Pipe or text and an OS
 // handle, for externals given a shell object (materialization).
 
-enum : i32 { PUMP_TOHANDLE, PUMP_FROMHANDLE, PUMP_TEXT };
+enum : i32 { PUMP_TOHANDLE, PUMP_FROMHANDLE, PUMP_TEXT, PUMP_TOBUF };
 
 struct Pump {
+    Pump  *next;     // free list
     i32    kind;
     Handle h;        // owned: closed when the pump ends
     Pipe  *pipe;     // owned end: the read end for PUMP_TOHANDLE
     Str    text;     // PUMP_TEXT: bytes to write
+    Buf   *buf;      // PUMP_TOBUF: where to append what h delivers
 };
+
+// A Pump that outlives the arena of whoever starts it, pooled.
+static Pump *newpump(Sched *s)
+{
+    Pump *p = s->freepumps;
+    if (p) {
+        s->freepumps = p->next;
+        *p = {};
+    } else {
+        p = alloc<Pump>(&s->a);
+    }
+    return p;
+}
 
 static void pumpmain(Task *t)
 {
@@ -537,9 +586,12 @@ static void pumpmain(Task *t)
     switch (p->kind) {
     case PUMP_TOHANDLE:
         for (;;) {
-            iz n = piperead(s, p->pipe, buf, countof(buf));
+            iz n = pipereadraw(s, p->pipe, buf, countof(buf));
             if (n<=0 || taskwrite(s, p->h, buf, n)) break;
         }
+        os_close(s->os, p->h);
+        p->h = BADHANDLE;  // EOF for the OS form at once
+        p->pipe->pumping = 0;
         pipeclose(s, p->pipe, 0);
         break;
     case PUMP_FROMHANDLE:
@@ -552,8 +604,15 @@ static void pumpmain(Task *t)
     case PUMP_TEXT:
         taskwrite(s, p->h, p->text.data, p->text.len);
         break;
+    case PUMP_TOBUF:
+        for (;;) {
+            iz n = taskread(s, p->h, buf, countof(buf));
+            if (n <= 0) break;
+            print(p->buf, {buf, n});
+        }
+        break;
     }
-    os_close(s->os, p->h);
+    if (p->h != BADHANDLE) os_close(s->os, p->h);
 }
 
 // Start a pump; the Pump must stay in place until it is joined.
@@ -567,4 +626,34 @@ static Task *spawnpump(Sched *s, Pump *p)
         }
     }
     return taskspawn(s, pumpmain, p, SMALLSTACK);
+}
+
+// Give a pipe an OS form for a program to read: an OS pipe fed by a
+// pump, which every reader reads from then on, so that what a program
+// leaves unread stays for the next reader, as with a real pipe shared
+// across processes. Returns its read handle, or BADHANDLE.
+static Handle pipeosread(Sched *s, Pipe *p)
+{
+    if (p->osr != BADHANDLE) return p->osr;
+    OsPipe op = os_pipe(s->os);
+    if (op.err) return BADHANDLE;
+    Pump *pp = newpump(s);
+    pp->kind = PUMP_TOHANDLE;
+    pp->h    = op.w;
+    pp->pipe = p;
+    p->osr     = op.r;
+    p->pumping = 1;
+    p->pump    = spawnpump(s, pp);
+    return p->osr;
+}
+
+// Stop a pump from newpump, once its handle's other end is closed,
+// and return its Pump to the pool.
+static void endpump(Sched *s, Task *t)
+{
+    Pump *p = (Pump *)t->arg;
+    taskcancel(s, t);
+    taskjoin(s, t);
+    p->next = s->freepumps;
+    s->freepumps = p;
 }

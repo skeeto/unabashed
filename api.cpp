@@ -139,6 +139,9 @@ static b32     os_write(Os *, Handle, u8 *, iz);
 static iz      os_read(Os *, Handle, u8 *, iz);
 // Open a file by absolute path. Mode applies when creating.
 static Opened  os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode);
+// A new empty file, open for reading and writing, with no name: it is
+// deleted once its last handle closes (large here-documents).
+static Opened  os_tempfile(Os *, Arena scratch);
 static void    os_close(Os *, Handle);
 // A second handle to the same open file.
 static Handle  os_dup(Os *, Handle);

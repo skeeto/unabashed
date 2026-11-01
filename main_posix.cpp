@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -118,6 +119,44 @@ static Opened os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode)
         return r;
     }
     r.h = (Handle)highfd(fd);
+    return r;
+}
+
+static Opened os_tempfile(Os *os, Arena scratch)
+{
+    // As bash: created in TMPDIR (or /tmp), then unlinked, readable
+    // only by the user
+    Str dir = {};
+    char *t = getenv("TMPDIR");
+    if (t && *t) {
+        dir.data = (u8 *)t;
+        for (; t[dir.len]; dir.len++) {}
+    }
+    dir = dir.len ? dir : Str("/tmp");
+    static u32 counter;
+    Opened r = {};
+    for (i32 try_ = 0; try_ < 100; try_++) {
+        Buf b(&scratch, dir.len+64);
+        print(&b, dir);
+        print(&b, "/sh-thd.");
+        print(&b, (i64)getpid());
+        print(&b, ".");
+        print(&b, (i64)(++counter ^ (u32)os_now(os)));
+        char *path = cpath(&scratch, finish(&b));
+        i32 fd = open(path, O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0600);
+        if (fd < 0 && errno==EEXIST) continue;
+        if (fd < 0) {
+            r.h   = BADHANDLE;
+            r.err = errno;
+            return r;
+        }
+        unlink(path);
+        fchmod(fd, 0400);
+        r.h = (Handle)highfd(fd);
+        return r;
+    }
+    r.h   = BADHANDLE;
+    r.err = EEXIST;
     return r;
 }
 

@@ -25,7 +25,8 @@ struct Vproc {
     byte  *storebase;
     Arena *pool[NPOOL];   // scratch arenas by depth, kept across uses
     Shell *sh;
-    Node  *node;          // what it runs
+    Node  *node;          // what it runs, or else
+    Str    src;           // source text to parse and run (procsubs)
 };
 
 static Vproc *newvproc(Sched *s)
@@ -266,6 +267,7 @@ static Shell *vproccopy(Shell *sh, Vproc *m)
     c->current  = 0;
     c->compargs = {};
     c->capdepth = 0;
+    c->psubs    = 0;
     c->flow     = FLOW_NONE;
     c->exiting  = 0;
     c->subshell++;
@@ -285,17 +287,21 @@ static void vprocmain(Task *t)
     sh->stacktop = &stackmark;
     iz room = t->stack - ((iz)1<<16);  // the parent's limit, if smaller
     sh->stackmax = sh->stackmax<room ? sh->stackmax : room;
-    if (!__builtin_setjmp(top.jmp)) {
+    if (__builtin_setjmp(top.jmp)) {
+        // escaped
+    } else if (m->node) {
         execute(sh, m->node, *scratchat(sh, 0));
+    } else {
+        // A procsub: as a command substitution, parsed only now
+        sh->tracedepth++;
+        sh->opt[O_VERBOSE] = 0;
+        runsource(sh, m->src, "process substitution", *scratchat(sh, 0), 0, sh->line);
     }
     t->status = sh->status;
 
     unwind(sh, 0);
-    Fdtab *fds = sh->fds;
-    for (i32 fd = 0; fd < fds->top; fd++) {
-        fileunref(sh, fds->fd[fd]);
-        fds->fd[fd] = 0;
-    }
+    closeall(sh);
+    joinpsubs(sh);
     releasefuncs(sh, sh->funcs);
     for (i32 i = 0; i < NPOOL; i++) m->pool[i] = sh->pool[i];
     Sched *s = sh->sched;
@@ -307,13 +313,10 @@ static void vprocmain(Task *t)
 // with its standard input and output replaced when in or out is given
 // (the caller keeps its references to them). The caller must join the
 // returned task, whose status is the subshell's.
-static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops)
+static Vproc *vprocwith(Shell *sh, File *in, File *out)
 {
-    Sched *s = sh->sched;
-    Vproc *m = newvproc(s);
+    Vproc *m = newvproc(sh->sched);
     Shell *c = vproccopy(sh, m);
-    if (newloops) c->loopdepth = 0;
-    c->simplestages += node->kind == N_SIMPLE;
     Fdtab *t = c->fds;
     if (in) {
         fileunref(c, t->fd[0]);
@@ -327,12 +330,158 @@ static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops
         if (t->fd[fd] && fd>=t->top) t->top = fd + 1;
     }
     m->sh   = c;
+    m->node = 0;
+    m->src  = {};
+    return m;
+}
+
+static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops)
+{
+    Vproc *m = vprocwith(sh, in, out);
+    Shell *c = m->sh;
+    if (newloops) c->loopdepth = 0;
+    c->simplestages += node->kind == N_SIMPLE;
     m->node = copynode(&m->perm, node);
     if (m->node && m->node->kind==N_SUBSHELL) {
         // ( list ) runs in the vproc's own subshell, not a nested one
         m->node->kind = N_GROUP;
     }
-    return taskspawn(s, vprocmain, m, BIGSTACK);
+    return taskspawn(sh->sched, vprocmain, m, BIGSTACK);
+}
+
+
+// Process substitution
+//
+// <(list) and >(list) run list in a fiber vproc whose standard output
+// (or input) is one end of a pipe. The other end opens in the shell at
+// a free descriptor from 63 down, as bash, and the word becomes
+// /dev/fd/N: the shell's redirections and builtins (openfile) and the
+// platform's programs (vos, POSIX) open that name as a duplicate. The
+// descriptor closes when the command ends (an Undo record), but the
+// vproc runs on, unwaited as in bash, on its creator's list (psubs):
+// finished ones are reaped when the next starts; wait joins one; the
+// end of the creating subshell, vproc or shell joins the rest.
+
+// Does a procsub body start with a likely external command? Then its
+// pipe is an OS pipe, which the program writes directly. A wrong guess
+// costs only speed.
+static b32 likelyexternaltext(Shell *sh, Str body)
+{
+    iz i = 0;
+    for (; i<body.len && (body[i]==' ' || body[i]=='\t'); i++) {}
+    iz beg = i;
+    for (; i<body.len && body[i]!=' ' && body[i]!='\t' && body[i]!='\n'; i++) {
+        u8 c = body[i];
+        if (!alnum(c) && c!='_' && c!='-' && c!='.' && c!='/' && c!='+') return 0;
+    }
+    Str name = span(body.data+beg, body.data+i);
+    for (iz k = 0; k < countof(reserved); k++) {
+        if (reserved[k].word == name) return 0;
+    }
+    return name.len && !findbuiltin(name) && !findfunc(sh, name);
+}
+
+// Join finished procsubs.
+static void reappsubs(Shell *sh)
+{
+    for (Task **p = &sh->psubs; *p;) {
+        Task *t = *p;
+        if (t->state == TS_DONE) {
+            *p = t->sib;
+            sh->psubpid    = t->pid;
+            sh->psubstatus = taskjoin(sh->sched, t);
+        } else {
+            p = &t->sib;
+        }
+    }
+}
+
+// Join every procsub started at this level, once its descriptors are
+// closed.
+static void joinpsubs(Shell *sh)
+{
+    while (sh->psubs) {
+        Task *t = sh->psubs;
+        sh->psubs = t->sib;
+        taskjoin(sh->sched, t);
+    }
+}
+
+// wait for a procsub by its pid. Sets *found if pid was one.
+static i32 waitpsub(Shell *sh, i64 pid, b32 *found)
+{
+    *found = 1;
+    for (Task **p = &sh->psubs; *p; p = &(*p)->sib) {
+        Task *t = *p;
+        if (t->pid == pid) {
+            *p = t->sib;
+            sh->psubpid    = pid;
+            sh->psubstatus = taskjoin(sh->sched, t);
+            return sh->psubstatus;
+        }
+    }
+    if (pid && pid==sh->psubpid) return sh->psubstatus;
+    *found = 0;
+    return 127;
+}
+
+// Close every descriptor, as a process does when it exits.
+static void closeall(Shell *sh)
+{
+    Fdtab *fds = sh->fds;
+    for (i32 fd = 0; fd < fds->top; fd++) {
+        fileunref(sh, fds->fd[fd]);
+        fds->fd[fd] = 0;
+    }
+    fds->top = 0;
+}
+
+static Str procsubst(Shell *sh, Arena *a, Str body, b32 output)
+{
+    if (sh->psubs) {
+        // Earlier ones may finish now, as forked children would have
+        yield(sh->sched);
+        reappsubs(sh);
+    }
+    Fdtab *t  = sh->fds;
+    i32    fd = 63;
+    for (; fd>3 && t->fd[fd]; fd--) {}
+    if (t->fd[fd]) {
+        for (fd = 64; fd<FDMAX && t->fd[fd]; fd++) {}
+    }
+    File *mine   = 0;
+    File *theirs = 0;
+    if (fd < FDMAX && likelyexternaltext(sh, body)) {
+        OsPipe p = os_pipe(sh->os);
+        if (!p.err) {
+            mine   = newfile(sh, F_OS, output ? OF_WRITE : OF_READ);
+            mine->h   = output ? p.w : p.r;
+            theirs = newfile(sh, F_OS, output ? OF_READ : OF_WRITE);
+            theirs->h = output ? p.r : p.w;
+        }
+    } else if (fd < FDMAX) {
+        Pipe *p = newpipe(sh->sched);
+        mine   = newfile(sh, F_PIPE, output ? OF_WRITE : OF_READ);
+        mine->pipe   = p;
+        theirs = newfile(sh, F_PIPE, output ? OF_READ : OF_WRITE);
+        theirs->pipe = p;
+    }
+    if (!mine) {
+        shellerror(sh, *a, "cannot make pipe for process substitution");
+        return {};
+    }
+
+    Vproc *m = vprocwith(sh, output ? theirs : 0, output ? 0 : theirs);
+    fileunref(sh, theirs);
+    m->src = clone(&m->perm, body);
+    Task *task = taskspawn(sh->sched, vprocmain, m, BIGSTACK);
+    task->pid  = m->sh->bashpid;
+    task->sib  = sh->psubs;
+    sh->psubs  = task;
+    sh->lastbg = task->pid;  // $!, as bash
+
+    fdsetpsub(sh, fd, mine);
+    return concat(a, "/dev/fd/", fmti64(a, fd));
 }
 
 
@@ -371,7 +520,8 @@ static b32 directstage(Shell *sh, Arena scratch, Node *n, b32 first)
     }
     Fdtab *t = sh->fds;
     for (i32 fd = first ? 0 : 2; fd < t->top; fd++) {
-        if (fd!=1 && t->fd[fd] && t->fd[fd]->kind!=F_OS) return 0;
+        File *f = t->fd[fd];
+        if (fd!=1 && f && f->kind!=F_OS && f->kind!=F_CAPTURE) return 0;
     }
     Word *w = n->words;
     while (isassignword(w)) w = w->next;

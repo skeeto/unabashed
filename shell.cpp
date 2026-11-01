@@ -236,6 +236,15 @@ struct File {
     b32    ownmem;   // mem is store memory to free with the file
 };
 
+// A command substitution's output: what its File (F_CAPTURE) points at.
+// Writers that outlive a synchronous call, such as a program started
+// without waiting, get an OS pipe whose pump appends here; the capture
+// ends once every pump has seen EOF from every writer (capturewriter).
+struct Capture {
+    Buf   b;         // first, so a File's Buf * is the Capture
+    Task *pumps;     // linked by Task.sib
+};
+
 enum { FDMAX = 1024, FDUSER = 10 };
 
 struct Fdtab {
@@ -247,6 +256,7 @@ struct Undo {        // a redirection to reverse
     Undo *next;
     i32   fd;
     File *old;       // the descriptor's previous file, or null
+    b32   psub;      // a procsub's /dev/fd/N: in the store, freed on unwind
 };
 
 
@@ -401,12 +411,36 @@ struct Shell {
     i32      optchar;      // getopts: next option letter in $OPTIND's word
     b32      ingetopts;    // its own OPTIND updates keep the position
     Slice<u8> compargs;    // declaration builtin: which args are name=(...)
+    Task    *psubs;        // procsubs started at this subshell level, to join
+    i64      psubpid;      // the last procsub joined, and its status,
+    i32      psubstatus;   // for a repeated wait
 };
 
 
 // Diagnostics
 
 [[noreturn]] static void escape(Shell *, i32 why);
+
+// Before the shell appends to a capture that programs also write
+// through pumps, let the pumps append whatever has arrived, so that
+// output keeps the order in which it was written.
+static void capturedrain(Sched *s, Capture *c)
+{
+    for (;;) {
+        while (s->npending) {
+            Io *io = os_wait(s->os, WAIT_POLL);
+            if (!io) break;
+            s->npending--;
+            wake(s, (Task *)io->ctx);
+        }
+        b32 ready = 0;
+        for (Task *t = c->pumps; t; t = t->sib) {
+            ready |= t->state == TS_READY;
+        }
+        if (!ready) return;
+        yield(s);
+    }
+}
 
 // A write to a pipe without readers: as a process killed by SIGPIPE,
 // the vproc ends silently with status 141.
@@ -430,6 +464,9 @@ static b32 fdwrite(Shell *sh, i32 fd, Str s)
         err = taskwrite(sh->sched, f->h, s.data, s.len);
         break;
     case F_CAPTURE:
+        if (((Capture *)f->cap)->pumps) {
+            capturedrain(sh->sched, (Capture *)f->cap);
+        }
         print(f->cap, s);
         return 1;
     case F_MEM:
@@ -597,6 +634,7 @@ static void fdset(Shell *sh, i32 fd, File *f, b32 keep, Arena *scratch)
         Undo *u = keep ? (Undo *)salloc(sh->store, sizeof(Undo)) : alloc<Undo>(scratch);
         u->fd   = fd;
         u->old  = t->fd[fd];
+        u->psub = 0;
         u->next = sh->undo;
         sh->undo = u;
     }
@@ -615,6 +653,43 @@ static void unwind(Shell *sh, Undo *to)
         fileunref(sh, t->fd[u->fd]);
         t->fd[u->fd] = u->old;
         sh->undo = u->next;
+        if (u->psub) sfree(sh->store, u, sizeof(Undo));
+    }
+    while (t->top && !t->fd[t->top-1]) {
+        t->top--;
+    }
+}
+
+// Open a procsub's descriptor until the command ends: its record is in
+// the store, since expansions may run in short-lived arenas.
+static void fdsetpsub(Shell *sh, i32 fd, File *f)
+{
+    Fdtab *t = sh->fds;
+    Undo  *u = (Undo *)salloc(sh->store, sizeof(Undo));
+    u->fd   = fd;
+    u->old  = t->fd[fd];
+    u->psub = 1;
+    u->next = sh->undo;
+    sh->undo = u;
+    t->fd[fd] = f;
+    if (fd >= t->top) t->top = fd + 1;
+}
+
+// Close the procsub descriptors opened since a saved point, keeping
+// the other redirections (exec makes those permanent).
+static void closepsubs(Shell *sh, Undo *to)
+{
+    Fdtab *t = sh->fds;
+    for (Undo **p = &sh->undo; *p != to;) {
+        Undo *u = *p;
+        if (!u->psub) {
+            p = &u->next;
+            continue;
+        }
+        *p = u->next;
+        fileunref(sh, t->fd[u->fd]);
+        t->fd[u->fd] = u->old;
+        sfree(sh->store, u, sizeof(Undo));
     }
     while (t->top && !t->fd[t->top-1]) {
         t->top--;

@@ -30,6 +30,8 @@ enum : i32 {
     FILE_ATTRIBUTE_NORMAL        = 0x80,
     FILE_ATTRIBUTE_READONLY      = 1,
     FILE_ATTRIBUTE_REPARSE_POINT = 0x400,
+    FILE_ATTRIBUTE_TEMPORARY     = 0x100,
+    FILE_FLAG_DELETE_ON_CLOSE    = 0x04000000,
     FILE_FLAG_BACKUP_SEMANTICS   = 0x02000000,
     FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000,
     FILE_READ_ATTRIBUTES         = 0x80,
@@ -162,6 +164,7 @@ W32(b32,    GetConsoleMode(uz, i32 *));
 W32(i32,    GetCurrentDirectoryW(i32, c16 *));
 W32(uz,     GetCurrentProcess());
 W32(i32,    GetCurrentProcessId());
+W32(i32,    GetTempPathW(i32, c16 *));
 W32(c16 *,  GetEnvironmentStringsW());
 W32(b32,    GetExitCodeProcess(uz, i32 *));
 W32(b32,    GetFileAttributesExW(c16 *, i32, FileAttributes *));
@@ -515,6 +518,44 @@ static iz os_read(Os *os, Handle h, u8 *buf, iz len)
         return GetLastError()==ERROR_BROKEN_PIPE ? 0 : -1;
     }
     return n;
+}
+
+static Opened os_tempfile(Os *os, Arena)
+{
+    // A uniquely named file in the temporary directory, deleted by the
+    // system when its last handle closes
+    Opened r = {};
+    r.h = BADHANDLE;
+    c16 path[300];
+    i32 len = GetTempPathW(260, path);
+    if (len<=0 || len>=260) {
+        r.err = E_NOENT;
+        return r;
+    }
+    static u32 counter;
+    for (i32 try_ = 0; try_ < 100; try_++) {
+        u64 tag = ((u64)GetCurrentProcessId()<<32) ^ ++counter ^ (u64)os_now(os);
+        i32 n = len;
+        for (char c : "sh-thd-") if (c) path[n++] = (c16)c;
+        for (i32 i = 0; i < 16; i++) {
+            path[n++] = (c16)"0123456789abcdef"[(tag >> (60 - 4*i)) & 15];
+        }
+        path[n] = 0;
+        uz h = CreateFileW(path, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_ALL, 0,
+                           CREATE_NEW,
+                           FILE_ATTRIBUTE_TEMPORARY|FILE_FLAG_DELETE_ON_CLOSE, 0);
+        if (h != INVALID_HANDLE_VALUE) {
+            r.h = (Handle)h;
+            return r;
+        }
+        i32 code = GetLastError();
+        if (code != 80 && code != 183) {  // ERROR_FILE_EXISTS, ERROR_ALREADY_EXISTS
+            r.err = errnum(code);
+            return r;
+        }
+    }
+    r.err = E_EXIST;
+    return r;
 }
 
 static Opened os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode)

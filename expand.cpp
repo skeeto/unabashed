@@ -58,6 +58,7 @@ struct X {
 
 // The runner side: defined with the executor.
 static Str  runcapture(Shell *, Arena *, Str src, b32 backquote);
+static Str  procsubst(Shell *, Arena *, Str body, b32 output);
 static void expansionerror(Shell *, Arena, Str msg);
 static void fatalerror(Shell *, Arena, Str msg);
 static Arith evalarith(Shell *, Arena *, Str);
@@ -1628,6 +1629,18 @@ static void expandinto(X *x, Str s, i32 ctx)
                 i += 2;
                 continue;
             }
+        }
+
+        if ((c=='<' || c=='>') && i+1<s.len && s[i+1]=='(' && !dq && !hd &&
+                !(ctx & XC_ARITH)) {
+            // Process substitution: the parser kept <(...) only where
+            // it is one
+            iz  e    = skipdollar(sh, x->a, s, i);
+            Str body = span(s.data+i+2, s.data+(e>i+2 ? e-1 : e));
+            xput(x, procsubst(sh, x->a, body, c=='>'), XF_QUOTED);
+            x->quoted = 1;
+            i = e;
+            continue;
         }
 
         if ((ctx & XC_ASSIGN) && !dq && c==':' && i+1<s.len && s[i+1]=='~') {

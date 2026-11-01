@@ -496,12 +496,59 @@ static void vfinish(Os *os)
 
 // Platform API over the vos
 
+// The descriptor named by /dev/fd/N or /dev/std*, or -1.
+static i32 vdevfd(Str path)
+{
+    if (path == "/dev/stdin")  return 0;
+    if (path == "/dev/stdout") return 1;
+    if (path == "/dev/stderr") return 2;
+    if (!startswith(path, "/dev/fd/") || path.len==8 || path.len>12) return -1;
+    i32 n = 0;
+    for (iz i = 8; i < path.len; i++) {
+        if (!digit(path[i])) return -1;
+        n = n*10 + (path[i] - '0');
+    }
+    return n;
+}
+
 static Opened os_open(Os *os, Arena, Str path, i32 flags, i32 mode)
 {
     Vos   *v = osvos(os);
     Opened r = {};
     r.h = BADHANDLE;
     v->clock += 1000;
+    i32 fd = vdevfd(path);
+    if (fd>=0 && v->cur) {
+        // As Linux, /dev/fd/N reopens the process's descriptor: a pipe
+        // end as a duplicate, a file as a new description of it
+        Handle h = fd<countof(v->procs[0].ctx.fd) ? v->procs[v->cur].ctx.fd[fd] : BADHANDLE;
+        VFile *f = vfile(v, h);
+        if (!f && h<3) {
+            r.h = os_dup(os, h);
+            return r;
+        } else if (!f) {
+            r.err = E_NOENT;
+            return r;
+        } else if (f->kind!=VK_FILE && f->kind!=VK_DIR) {
+            r.h = os_dup(os, h);
+            return r;
+        }
+        Handle n = vnewhandle(v);
+        if (n == BADHANDLE) {
+            r.err = E_MFILE;
+            return r;
+        }
+        VFile *nf = v->files + n;
+        nf->kind  = f->kind;
+        nf->flags = flags;
+        nf->node  = f->node;
+        if ((flags&OF_TRUNC) && f->node->type==FT_FILE) {
+            f->node->data.len = 0;
+            f->node->mtime    = v->clock;
+        }
+        r.h = n;
+        return r;
+    }
     if (path == "/dev/null") {
         Handle h = vnewhandle(v);
         if (h == BADHANDLE) { r.err = E_MFILE; return r; }
@@ -549,6 +596,27 @@ static Opened os_open(Os *os, Arena, Str path, i32 flags, i32 mode)
         n->mtime    = v->clock;
     }
     r.h = h;
+    return r;
+}
+
+static Opened os_tempfile(Os *os, Arena)
+{
+    // A node in no directory, as an unlinked file: bash's heredoc file
+    // is left readable only by its owner
+    Vos   *v = osvos(os);
+    Opened r = {};
+    v->clock += 1000;
+    r.h = vnewhandle(v);
+    if (r.h == BADHANDLE) {
+        r.err = E_MFILE;
+        return r;
+    }
+    VNode *n = vnew(v, 0, "", FT_FILE, 0400);
+    n->nlink = 0;
+    VFile *f = v->files + r.h;
+    f->kind  = VK_FILE;
+    f->flags = OF_READ|OF_WRITE;
+    f->node  = n;
     return r;
 }
 
@@ -733,6 +801,14 @@ static Stat vstat(VNode *n)
 static Stat os_stat(Os *os, Arena, Str path, b32 follow)
 {
     Vos *v = osvos(os);
+    i32 fd = vdevfd(path);
+    if (fd>=0 && v->cur) {
+        Handle h = fd<countof(v->procs[0].ctx.fd) ? v->procs[v->cur].ctx.fd[fd] : BADHANDLE;
+        if (h<3 || vfile(v, h)) return os_fstat(os, h);
+        Stat r = {};
+        r.err = E_NOENT;
+        return r;
+    }
     if (path == "/dev/null") {
         Stat r = {};
         r.type = FT_CHAR;
