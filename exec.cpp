@@ -1044,6 +1044,8 @@ static u32 hashcmdbucket(Str name)
     return h & (NHASHCMD - 1);
 }
 
+static i32 setoptionbyname(Shell *, Str name, b32 on);  // builtins.cpp
+
 static HashCmd *hashfind(Shell *sh, Str name)
 {
     if (!sh->cmdhash) return 0;
@@ -1545,7 +1547,11 @@ static void leaveframe(Shell *sh, Frame *f)
 {
     poplocals(sh, f);
     if (f->opts) {
+        b32 eof = sh->opt[O_IGNOREEOF];
         for (i32 i = 0; i < O_COUNT; i++) sh->opt[i] = f->opts[i];
+        if (eof != sh->opt[O_IGNOREEOF]) {
+            setoptionbyname(sh, "ignoreeof", sh->opt[O_IGNOREEOF]);  // and IGNOREEOF
+        }
         sfree(sh->store, f->opts, O_COUNT*(iz)sizeof(b32));
     }
     sh->funcdepth--;
