@@ -1436,6 +1436,7 @@ static Slice<Str> makeenv(Shell *sh, Arena *a)
 {
     Slice<Str> env = {};
     collectexports(sh, sh->vars, a, &env);
+    for (iz i = 0; i < sh->nbadenv; i++) env = push(a, env, sh->badenv[i]);
     exportfuncs(sh->funcs, a, &env);
     sort(env.data, env.len, envless, *a);
     return env;

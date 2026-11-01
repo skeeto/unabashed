@@ -126,6 +126,7 @@ static Alias *copyaliases(Store *st, Alias *a)
     Alias *c = (Alias *)salloc(st, sizeof(Alias));
     c->name  = sclone(st, a->name);
     c->value = sclone(st, a->value);
+    c->seq   = a->seq;
     for (i32 i = 0; i < 4; i++) {
         c->child[i] = copyaliases(st, a->child[i]);
     }
@@ -292,6 +293,11 @@ static Shell *vproccopy(Shell *sh, Vproc *m)
     c->lastarg    = {(u8 *)salloc(st, c->lastargcap), sh->lastarg.len};
     copybytes(c->lastarg.data, sh->lastarg.data, sh->lastarg.len);
     c->host       = sclone(st, sh->host);
+    c->badenv     = (Str *)salloc(st, (sh->nbadenv ? sh->nbadenv : 1)*(iz)sizeof(Str));
+    for (iz i = 0; i < sh->nbadenv; i++) c->badenv[i] = sclone(st, sh->badenv[i]);
+    c->bltname    = {};  // the running builtin's, in the parent's memory
+    c->bltargs    = 0;
+    c->nbltargs   = 0;
     Arena tmp = *a;
     c->cmdtext    = sclone(st, cmdtext(sh, &tmp));
     c->cmdnode    = 0;

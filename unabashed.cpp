@@ -309,7 +309,15 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
             importfunc(sh, scratch, c.head, c.tail);
             continue;
         }
-        if (!c.ok || !validvarname(c.head)) continue;
+        if (c.ok && !validvarname(c.head)) {
+            // not a variable, but passed on to programs, as bash does
+            Str *n = (Str *)salloc(sh->store, (sh->nbadenv+1)*(iz)sizeof(Str));
+            for (iz k = 0; k < sh->nbadenv; k++) n[k] = sh->badenv[k];
+            n[sh->nbadenv++] = sclone(sh->store, info->env[i]);
+            sh->badenv = n;
+            continue;
+        }
+        if (!c.ok) continue;
         setvar(sh, scratch, c.head, c.tail, SV_FORCE);
         setattrs(sh, c.head, V_EXPORT, 0);
     }

@@ -422,6 +422,8 @@ struct Shell {
     u64      dynread;      // dynamic variables read so far, by DYN_ bit
     i32      lastrandom;   // RANDOM's last value, for listings
     i64      lastlineno;   // and LINENO's
+    Str     *badenv;       // inherited entries that name no variable
+    iz       nbadenv;
     Undo    *undo;
     Escape  *esc;
     Node    *current;      // simple command being run, for messages
