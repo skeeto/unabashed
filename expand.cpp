@@ -2322,6 +2322,12 @@ static Str expandpattern(Shell *sh, Arena *a, Str text, i32 ctx = 0)
     return expandpat(x, text, ctx);
 }
 
+// Is byte k of a field the unquoted character c?
+static b32 unquotedat(XField f, iz k, u8 c)
+{
+    return k<f.data.len && f.data[k]==c && !(f.flags[k] & XF_QUOTED);
+}
+
 static b32 erespecial(u8 c)
 {
     switch (c) {
@@ -2365,9 +2371,8 @@ static Str expandregex(Shell *sh, Arena *a, Str text, i32 ctx = 0)
         iz mark = b.len;
         iz j    = i + 1;
         putbyte(&b, '[');
-        #define UNQ(k, ch) ((k)<d.len && d[k]==(ch) && !(f.flags[k] & XF_QUOTED))
-        if (UNQ(j, '^')) putbyte(&b, d[j++]);
-        if (UNQ(j, ']')) putbyte(&b, d[j++]);
+        if (unquotedat(f, j, '^')) putbyte(&b, d[j++]);
+        if (unquotedat(f, j, ']')) putbyte(&b, d[j++]);
         b32 closed = 0;
         for (; j < d.len; j++) {
             u8 e = d[j];
@@ -2376,21 +2381,21 @@ static Str expandregex(Shell *sh, Arena *a, Str text, i32 ctx = 0)
             } else if (e == ']') {
                 closed = 1;
                 break;
-            } else if (e=='[' && UNQ(j+1, ':')) {
+            } else if (e=='[' && unquotedat(f, j+1, ':')) {
                 print(&b, "[:");
                 j++;
                 cclass = 1;
-            } else if (cclass && e==':' && UNQ(j+1, ']')) {
+            } else if (cclass && e==':' && unquotedat(f, j+1, ']')) {
                 print(&b, ":]");
                 j++;
                 cclass = 0;
-            } else if (e=='[' && (UNQ(j+1, '=') || UNQ(j+1, '.'))) {
+            } else if (e=='[' && (unquotedat(f, j+1, '=') || unquotedat(f, j+1, '.'))) {
                 putbyte(&b, e);
                 putbyte(&b, d[++j]);
                 if (d[j] == '=') equiv = 1; else collsym = 1;
-                if (UNQ(j+1, ']')) putbyte(&b, d[++j]);
-            } else if ((equiv && e=='=' && UNQ(j+1, ']')) ||
-                       (collsym && e=='.' && UNQ(j+1, ']'))) {
+                if (unquotedat(f, j+1, ']')) putbyte(&b, d[++j]);
+            } else if ((equiv && e=='=' && unquotedat(f, j+1, ']')) ||
+                       (collsym && e=='.' && unquotedat(f, j+1, ']'))) {
                 putbyte(&b, e);
                 putbyte(&b, d[++j]);
                 if (e == '=') equiv = 0; else collsym = 0;
@@ -2398,7 +2403,6 @@ static Str expandregex(Shell *sh, Arena *a, Str text, i32 ctx = 0)
                 putbyte(&b, e);
             }
         }
-        #undef UNQ
         if (closed) {
             putbyte(&b, ']');
             i = j;
