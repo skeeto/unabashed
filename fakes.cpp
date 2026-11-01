@@ -42,6 +42,14 @@ struct OsIds {
 
 enum : i32 { UN_SYSNAME, UN_NODENAME, UN_RELEASE, UN_VERSION, UN_MACHINE };
 
+// Accumulate a decimal digit, saturating at max so that long digit
+// strings cannot overflow.
+static i64 fkaccum(i64 n, u8 c, i64 max = (i64)1<<40)
+{
+    n = n*10 + (c - '0');
+    return n<max ? n : max;
+}
+
 static i32   os_mkdir(Os *, Arena, Str path, i32 mode);   // mode less umask
 static i32   os_rmdir(Os *, Arena, Str path);
 static i32   os_unlink(Os *, Arena, Str path);            // not directories
@@ -5703,7 +5711,7 @@ static b32 fkodparse(FkProg *p, Str s, Slice<FkOdSpec> *specs)
                 else if (c == 'L') { sp.size = 8; i++; }
                 else if (digit(c)) {
                     i32 n = 0;
-                    for (; i<s.len && digit(s[i]); i++) n = n*10 + s[i] - '0';
+                    for (; i<s.len && digit(s[i]); i++) n = (i32)fkaccum(n, s[i], 1<<20);
                     if (n!=1 && n!=2 && n!=4 && n!=8) {
                         print(diag(p), "invalid type string ");
                         quote(&p->err, s);
@@ -8211,13 +8219,13 @@ static FkSedAddr fksedaddr(FkSedParse *sp, b32 second)
     u8 c = s[sp->i];
     if (digit(c)) {
         i64 n = 0;
-        for (; !fksedeof(sp) && digit(s[sp->i]); sp->i++) n = n*10 + s[sp->i] - '0';
+        for (; !fksedeof(sp) && digit(s[sp->i]); sp->i++) n = fkaccum(n, s[sp->i]);
         a.kind = SA_LINE;
         a.n    = n;
         if (!fksedeof(sp) && s[sp->i]=='~') {
             sp->i++;
             i64 st = 0;
-            for (; !fksedeof(sp) && digit(s[sp->i]); sp->i++) st = st*10 + s[sp->i] - '0';
+            for (; !fksedeof(sp) && digit(s[sp->i]); sp->i++) st = fkaccum(st, s[sp->i]);
             a.kind = SA_STEP;
             a.step = st;
         } else if (!n && !second) {
@@ -8226,7 +8234,7 @@ static FkSedAddr fksedaddr(FkSedParse *sp, b32 second)
     } else if ((c=='+' || c=='~') && second) {
         sp->i++;
         i64 n = 0;
-        for (; !fksedeof(sp) && digit(s[sp->i]); sp->i++) n = n*10 + s[sp->i] - '0';
+        for (; !fksedeof(sp) && digit(s[sp->i]); sp->i++) n = fkaccum(n, s[sp->i]);
         a.kind = c=='+' ? SA_PLUS : SA_MULT;
         a.n    = n;
     } else if (c == '$') {
@@ -8486,7 +8494,7 @@ static Slice<FkSedCmd> fksedparse(FkSedParse *sp)
         case 'q': case 'Q':
             fksedspaces(sp);
             for (; !fksedeof(sp) && digit(s[sp->i]); sp->i++) {
-                c.status = c.status*10 + s[sp->i] - '0';
+                c.status = (i32)fkaccum(c.status, s[sp->i], (i64)1<<30);
             }
             if (!fksedcmdend(sp)) return cmds;
             break;
@@ -8575,7 +8583,7 @@ static Slice<FkSedCmd> fksedparse(FkSedParse *sp)
                         }
                         i64 n = 0;
                         for (; !fksedeof(sp) && digit(s[sp->i]); sp->i++) {
-                            n = n*10 + s[sp->i] - '0';
+                            n = fkaccum(n, s[sp->i]);
                         }
                         if (!n) {
                             fksederr(sp, "number option to `s' command may not be zero");

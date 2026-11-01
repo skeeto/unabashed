@@ -1304,7 +1304,7 @@ static i32 b_pwd(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (args[i] == "-P") physical = 1;
         else if (args[i] == "-L") physical = 0;
         else if (args[i] == "--") break;
-        else if (args[i].len && args[i][0]=='-') {
+        else if (args[i].len>1 && args[i][0]=='-') {
             invalidoption(sh, scratch, "pwd", takehead(args[i], 2));
             return 2;
         }

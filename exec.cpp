@@ -419,7 +419,7 @@ static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
     if (startswith(name, "/dev/fd/") && name.len>8) {
         i64 n = 0;
         b32 num = 1;
-        for (iz i = 8; i < name.len; i++) {
+        for (iz i = 8; num && i<name.len; i++) {
             num &= digit(name[i]);
             n = n*10 + (name[i] - '0');
             if (n > FDMAX) num = 0;
