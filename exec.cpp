@@ -1329,15 +1329,37 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->sourcedepth = 0;
         sh->psubs       = 0;
         sh->capdepth++;
+        // As a new shell: what was ignored is ignored on entry, caught
+        // signals are reset, and only its own traps are listed
+        sh->hardign  |= ignoredsigs(sh);
+        sh->killsig   = 0;
+        sh->errexited = 0;
+        subshelltraps(sh);
+        sh->shown   = 0;
+        sh->bashpid = ++sh->lastpid;
+        Sigproc sig;
+        sigenter(sh, &sig, sh->bashpid, sh->sched->cur);
         if (!__builtin_setjmp(e.jmp)) {
             runsource(sh, src, name, *scratchat(sh, sh->capdepth), 1);
         }
+        if (!sh->execed && !sh->killsig && sh->traps) {
+            if (sh->errexited) unwindtemp(sh, saved.undo);
+            runexittrap(sh, *scratchat(sh, sh->capdepth));
+        }
         i32 status = sh->status;
+        i32 killed = sh->killsig;
+        i64 pid    = sh->bashpid;
+        sigleave(sh, &sig);
         unwind(sh, saved.undo);
         joinpsubs(sh);
         storeleave(sh->store, &w);
         for (i32 i = 0; i < NPOOL; i++) saved.pool[i] = sh->pool[i];
+        saved.lastpid = sh->lastpid;
         *sh = saved;
+        if (killed) {
+            sh->childsig = killed;
+            sh->childpid = pid;
+        }
         return status;
     }
     Stat s = os_stat(sh->os, a, absolute(sh, &a, path), 1);
@@ -1417,6 +1439,9 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     f.name = argv[0];
     f.line = sh->line;
     f.file = fn->code->file;
+    if (sh->traps) {
+        for (i32 k = 0; k < 3; k++) f.trapat[k] = sh->traps[TRAP_DEBUG+k].data;
+    }
     Args saved = sh->args;
     sh->args.v = argv + 1;
     sh->args.n = argc - 1;

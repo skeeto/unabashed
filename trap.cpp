@@ -254,17 +254,25 @@ static void runtrap(Shell *sh, i32 idx)
     // BASH_COMMAND once its node was freed: the store copy may be
     // replaced while the action runs (keepcmdtext)
     Str   cmdtext_ = cmdnode ? Str{} : clone(&a, sh->cmdtext);
+    i32   funcs    = sh->trapfuncs;
     sh->trapstatus = status;
+    sh->trapfuncs  = sh->funcdepth;
     sh->intrap++;
     i32   busy  = sh->trapbusy;
     if (idx >= TRAP_DEBUG) sh->trapbusy |= 1 << (idx-TRAP_DEBUG);
+    // BASH_TRAPSIG: the trap's number, while it runs
+    pushtemp(sh, a, "BASH_TRAPSIG", fmti64(&a, idx));
+    Value *v = lookup(sh, "BASH_TRAPSIG");
+    if (v) v->attrs &= ~V_EXPORT;
     sh->evaldepth++;
     runsource(sh, cmd, sh->iname, a, 0, sh->line);
     sh->evaldepth--;
+    poptemp(sh, "BASH_TRAPSIG");
     sh->capdepth = depth - 1;
     sh->trapbusy = busy;
     sh->intrap--;
     sh->trapstatus = saved;
+    sh->trapfuncs  = funcs;
     sh->line    = line;
     sh->current = current;
     sh->cmdnode = cmdnode;
@@ -322,7 +330,7 @@ static void checksigs(Shell *sh, Arena scratch)
 
 // After a wait that failed, perhaps because a signal interrupted it:
 // a signal that kills this level does so now. True if a signal was
-// the cause; then a read builtin's wait reports it (intrsig).
+// the cause.
 static b32 sigtaken(Shell *sh)
 {
     Task *t = sh->sched->cur;
@@ -342,9 +350,6 @@ static b32 sigtaken(Shell *sh)
             Arena a = *scratchat(sh, sh->capdepth+1);
             sigdie(sh, sig, a);
         }
-    }
-    if (pend && sh->intrread) {
-        sh->intrsig = __builtin_ctzll(pend) + 1;
     }
     return 1;
 }
@@ -423,38 +428,48 @@ static void runexittrap(Shell *sh, Arena)
     sh->exiting = 0;
     sh->flow    = FLOW_NONE;
     sh->trapstatus = status;
+    sh->trapfuncs  = sh->funcdepth;
     sh->intrap++;
+    pushtemp(sh, scratch, "BASH_TRAPSIG", "0");
+    Value *v = lookup(sh, "BASH_TRAPSIG");
+    if (v) v->attrs &= ~V_EXPORT;
     if (!__builtin_setjmp(e.jmp)) {
         runsource(sh, cmd, sh->iname, scratch, 0, sh->line);
         sh->status = status;
     }
+    poptemp(sh, "BASH_TRAPSIG");
     sh->intrap--;
     sh->esc     = e.up;
     sh->exiting = 1;
 }
 
-// ERR: after a command fails where set -e would act. Not in functions
-// and subshells without errtrace (subshells reset it).
+// Should DEBUG, ERR or RETURN run now? Each runs once at a time, and in
+// a function only if the function set it, or with functrace (errtrace
+// for ERR): a caller's is not inherited.
+static b32 pseudotrap(Shell *sh, i32 idx, b32 opt)
+{
+    i32 k = idx - TRAP_DEBUG;
+    if (!trapset(sh, idx) || (sh->trapbusy & 1<<k)) return 0;
+    return !sh->funcdepth || opt || !sh->frame || sh->traps[idx].data!=sh->frame->trapat[k];
+}
+
+// ERR: after a command fails where set -e would act. Subshells reset
+// it without errtrace.
 static void runerrtrap(Shell *sh)
 {
-    if (!trapset(sh, TRAP_ERR) || (sh->trapbusy & 1<<(TRAP_ERR-TRAP_DEBUG))) return;
-    if (sh->funcdepth && !sh->opt[O_ERRTRACE]) return;
-    runtrap(sh, TRAP_ERR);
+    if (pseudotrap(sh, TRAP_ERR, sh->opt[O_ERRTRACE])) runtrap(sh, TRAP_ERR);
 }
 
-// DEBUG: before a simple command, (( )) or [[ ]].
-static void rundebugtrap(Shell *sh, Arena scratch)
+// DEBUG: before a simple command, (( )), [[ ]] or a for iteration.
+static void rundebugtrap(Shell *sh, Arena)
 {
-    if (!trapset(sh, TRAP_DEBUG) || (sh->trapbusy & 1)) return;
-    if (sh->funcdepth && !sh->opt[O_FUNCTRACE]) return;
-    runtrap(sh, TRAP_DEBUG);
+    if (pseudotrap(sh, TRAP_DEBUG, sh->opt[O_FUNCTRACE])) runtrap(sh, TRAP_DEBUG);
 }
 
-// RETURN: as a function (with functrace) or a sourced file returns.
-static void runreturntrap(Shell *sh, Arena scratch)
+// RETURN: as a function or a sourced file returns.
+static void runreturntrap(Shell *sh, Arena)
 {
-    if (!trapset(sh, TRAP_RETURN) || (sh->trapbusy & 1<<(TRAP_RETURN-TRAP_DEBUG))) return;
-    if (sh->funcdepth && !sh->opt[O_FUNCTRACE]) return;
+    if (!pseudotrap(sh, TRAP_RETURN, sh->opt[O_FUNCTRACE])) return;
     i32 flow = sh->flow;
     sh->flow = FLOW_NONE;
     runtrap(sh, TRAP_RETURN);
@@ -473,7 +488,7 @@ static b32 longreport(Shell *sh, i32 sig)
 // the line and the pid unless longreport says otherwise.
 static void reportsig(Shell *sh, Arena scratch, i32 sig, i64 pid, Str text)
 {
-    if (sig==2 || sig==13 || sig<=0 || sig>=NSIGNAL) return;
+    if (sig==2 || sig==13 || sig<=0 || sig>=NSIGNAL || sh->noreport) return;
     Str desc = sig<32 ? sigdescs[sig]
              : sig<34 ? concat(&scratch, "Unknown signal ", fmti64(&scratch, sig))
              : concat(&scratch, "Real-time signal ", fmti64(&scratch, sig-34));
@@ -563,6 +578,10 @@ static i32 b_trap(Shell *sh, Str *args, iz nargs, Arena scratch)
     if (list) {
         siglisting(sh, scratch);
         return 0;
+    }
+    if (action && print_) {
+        builtinerror(sh, scratch, "trap", "cannot specify both -p and -P");
+        return 2;
     }
     if (action && i==nargs) {
         builtinerror(sh, scratch, "trap", "-P requires at least one signal name");
@@ -757,7 +776,7 @@ static void reportpipeline(Shell *sh, Arena scratch, Node **stages, i32 n, i32 *
                            i64 *pids, Node *job)
 {
     i32 sig = (statuses[n-1] & 255) - 128;
-    if (sig==2 || sig==13) return;
+    if (sig==2 || sig==13 || sh->noreport) return;
     if (!longreport(sh, sig)) {
         Node c = *job;
         c.flags &= ~(CMD_INVERT|CMD_TIME|CMD_TIMEPOSIX);

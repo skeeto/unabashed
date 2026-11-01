@@ -284,6 +284,8 @@ struct Frame {       // a function call
     b32   *opts;     // local -: set options to restore, in the store
     i32    optchar;  // local OPTIND: getopts position to restore
     b32    optsaved;
+    u8    *trapat[3];  // DEBUG, ERR and RETURN actions at the call: those
+                       // run in it only if it set them (or with -T/-E)
 };
 
 enum : i32 {
@@ -433,6 +435,7 @@ struct Shell {
     i32      intrap;       // running trap actions
     i32      trapbusy;     // DEBUG, ERR, RETURN actions running: not again
     i32      trapstatus;   // $? before the running trap, for its exit
+    i32      trapfuncs;    // funcdepth where it runs, for its return
     i32      killsig;      // this level is dying by this signal
     i32      childsig;     // the last foreground child died by this signal
     i64      childpid;     // and had this pid
@@ -440,8 +443,7 @@ struct Shell {
     Node    *tailnode;     // command, which bash would exec: its death by a
                            // signal is the subshell's (reported by its parent)
     b32      noreport;     // in command and process substitutions: no reports
-    b32      intrread;     // in the read builtin: trapped signals interrupt
-    i32      intrsig;      // the signal that interrupted it
+    b32      intrread;     // in the read builtin: trap actions run at once
     b32      execed;       // replaced by exec: no EXIT trap
     b32      errexited;    // set -e is ending this level
     i32      writeerr;     // why the last fdwrite failed
@@ -474,6 +476,7 @@ static void capturedrain(Sched *s, Capture *c)
 }
 
 static b32  sigtaken(Shell *);
+static void runsigs(Shell *, Arena);
 static void runexittrap(Shell *, Arena);
 
 // A write to a pipe without readers: as a process killed by SIGPIPE,
@@ -789,9 +792,10 @@ static iz fileread(Shell *sh, File *f, u8 *buf, iz len)
             iz n = f->kind==F_OS ? taskread(sh->sched, f->h, buf, len)
                                  : piperead(sh->sched, f->pipe, buf, len);
             // A signal may have failed the read: one that kills this
-            // level does so, one for the read builtin ends it, and
-            // otherwise the read resumes
-            if (n>=0 || !sigtaken(sh) || sh->intrread) return n;
+            // level does so, the read builtin runs trap actions at
+            // once, as bash, and the read resumes
+            if (n>=0 || !sigtaken(sh)) return n;
+            if (sh->intrread) runsigs(sh, {});
         }
     case F_MEM: {
         iz n = f->mem.len - f->pos;

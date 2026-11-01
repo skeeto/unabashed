@@ -240,7 +240,9 @@ static i32 b_return(Shell *sh, Str *args, iz nargs, Arena scratch)
         builtinerror(sh, scratch, "return", "can only `return' from a function or sourced script");
         return 2;
     }
-    i32 status = sh->status;
+    // In a trap action itself, the status from before the action
+    b32 intrap = sh->intrap && sh->funcdepth==sh->trapfuncs;
+    i32 status = intrap ? sh->trapstatus : sh->status;
     iz  i = skipdashdash(args, nargs, 1);
     if (i < nargs) {
         i64 v;
@@ -1443,12 +1445,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         sh->intrread = sh->sched->cur->introk = 1;
         i32 c = readbyte(sh, fd);
         sh->intrread = sh->sched->cur->introk = 0;
-        if (c==-2 && sh->intrsig) {
-            // A signal with a trap ends the read
-            i32 sig = sh->intrsig;
-            sh->intrsig = 0;
-            return 128 + sig;
-        } else if (c == -2) {
+        if (c == -2) {
             Str msg = concat(&scratch, fmti64(&scratch, fd), ": read error: Bad file descriptor");
             builtinerror(sh, scratch, "read", msg);
             return 1;

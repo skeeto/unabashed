@@ -38,7 +38,7 @@ Done (core foundation):
   trap and kill builtins, EXIT/ERR/DEBUG/RETURN, signals to virtual
   processes, the vos, POSIX and Win32 layers, subshell trap rules,
   per-spawn ignored signals, reports of deaths by signals, SIGPIPE
-  dispositions, wait and read interrupted; tests `t/exec/622`-`628`.
+  dispositions, wait and read interrupted; tests `t/exec/622`-`630`.
 
 Remaining M3a work (see "Plan for the rest of M3a" below): launcher
 fibers for external stages with comsubs, fork-on-exec, interim fiber
@@ -394,29 +394,37 @@ blocked task: a signal that will kill the level fails any pipe or OS
 wait (`all`); a trapped one only the waits of a `read` or `wait`
 builtin (`Task.introk`). The wait returns an error with `Task.intr`
 set; `fileread`/`fdwrite`/`runprogram` call `sigtaken`, which kills the
-level now if it should die, else lets `read` return 128+N
-(`Shell.intrsig`) or resumes the read. `waitpsub` uses `taskjoinintr`
-and returns 128+N. When `os_wait` returns early for a signal,
-`schedule()` hands it to `top` and interrupts a `read`/`wait` there.
+level now if it should die; then a read resumes, after running the trap
+actions at once if it is the read builtin's (`Shell.intrread`; bash runs
+them during read, which goes on reading). `waitpsub` uses
+`taskjoinintr` and returns 128+N, the trap running after wait. When
+`os_wait` returns early for a signal, `schedule()` hands it to `top` and
+interrupts a `read`/`wait` there.
 
 **Trap actions** (`runtrap`): parsed and run like eval in a fresh pool
 arena (`capdepth+1`), keeping `$?` (unless the action returns from a
 function: `return` in a trap returns from the function), LINENO and
 BASH_COMMAND (simple commands in actions do not change it). `exit`
 without a status in an action uses the status from before it
-(`Shell.trapstatus`). ERR runs from `checkerrexit` where set -e would
-act, not in functions without errtrace; DEBUG before simple commands,
-`(( ))`, `[[ ]]` and each `for` iteration (BASH_COMMAND the header), not
-in functions without functrace; RETURN at the end of a function (with
-functrace) or a sourced file. None of these runs inside its own action
-(`Shell.trapbusy`); DEBUG does run inside other actions.
+(`Shell.trapstatus`); so does `return` without a status in the action
+itself (not in a function it calls, `Shell.trapfuncs`). BASH_TRAPSIG is
+bound (unexported) to the trap's index while it runs (EXIT 0, DEBUG 65,
+ERR 66, RETURN 67, as bash 5.3). ERR runs from `checkerrexit` where set
+-e would act; DEBUG before simple commands, `(( ))`, `[[ ]]` and each
+`for` iteration (BASH_COMMAND the header); RETURN at the end of a
+function or a sourced file. In a function they run only if the function
+set them (`Frame.trapat` records them at the call) or with functrace
+(errtrace for ERR); `pseudotrap`. None of these runs inside its own
+action (`Shell.trapbusy`); DEBUG does run inside other actions.
 
 **EXIT** (`runexittrap`): at `sh_main`'s end, at the end of a sync
 subshell or vproc whose own table has one, and from `sigdie`. Not after
 exec (`Shell.execed`). After set -e (`Shell.errexited`) the abandoned
 commands' redirections are undone first (`unwindtemp`, keeping exec's
 in a subshell, `Undo.keep`); after `exit` they stay in force, as in
-bash.
+bash. A script without `#!` run in-process (`runexternal`) starts as a
+new shell: what its parent ignores is ignored on entry, caught traps
+reset, only its own listed; it runs its own EXIT trap.
 
 **Deaths by signals.** `os_waitproc` and `IO_PROC` return 128+N with
 `WSIGNALED`; `sh_main` returns that too when the shell dies by a signal,
@@ -450,6 +458,10 @@ subshell's, reported by the parent with the subshell's text
 - Win32: `os_kill` is TerminateProcess with exit code 128+N; nothing
   arrives through `os_sigpending` yet (Ctrl-C and the signal channel
   to our own shells are M3b/M5b); crash codes carry `WSIGNALED`.
+
+The trap oracle (`run-trap`, which prints a binary diff: run it with
+`diff -a` to see) differs only in `declare -ft` and SIGCHLD traps of
+background jobs.
 
 Not done: job specs (`kill %1`: no job table yet), `wait -n` and
 signals during `read -t` (timers), Ctrl-C on Win32, extdebug, the
