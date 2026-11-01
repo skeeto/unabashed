@@ -528,6 +528,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     unwind(sh, mark);
 
     i32 failed = status;
+    statuses[last] = status;
     for (i32 k = last-1; k >= 0; k--) {
         i32 st = statuses[k];
         if (tasks[k]) {
@@ -535,9 +536,11 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         } else if (procs[k] != BADHANDLE) {
             st = taskwaitproc(s, procs[k]);
         }
+        statuses[k] = st;
         if (!failed) failed = st;
     }
     sh->status = status;
+    setpstat(sh, statuses, nstages);
     if (escaped) {
         escape(sh, why);
     }

@@ -916,8 +916,9 @@ static iz assignwords(X *x, Str name, Str *out)
     iz  n   = 0;
     out[n++] = "declare";
     out[n++] = concat(x->a, "-", let.len ? let : Str("-"));
-    if (val->arr) {
-        out[n++] = concat3(x->a, name, "=", arrayassign(x->a, val->arr));
+    Array *arr = varray(sh, x->a, val);
+    if (arr) {
+        out[n++] = concat3(x->a, name, "=", arrayassign(x->a, arr));
     } else {
         Got g = getvar(sh, x->a, name);
         out[n++] = concat3(x->a, name, "=", quoteforreuse(x->a, g.value));
@@ -1235,7 +1236,8 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         Str off  = c2<0 ? body : takehead(body, c2);
         Str len  = c2<0 ? Str{} : cuthead(body, c2+1);
         Value *val = p.array ? lookup(sh, name) : 0;
-        if (p.list && p.array && !(val && val->arr)) {
+        Array *arr = varray(sh, x->a, val);  // dynamic arrays too
+        if (p.list && p.array && !arr) {
             // a scalar's ${s[@]:off:len} is a substring
             Str v = p.ln ? p.lv[0] : Str{};
             putvalue(x, applysubstring(x, uname, v, off, len, c2>=0), ctx);
@@ -1243,7 +1245,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         }
         if (p.list && p.array) {
             // ${a[@]:off:len} selects elements from index off on
-            b32 assoc = val && val->arr && val->arr->bucket;
+            b32 assoc = arr && arr->bucket;
             Arith o = substrarith(x, uname, off);
             i64 top = assoc ? p.ln-1 : p.ln ? p.li[p.ln-1] : -1;
             i64 from = o.value<0 ? top + 1 + o.value : o.value;
@@ -1295,6 +1297,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     if (op=='@' && rest.len==2 && transformop(rest[1])) {
         u8 t = rest[1];
         Value *val = lookup(sh, name);
+        Array *arr = varray(sh, x->a, val);
         if (p.list && p.array && t=='A') {
             Str v[3];
             iz  n = assignwords(x, name, v);
@@ -1309,10 +1312,10 @@ static void expandbraced(X *x, Str whole, i32 ctx)
                 v[k+2] = quoteforreuse(x->a, p.lv[k]);
             }
             putlist(x, v, n ? n+2 : 0, p.star, ctx);
-        } else if (p.list && p.array && t=='K' && val && val->arr) {
-            putvalue(x, arraykv(x->a, val->arr), ctx);
-        } else if (p.list && p.array && t=='k' && val && val->arr) {
-            AList l = alist(x->a, val->arr, 1);
+        } else if (p.list && p.array && t=='K' && arr) {
+            putvalue(x, arraykv(x->a, arr), ctx);
+        } else if (p.list && p.array && t=='k' && arr) {
+            AList l = alist(x->a, arr, 1);
             Str *v = alloc<Str>(x->a, 2*l.n);
             for (iz k = 0; k < l.n; k++) {
                 v[2*k]   = l.keys[k];

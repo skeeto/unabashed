@@ -185,6 +185,8 @@ static void varchanged(Shell *sh, Str name)
         }
         if (sh->lexer) sh->lexer->utf8 = utf8;
         sh->utf8 = utf8;
+    } else if (name == "PIPESTATUS") {
+        sh->pstatdirty = 1;
     } else if (name == "PATH") {
         sh->cmdhash = 0;  // bash forgets remembered paths
     } else if (name == "OPTIND") {
@@ -331,6 +333,8 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     dynamic(sh, "FUNCNAME", DYN_FUNCNAME, V_ARRAY);
     dynamic(sh, "BASH_LINENO", DYN_BASH_LINENO, V_ARRAY);
     dynamic(sh, "BASH_SOURCE", DYN_BASH_SOURCE, V_ARRAY);
+    dynamic(sh, "PIPESTATUS", DYN_PIPESTATUS, V_ARRAY);
+    sh->npstat = 1;
     static Str versinfo[] = {"5", "3", "0", "1", "release", "x86_64-pc-linux-gnu"};
     for (iz i = 0; i < countof(versinfo); i++) {
         setelem(sh, scratch, "BASH_VERSINFO", i, {}, versinfo[i]);

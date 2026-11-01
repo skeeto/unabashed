@@ -1969,6 +1969,7 @@ static void execsubshell(Shell *sh, Node *n, Arena scratch)
     j.node = n->a;
     j.newloops = 1;
     sh->status = subshell(sh, &j, scratch, 0);
+    setpstat1(sh);
     checkerrexit(sh);
 }
 
@@ -2086,6 +2087,7 @@ static void execarith(Shell *sh, Node *n, Arena scratch)
     }
     Arith r = evalarithcmd(sh, &scratch, text, "((");
     sh->status = r.ok ? !r.value : 1;
+    setpstat1(sh);
     checkerrexit(sh);
 }
 
@@ -2094,6 +2096,7 @@ static void execcond(Shell *sh, Node *n, Arena scratch)
 {
     sh->line = n->line;
     sh->status = condeval(sh, &scratch, n->cond) ? 0 : 1;
+    setpstat1(sh);
     checkerrexit(sh);
 }
 
@@ -2117,6 +2120,7 @@ static void executenode(Shell *sh, Node *n, Arena scratch)
         case N_SIMPLE:
             checkstack(sh);
             runsimple(sh, n, scratch);
+            setpstat1(sh);
             return;
         case N_GROUP:
             n = n->a;
@@ -2184,6 +2188,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     switch (n->kind) {
     case N_SIMPLE:
         runsimple(sh, n, scratch);
+        setpstat1(sh);
         break;
 
     case N_CONNECT:

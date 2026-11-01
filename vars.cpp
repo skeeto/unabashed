@@ -29,7 +29,7 @@ enum : i32 {  // dynamic variables, computed when read
     DYN_NONE, DYN_LINENO, DYN_RANDOM, DYN_SRANDOM, DYN_SECONDS,
     DYN_EPOCHSECONDS, DYN_EPOCHREALTIME, DYN_BASHPID, DYN_BASH_SUBSHELL,
     DYN_FUNCNAME, DYN_BASH_COMMAND, DYN_HISTCMD, DYN_BASH_LINENO,
-    DYN_BASH_SOURCE, DYN_BASH_ARGV0,
+    DYN_BASH_SOURCE, DYN_BASH_ARGV0, DYN_PIPESTATUS,
 };
 
 struct Value {
@@ -218,6 +218,7 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
     case DYN_BASH_COMMAND:  return cmdtext(sh, a);
     case DYN_HISTCMD:       return "1";
     case DYN_BASH_ARGV0:    return dollar0(sh);
+    case DYN_PIPESTATUS:    return fmti64(a, sh->npstat ? sh->pstat[0] : 0);
     }
     return v->str;
 }
@@ -367,6 +368,17 @@ static void assigned(Shell *sh, Value *val, Str name)
 static Array *dynarray(Shell *sh, Arena *a, Value *v)
 {
     i32 d = v ? v->dyn : 0;
+    if (d == DYN_PIPESTATUS) {
+        Array *r = alloc<Array>(a);
+        r->cap   = sh->npstat;
+        r->e     = alloc<Elem>(a, r->cap);
+        for (; r->len < sh->npstat; r->len++) {
+            r->e[r->len].idx = r->len;
+            r->e[r->len].val = fmti64(a, sh->pstat[r->len]);
+        }
+        r->isset = 1;
+        return r;
+    }
     if (d!=DYN_FUNCNAME && d!=DYN_BASH_LINENO && d!=DYN_BASH_SOURCE) return 0;
     iz n = 0;
     for (Frame *f = sh->frame; f; f = f->up) n++;
@@ -397,6 +409,43 @@ static Array *dynarray(Shell *sh, Arena *a, Value *v)
 static Array *varray(Shell *sh, Arena *a, Value *v)
 {
     return !v ? 0 : v->arr ? v->arr : dynarray(sh, a, v);
+}
+
+// PIPESTATUS: bash sets it after every pipeline, simple command, (( )),
+// [[ ]] and subshell, but not after other compound commands. The
+// statuses live in the Shell, so that setting it costs a few stores,
+// and the variable is a dynamic array over them. An assignment or unset
+// makes it an ordinary variable until the command ends, when bash
+// recreates it.
+static void restorepstat(Shell *sh)
+{
+    Store *st = sh->store;
+    Var   *v  = upsertvar(sh, "PIPESTATUS");
+    sh->pstatdirty = 0;
+    if (v->top && v->top->dyn==DYN_PIPESTATUS && !v->top->arr) return;
+    while (v->top) {
+        Value *t = v->top;
+        jset(st, &v->top, t->below);
+        freevalue(sh, t);
+    }
+    Value *n = (Value *)salloc(st, sizeof(Value));
+    n->dyn   = DYN_PIPESTATUS;
+    n->attrs = V_ARRAY;
+    jset(st, &v->top, n);
+}
+
+static void setpstat1(Shell *sh)
+{
+    if (sh->pstatdirty) restorepstat(sh);
+    sh->npstat   = 1;
+    sh->pstat[0] = (u8)sh->status;
+}
+
+static void setpstat(Shell *sh, i32 *statuses, i32 n)
+{
+    if (sh->pstatdirty) restorepstat(sh);
+    sh->npstat = n;
+    for (i32 i = 0; i < n; i++) sh->pstat[i] = (u8)statuses[i];
 }
 
 // Make an owned binding an indexed array, its value becoming element 0.
@@ -515,7 +564,7 @@ static Value *setattrs(Shell *sh, Str name, u32 on, u32 off)
     Value *val = ownvalue(sh, &v->top);
     if ((on & V_ASSOC) && !val->arr) {
         toassoc(sh, val, fresh);
-    } else if ((on & V_ARRAY) && !val->arr) {
+    } else if ((on & V_ARRAY) && !val->arr && val->dyn!=DYN_PIPESTATUS) {
         toarray(sh, val);
     }
     val->attrs = (val->attrs | on) & ~off;

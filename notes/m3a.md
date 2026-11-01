@@ -23,6 +23,8 @@ Done (core foundation):
 - Platform API (`api.cpp`): `Io`, `os_submit`, `os_wait`, `os_cancel`,
   `OsInfo.chaos`, `E_DEADLK`; implemented on the vos, POSIX and Win32.
 - `fakes.cpp`: `yes`.
+- PIPESTATUS, pipefail, lastpipe, `time` and `!` on pipelines, SIGPIPE
+  statuses (see "PIPESTATUS and SIGPIPE" below); tests `t/exec/612`–`615`.
 - Tests: `t/exec/607`–`611`; `test_sched` unit tests (pipes, joins,
   EPIPE, deadlock recovery); `tests.exe --chaos N` reruns every spec
   with N chaos seeds, comparing stdout, stderr and status (a spec
@@ -31,7 +33,7 @@ Done (core foundation):
 
 Remaining M3a work (see "Plan for the rest of M3a" below): launcher
 fibers for external stages with comsubs, procsub, heredoc and
-capture materialization through pumps everywhere, PIPESTATUS, traps and
+capture materialization through pumps everywhere, traps and
 SIGPIPE dispositions, fork-on-exec, interim fiber `&`/wait/coproc, the
 isolate fuzzer, timers.
 
@@ -214,6 +216,44 @@ reports `subshell - simplestages`.
   anything the shell writes next;
 - `F_CAPTURE`: an OS pipe read here until EOF.
 
+## PIPESTATUS and SIGPIPE
+
+PIPESTATUS is a dynamic array (`DYN_PIPESTATUS`, vars.cpp) over
+`Shell.pstat` (u8[256], exit statuses are 8 bits) and `Shell.npstat`,
+so that setting it costs a few stores and no store memory. Being in the
+Shell struct, subshells and command substitutions restore it with the
+rest of the struct, and vprocs copy it.
+- `setpstat1(sh)` (one status, `$?`) runs after every simple command
+  (both `runsimple` call sites in exec.cpp, so functions and builtins
+  report their own status, not their last pipeline's), `(( ))`, `[[ ]]`
+  and `( )`; other compound commands, function definitions, `&` and a
+  failed redirection on a compound command leave it alone, as bash.
+- `setpstat(sh, statuses, n)` runs in `runpipeline` once every stage is
+  joined, before pipefail and `!` change `$?` (`! true | false` gives
+  `$?` 0 and PIPESTATUS `0 1`). Under lastpipe the last stage's own
+  commands set it first, then the pipeline overwrites it.
+- An assignment or unset of PIPESTATUS (`varchanged`) sets
+  `Shell.pstatdirty`; the next `setpstat*` puts the dynamic binding back
+  (`restorepstat`), so `PIPESTATUS=(9 8) x=${PIPESTATUS[1]}` sees 8 and
+  the next command recreates it, as bash. `declare -a` and `readonly`
+  keep it dynamic.
+- Expansions that read an array's elements go through `varray`, so
+  slices, `@A`, `@K`/`@k` work on dynamic arrays (FUNCNAME too).
+
+SIGPIPE: a fake, a direct external or a shell stage writing to a pipe
+without readers ends with status 141 and prints nothing: bash, built
+with its default `DONT_REPORT_SIGPIPE`, reports no SIGPIPE deaths of
+pipeline members (checked against the oracle for first, middle and last
+stages). A shell stage ends through `sigpipe()` (shell.cpp) from
+`fdwrite`; the code after the write in that vproc does not run
+(`{ yes; echo "after $?" >&2; } | { read x; }` prints `after 141`
+because `yes` is a separate program). `trap '' PIPE` (a write error
+instead) waits for traps.
+
+Bash 5.3 oddity, not copied: run as a script file, `shopt -s lastpipe;
+echo e | exit 7` exits 0; with `-c` (how specs run) it exits 7, which is
+what unabashed does.
+
 ## Platform API additions
 
 ```
@@ -277,9 +317,7 @@ In suggested order, each with the API to use:
    launcher would copy less state, or the copier could become
    copy-on-first-write (M8). The last stage, when external, could also
    be started directly instead of in a synchronous subshell.
-2. **PIPESTATUS**: `runpipeline` has every stage's status; also needs
-   setting after every simple and compound command, cheaply (a dynamic
-   variable over a small array in `Shell`).
+2. **PIPESTATUS**: done (see above).
 3. **Process substitution** `<(f)`/`>(f)`: a fiber vproc (`spawnvproc`
    with `out`/`in` set to a `Pipe` end) whose other end is a `File` in
    the parent named `/dev/fd/N`; for an external, materialize as an OS

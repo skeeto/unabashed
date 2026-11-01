@@ -352,6 +352,9 @@ struct Shell {
     Str      cmdtext;      // its text once the node may be freed
     i32      line;         // LINENO
     i32      status;       // $?
+    i32      npstat;       // PIPESTATUS: the last pipeline's statuses
+    u8       pstat[256];
+    b32      pstatdirty;   // PIPESTATUS assigned or unset meanwhile
     i32      flow;
     i32      flowcount;
     i32      loopdepth;
