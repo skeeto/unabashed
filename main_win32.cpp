@@ -144,6 +144,8 @@ struct BasicInfo {  // PROCESS_BASIC_INFORMATION
 
 #define W32(r, p) extern "C" __declspec(dllimport) r __stdcall p noexcept
 W32(b32,    CloseHandle(uz));
+W32(uz,     CreateEventW(uz, b32, b32, c16 *));
+W32(uz,     CreateThread(uz, uz, u32 (__stdcall *)(void *), void *, i32, i32 *));
 W32(uz,     CreateFileW(c16 *, i32, i32, uz, i32, i32, uz));
 W32(b32,    CreatePipe(uz *, uz *, uz, i32));
 W32(b32,    CreateProcessW(c16 *, c16 *, uz, uz, b32, i32, c16 *, c16 *,
@@ -174,12 +176,15 @@ W32(uz,     GetStdHandle(i32));
 W32(i32,    GetSystemDirectoryW(c16 *, i32));
 W32(void,   GetSystemTimeAsFileTime(Filetime *));
 W32(b32,    ReadConsoleW(uz, c16 *, i32, i32 *, uz));
+W32(b32,    PeekNamedPipe(uz, u8 *, i32, i32 *, i32 *, i32 *));
 W32(b32,    ReadFile(uz, u8 *, i32, i32 *, uz));
 W32(b32,    SetEndOfFile(uz));
 W32(b32,    SetFilePointerEx(uz, i64, i64 *, i32));
 W32(b32,    SetHandleInformation(uz, i32, i32));
 W32(byte *, VirtualAlloc(byte *, iz, i32, i32));
 W32(b32,    VirtualFree(byte *, iz, i32));
+W32(b32,    SetEvent(uz));
+W32(i32,    WaitForMultipleObjects(i32, uz *, b32, i32));
 W32(i32,    WaitForSingleObject(uz, i32));
 W32(b32,    WriteConsoleW(uz, c16 *, i32, i32 *, uz));
 W32(b32,    WriteFile(uz, u8 *, i32, i32 *, uz));
@@ -240,9 +245,37 @@ extern "C" i32 memcmp(void const *a, void const *b, uz len)
 
 #include "fibers.cpp"
 
+// A thread that performs one blocking read or write at a time for the
+// main thread, which waits on its done event (M3a; notes/m3a.md).
+struct Helper {
+    Helper *next;    // idle list
+    Os     *os;
+    Io     *io;
+    uz      thread;
+    uz      go;      // auto-reset: an operation is ready
+    uz      done;    // auto-reset: it completed
+};
+
+struct IoStatusBlock {
+    uz status;
+    uz info;
+};
+
+struct PipeLocalInfo {  // FILE_PIPE_LOCAL_INFORMATION
+    u32 type, config, maxinst, curinst, inquota, readavail;
+    u32 outquota, writequota, state, end;
+};
+
+using NtQueryInformationFileFn = i32 (__stdcall *)(uz, IoStatusBlock *, void *, u32, i32);
+
 struct Os {
     Fibers fibers;
     void (__stdcall *now)(Filetime *);  // precise clock where available
+    NtQueryInformationFileFn queryfile;  // ntdll, resolved at run time
+    Io     *pending;  // submitted, oldest first
+    Helper *idle;
+    Helper  helpers[64];
+    i32     nhelpers;
 
     // Console input converted to UTF-8 but not yet consumed
     uz     conh;
@@ -924,6 +957,193 @@ static i32 os_waitproc(Os *, Handle proc)
     return exitstatus((u32)code);
 }
 
+// Asynchronous operations (M3a): process exits through the process
+// handle, pipe reads through PeekNamedPipe when data is waiting, pipe
+// writes directly when the pipe has room, and otherwise a helper
+// thread performs the blocking call. Disk files and consoles complete
+// at once. The main thread waits on process handles and helpers' done
+// events together (at most 64 at a time).
+
+static u32 __stdcall helpermain(void *arg)
+{
+    Helper *h = (Helper *)arg;
+    for (;;) {
+        WaitForSingleObject(h->go, INFINITE);
+        Io *io = h->io;
+        if (io->op == IO_READ) {
+            io->n   = os_read(h->os, io->h, io->buf, io->len);
+            io->err = io->n<0 ? E_IO : 0;
+            io->n   = io->n<0 ? 0 : io->n;
+        } else {
+            i32 n = 0;
+            if (WriteFile(io->h, io->buf, chunk(io->len), &n, 0) && n) {
+                io->n = n;
+            } else {
+                i32 code = GetLastError();
+                io->err = code==ERROR_NO_DATA || code==ERROR_BROKEN_PIPE ? E_PIPE : E_IO;
+            }
+        }
+        SetEvent(h->done);
+    }
+}
+
+static b32 tohelper(Os *os, Io *io)
+{
+    Helper *h = os->idle;
+    if (h) {
+        os->idle = h->next;
+    } else {
+        if (os->nhelpers == countof(os->helpers)) return 0;
+        h = os->helpers + os->nhelpers;
+        h->os   = os;
+        h->go   = CreateEventW(0, 0, 0, 0);
+        h->done = CreateEventW(0, 0, 0, 0);
+        h->thread = CreateThread(0, 1<<16, helpermain, h, 0x10000, 0);
+        if (!h->go || !h->done || !h->thread) return 0;
+        os->nhelpers++;
+    }
+    h->io = io;
+    io->plt[0] = (uz)h;
+    SetEvent(h->go);
+    return 1;
+}
+
+static b32 procdone(Io *io, i32 timeout)
+{
+    if (WaitForSingleObject(io->h, timeout)) return 0;
+    i32 code = 127;
+    if (!GetExitCodeProcess(io->h, &code)) code = 127;
+    CloseHandle(io->h);
+    io->n = exitstatus((u32)code);
+    return 1;
+}
+
+// Try to complete a read or write without blocking.
+static b32 trypipeio(Os *os, Io *io)
+{
+    i32 type = GetFileType(io->h);
+    if (type != FILE_TYPE_PIPE) {
+        if (type==FILE_TYPE_CHAR && io->op==IO_READ) return 0;
+        if (io->op == IO_READ) {
+            io->n   = os_read(os, io->h, io->buf, io->len);
+            io->err = io->n<0 ? E_IO : 0;
+            io->n   = io->n<0 ? 0 : io->n;
+        } else {
+            io->n   = io->len;
+            io->err = os_write(os, io->h, io->buf, io->len) ? 0 : E_IO;
+        }
+        return 1;
+    }
+    if (io->op == IO_READ) {
+        i32 avail = 0;
+        if (!PeekNamedPipe(io->h, 0, 0, 0, &avail, 0)) {
+            io->n   = 0;
+            io->err = GetLastError()==ERROR_BROKEN_PIPE ? 0 : E_IO;
+            return 1;
+        }
+        if (!avail) return 0;
+        i32 n = 0;
+        if (!ReadFile(io->h, io->buf, chunk(avail<io->len ? avail : io->len), &n, 0)) {
+            io->err = GetLastError()==ERROR_BROKEN_PIPE ? 0 : E_IO;
+        }
+        io->n = n;
+        return 1;
+    }
+    if (!os->queryfile) return 0;
+    IoStatusBlock iosb = {};
+    PipeLocalInfo info = {};
+    if (os->queryfile(io->h, &iosb, &info, sizeof(info), 24) || !info.writequota) {
+        return 0;
+    }
+    i32 n = 0;
+    iz  len = io->len<(iz)info.writequota ? io->len : (iz)info.writequota;
+    if (WriteFile(io->h, io->buf, chunk(len), &n, 0) && n) {
+        io->n = n;
+    } else {
+        i32 code = GetLastError();
+        io->err = code==ERROR_NO_DATA || code==ERROR_BROKEN_PIPE ? E_PIPE : E_IO;
+    }
+    return 1;
+}
+
+static void os_submit(Os *os, Io *io)
+{
+    io->done   = 0;
+    io->next   = 0;
+    io->plt[0] = 0;
+    b32 now = io->op==IO_PROC ? procdone(io, 0) : trypipeio(os, io);
+    if (now) {
+        io->done = 1;
+        return;
+    }
+    if (io->op!=IO_PROC && !tohelper(os, io)) {
+        // no helper: block here
+        if (io->op == IO_READ) {
+            io->n   = os_read(os, io->h, io->buf, io->len);
+            io->err = io->n<0 ? E_IO : 0;
+            io->n   = io->n<0 ? 0 : io->n;
+        } else {
+            io->n   = io->len;
+            io->err = os_write(os, io->h, io->buf, io->len) ? 0 : E_PIPE;
+        }
+        io->done = 1;
+        return;
+    }
+    Io **tail = &os->pending;
+    while (*tail) tail = &(*tail)->next;
+    *tail = io;
+}
+
+static Io *os_wait(Os *os, i64 deadline)
+{
+    uz  handles[64];
+    Io *ios[64];
+    i32 n = 0;
+    for (Io *io = os->pending; io && n<countof(handles); io = io->next) {
+        Helper *h = (Helper *)io->plt[0];
+        handles[n] = h ? h->done : io->h;
+        ios[n++]   = io;
+    }
+    if (!n) return 0;
+    i32 timeout = INFINITE;
+    if (deadline == WAIT_POLL) {
+        timeout = 0;
+    } else if (deadline > 0) {
+        i64 left = (deadline - os_now(os) + 999999) / 1000000;
+        timeout = left<0 ? 0 : left>(1<<30) ? (1<<30) : (i32)left;
+    }
+    i32 r = WaitForMultipleObjects(n, handles, 0, timeout);
+    if (r<0 || r>=n) return 0;
+    Io *io = ios[r];
+    Helper *h = (Helper *)io->plt[0];
+    if (h) {
+        h->next  = os->idle;
+        os->idle = h;
+    } else {
+        procdone(io, 0);
+    }
+    for (Io **p = &os->pending; *p; p = &(*p)->next) {
+        if (*p == io) {
+            *p = io->next;
+            break;
+        }
+    }
+    io->done = 1;
+    return io;
+}
+
+static b32 os_cancel(Os *os, Io *io)
+{
+    if (io->plt[0]) return 0;  // a helper owns it until it completes
+    for (Io **p = &os->pending; *p; p = &(*p)->next) {
+        if (*p == io) {
+            *p = io->next;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static i64 os_now(Os *os)
 {
     Filetime t = {};
@@ -977,6 +1197,7 @@ void mainCRTStartup()
     info.reserve = (iz)1 << (sizeof(void *)==8 ? 34 : 28);
 
     os.now = GetSystemTimeAsFileTime;
+    os.queryfile = (NtQueryInformationFileFn)dynamic(u"ntdll.dll", "NtQueryInformationFile");
     void *precise = dynamic(u"kernel32.dll", "GetSystemTimePreciseAsFileTime");
     if (precise) {
         os.now = (void (__stdcall *)(Filetime *))precise;  // Windows 8

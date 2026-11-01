@@ -23,6 +23,7 @@ struct OsInfo {
     Handle std[3];
     iz     reserve;  // address space for each large arena
     iz     stack;    // usable bytes of the calling thread's stack, 0 if unknown
+    u64    chaos;    // test layers: seed for random yields, 0 for none
 };
 
 // Errors are Linux errno numbers on every platform.
@@ -33,8 +34,8 @@ enum : i32 {
     E_EXIST = 17, E_XDEV = 18, E_NODEV = 19, E_NOTDIR = 20, E_ISDIR = 21,
     E_INVAL = 22, E_NFILE = 23, E_MFILE = 24, E_NOTTY = 25, E_TXTBSY = 26,
     E_FBIG = 27, E_NOSPC = 28, E_SPIPE = 29, E_ROFS = 30, E_MLINK = 31,
-    E_PIPE = 32, E_DOM = 33, E_RANGE = 34, E_NAMETOOLONG = 36,
-    E_NOSYS = 38, E_NOTEMPTY = 39, E_LOOP = 40,
+    E_PIPE = 32, E_DOM = 33, E_RANGE = 34, E_DEADLK = 35,
+    E_NAMETOOLONG = 36, E_NOSYS = 38, E_NOTEMPTY = 39, E_LOOP = 40,
 };
 
 enum : i32 {  // os_open flags
@@ -103,6 +104,31 @@ struct Spawned {
     Handle proc;
 };
 
+// An operation submitted for asynchronous completion, so that a task
+// can block on it while other tasks run (see notes/m3a.md). The core
+// fills op, h, buf and len and keeps the record in place until it
+// completes; the platform may use the rest.
+enum : i32 {
+    IO_READ = 1,  // at least one byte, or end of file (n = 0)
+    IO_WRITE,     // at least one byte (n), perhaps fewer than len
+    IO_PROC,      // a spawned program's exit: n is os_waitproc's status
+};
+
+struct Io {
+    i32    op;       // IO_*
+    Handle h;        // descriptor, or the process for IO_PROC
+    u8    *buf;
+    iz     len;
+    iz     n;        // result
+    i32    err;      // E_* on failure, such as E_PIPE
+    b32    done;
+    void  *ctx;      // the core's: the waiting task
+    Io    *next;     // the platform's: pending list
+    uz     plt[4];   // the platform's
+};
+
+enum : i64 { WAIT_FOREVER = -1, WAIT_POLL = 0 };
+
 // Reserve address space. Returns null on failure.
 static byte   *os_reserve(Os *, iz);
 // Commit part of a reservation. Returns false on failure.
@@ -129,6 +155,17 @@ static Dirent *os_list(Os *, Arena *, Str dir, i32 *err);
 static Spawned os_spawn(Os *, Arena scratch, Spawn *);
 // Wait for a spawned program: 0-255 on exit, 128+N on signal N.
 static i32     os_waitproc(Os *, Handle proc);
+// Begin an operation without blocking. It may complete at once (done
+// set), else a later os_wait returns it. A pending IO_PROC releases
+// the process when it completes, as os_waitproc does.
+static void    os_submit(Os *, Io *);
+// Block until a submitted operation completes and return it, or null
+// at the deadline (WAIT_POLL to poll, or an os_now time). The virtual
+// OS also returns null when nothing can ever complete (deadlock).
+static Io     *os_wait(Os *, i64 deadline);
+// Withdraw a pending operation. False if it cannot be withdrawn (it
+// may still complete) or already completed.
+static b32     os_cancel(Os *, Io *);
 // Realtime clock, in ns since the epoch.
 static i64     os_now(Os *);
 // The currently running fiber, converting the thread on first use.

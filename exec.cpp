@@ -1,9 +1,8 @@
 // Executor: commands, redirections, subshells and programs
 //
-// Execution is sequential in M2: subshells, command substitutions and
-// pipeline stages run on the caller's stack, isolated by the store's
-// journal and the redirection undo list. Pipelines pass each stage's
-// output to the next through a buffer.
+// Subshells and command substitutions run on the caller's stack,
+// isolated by the store's journal and the redirection undo list.
+// Pipeline stages run concurrently (proc.cpp, sched.cpp).
 //
 // This is free and unencumbered software released into the public domain.
 
@@ -904,30 +903,43 @@ static Str commandpath(Shell *sh, Arena *a, Str name, b32 enter)
     return path;
 }
 
-// Run a program and wait for it. Returns its status, or reports why it
-// could not run.
+// Run a program and wait for it. Returns its status, or the negated
+// error that kept it from starting. Shell objects on its descriptors
+// become OS pipes: text and in-memory pipes are fed by pump tasks, and
+// a capture is read here until end of file.
 static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
                       Slice<Str> env)
 {
+    Sched *s = sh->sched;
     Fdtab *t = sh->fds;
     SpawnFd *fds = alloc<SpawnFd>(&a, t->top ? t->top : 1);
     iz nfds = 0;
-    // Input from memory goes into a pipe: what fits before the child
-    // starts, the rest after (M3a will feed it from a fiber instead)
-    struct Feed { Handle w; Str rest; };
-    Feed feeds[8];
-    i32  nfeeds = 0;
-    Handle closeafter[FDMAX/8];
-    i32    nclose = 0;
-    File  *capfile = 0;
-    Handle capread = BADHANDLE;
+    Handle *closeafter = alloc<Handle>(&a, t->top ? t->top : 1);
+    i32     nclose = 0;
+    Task   *pumps[16];
+    b32     input[16];
+    i32     npumps = 0;
+    File   *capfile = 0;
+    Handle  capread = BADHANDLE;
     for (i32 fd = 0; fd < t->top; fd++) {
         File *f = t->fd[fd];
         if (!f) continue;
-        SpawnFd s = {fd, BADHANDLE};
+        SpawnFd sf = {fd, BADHANDLE};
+        // A File already given to an earlier descriptor shares its handle
+        b32 shared = 0;
+        for (iz k = 0; k<nfds && f->kind!=F_OS; k++) {
+            if (t->fd[fds[k].fd] == f) {
+                sf.h   = fds[k].h;
+                shared = 1;
+            }
+        }
+        if (shared) {
+            fds[nfds++] = sf;
+            continue;
+        }
         switch (f->kind) {
         case F_OS:
-            s.h = f->h;
+            sf.h = f->h;
             break;
         case F_MEM: {
             OsPipe p = os_pipe(sh->os);
@@ -935,31 +947,48 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
             Str rest = cuthead(f->mem, f->pos<f->mem.len ? f->pos : f->mem.len);
             iz  now  = rest.len<os_pipecap(sh->os) ? rest.len : os_pipecap(sh->os);
             os_write(sh->os, p.w, rest.data, now);
-            if (now<rest.len && nfeeds<countof(feeds)) {
-                feeds[nfeeds++] = {p.w, cuthead(rest, now)};
+            if (now<rest.len && npumps<countof(pumps)) {
+                Pump *pp = alloc<Pump>(&a);
+                pp->kind = PUMP_TEXT;
+                pp->h    = p.w;
+                pp->text = cuthead(rest, now);
+                input[npumps] = 1;
+                pumps[npumps++] = spawnpump(s, pp);
             } else {
                 os_close(sh->os, p.w);
             }
-            s.h = p.r;
-            if (nclose < countof(closeafter)) closeafter[nclose++] = p.r;
+            sf.h = p.r;
+            closeafter[nclose++] = p.r;
         } break;
         case F_CAPTURE: {
-            if (capfile == f) {
-                s.h = fds[0].h;  // replaced below
-                for (iz k = 0; k < nfds; k++) {
-                    if (t->fd[fds[k].fd] == f) s.h = fds[k].h;
-                }
-                break;
-            }
             OsPipe p = os_pipe(sh->os);
             if (p.err) continue;
             capfile = f;
             capread = p.r;
-            s.h = p.w;
-            if (nclose < countof(closeafter)) closeafter[nclose++] = p.w;
+            sf.h = p.w;
+            closeafter[nclose++] = p.w;
+        } break;
+        case F_PIPE: {
+            if (npumps == countof(pumps)) continue;
+            OsPipe p = os_pipe(sh->os);
+            if (p.err) continue;
+            Pump *pp = alloc<Pump>(&a);
+            pp->pipe = f->pipe;
+            if (f->flags & OF_READ) {
+                pp->kind = PUMP_TOHANDLE;
+                pp->h    = p.w;
+                sf.h     = p.r;
+            } else {
+                pp->kind = PUMP_FROMHANDLE;
+                pp->h    = p.r;
+                sf.h     = p.w;
+            }
+            closeafter[nclose++] = sf.h;
+            input[npumps] = pp->kind == PUMP_TOHANDLE;
+            pumps[npumps++] = spawnpump(s, pp);
         } break;
         }
-        fds[nfds++] = s;
+        fds[nfds++] = sf;
     }
 
     Spawn sp = {};
@@ -973,25 +1002,27 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     sp.nfds  = nfds;
     Spawned r = os_spawn(sh->os, a, &sp);
     for (i32 i = 0; i < nclose; i++) {
-        if (closeafter[i] != capread) os_close(sh->os, closeafter[i]);
-    }
-    for (i32 i = 0; i < nfeeds; i++) {
-        if (!r.err) os_write(sh->os, feeds[i].w, feeds[i].rest.data, feeds[i].rest.len);
-        os_close(sh->os, feeds[i].w);
+        os_close(sh->os, closeafter[i]);
     }
     if (capfile) {
         u8 buf[4096];
         for (;;) {
-            iz n = os_read(sh->os, capread, buf, countof(buf));
+            iz n = taskread(s, capread, buf, countof(buf));
             if (n <= 0) break;
             print(capfile->cap, {buf, n});
         }
         os_close(sh->os, capread);
     }
-    if (r.err) {
-        return -r.err;
+    i32 status = r.err ? -r.err : taskwaitproc(s, r.proc);
+    // What the program did not read stays unread; what it wrote is
+    // passed on before anything the shell writes next
+    for (i32 i = 0; i < npumps; i++) {
+        if (input[i]) taskcancel(s, pumps[i]);
     }
-    return os_waitproc(sh->os, r.proc);
+    for (i32 i = 0; i < npumps; i++) {
+        taskjoin(s, pumps[i]);
+    }
+    return status;
 }
 
 static b32 isshellscript(Shell *sh, Arena a, Str path)
@@ -1175,6 +1206,7 @@ static void checkfuncnest(Shell *sh, Str name, Arena scratch)
 
 static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
 {
+    safepoint(sh->sched);
     checkstack(sh);
     checkfuncnest(sh, argv[0], scratch);
     Frame f = {};
@@ -1210,8 +1242,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     sh->esc = e.up;
 
     if (!--code->refs && code->dead) {
-        keepcmdtext(sh, (byte *)code, (byte *)code+code->size);
-        sfree(sh->store, code, code->size);
+        freecode(sh, code);
     }
     if (sh->flow == FLOW_RETURN) {
         sh->flow = FLOW_NONE;
@@ -1337,6 +1368,7 @@ static b32 doassignments(Shell *sh, Arena *a, Word *w, iz n)
 [[gnu::noinline]]
 static void runsimple(Shell *sh, Node *n, Arena scratch)
 {
+    safepoint(sh->sched);
     sh->line    = n->line;
     sh->current = n;
     sh->cmdnode = n;
@@ -1960,6 +1992,7 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
     sh->loopdepth++;
     for (iz i = 0; i < list.len; i++) {
         Arena it = scratch;
+        safepoint(sh->sched);
         if (head.data && sh->opt[O_XTRACE]) traceline(sh, it, head);
         if (!setvar(sh, it, var, list[i])) {
             sh->status = 1;
@@ -1988,6 +2021,7 @@ static void execarithfor(Shell *sh, Node *n, Arena scratch)
     sh->loopdepth++;
     for (;;) {
         Arena it = scratch;
+        safepoint(sh->sched);
         Arith r = {};
         if (!arithpart(sh, it, test, &r)) status = 1;
         if (!r.ok || !r.value) break;
@@ -2210,6 +2244,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         sh->loopdepth++;
         for (;;) {
             Arena it = scratch;
+            safepoint(sh->sched);
             sh->noerrexit++;
             execute(sh, n->a, it);
             sh->noerrexit--;
@@ -2348,6 +2383,7 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
     b32 menu = 1;
     for (;;) {
         Arena it = scratch;
+        safepoint(sh->sched);
         if (menu) selectmenu(sh, it, list);
         Got ps3 = getvar(sh, &it, "PS3");
         fdwrite(sh, 2, ps3.set ? ps3.value : Str("#? "));
@@ -2376,76 +2412,6 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
     }
     sh->loopdepth--;
 }
-
-// Pipelines run one stage at a time in M2: each stage's output is
-// collected and becomes the next stage's input.
-static void runpipeline(Shell *sh, Node *n, Arena scratch)
-{
-    // Flatten the left-nested chain into stages
-    Node *stages[256];
-    i32   nstages = 0;
-    Node *cur = n;
-    while (cur->kind==N_CONNECT && cur->connector=='|' && nstages<255) {
-        stages[nstages++] = cur->b;
-        cur = cur->a;
-    }
-    stages[nstages++] = cur;
-
-    Str input = {};
-    b32 haveinput = 0;
-    i32 status = 0;
-    i32 failed = 0;
-    i32 before = sh->status;  // what $? is in every stage
-    for (i32 k = nstages-1; k >= 0; k--) {
-        Node *stage = stages[k];
-        sh->status = before;
-        b32 last = k == 0;
-        Arena a = scratch;
-        Undo *mark = sh->undo;
-        if (haveinput) {
-            File *in = newfile(sh, F_MEM, OF_READ);
-            in->mem = input;
-            fdset(sh, 0, in, 0, &a);
-        }
-        Buf *cap = 0;
-        if (!last) {
-            cap  = alloc<Buf>(&a);
-            *cap = Buf(&a, 256);
-        }
-        SubJob j = {};
-        j.kind = SUB_NODE;
-        j.node = stage;
-        j.newloops = stage->kind != N_SIMPLE;  // as bash: break | x is silent
-        Node group;
-        if (stage->kind == N_SUBSHELL) {
-            // ( list ) runs in the stage's own subshell, not a nested one
-            group = *stage;
-            group.kind = N_GROUP;
-            j.node = &group;
-        }
-        i32   depth = ++sh->capdepth;
-        Arena child = *scratchat(sh, depth);
-        if (last && sh->shopt[S_LASTPIPE] && !sh->opt[O_MONITOR]) {
-            execute(sh, stage, child);
-            status = sh->status;
-        } else {
-            status = subshell(sh, &j, child, cap);
-        }
-        sh->capdepth = depth - 1;
-        unwind(sh, mark);
-        if (status) failed = status;
-        sfreestr(sh->store, input);
-        input = {};
-        if (cap) {
-            input = sclone(sh->store, finish(cap));
-            haveinput = 1;
-        }
-    }
-    // With pipefail, the rightmost nonzero status
-    sh->status = sh->opt[O_PIPEFAIL] && !status ? failed : status;
-    checkerrexit(sh);
-}
-
 
 // Running source text
 

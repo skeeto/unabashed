@@ -4,6 +4,9 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <poll.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -17,7 +20,12 @@ extern char **environ;
 
 struct Os {
     Fibers fibers;
+    Io    *pending;     // submitted operations, oldest first
+    i32    wakefd[2];   // self-pipe written by the SIGCHLD handler
+    b32    pipeign;     // SIGPIPE was ignored on entry, so stays ignored
 };
+
+static Os *sigos;  // for the signal handler
 
 static Fibers *osfibers(Os *os)
 {
@@ -268,6 +276,9 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
         if (chdir(cwd)) {
             // run anyway: bash reports nothing here
         }
+        // The shell ignores SIGPIPE for its in-process subshells
+        if (!sigos || !sigos->pipeign) signal(SIGPIPE, SIG_DFL);
+        signal(SIGCHLD, SIG_DFL);
         execve(path, argv, envp);
         i32 e = errno;
         writeall(report[1], (u8 *)&e, sizeof(e));
@@ -289,15 +300,192 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
     return r;
 }
 
+static i32 waitstatus(i32 status)
+{
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return 127;
+}
+
 static i32 os_waitproc(Os *, Handle proc)
 {
     i32 status;
     while (waitpid((pid_t)proc, &status, 0) < 0) {
         if (errno != EINTR) return 127;
     }
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
-    return 127;
+    return waitstatus(status);
+}
+
+
+// Asynchronous operations: poll for readiness, then a single read or
+// write that cannot block (at most PIPE_BUF bytes, which a pipe takes
+// atomically once poll reports room). Process exits arrive through a
+// self-pipe written by the SIGCHLD handler. No descriptor that another
+// process may hold is made non-blocking.
+
+static void onsigchld(int)
+{
+    i32 saved = errno;
+    u8  c = 0;
+    if (write(sigos->wakefd[1], &c, 1)) {}
+    errno = saved;
+}
+
+static void initasync(Os *os)
+{
+    sigos = os;
+    struct sigaction sa = {};
+    sigaction(SIGPIPE, 0, &sa);
+    os->pipeign = sa.sa_handler == SIG_IGN;
+    signal(SIGPIPE, SIG_IGN);
+    if (pipe(os->wakefd)) {
+        os->wakefd[0] = os->wakefd[1] = -1;
+        return;
+    }
+    for (i32 i = 0; i < 2; i++) {
+        os->wakefd[i] = highfd(os->wakefd[i]);
+        fcntl(os->wakefd[i], F_SETFL, O_NONBLOCK);
+    }
+    sa = {};
+    sa.sa_handler = onsigchld;
+    sa.sa_flags   = SA_RESTART | SA_NOCLDSTOP;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGCHLD, &sa, 0);
+}
+
+// Complete an operation if it can be done now. For reads and writes,
+// revents is poll's verdict on the descriptor.
+static b32 tryio(Io *io, i32 revents)
+{
+    switch (io->op) {
+    case IO_READ: {
+        if (!revents) return 0;
+        iz n;
+        do {
+            n = read((i32)io->h, io->buf, (uz)(io->len<(1<<30) ? io->len : (1<<30)));
+        } while (n<0 && errno==EINTR);
+        io->n   = n<0 ? 0 : n;
+        io->err = n<0 ? errno : 0;
+    } return 1;
+    case IO_WRITE: {
+        if (!revents) return 0;
+        iz len = io->len<PIPE_BUF ? io->len : PIPE_BUF;
+        iz n;
+        do {
+            n = write((i32)io->h, io->buf, (uz)len);
+        } while (n<0 && errno==EINTR);
+        io->n   = n<0 ? 0 : n;
+        io->err = n<0 ? errno : 0;
+    } return 1;
+    case IO_PROC: {
+        i32   status = 0;
+        pid_t r;
+        do {
+            r = waitpid((pid_t)io->h, &status, WNOHANG);
+        } while (r<0 && errno==EINTR);
+        if (!r) return 0;
+        io->n   = r<0 ? 127 : waitstatus(status);
+        io->err = 0;
+    } return 1;
+    }
+    io->err = E_INVAL;
+    return 1;
+}
+
+static i32 pollnow(Io *io, i32 timeout)
+{
+    struct pollfd p = {};
+    p.fd     = (i32)io->h;
+    p.events = io->op==IO_READ ? POLLIN : POLLOUT;
+    i32 r;
+    do {
+        r = poll(&p, 1, timeout);
+    } while (r<0 && errno==EINTR);
+    return r>0 ? p.revents : 0;
+}
+
+static void os_submit(Os *os, Io *io)
+{
+    io->done = 0;
+    io->next = 0;
+    if (tryio(io, io->op==IO_PROC ? 1 : pollnow(io, 0))) {
+        io->done = 1;
+        return;
+    }
+    Io **tail = &os->pending;
+    while (*tail) tail = &(*tail)->next;
+    *tail = io;
+}
+
+static Io *os_wait(Os *os, i64 deadline)
+{
+    enum { MAXPOLL = 256 };
+    struct pollfd fds[MAXPOLL];
+    for (;;) {
+        // Process exits first: the self-pipe only says "look again"
+        for (Io **p = &os->pending; *p; p = &(*p)->next) {
+            Io *io = *p;
+            if (io->op==IO_PROC && tryio(io, 1)) {
+                *p = io->next;
+                io->done = 1;
+                return io;
+            }
+        }
+        i32 n = 0;
+        fds[n].fd      = os->wakefd[0];
+        fds[n].events  = POLLIN;
+        fds[n++].revents = 0;
+        for (Io *io = os->pending; io && n<MAXPOLL; io = io->next) {
+            if (io->op == IO_PROC) continue;
+            fds[n].fd      = (i32)io->h;
+            fds[n].events  = io->op==IO_READ ? POLLIN : POLLOUT;
+            fds[n++].revents = 0;
+        }
+        i32 timeout = -1;
+        if (deadline == WAIT_POLL) {
+            timeout = 0;
+        } else if (deadline > 0) {
+            i64 left = (deadline - os_now(os) + 999999) / 1000000;
+            timeout = left<0 ? 0 : left>(1<<30) ? (1<<30) : (i32)left;
+        }
+        i32 r = poll(fds, (nfds_t)n, timeout);
+        if (r<0 && errno!=EINTR) return 0;
+        if (fds[0].revents) {
+            u8 buf[64];
+            while (read(os->wakefd[0], buf, sizeof(buf)) > 0) {}
+        }
+        i32 k = 1;
+        for (Io **p = &os->pending; *p; p = &(*p)->next) {
+            Io *io = *p;
+            if (io->op == IO_PROC) continue;
+            if (k >= n) break;
+            if (tryio(io, fds[k++].revents)) {
+                *p = io->next;
+                io->done = 1;
+                return io;
+            }
+        }
+        for (Io **p = &os->pending; *p; p = &(*p)->next) {
+            Io *io = *p;
+            if (io->op==IO_PROC && tryio(io, 1)) {
+                *p = io->next;
+                io->done = 1;
+                return io;
+            }
+        }
+        if (r==0 && timeout>=0) return 0;
+    }
+}
+
+static b32 os_cancel(Os *os, Io *io)
+{
+    for (Io **p = &os->pending; *p; p = &(*p)->next) {
+        if (*p == io) {
+            *p = io->next;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static i64 os_now(Os *)
@@ -335,6 +523,7 @@ int main(int argc, char **argv)
     static Os os;
     OsInfo info = {};
     info.reserve = (iz)1 << (sizeof(void *)==8 ? 34 : 28);
+    initasync(&os);
 
     Arena a = newarena(&os, (iz)1<<26);
     info.nargs = argc;

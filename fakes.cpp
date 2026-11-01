@@ -1052,6 +1052,23 @@ static i32 fake_false(Os *os, FakeCtx *ctx)
     return fkexit(&p, 1);
 }
 
+// yes: its arguments (or "y") on a line, until the output fails.
+static i32 fake_yes(Os *os, FakeCtx *ctx)
+{
+    FkProg p = fkprog(os, ctx);
+    iz     i = ctx->argc>1 && ctx->argv[1]=="--" ? 2 : 1;
+    Buf    line(p.a, 64);
+    for (iz k = i; k < ctx->argc; k++) {
+        if (k > i) putbyte(&line, ' ');
+        print(&line, ctx->argv[k]);
+    }
+    if (i >= ctx->argc) putbyte(&line, 'y');
+    putbyte(&line, '\n');
+    Str s = finish(&line);
+    while (!p.out.err) print(&p.out, s);
+    return fkexit(&p, 1);
+}
+
 static i32 fake_echo(Os *os, FakeCtx *ctx)
 {
     FkProg p  = fkprog(os, ctx);
@@ -9924,6 +9941,7 @@ static Fake fakes[] = {
     {"uniq",     fake_uniq},
     {"wc",       fake_wc},
     {"whoami",   fake_whoami},
+    {"yes",      fake_yes},
     {"xcase",    fake_xcase},
     {"zecho",    fake_zecho},
 };

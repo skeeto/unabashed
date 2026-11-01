@@ -219,15 +219,19 @@ static void storeleave(Store *st, Watermark *w)
 
 // Open files and the descriptor table
 
-enum : i32 { F_OS, F_CAPTURE, F_MEM };
+enum : i32 { F_OS, F_CAPTURE, F_MEM, F_PIPE };
 
-struct File {        // an open file description, shared by descriptors
+// An open file description, shared by descriptors. Files belong to one
+// vproc's store: another vproc gets its own File for the same object
+// (see vproccopy), with a duplicated handle or another Pipe end.
+struct File {
     i32    kind;
     i32    refs;
     i32    flags;    // OF_READ OF_WRITE OF_APPEND
     Handle h;        // F_OS
     Buf   *cap;      // F_CAPTURE: command substitution output
     Str    mem;      // F_MEM: here-document or pipeline text
+    Pipe  *pipe;     // F_PIPE: the read end with OF_READ, else the write end
     iz     pos;
     b32    ownmem;   // mem is store memory to free with the file
 };
@@ -311,6 +315,7 @@ struct HashCmd {
 
 struct Shell {
     Os      *os;
+    Sched   *sched;        // shared by every vproc of the process
     Store   *store;
     Fdtab   *fds;
     Lexer   *lexer;        // the innermost parser, for its options
@@ -343,7 +348,9 @@ struct Shell {
     i32      flowcount;
     i32      loopdepth;
     i32      noerrexit;    // inside a condition: set -e is off
-    i32      subshell;     // BASH_SUBSHELL
+    i32      subshell;     // subshell depth
+    i32      simplestages; // of which simple commands as pipeline stages,
+                           // which BASH_SUBSHELL leaves out, as bash
     i32      evaldepth;
     i32      sourcedepth;
     i32      funcdepth;
@@ -388,22 +395,42 @@ struct Shell {
 
 // Diagnostics
 
+[[noreturn]] static void escape(Shell *, i32 why);
+
+// A write to a pipe without readers: as a process killed by SIGPIPE,
+// the vproc ends silently with status 141.
+static void sigpipe(Shell *sh)
+{
+    sh->status  = 128 + 13;
+    sh->exiting = 1;
+    escape(sh, ESC_EXIT);
+}
+
 // Write to one of the shell's descriptors, through its current file.
 static b32 fdwrite(Shell *sh, i32 fd, Str s)
 {
     if (fd<0 || fd>=FDMAX) return 0;
     File *f = sh->fds->fd[fd];
     if (!f || !(f->flags & OF_WRITE)) return 0;
+    i32 err = 0;
     switch (f->kind) {
     case F_OS:
-        return !s.len || os_write(sh->os, f->h, s.data, s.len);
+        if (!s.len) return 1;
+        err = taskwrite(sh->sched, f->h, s.data, s.len);
+        break;
     case F_CAPTURE:
         print(f->cap, s);
         return 1;
     case F_MEM:
         return 0;
+    case F_PIPE:
+        err = pipewrite(sh->sched, f->pipe, s.data, s.len);
+        break;
     }
-    return 0;
+    if (err == E_PIPE) {
+        sigpipe(sh);
+    }
+    return !err;
 }
 
 // Write out the running builtin's pending output before a diagnostic,
@@ -510,6 +537,7 @@ static Str errtext(i32 err)
     case E_PIPE:   return "Broken pipe";
     case E_DOM:    return "Numerical argument out of domain";
     case E_RANGE:  return "Numerical result out of range";
+    case E_DEADLK: return "Resource deadlock avoided";
     case E_NAMETOOLONG: return "File name too long";
     case E_NOSYS:  return "Function not implemented";
     case E_NOTEMPTY: return "Directory not empty";
@@ -535,6 +563,8 @@ static void fileunref(Shell *sh, File *f)
     if (!f || --f->refs) return;
     if (f->kind == F_OS) {
         os_close(sh->os, f->h);
+    } else if (f->kind == F_PIPE) {
+        pipeclose(sh->sched, f->pipe, !(f->flags & OF_READ));
     }
     if (f->ownmem) {
         sfreestr(sh->store, f->mem);
@@ -598,7 +628,9 @@ static iz fileread(Shell *sh, File *f, u8 *buf, iz len)
     if (!f || !(f->flags & OF_READ)) return -1;
     switch (f->kind) {
     case F_OS:
-        return os_read(sh->os, f->h, buf, len);
+        return taskread(sh->sched, f->h, buf, len);
+    case F_PIPE:
+        return piperead(sh->sched, f->pipe, buf, len);
     case F_MEM: {
         iz n = f->mem.len - f->pos;
         n = n<len ? n : len;

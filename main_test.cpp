@@ -18,11 +18,23 @@
 #include "fakes.cpp"
 #include "vos.cpp"
 
+// A nested shell's share of the heap, released when it exits if
+// nothing reserved since then outlives it.
+struct HeapMark {
+    iz  save;
+    i32 proc;     // its vos process
+    b32 dead;
+};
+
 struct Os {
     Fibers   fibers;
     byte    *heap;     // backs every reservation
     iz       heapcap;
     iz       heapused;
+    iz       pinned;   // reserved by others while nested shells run
+    HeapMark marks[64];
+    i32      nmarks;
+    u64      chaos;    // seed for the next run, 0 for none
     Vos      vos;
 };
 
@@ -57,6 +69,9 @@ static byte *os_reserve(Os *os, iz len)
     }
     byte *r = os->heap + os->heapused + pad;
     os->heapused += pad + len;
+    if (os->nmarks && os->marks[os->nmarks-1].proc!=os->vos.cur) {
+        os->pinned = os->heapused;
+    }
     memset(r, 0x55, (uz)len);  // expose reads of uninitialized memory
     return r;
 }
@@ -159,12 +174,19 @@ static iz stackleft()
 }
 
 // The vos program for bash itself: a nested shell in the same process,
-// whose memory is released when it returns.
+// on the fiber of its vos process, whose memory is released when it
+// returns unless something reserved meanwhile still lives.
 static i32 fake_bash(Os *os, FakeCtx *ctx)
 {
-    iz save = os->heapused;
+    i32 m = os->nmarks;
+    if (m == countof(os->marks)) return 126;
+    os->marks[m].save = os->heapused;
+    os->marks[m].proc = os->vos.cur;
+    os->marks[m].dead = 0;
+    os->nmarks++;
     OsInfo info = {};
-    info.stack   = stackleft();
+    info.stack   = stackrest ? vstack(os) - ((iz)1<<20) : 0;
+    info.chaos   = os->chaos;
     info.args    = ctx->argv;
     info.nargs   = ctx->argc;
     info.env     = ctx->env;
@@ -178,7 +200,11 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     for (i32 i = 0; i < 3; i++) info.std[i] = ctx->fd[i];
     info.reserve = (iz)1<<22;
     i32 status = sh_main(os, &info);
-    os->heapused = save;
+    os->marks[m].dead = 1;
+    while (os->nmarks && os->marks[os->nmarks-1].dead) {
+        iz save = os->marks[--os->nmarks].save;
+        os->heapused = save>os->pinned ? save : os->pinned;
+    }
     return status;
 }
 
@@ -200,14 +226,16 @@ static Result runshell(Test *t, Str *args, iz nargs, Str input = {})
 {
     Os *os = t->os;
     os->heapused = 0;
-    os->fibers   = {};
+    os->pinned   = 0;
+    os->nmarks   = 0;
 
     // The vos lives in the upper half of the heap, the shell below
     Arena va = {};
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
     vreset(&os->vos, va, testfakes, ntestfakes);
-    os->vos.in = input;
+    os->vos.in    = input;
+    os->vos.chaos = os->chaos;
 
     static Str env[] = {
         "LANG=C", "TZ=UTC", "HOME=/home/oracle",
@@ -229,9 +257,11 @@ static Result runshell(Test *t, Str *args, iz nargs, Str input = {})
     info.std[2]  = 2;
     info.reserve = (iz)1<<22;
     info.stack   = (iz)1<<20;
+    info.chaos   = os->chaos;
 
     Result r = {};
     r.status = sh_main(os, &info);
+    vfinish(os);
     r.out    = os->vos.out;
     r.err    = os->vos.err;
     r.merged = os->vos.merged;
@@ -352,6 +382,8 @@ static SpecFile parsespec(Str s)
     return r;
 }
 
+static i32 chaosruns;  // --chaos N: also run each spec with seeds 1..N
+
 static b32 test_spec(Test *t, char *path)
 {
     Str  p        = {(u8 *)path, (iz)strlen(path)};
@@ -379,6 +411,21 @@ static b32 test_spec(Test *t, char *path)
     ok &= expect(t, p, r.err, want.err);
     ok &= expect(t, p, r.merged, want.merged);
     ok &= expectint(t, p, r.status, want.status);
+
+    // Under chaos scheduling, each writer's output must be the same
+    // (the merged stream may interleave differently)
+    i32 nchaos = find(script, "# nochaos")<0 ? chaosruns : 0;
+    for (i32 seed = 1; ok && seed <= nchaos; seed++) {
+        t->os->chaos = (u64)seed * 0x9e3779b97f4a7c15u;
+        r = runshell(t, args, countof(args));
+        t->os->chaos = 0;
+        char name[1200];
+        snprintf(name, sizeof(name), "%s (chaos seed %d)", path, seed);
+        Str n = {(u8 *)name, (iz)strlen(name)};
+        ok &= expect(t, n, r.out, want.out);
+        ok &= expect(t, n, r.err, want.err);
+        ok &= expectint(t, n, r.status, want.status);
+    }
 
     // The script's commands must also print and reparse to a fixed
     // point (scripts with aliases are skipped: the reparse lacks them).
@@ -474,7 +521,8 @@ static b32 oracle(Test *t, char *suite, char *name, b32 verbose)
 {
     Os *os = t->os;
     os->heapused = 0;
-    os->fibers   = {};
+    os->pinned   = 0;
+    os->nmarks   = 0;
     Arena va = {};
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
@@ -521,6 +569,7 @@ static b32 oracle(Test *t, char *suite, char *name, b32 verbose)
     stackrest    = 1;
     info.stack   = stackleft();
     i32 status = sh_main(os, &info);
+    vfinish(os);
     stackrest    = 0;
     // Some run-* scripts always print advisory "warning: ..." lines,
     // which run-all shows to a human. They are not differences.
@@ -571,8 +620,10 @@ int main(int argc, char **argv)
     }
 
     if (argc>2 && !strcmp(argv[1], "--run")) {
-        // Run one script on the vos and show what it printed
+        // Run one script on the vos and show what it printed, with an
+        // optional chaos seed
         Str script = readfile(argv[2]);
+        os.chaos = argc>3 ? (u64)atoll(argv[3]) : 0;
         Str args[] = {"bash", "-c", script, "bash"};
         Result r = runshell(&t, args, countof(args));
         printstr(stdout, r.merged);
@@ -609,6 +660,10 @@ int main(int argc, char **argv)
     i32 specfail = 0;
     for (i32 i = 1; i < argc; i++) {
         Str a = {(u8 *)argv[i], (iz)strlen(argv[i])};
+        if (a=="--chaos" && i+1<argc) {
+            chaosruns = atoi(argv[++i]);
+            continue;
+        }
         if (endswith(a, ".sh")) {
             specs++;
             specfail += !test_spec(&t, argv[i]);

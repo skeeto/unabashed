@@ -25,6 +25,9 @@ struct Os {
     byte  *heap;
     iz     heapcap;
     iz     heapused;
+    iz     pinned;    // reserved by others while nested shells run
+    i32    shells;    // nested shells running
+    i32    owner;     // vos process of the innermost one
     Vos    vos;
 };
 
@@ -53,6 +56,7 @@ static byte *os_reserve(Os *os, iz len)
     }
     byte *r = os->heap + os->heapused + pad;
     os->heapused += pad + len;
+    if (os->shells && os->owner!=os->vos.cur) os->pinned = os->heapused;
     return r;
 }
 
@@ -71,10 +75,13 @@ static void fiberunstack(Os *, byte *p, iz)
     free(p);
 }
 
-// Nested shells run in-process with their memory released afterward.
+// Nested shells run in-process with their memory released afterward,
+// unless another process reserved memory meanwhile.
 static i32 fake_bash(Os *os, FakeCtx *ctx)
 {
     iz save = os->heapused;
+    os->shells++;
+    os->owner = os->vos.cur;
     OsInfo info = {};
     info.args    = ctx->argv;
     info.nargs   = ctx->argc;
@@ -86,7 +93,8 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     for (i32 i = 0; i < 3; i++) info.std[i] = ctx->fd[i];
     info.reserve = (iz)1<<18;
     i32 status = sh_main(os, &info);
-    os->heapused = save;
+    os->owner = -1;  // until the next nested shell
+    if (os->shells-- == 1 && os->pinned < save) os->heapused = save;
     return status;
 }
 
@@ -116,7 +124,9 @@ int main()
         memcpy(src, buf, (uz)len);
 
         os.heapused = 0;
-        os.fibers   = {};
+        os.pinned   = 0;
+        os.shells   = 0;
+        os.fibers.current = &os.fibers.main;
         if (setjmp(oomjmp)) {
             continue;
         }
@@ -145,6 +155,7 @@ int main()
         info.std[2]  = 2;
         info.reserve = (iz)1<<20;
         sh_main(&os, &info);
+        vfinish(&os);
         #endif
     }
 }

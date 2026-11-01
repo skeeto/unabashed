@@ -49,11 +49,13 @@ struct Var {
 };
 
 // A function body, deep-copied into one store block of its own so that
-// redefinition can free it. A body still running is freed when its
-// last call returns.
+// redefinition can free it. A body still running, or still in the
+// function table of another vproc, is freed when its last reference
+// goes.
 struct Code {
-    i32   refs;      // calls in progress
-    b32   dead;      // replaced or unset while running
+    Store *store;    // the vproc store holding it
+    i32   refs;      // calls in progress, and other vprocs' tables
+    b32   dead;      // replaced or unset in its own store's table
     iz    size;      // of the block, for sfree
     Node *body;
     Str   file;      // where it was defined, for BASH_SOURCE
@@ -204,7 +206,7 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
         return finish(&b);
     }
     case DYN_BASHPID:       return fmti64(a, sh->bashpid);
-    case DYN_BASH_SUBSHELL: return fmti64(a, sh->subshell);
+    case DYN_BASH_SUBSHELL: return fmti64(a, sh->subshell - sh->simplestages);
     case DYN_FUNCNAME:
         return sh->frame ? sh->frame->name : Str{};
     case DYN_BASH_LINENO:
@@ -677,14 +679,27 @@ static Func *findfunc(Shell *sh, Str name)
     return 0;
 }
 
-static void releasecode(Shell *sh, Code *c)
+static void freecode(Shell *sh, Code *c)
 {
-    if (!c) return;
-    if (c->refs) {
+    keepcmdtext(sh, (byte *)c, (byte *)c+c->size);
+    sfree(c->store, c, c->size);
+}
+
+// The function table entry f lets go of its body.
+static void releasecode(Shell *sh, Func *f)
+{
+    Store *st = sh->store;
+    Code  *c  = f->code;
+    if (!c || (byte *)f<st->mark) {
+        return;  // a subshell's change, which rollback reverses
+    }
+    if (c->store != st) {
+        // another vproc's: shared by reference
+        if (!--c->refs && c->dead) freecode(sh, c);
+    } else if (c->refs) {
         c->dead = 1;
     } else {
-        keepcmdtext(sh, (byte *)c, (byte *)c+c->size);
-        sfree(sh->store, c, c->size);
+        freecode(sh, c);
     }
 }
 
@@ -705,7 +720,8 @@ static Code *newcode(Shell *sh, Arena scratch, Node *body)
     block.beg = salloc(sh->store, size);
     block.end = block.beg + size;
     Code *c = alloc<Code>(&block);
-    c->size = size;
+    c->store = sh->store;
+    c->size  = size;
     c->body = copynode(&block, body);
     c->file = clone(&block, sh->srcname);
     return c;
@@ -728,7 +744,7 @@ static void definefunc(Shell *sh, Arena scratch, Str name, Node *body)
         if (slot == &sh->funcs) *slot = f; else jset(st, slot, f);
     } else {
         Func *f = *slot;
-        releasecode(sh, f->code);
+        releasecode(sh, f);
         jset(st, &f->body, code->body);
         jset(st, &f->code, code);
     }
@@ -739,7 +755,7 @@ static void unsetfunc(Shell *sh, Str name)
     Func *f = sh->funcs;
     for (u64 h = hash(name); f; h <<= 2) {
         if (f->name == name) {
-            releasecode(sh, f->code);
+            releasecode(sh, f);
             jset(sh->store, &f->body, (Node *)0);
             jset(sh->store, &f->code, (Code *)0);
             jwrite(sh->store, &f->attrs, 0);

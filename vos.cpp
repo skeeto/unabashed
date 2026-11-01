@@ -3,8 +3,15 @@
 // The test and fuzz layers include this file after unabashed.cpp. They
 // embed a Vos in their struct Os and define osvos() to return it. Nothing
 // here touches the host: file names resolve against the virtual tree, and
-// "processes" are fake programs (fakes.cpp) or nested shells, run to
-// completion inside os_spawn.
+// "processes" are fake programs (fakes.cpp) or nested shells.
+//
+// Each spawned process runs on a fiber of its own, scheduled by the vos
+// deterministically: a process runs until it blocks (an empty or full
+// pipe, waiting for a child, or os_wait), then the next runnable one in
+// round-robin order runs. Pipes hold 64 KiB, as on Linux; a fake that
+// writes to a pipe without readers dies as if by SIGPIPE. When nothing
+// can run, the vos reports a deadlock and fails the blocked call
+// instead of hanging. A chaos seed randomizes the choices.
 //
 // The initial tree mirrors the oracle container (tools/record) so that
 // recorded specs and the vos agree: cwd and HOME /home/oracle, a /tmp,
@@ -34,10 +41,12 @@ struct VNode {
 
 enum : i32 { VK_FREE, VK_FILE, VK_DIR, VK_PIPEREAD, VK_PIPEWRITE, VK_NULL };
 
+enum { VPIPECAP = 1<<16 };
+
 struct VPipe {
-    Str  data;
-    iz   cap;
+    u8  *buf;      // VPIPECAP bytes once written
     iz   pos;      // next unread byte
+    iz   len;      // end of the buffered bytes
     i32  readers;
     i32  writers;
 };
@@ -53,9 +62,25 @@ struct VFile {      // open file description
 
 enum { VOS_HANDLES = 1024 };
 
+enum : i32 { VP_FREE, VP_RUN, VP_BLOCK, VP_EXIT };
+enum : i32 { VW_NONE, VW_READ, VW_WRITE, VW_PROC, VW_IO, VW_YIELD };
+
+// A process: slot 0 is the outermost shell, the rest are spawned.
 struct VProc {
-    i32 status;
-    b32 used;
+    i32     state;    // VP_*
+    i32     status;   // once exited
+    i32     prog;
+    b32     shell;    // a shell: a broken pipe is an error, not a kill
+    b32     failed;   // resumed to fail its blocked call (deadlock)
+    Fiber  *fiber;    // where to resume it
+    Fiber  *own;      // its own fiber, freed once reaped
+    iz      stack;
+    i32     wait;     // VW_*: what it is blocked on
+    VPipe  *wpipe;
+    Handle  wproc;
+    Io     *ios;      // submitted and not yet completed
+    FakeCtx ctx;
+    Arena   mem;      // a fixed block: the program's memory
 };
 
 struct Vos {
@@ -63,13 +88,16 @@ struct Vos {
     VNode  *root;
     VFile   files[VOS_HANDLES];
     VProc   procs[256];
-    i32     nprocs;
+    i32     nprocs;      // slots in use, including the outermost shell
+    i32     cur;         // the running process
+    i32     live;        // spawned processes not yet exited
+    u64     chaos;       // seed for random scheduling, 0 for none
+    u8     *freebufs;    // released pipe buffers
     i64     nextino;
     i32     user;        // owner of new nodes
     i64     clock;       // virtual realtime, ns; advances on each query
     Fake   *fakes;
     iz      nfakes;
-    i32     depth;       // nested shells, to stop runaway recursion
     // Captured standard streams of the outermost shell
     Str     out;
     Str     err;
@@ -227,19 +255,49 @@ static void vwritenode(Vos *v, VNode *n, i64 pos, u8 *buf, iz len)
     n->mtime = v->clock;
 }
 
-static void vpipewrite(Vos *v, VPipe *p, u8 *buf, iz len)
+// Append what fits; the caller checked for space.
+static iz vpipewrite(Vos *v, VPipe *p, u8 *buf, iz len)
 {
-    if (p->data.len+len > p->cap) {
-        iz cap = p->cap ? p->cap : 256;
-        while (cap < p->data.len+len) cap *= 2;
-        u8 *data = allocbytes(&v->a, cap);
-        copybytes(data, p->data.data, p->data.len);
-        p->data.data = data;
-        p->cap = cap;
+    if (!p->buf) {
+        p->buf = v->freebufs;
+        if (p->buf) {
+            __builtin_memcpy(&v->freebufs, p->buf, sizeof(u8 *));
+        } else {
+            p->buf = allocbytes(&v->a, VPIPECAP);
+        }
     }
-    copybytes(p->data.data+p->data.len, buf, len);
-    p->data.len += len;
+    iz space = VPIPECAP - (p->len - p->pos);
+    iz n = len<space ? len : space;
+    if (p->len+n > VPIPECAP) {
+        __builtin_memmove(p->buf, p->buf+p->pos, (uz)(p->len-p->pos));
+        p->len -= p->pos;
+        p->pos  = 0;
+    }
+    copybytes(p->buf+p->len, buf, n);
+    p->len += n;
+    return n;
 }
+
+static iz vpiperead(VPipe *p, u8 *buf, iz len)
+{
+    iz n = p->len - p->pos;
+    n = n<len ? n : len;
+    copybytes(buf, p->buf+p->pos, n);
+    p->pos += n;
+    if (p->pos == p->len) p->pos = p->len = 0;
+    return n;
+}
+
+static u32 vrand(Vos *v)
+{
+    u64 x = v->chaos;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    v->chaos = x;
+    return (u32)((x * 0x2545f4914f6cdd1dull) >> 32);
+}
+
 
 static Handle vnewhandle(Vos *v)
 {
@@ -259,6 +317,180 @@ static VFile *vfile(Vos *v, Handle h)
         return v->files + h;
     }
     return 0;
+}
+
+
+// Processes
+
+static b32 vioready(Vos *, Io *);
+
+static b32 vready(Vos *v, VProc *p)
+{
+    if (p->state == VP_RUN) return 1;
+    if (p->state != VP_BLOCK) return 0;
+    VPipe *q = p->wpipe;
+    switch (p->wait) {
+    case VW_READ:  return q->len>q->pos || !q->writers;
+    case VW_WRITE: return q->len-q->pos<VPIPECAP || !q->readers;
+    case VW_PROC:  return v->procs[p->wproc].state == VP_EXIT;
+    case VW_YIELD: return 1;
+    case VW_IO:
+        for (Io *io = p->ios; io; io = io->next) {
+            if (vioready(v, io)) return 1;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+// The next process to run after the current one, which may be itself
+// (last, unless chaos picks it), or -1 if none can run.
+static i32 vpick(Vos *v, b32 selfok)
+{
+    i32 n    = v->nprocs;
+    i32 self = v->cur;
+    if (v->chaos) {
+        i32 ready[256];
+        i32 nready = 0;
+        for (i32 i = 0; i < n; i++) {
+            if ((i!=self || selfok) && vready(v, v->procs+i)) ready[nready++] = i;
+        }
+        return nready ? ready[vrand(v) % (u32)nready] : -1;
+    }
+    for (i32 i = 1; i <= n; i++) {
+        i32 j = (self + i) % n;
+        if ((j!=self || selfok) && vready(v, v->procs+j)) return j;
+    }
+    return -1;
+}
+
+static void vrun(Os *os, Vos *v, i32 next)
+{
+    VProc *me = v->procs + v->cur;
+    VProc *p  = v->procs + next;
+    p->state = VP_RUN;
+    p->wait  = VW_NONE;
+    if (next == v->cur) return;
+    me->fiber = os_self(os);
+    v->cur = next;
+    os_switch(os, p->fiber);
+}
+
+// Block the current process on its wait condition until it holds.
+// Returns false if nothing else can run, so that it never would.
+static b32 vschedule(Os *os, Vos *v)
+{
+    VProc *me = v->procs + v->cur;
+    me->state = VP_BLOCK;
+    i32 next = vpick(v, 1);
+    if (next < 0) {
+        me->state = VP_RUN;
+        me->wait  = VW_NONE;
+        return 0;
+    }
+    vrun(os, v, next);
+    b32 ok = !me->failed;
+    me->failed = 0;
+    return ok;
+}
+
+static void vdeadlock(Vos *v)
+{
+    Str msg = "vos: deadlock\n";
+    for (i32 i = 0; i < 2; i++) {
+        Str *dst = i ? &v->merged : &v->err;
+        if (msg.len <= v->outcap - dst->len) {
+            copybytes(dst->data+dst->len, msg.data, msg.len);
+            dst->len += msg.len;
+        }
+    }
+}
+
+// Give the other runnable processes a turn.
+static void vyield(Os *os, Vos *v)
+{
+    v->procs[v->cur].wait = VW_YIELD;
+    vschedule(os, v);
+}
+
+static void vcloseall(Os *os, VProc *p)
+{
+    for (iz i = 0; i < countof(p->ctx.fd); i++) {
+        os_close(os, p->ctx.fd[i]);
+        p->ctx.fd[i] = BADHANDLE;
+    }
+}
+
+// End the current process: it never runs again. If nothing else can
+// run, resume a blocked process to fail its call.
+[[noreturn]] static void vexit(Os *os, Vos *v, i32 status)
+{
+    VProc *me = v->procs + v->cur;
+    vcloseall(os, me);
+    me->status = status;
+    me->state  = VP_EXIT;
+    me->wait   = VW_NONE;
+    v->live--;
+    i32 next = vpick(v, 0);
+    if (next < 0) {
+        vdeadlock(v);
+        for (i32 i = 0; i < v->nprocs; i++) {
+            if (v->procs[i].state == VP_BLOCK) {
+                next = i;
+                v->procs[i].failed = 1;
+                break;
+            }
+        }
+    }
+    assert(next >= 0);
+    vrun(os, v, next);
+    __builtin_trap();
+}
+
+// End another process, as by a signal.
+static void vkill(Os *os, Vos *v, VProc *p, i32 status)
+{
+    if (p->state==VP_EXIT || p->state==VP_FREE) return;
+    vcloseall(os, p);
+    p->status = status;
+    p->state  = VP_EXIT;
+    p->wait   = VW_NONE;
+    v->live--;
+}
+
+// Release an exited process's slot.
+static i32 vreap(Os *os, Vos *v, Handle proc)
+{
+    VProc *p = v->procs + proc;
+    if (p->own) os_fiberfree(os, p->own);
+    p->own   = p->fiber = 0;
+    p->state = VP_FREE;
+    return p->status;
+}
+
+static void vprocentry(Os *os, void *arg)
+{
+    VProc *p = (VProc *)arg;
+    Vos   *v = osvos(os);
+    vexit(os, v, v->fakes[p->prog].main(os, &p->ctx));
+}
+
+// The running process's stack size, for nested shells.
+static iz vstack(Os *os)
+{
+    Vos *v = osvos(os);
+    return v->procs[v->cur].stack;
+}
+
+// Free the fibers of processes left over after a run.
+static void vfinish(Os *os)
+{
+    Vos *v = osvos(os);
+    for (i32 i = 1; i < v->nprocs; i++) {
+        VProc *p = v->procs + i;
+        if (p->own) os_fiberfree(os, p->own);
+        p->own = p->fiber = 0;
+    }
 }
 
 
@@ -327,6 +559,12 @@ static void os_close(Os *os, Handle h)
     if (!f || --f->refs) return;
     if (f->kind == VK_PIPEREAD)  f->pipe->readers--;
     if (f->kind == VK_PIPEWRITE) f->pipe->writers--;
+    VPipe *p = f->pipe;
+    if (p && !p->readers && !p->writers && p->buf) {
+        __builtin_memcpy(p->buf, &v->freebufs, sizeof(u8 *));
+        v->freebufs = p->buf;
+        p->buf = 0;
+    }
     f->kind = VK_FREE;
 }
 
@@ -341,7 +579,7 @@ static Handle os_dup(Os *os, Handle h)
 
 static iz os_pipecap(Os *)
 {
-    return (iz)1<<40;  // unbounded: writers never block
+    return VPIPECAP;
 }
 
 static OsPipe os_pipe(Os *os)
@@ -395,10 +633,30 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
         vwritenode(v, f->node, f->pos, buf, len);
         f->pos += len;
         return 1;
-    case VK_PIPEWRITE:
-        if (!f->pipe->readers) return 0;  // EPIPE
-        vpipewrite(v, f->pipe, buf, len);
+    case VK_PIPEWRITE: {
+        VPipe *p  = f->pipe;
+        VProc *me = v->procs + v->cur;
+        if (v->chaos && vrand(v)%4==0) vyield(os, v);
+        while (len > 0) {
+            if (!p->readers) {
+                if (!me->shell) vexit(os, v, 128+13);  // SIGPIPE
+                return 0;
+            }
+            if (p->len-p->pos == VPIPECAP) {
+                me->wait  = VW_WRITE;
+                me->wpipe = p;
+                if (!vschedule(os, v)) {
+                    vdeadlock(v);
+                    return 0;
+                }
+                continue;
+            }
+            iz n = vpipewrite(v, p, buf, len);
+            buf += n;
+            len -= n;
+        }
         return 1;
+    }
     }
     return 0;
 }
@@ -428,13 +686,18 @@ static iz os_read(Os *os, Handle h, u8 *buf, iz len)
         return n;
     }
     case VK_PIPEREAD: {
-        // Writers have all run to completion, so an empty pipe is EOF
-        VPipe *p = f->pipe;
-        iz n = p->data.len - p->pos;
-        n = n<len ? n : len;
-        copybytes(buf, p->data.data+p->pos, n);
-        p->pos += n;
-        return n;
+        VPipe *p  = f->pipe;
+        VProc *me = v->procs + v->cur;
+        if (v->chaos && vrand(v)%4==0) vyield(os, v);
+        while (p->len==p->pos && p->writers) {
+            me->wait  = VW_READ;
+            me->wpipe = p;
+            if (!vschedule(os, v)) {
+                vdeadlock(v);
+                return -1;
+            }
+        }
+        return vpiperead(p, buf, len);
     }
     }
     return -1;
@@ -580,7 +843,9 @@ static i32 vprogram(Vos *v, Str path, i32 *err)
     return prog - 1;
 }
 
-static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
+// Spawn a fake program as a process of its own, runnable at once. Its
+// arguments are copied into its memory, since it outlives the call.
+static Spawned os_spawn(Os *os, Arena, Spawn *s)
 {
     Vos    *v = osvos(os);
     Spawned r = {};
@@ -589,23 +854,30 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     if (prog < 0) {
         return r;
     }
-    // Reuse the slot of a process already waited for
-    i32 id = 0;
-    for (; id<v->nprocs && v->procs[id].used; id++) {}
-    if (id == countof(v->procs)) {
+    i32 id = 1;
+    for (; id<v->nprocs && v->procs[id].state!=VP_FREE; id++) {}
+    if (id==countof(v->procs) || v->live>=64) {
         r.err = E_AGAIN;
         return r;
     }
-    v->procs[id].used = 1;  // claimed before nested spawns run
     v->nprocs += id == v->nprocs;
-
+    VProc *p = v->procs + id;
+    if (!p->mem.beg) {
+        enum { VPMEM = 1<<22 };
+        p->mem.beg = (byte *)allocbytes(&v->a, VPMEM);
+        p->mem.end = p->mem.beg + VPMEM;
+    }
+    Arena mem = {};
+    mem.beg = p->mem.beg;
+    mem.end = p->mem.end;
     FakeCtx ctx = {};
-    ctx.argv    = s->argv;
-    ctx.argc    = s->argc;
-    ctx.env     = s->env;
-    ctx.nenv    = s->nenv;
-    ctx.cwd     = s->cwd;
-    ctx.scratch = scratch;
+    ctx.argc = s->argc;
+    ctx.argv = alloc<Str>(&mem, s->argc+1);
+    for (iz i = 0; i < s->argc; i++) ctx.argv[i] = clone(&mem, s->argv[i]);
+    ctx.nenv = s->nenv;
+    ctx.env  = alloc<Str>(&mem, s->nenv+1);
+    for (iz i = 0; i < s->nenv; i++) ctx.env[i] = clone(&mem, s->env[i]);
+    ctx.cwd  = clone(&mem, s->cwd);
     for (iz i = 0; i < countof(ctx.fd); i++) {
         ctx.fd[i] = BADHANDLE;
     }
@@ -614,13 +886,19 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
             ctx.fd[s->fds[i].fd] = os_dup(os, s->fds[i].h);
         }
     }
-    v->depth++;
-    i32 status = v->depth>64 ? 126 : v->fakes[prog].main(os, &ctx);
-    v->depth--;
-    for (iz i = 0; i < countof(ctx.fd); i++) {
-        os_close(os, ctx.fd[i]);
-    }
-    v->procs[id].status = status;
+    ctx.scratch = mem;
+
+    p->state  = VP_RUN;
+    p->status = 0;
+    p->prog   = prog;
+    p->shell  = v->fakes[prog].name == "bash";
+    p->failed = 0;
+    p->wait   = VW_NONE;
+    p->ios    = 0;
+    p->ctx    = ctx;
+    p->stack  = p->shell ? (iz)1<<25 : (iz)1<<20;
+    p->own    = p->fiber = os_fiber(os, &v->a, p->stack, vprocentry, p);
+    v->live++;
     r.proc = (Handle)id;
     return r;
 }
@@ -628,9 +906,130 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 static i32 os_waitproc(Os *os, Handle proc)
 {
     Vos *v = osvos(os);
-    if (proc>=(Handle)v->nprocs || !v->procs[proc].used) return 127;
-    v->procs[proc].used = 0;
-    return v->procs[proc].status;
+    if (!proc || proc>=(Handle)v->nprocs || v->procs[proc].state==VP_FREE) {
+        return 127;
+    }
+    VProc *me = v->procs + v->cur;
+    while (v->procs[proc].state != VP_EXIT) {
+        me->wait  = VW_PROC;
+        me->wproc = proc;
+        if (!vschedule(os, v)) {
+            vdeadlock(v);
+            vkill(os, v, v->procs+proc, 128+9);
+        }
+    }
+    return vreap(os, v, proc);
+}
+
+// Can a submitted operation complete now? Then with perform set, do it.
+static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
+{
+    VFile *f = io->op==IO_PROC ? 0 : vfile(v, io->h);
+    switch (io->op) {
+    case IO_READ:
+        if (f && f->kind==VK_PIPEREAD) {
+            VPipe *p = f->pipe;
+            if (p->len==p->pos && p->writers) return 0;
+            if (perform) io->n = vpiperead(p, io->buf, io->len);
+        } else if (perform) {
+            io->n = os_read(os, io->h, io->buf, io->len);
+            io->err = io->n<0 ? E_BADF : 0;
+        }
+        return 1;
+    case IO_WRITE:
+        if (f && f->kind==VK_PIPEWRITE) {
+            VPipe *p = f->pipe;
+            if (!p->readers) {
+                io->err = E_PIPE;
+                return 1;
+            }
+            if (p->len-p->pos == VPIPECAP) return 0;
+            if (perform) io->n = vpipewrite(v, p, io->buf, io->len);
+        } else if (perform) {
+            io->n   = io->len;
+            io->err = os_write(os, io->h, io->buf, io->len) ? 0 : E_BADF;
+        }
+        return 1;
+    case IO_PROC:
+        if (!io->h || io->h>=(Handle)v->nprocs || v->procs[io->h].state==VP_FREE) {
+            io->err = E_CHILD;
+            return 1;
+        }
+        if (v->procs[io->h].state != VP_EXIT) return 0;
+        if (perform) io->n = vreap(os, v, io->h);
+        return 1;
+    }
+    io->err = E_INVAL;
+    return 1;
+}
+
+static b32 vioready(Vos *v, Io *io)
+{
+    return vio(0, v, io, 0);
+}
+
+static void os_submit(Os *os, Io *io)
+{
+    Vos   *v  = osvos(os);
+    VProc *me = v->procs + v->cur;
+    io->done = 0;
+    io->next = 0;
+    if (!v->chaos || vrand(v)%2) {
+        if (vio(os, v, io, 1)) {
+            io->done = 1;
+            return;
+        }
+    }
+    Io **tail = &me->ios;
+    while (*tail) tail = &(*tail)->next;
+    *tail = io;
+}
+
+static Io *os_wait(Os *os, i64 deadline)
+{
+    Vos   *v  = osvos(os);
+    VProc *me = v->procs + v->cur;
+    b32 yielded = 0;
+    for (;;) {
+        for (Io **p = &me->ios; *p; p = &(*p)->next) {
+            Io *io = *p;
+            if (vio(os, v, io, 1)) {
+                *p = io->next;
+                io->done = 1;
+                return io;
+            }
+        }
+        if (deadline == WAIT_POLL) {
+            // Polling: let the other processes make progress once
+            if (yielded) return 0;
+            vyield(os, v);
+            yielded = 1;
+            continue;
+        }
+        me->wait = VW_IO;
+        if (!vschedule(os, v)) {
+            if (deadline > 0) {
+                v->clock = v->clock>deadline ? v->clock : deadline;
+            } else {
+                vdeadlock(v);
+            }
+            return 0;
+        }
+    }
+}
+
+static b32 os_cancel(Os *os, Io *io)
+{
+    Vos *v = osvos(os);
+    for (i32 i = 0; i < v->nprocs; i++) {
+        for (Io **p = &v->procs[i].ios; *p; p = &(*p)->next) {
+            if (*p == io) {
+                *p = io->next;
+                return 1;
+            }
+        }
+    }
+    return 0;
 }
 
 
@@ -669,6 +1068,9 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes)
     v->clock   = (i64)1700000000 * 1000000000;
     v->fakes   = fakes;
     v->nfakes  = nfakes;
+    v->nprocs  = 1;  // the outermost shell
+    v->procs[0].state = VP_RUN;
+    v->procs[0].shell = 1;
 
     v->root = vnew(v, 0, "", FT_DIR, 0755);
     vmkdirs(v, "home/oracle")->uid = 1000;

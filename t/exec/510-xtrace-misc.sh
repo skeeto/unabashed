@@ -12,3 +12,4 @@ echo a\ b "c\"d"
 set -- 'p 1' p2
 echo "$@"
 set +x
+# nochaos: the stages of "true | echo" trace in either order

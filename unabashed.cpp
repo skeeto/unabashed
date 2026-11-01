@@ -156,11 +156,13 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "brace.cpp"
 #include "b_test.cpp"
 #include "b_printf.cpp"
+#include "sched.cpp"
 #include "shell.cpp"
 #include "array.cpp"
 #include "vars.cpp"
 #include "expand.cpp"
 #include "exec.cpp"
+#include "proc.cpp"
 #include "builtins.cpp"
 
 
@@ -403,6 +405,7 @@ static i32 sh_main(Os *os, OsInfo *info)
 
     Shell *sh = alloc<Shell>(&perm);
     sh->os      = os;
+    sh->sched   = newsched(os, &perm, info->reserve, info->chaos, info->std[2]);
     sh->store   = st;
     sh->fds     = alloc<Fdtab>(&perm);
     sh->reserve = info->reserve;
@@ -572,5 +575,6 @@ static i32 sh_main(Os *os, OsInfo *info)
     } else if (top.why==ESC_FATAL && sh->cflag) {
         sh->status = 127;  // as bash's -c reports a fatal error
     }
+    freesched(sh->sched);
     return sh->status & 255;
 }
