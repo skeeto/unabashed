@@ -1143,8 +1143,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 Str msg = concat(&scratch, takehead(a, eq), ": cannot assign list to array member");
                 builtinerror(sh, scratch, name, msg);
             } else if (compound) {
+                i32 nl = mklocal && fresh ? SV_NEWLOCAL : 0;
                 ok = assigncompound(sh, scratch, vname, cuttail(cuthead(val, 1), 1),
-                                    sflags, wordcomp);
+                                    sflags|nl, wordcomp);
             } else if (hassub) {
                 i32 raw = sh->shopt[S_ARRAY_EXPAND_ONCE] ? SV_RAWKEY : 0;
                 ok = assignelem(sh, scratch, vname, sub, takehead(a, eq), val, sflags|raw);

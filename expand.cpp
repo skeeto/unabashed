@@ -2474,6 +2474,30 @@ struct CItem {      // an element of an indexed compound assignment
     b32 append;
 };
 
+// While the list for a new local expands, the binding it hides shows:
+// local -a arr=("${arr[@]}") copies the caller's array. (An escape
+// during the expansion leaves the local hidden, which only drops it.)
+struct Hidden {
+    Var   *var;
+    Value *top;
+};
+
+static Hidden hidelocal(Shell *sh, Str name, i32 flags)
+{
+    Hidden r = {};
+    if (!(flags & SV_NEWLOCAL)) return r;
+    r.var = findvar(sh, name);
+    r.top = r.var ? r.var->top : 0;
+    if (!r.top) return {};
+    r.var->top = r.top->below;
+    return r;
+}
+
+static void unhide(Hidden h)
+{
+    if (h.var) h.var->top = h.top;
+}
+
 // Discard the rest of the command after a failed compound assignment.
 [[noreturn]] static void compoundfail(Shell *sh)
 {
@@ -2506,6 +2530,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
 
     if (!(cur && cur->arr && cur->arr->bucket)) {
         // Indexed: expand every word first
+        Hidden hid = hidelocal(sh, name, flags);
         Slice<CItem> items = {};
         for (iz k = 0; k < words.len; k++) {
             Str w  = words[k];
@@ -2532,6 +2557,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
                 items = push(a, items, it);
             }
         }
+        unhide(hid);
         Value *val = assignslot(sh, scratch, name, flags|SV_FORCE);
         toarray(sh, val);
         if (!append) aclear(st, val->arr);
@@ -2584,6 +2610,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
     Array *dst = append ? arr : newassoc(st, arr->nbuckets);
     u32    at  = val->attrs;
     b32    failed = 0;
+    Hidden hid = hidelocal(sh, name, flags);
     if (words.len && !assignment(words[0], 1)) {
         // key value key value ..., each word expanded as an assignment
         // value is: no splitting, no globbing
@@ -2635,6 +2662,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
             hput(st, dst, key, sclone(st, v));
         }
     }
+    unhide(hid);
     val = assignslot(sh, scratch, name, flags|SV_FORCE);
     if (dst != val->arr) {
         afree(st, val->arr);

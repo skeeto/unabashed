@@ -553,6 +553,7 @@ enum : i32 {  // setvar flags
     SV_UNDERTEMP = 1<<4,  // the binding below any temporary ones
     SV_NOREF  = 1<<5,  // name itself, even a nameref
     SV_RAWKEY = 1<<6,  // an associative subscript used as it is
+    SV_NEWLOCAL = 1<<7,  // a local just made: lists expand without it
 };
 
 static void varchanged(Shell *, Str name);
@@ -1097,8 +1098,11 @@ static b32 unsetvar(Shell *sh, Str name, b32 force = 0)
     if (!v || !v->top) return 1;
     Value *top = v->top;
     if ((top->attrs & V_READONLY) && !force) return 0;
-    if (top->depth && top->depth==sh->funcdepth && !(top->attrs & V_TEMP)) {
-        // A local at the current level stays local, but loses its value
+    b32 here = top->depth==sh->funcdepth ||
+               (sh->shopt[S_LOCALVAR_UNSET] && top->depth<sh->funcdepth);
+    if (top->depth && here && !(top->attrs & V_TEMP)) {
+        // A local at the current level (or, under localvar_unset, a
+        // caller's) stays local, but loses its value
         Value *val = ownvalue(sh, &v->top);
         afree(sh->store, val->arr);
         val->str   = {};
