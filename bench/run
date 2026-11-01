@@ -2,7 +2,7 @@
 # Usage: bench/run SHELL... : time each benchmark under each shell,
 # after checking that every shell prints the same output.
 cd "$(dirname "$0")"
-for b in b1 b2 b7 b8 b9 b10 b12; do
+for b in b1 b2 b3 b4 b7 b8 b9 b10 b12; do
     ref=
     for sh in "$@"; do
         out=$("$sh" $b.sh 2>&1 | cksum)
