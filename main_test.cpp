@@ -329,6 +329,66 @@ static void test_arena(Test *t)
     expectint(t, "arena oom", hit, 1);
 }
 
+// The scheduler on its own: pipes between tasks, joins, EPIPE, and
+// deadlock recovery.
+
+struct PipeTest {
+    Pipe *p;
+    iz    got;
+};
+
+static void pipereader(Task *t)
+{
+    PipeTest *x = (PipeTest *)t->arg;
+    u8 buf[100];
+    iz n;
+    while ((n = piperead(t->s, x->p, buf, countof(buf))) > 0) x->got += n;
+    pipeclose(t->s, x->p, 0);
+    t->status = n<0 ? 99 : 0;
+}
+
+static void test_sched(Test *t)
+{
+    Os *os = t->os;
+    os->heapused = 0;
+    Arena va = {};
+    va.beg = os->heap + os->heapcap/2;
+    va.end = os->heap + os->heapcap;
+    vreset(&os->vos, va, testfakes, ntestfakes);
+    Arena  a = newarena(os, (iz)1<<22);
+    Sched *s = newsched(os, &a, (iz)1<<22, 0, 2);
+
+    // Three pipes' worth through one pipe: the writer blocks, the
+    // reader drains, and closing the write end is end of file
+    PipeTest x = {};
+    x.p = newpipe(s);
+    Task *r = taskspawn(s, pipereader, &x, SMALLSTACK);
+    u8 *big = allocbytes(&a, 3*PIPECAP);
+    memset(big, 'x', 3*PIPECAP);
+    expectint(t, "sched pipewrite", pipewrite(s, x.p, big, 3*PIPECAP), 0);
+    pipeclose(s, x.p, 1);
+    expectint(t, "sched join", taskjoin(s, r), 0);
+    expectint(t, "sched bytes", x.got, 3*PIPECAP);
+    expectint(t, "sched tasks", s->ntasks, 1);
+
+    // No readers left: E_PIPE
+    Pipe *p = newpipe(s);
+    pipeclose(s, p, 0);
+    expectint(t, "sched epipe", pipewrite(s, p, big, 10), E_PIPE);
+    pipeclose(s, p, 1);
+
+    // The reader waits on a pipe whose writer is the joining task:
+    // reported, and the read fails
+    x = {};
+    x.p = newpipe(s);
+    r = taskspawn(s, pipereader, &x, SMALLSTACK);
+    expectint(t, "sched deadlock status", taskjoin(s, r), 99);
+    expect(t, "sched deadlock message", os->vos.err,
+           "unabashed: deadlock: every task is blocked\n");
+    pipeclose(s, x.p, 1);
+    freesched(s);
+}
+
 // SpecFile tests: run a script recorded by tools/record and compare all
 // of its outputs. The harness reads the files; the shell never does.
 
@@ -607,6 +667,7 @@ int main(int argc, char **argv)
     test_m0(&t);
     test_fibers(&t);
     test_arena(&t);
+    test_sched(&t);
 
     if (argc>3 && (!strcmp(argv[1], "--oracle") || !strcmp(argv[1], "--oracle-v"))) {
         // --oracle SUITEDIR NAME...: bash test suite runs on the vos

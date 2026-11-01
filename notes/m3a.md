@@ -14,7 +14,8 @@ Done (core foundation):
 - `sched.cpp`: the scheduler, tasks, in-memory `Pipe`s, task I/O, pumps,
   safe points, chaos mode, deadlock recovery.
 - `proc.cpp`: the copier (`vproccopy`), fiber vprocs (`spawnvproc`),
-  concurrent pipelines (`runpipeline`).
+  concurrent pipelines (`runpipeline`), external stages started
+  directly (`spawndirect`).
 - `exec.cpp`: `runprogram` materializes shell objects for externals
   (pumps); safe points in simple commands, loops and function calls.
 - `vos.cpp`: processes on fibers, blocking 64 KiB pipes, SIGPIPE for
@@ -22,11 +23,14 @@ Done (core foundation):
 - Platform API (`api.cpp`): `Io`, `os_submit`, `os_wait`, `os_cancel`,
   `OsInfo.chaos`, `E_DEADLK`; implemented on the vos, POSIX and Win32.
 - `fakes.cpp`: `yes`.
-- Tests: `t/exec/607`–`610`; `tests.exe --chaos N` reruns every spec
-  with N chaos seeds; `tests.exe --run FILE [SEED]`.
+- Tests: `t/exec/607`–`611`; `test_sched` unit tests (pipes, joins,
+  EPIPE, deadlock recovery); `tests.exe --chaos N` reruns every spec
+  with N chaos seeds, comparing stdout, stderr and status (a spec
+  containing `# nochaos` is exempt: its stages race on one stream);
+  `tests.exe --run FILE [SEED]`.
 
 Remaining M3a work (see "Plan for the rest of M3a" below): launcher
-fibers and direct spawning of external stages, procsub, heredoc and
+fibers for external stages with comsubs, procsub, heredoc and
 capture materialization through pumps everywhere, PIPESTATUS, traps and
 SIGPIPE dispositions, fork-on-exec, interim fiber `&`/wait/coproc, the
 isolate fuzzer, timers.
@@ -176,21 +180,29 @@ reports `subshell - simplestages`.
 ## Pipelines
 
 `runpipeline` (proc.cpp):
-1. Flatten the stages, left to right; `$?` in every stage is the
-   status from before the pipeline.
+1. Flatten the stages, left to right, along the parser's right-nested
+   chain (`a | b | c` is `a | (b | c)` in the tree, but one pipeline);
+   `$?` in every stage is the status from before the pipeline.
 2. For each edge: an OS pipe if a stage next to it is a likely external
    (`likelyexternal`: a simple command whose command word is a plain
    literal naming no builtin or function), else an in-memory `Pipe`. A
    wrong guess only costs speed: shell code can use an OS pipe, and an
    external given an in-memory pipe gets an OS pipe plus a pump.
-3. Spawn a fiber vproc for every stage but the last, then drop the
-   parent's pipe references and `yield`, so that earlier stages start
-   first, as forked children do (this matches bash's usual xtrace
-   order).
+3. For every stage but the last, in order: a **direct** external
+   (`directstage`: a likely external with no redirections, no `$(`,
+   backquote or procsub in its words, found on PATH, and no inherited
+   descriptor needing a pump) expands in a synchronous subshell with
+   the stage's descriptors and starts without waiting
+   (`Shell.spawnto` makes `runprogram` return the process); anything
+   else becomes a fiber vproc, followed by a `yield` so that it gets
+   going first, as a forked child does (this matches bash's usual
+   xtrace order). A direct stage that turns out to be a script without
+   `#!` falls back to a vproc. Then drop the parent's pipe references.
 4. Run the last stage on the current stack: in a synchronous subshell,
    or in the shell itself under lastpipe (without monitor mode).
-5. Close the last stage's input, join the stages right to left. `$?`
-   is the last stage's status, or with pipefail the rightmost nonzero.
+5. Close the last stage's input, join the stages right to left (fibers
+   with `taskjoin`, direct externals with `taskwaitproc`). `$?` is the
+   last stage's status, or with pipefail the rightmost nonzero.
 
 `runprogram` (exec.cpp), for every descriptor of an external:
 - `F_OS`: passed as is;
@@ -260,14 +272,11 @@ b32  os_cancel(Os *, Io *);        // false if it may still complete
 ## Plan for the rest of M3a
 
 In suggested order, each with the API to use:
-1. **Direct external stages** (plan step 3): in `runpipeline`, a stage
-   that is a simple command with constant or plain-parameter words
-   resolving to an external is expanded in the parent inside a journaled
-   subshell (`storeenter`/`storeleave`) with the stage's fds, spawned
-   with `os_spawn`, and waited for with an `IO_PROC` (`taskwaitproc` in
-   a tiny task, or a join list), with no vproc copy. Words with comsubs
-   or procsubs go to a launcher fiber (`spawnvproc` of the stage is
-   already correct, only slower).
+1. **Launcher fibers**: an external stage whose words contain comsubs
+   or procsubs runs as a full vproc today (correct, only slower). A
+   launcher would copy less state, or the copier could become
+   copy-on-first-write (M8). The last stage, when external, could also
+   be started directly instead of in a synchronous subshell.
 2. **PIPESTATUS**: `runpipeline` has every stage's status; also needs
    setting after every simple and compound command, cheaply (a dynamic
    variable over a small array in `Shell`).
