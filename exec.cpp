@@ -245,6 +245,8 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
         return {};
     }
     if (!setvar(c->sh, *a, ref->name, v, SV_QUIET)) {
+        Value *t = lookup(c->sh, ref->name);
+        if (!t || !(t->attrs & V_READONLY)) return {};  // reported
         c->readonly = 1;
         return concat(a, ref->name, ": readonly variable");
     }
@@ -305,7 +307,10 @@ static Arith evalinteger(Shell *sh, Arena *a, Str expr)
 static Arith evalarithcmd(Shell *sh, Arena *a, Str expr, Str who)
 {
     b32 readonly = 0;
+    Str savedname = sh->bltname;
+    sh->bltname = who;
     Arith r = arithrun(sh, a, expr, &readonly, who);
+    sh->bltname = savedname;
     if (!r.ok && readonly) {
         shellerror(sh, *a, r.err);  // bash reports these with no prefix
     } else if (!r.ok) {
@@ -669,6 +674,7 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
     for (Redir *r = list; r; r = r->next) {
         i32 fd   = r->src;
         b32 kept = keep;
+        b32 setfdvar = 0;
         if (r->srcvar) {
             // {var}>: allocate a descriptor from 10 up
             fd = FDUSER;
@@ -688,11 +694,7 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                     return 0;
                 }
             } else {
-                if (elem) {
-                    assignto(sh, *a, var, fmti64(a, fd));
-                } else {
-                    setvar(sh, *a, var, fmti64(a, fd));
-                }
+                setfdvar = 1;  // once the descriptor is open, as bash
                 // The new descriptor outlives the command
                 kept |= !sh->shopt[S_VARREDIR_CLOSE];
             }
@@ -845,6 +847,16 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
             f->ownmem = 1;
             fdset(sh, fd, f, kept, a);
         } break;
+        }
+        if (setfdvar) {
+            Str var = r->srcvar->text;
+            b32 ok  = find(var, "[")>=0 ? assignto(sh, *a, var, fmti64(a, fd))
+                                        : setvar(sh, *a, var, fmti64(a, fd));
+            if (!ok) {
+                shellerror(sh, *a, concat(a, var, ": cannot assign fd to variable"));
+                fdset(sh, fd, 0, kept, a);
+                return 0;
+            }
         }
     }
     return 1;
@@ -1969,7 +1981,10 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             sh->bout = &b;
             Slice<u8> savedcomp = sh->compargs;
             sh->compargs = compargs;
+            Str savedname = sh->bltname;
+            sh->bltname = name;
             sh->status = bi->fn(sh, argv.data, argv.len, scratch);
+            sh->bltname = savedname;
             sh->compargs = savedcomp;
             sh->bout = saved;
             if ((b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed) {
@@ -2513,7 +2528,21 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
             rundebugtrap(sh, it);
             sh->line = n->line;
         }
-        if (!setvar(sh, it, var, list[i])) {
+        Value *ref = rawlookup(sh, var);
+        if (ref && (ref->attrs & V_NAMEREF)) {
+            // A nameref loop variable refers to each word in turn
+            Ref r = resolveref(sh, var);
+            if (!validnameref(list[i])) {
+                Str msg = concat3(&it, "`", list[i], "': not a valid identifier");
+                shellerror(sh, it, msg);
+                sh->status = 1;
+                break;
+            }
+            if (!setvar(sh, it, r.last ? r.lastname : var, list[i], SV_NOREF)) {
+                sh->status = 1;
+                break;
+            }
+        } else if (!setvar(sh, it, var, list[i])) {
             sh->status = 1;
             break;
         }

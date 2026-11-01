@@ -832,7 +832,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             continue;
         }
         if (print) {
-            Value *v = lookup(sh, a);
+            Value *v = rawlookup(sh, a);
             if (!v) {
                 builtinerror(sh, scratch, name, concat(&scratch, a, ": not found"));
                 status = 1;
@@ -861,8 +861,72 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         }
         Str  val      = eq<a.len ? cuthead(a, eq+1) : Str{};
         b32  wordcomp = i<sh->compargs.len && sh->compargs[i];
-        Value *cur = lookup(sh, vname);
-        b32 mklocal = local || (name!="export" && name!="readonly" && sh->funcdepth && !global);
+        b32  mklocal  = local || (name!="export" && name!="readonly" && sh->funcdepth && !global);
+        b32  onref    = !!(on & V_NAMEREF);
+        if (onref) {
+            if (hassub) {
+                Str msg = concat(&scratch, takehead(a, eq), ": reference variable cannot be an array");
+                builtinerror(sh, scratch, name, msg);
+                status = 1;
+                continue;
+            }
+            Str sn, ss;
+            b32 self = eq<a.len && (val==vname || (splitref(val, &sn, &ss) && sn==vname));
+            if (self && !sh->funcdepth) {
+                Str msg = concat(&scratch, vname, ": nameref variable self references not allowed");
+                builtinerror(sh, scratch, name, msg);
+                status = 1;
+                continue;
+            } else if (self) {
+                // and again as bash looks the new variable up
+                Str msg = concat3(&scratch, "warning: ", vname, ": circular name reference");
+                builtinerror(sh, scratch, name, msg);
+                shellerror(sh, scratch, msg);
+            }
+            if (val.len && !append && !validnameref(val)) {
+                Str msg = concat3(&scratch, "`", val, "': invalid variable name for name reference");
+                builtinerror(sh, scratch, name, msg);
+                status = 1;
+                continue;
+            }
+        }
+        Value *raw = rawlookup(sh, vname);
+        if (raw && (raw->attrs & V_NAMEREF) && hassub && eq<a.len) {
+            // declare -n r; declare r[1]=x: r stops being a nameref
+            builtinerror(sh, scratch, "", concat(&scratch, "warning: ", concat(&scratch, vname, ": removing nameref attribute")));
+            Value *nv = setattrs(sh, vname, 0, V_NAMEREF);
+            nv->str = {};
+            raw = nv;
+        } else if (raw && (raw->attrs & V_NAMEREF) && !onref) {
+            // Otherwise declare acts on the variable a nameref names,
+            // though in a function only through a nameref of its own
+            Ref r = resolveref(sh, vname);
+            b32 offref = !!(off & V_NAMEREF);
+            if (offref && r.last && r.last->str.data && (r.last->attrs & V_READONLY)) {
+                shellerror(sh, scratch, concat(&scratch, vname, ": readonly variable"));
+                status = 1;
+                continue;
+            }
+            if (offref && r.last && !(on & ~baseon) && eq==a.len && off==V_NAMEREF) {
+                setattrs(sh, r.lastname, 0, V_NAMEREF);
+                continue;
+            }
+            b32 follow = r.name.data && !r.loop && (!mklocal || (r.last && r.last->depth==sh->funcdepth));
+            if (follow && r.hassub && (name=="export" || name=="readonly")) {
+                notident(sh, scratch, name, r.last->str);
+                status = 1;
+                continue;
+            }
+            if (offref && r.last) setattrs(sh, r.lastname, 0, V_NAMEREF);
+            if (follow) {
+                vname = r.name;
+                if (r.hassub && !hassub) {
+                    sub    = r.sub;
+                    hassub = 1;
+                }
+            }
+        }
+        Value *cur = rawlookup(sh, vname);
         b32 shadowing = mklocal && cur && cur->depth!=sh->funcdepth && cur->depth;
         if (wordcomp && cur && (cur->attrs & V_READONLY) && !shadowing) {
             // As bash, a literal name=(...) to a readonly variable is
@@ -910,7 +974,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         b32 fresh = !cur || (mklocal && cur->depth!=sh->funcdepth);
         if (mklocal) {
             makelocal(sh, &scratch, vname);
-            cur = lookup(sh, vname);
+            cur = rawlookup(sh, vname);
             if (cur && !cur->str.data && !cur->arr) cur = 0;
         }
         b32 isarr   = cur && cur->arr && !cur->arr->bucket;
@@ -930,12 +994,52 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             status = 1;
             continue;
         }
+        Value *self = rawlookup(sh, vname);
+        if (onref && (isarr || isassoc)) {
+            builtinerror(sh, scratch, name, concat(&scratch, vname, ": reference variable cannot be an array"));
+            status = 1;
+            continue;
+        }
+        if (onref && eq==a.len && self && !(self->attrs & V_NAMEREF) &&
+                self->str.data && !validnameref(self->str)) {
+            Str msg = concat3(&scratch, "`", self->str, "': invalid variable name for name reference");
+            builtinerror(sh, scratch, name, msg);
+            status = 1;
+            continue;
+        }
+        b32 isref = self && (self->attrs & V_NAMEREF);
+        if (isref && !onref && !(off & V_NAMEREF) && eq<a.len && !validnameref(val)) {
+            Str why = self->str.len ? Str("': invalid variable name for name reference")
+                                    : Str("': not a valid identifier");
+            Str msg = concat3(&scratch, "`", val, why);
+            builtinerror(sh, scratch, name, msg);
+            if (!self->str.len) unsetvar(sh, vname);  // as bash deletes it
+            status = 1;
+            continue;
+        }
+        if (isref && (on & (V_ARRAY|V_ASSOC))) {
+            // a nameref made an array stops being one
+            Value *nv = setattrs(sh, vname, 0, V_NAMEREF);
+            nv->str = {};
+            isref = 0;
+        }
+        if (onref && self && (self->attrs & V_READONLY)) {
+            shellerror(sh, scratch, concat(&scratch, vname, ": readonly variable"));
+            status = 1;
+            continue;
+        }
+        if (onref) {
+            // as ksh93, a nameref is never an integer or case-mapped
+            off |= V_INTEGER|V_LOWER|V_UPPER|V_CAPITAL;
+            on  &= ~(V_INTEGER|V_LOWER|V_UPPER|V_CAPITAL);
+        }
         if ((on & V_ASSOC) && fresh) {
             toassoc(sh, setattrs(sh, vname, 0, 0), 1);
         }
-        u32 aon = on & ~V_READONLY;
+        u32 aon = on & ~(V_READONLY|V_NAMEREF);
         if (hassub && !(on & V_ASSOC) && !isassoc) aon |= V_ARRAY;
         i32 sflags = (append ? SV_APPEND : 0) | (global ? SV_GLOBAL : 0);
+        if (onref || isref) sflags |= SV_NOREF;
         // export and readonly without -a or -A assign a quoted
         // 'name=(...)' as a string, to element 0 of an existing array
         b32 plain    = (name=="export" || name=="readonly") && !(on & (V_ARRAY|V_ASSOC));
@@ -963,8 +1067,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 status = 1;
                 continue;
             }
-            if (on & V_READONLY) setattrs(sh, vname, V_READONLY, 0);
-        } else if (on || off || local || hassub || !lookup(sh, vname)) {
+            if (on & (V_READONLY|V_NAMEREF)) setattrs(sh, vname, on & (V_READONLY|V_NAMEREF), 0);
+        } else if (on || off || local || hassub || !rawlookup(sh, vname)) {
             // Like bash, a new -i leaves the current value as it is:
             // only later assignments are evaluated
             setattrs(sh, vname, on | (aon & V_ARRAY), off);
@@ -1011,8 +1115,10 @@ static i32 compatlevel(Shell *sh)
 
 // With raw, an associative key is used as it is, not expanded
 // (array_expand_once).
-static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0)
+static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b32 quiet = 0)
 {
+    i32 rflags = 0;
+    name = arraytarget(sh, name, &rflags);
     Var *v = findvar(sh, name);
     if (!v || !v->top) return 0;
     Value *cur = v->top;
@@ -1039,7 +1145,9 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0)
     }
     i64 idx = allsub(sub) ? 0 : subindex(x, sub);
     if (!cur->arr) {
-        if (idx) {
+        if (idx && quiet) {
+            return 0;
+        } else if (idx) {
             builtinerror(sh, scratch, "unset", concat(&scratch, name, ": not an array variable"));
             return 1;
         }
@@ -1058,7 +1166,7 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0)
 
 static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
-    b32 funcs = 0, vars = 0;
+    b32 funcs = 0, vars = 0, refs = 0;
     iz  i = 1;
     for (; i<nargs && args[i].len>1 && args[i][0]=='-'; i++) {
         if (args[i] == "--") { i++; break; }
@@ -1066,7 +1174,7 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
             switch (args[i][k]) {
             case 'f': funcs = 1; break;
             case 'v': vars = 1; break;
-            case 'n': break;
+            case 'n': refs = 1; break;
             default:
                 invalidoption(sh, scratch, "unset", span(args[i].data+k-1, args[i].data+k+1));
                 return 2;
@@ -1101,7 +1209,7 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         // Without a flag, an invalid name may be a function, as is a
         // name that is not a variable
-        if (funcs || (!vars && (!valid || !lookup(sh, base)))) {
+        if (funcs || (!vars && (!valid || !rawlookup(sh, base)))) {
             Func *f = findfunc(sh, name);
             if (f && (f->attrs & V_READONLY)) {
                 builtinerror(sh, scratch, "unset", concat(&scratch, name, ": cannot unset: readonly function"));
@@ -1112,11 +1220,25 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (funcs || f || !valid) continue;
         }
         Str rn, rs;
-        if (br.ok && splitref(name, &rn, &rs)) {
+        if (br.ok && splitref(name, &rn, &rs) && !refs) {
             b32 raw = sh->shopt[S_ARRAY_EXPAND_ONCE] &&
                       !(i<sh->compargs.len && sh->compargs[i]==2);
             status |= unsetelem(sh, scratch, rn, rs, raw);
             continue;
+        }
+        Value *top = rawlookup(sh, base);
+        if (refs && !funcs) {
+            // unset -n: the nameref itself, and nothing else
+            if (!top || !(top->attrs & V_NAMEREF)) continue;
+        } else if (top && (top->attrs & V_NAMEREF)) {
+            // what the nameref names, which may be an array element
+            Ref r = resolveref(sh, base);
+            if (r.hassub) {
+                status |= unsetelem(sh, scratch, r.name, r.sub, 0, 1);
+                continue;
+            } else if (r.name.data) {
+                base = r.name;
+            }
         }
         if (!unsetvar(sh, base)) {
             builtinerror(sh, scratch, "unset", concat(&scratch, base, ": cannot unset: readonly variable"));

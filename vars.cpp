@@ -111,11 +111,202 @@ static Var *upsertvar(Shell *sh, Str name)
     return v;
 }
 
-// The visible binding of a variable, or null.
-static Value *lookup(Shell *sh, Str name)
+// The visible binding of a variable itself, or null, even a nameref.
+static Value *rawlookup(Shell *sh, Str name)
 {
     Var *v = findvar(sh, name);
     return v ? v->top : 0;
+}
+
+
+// Namerefs
+//
+// A nameref's value names another variable, or an array element, which
+// stands in for it wherever the shell reads, assigns or unsets it by
+// name. Chains are followed to a depth of 8.
+
+enum { NAMEREF_MAX = 8 };
+
+struct Ref {
+    Str    name;     // the variable named at the end, null if none
+    Str    sub;      // the element named, when hassub
+    b32    hassub;
+    Str    lastname; // the last nameref followed, if any
+    Value *last;
+    b32    loop;     // circular or too deep
+    b32    global;   // circular inside a function: the global binding
+};
+
+static b32 splitref(Str s, Str *name, Str *sub);
+
+static void refwarning(Shell *sh, Str name, Str msg)
+{
+    byte  mem[1024];
+    Arena a = {mem, mem+sizeof(mem)};
+    if (name.len > 256) name = takehead(name, 256);
+    shellerror(sh, a, concat3(&a, "warning: ", name, msg));
+}
+
+// Follow the namerefs from name, as bash does: a chain may not come
+// back to where it started or name itself, and is at most 8 long.
+static Ref resolveref(Shell *sh, Str name)
+{
+    Ref    r = {};
+    Value *v = rawlookup(sh, name);
+    r.name = name;
+    for (i32 level = 0; v && (v->attrs & V_NAMEREF); level++) {
+        if (level == NAMEREF_MAX) {
+            refwarning(sh, name, ": maximum nameref depth (8) exceeded");
+            r.name = {};
+            r.loop = 1;
+            return r;
+        }
+        Str t = v->str;
+        r.lastname = r.name;
+        r.last     = v;
+        if (!t.len) {
+            r.name = {};
+            return r;
+        }
+        Str rn, rs;
+        if (!validvarname(t) && splitref(t, &rn, &rs)) {
+            r.name   = rn;
+            r.sub    = rs;
+            r.hassub = 1;
+            return r;
+        }
+        Value *n = rawlookup(sh, t);
+        if (n && (t==name || t==r.name)) {
+            refwarning(sh, name, ": circular name reference");
+            r.loop = 1;
+            if (sh->funcdepth && n->depth) {
+                r.name   = t;
+                r.global = 1;
+            } else {
+                r.name = {};
+            }
+            return r;
+        }
+        r.name = t;
+        v = n;
+    }
+    return r;
+}
+
+// The binding at the bottom of a variable's stack (the global one).
+static Value *globalvalue(Shell *sh, Str name)
+{
+    Value *v = rawlookup(sh, name);
+    while (v && v->depth) v = v->below;
+    return v;
+}
+
+// The binding of name made at function depth d (0 for global), or null.
+static Value *bindingat(Shell *sh, Str name, i32 d)
+{
+    Value *v = rawlookup(sh, name);
+    for (; v && (v->depth>d || (v->attrs & V_TEMP)); v = v->below) {}
+    return v && v->depth==d ? v : 0;
+}
+
+// Is any binding in this stack a nameref?
+static b32 anyref(Value *v)
+{
+    for (; v; v = v->below) {
+        if (v->attrs & V_NAMEREF) return 1;
+    }
+    return 0;
+}
+
+// Where an assignment to name goes, as bash's bind_variable decides.
+// A nameref found in a function's scope is followed scope by scope
+// toward the global one, so that a chain that loops within a scope
+// exceeds the maximum depth instead of being circular, and then the
+// global variable of that name is assigned. A nameref without a value
+// is itself assigned: the value names its target.
+struct Bind {
+    Str name;
+    Str sub;
+    b32 hassub;
+    b32 self;      // assign name itself, a nameref
+    b32 global;    // the global binding of name
+    b32 fail;
+};
+
+static Bind assignref(Shell *sh, Str name)
+{
+    Bind   b = {};
+    Value *v = rawlookup(sh, name);
+    b.name = name;
+    for (; v && (v->attrs & V_TEMP); v = v->below) {}
+    if (v && v->depth) {
+        // found in the scope of function d
+        i32 d = v->depth;
+        if (!(v->attrs & V_NAMEREF)) return b;
+        Value *nv = v;
+        Str    nn = name;
+        for (i32 c = d; c >= 0; c--) {
+            for (i32 level = 1; nv->attrs & V_NAMEREF;) {
+                if (++level > NAMEREF_MAX) {
+                    refwarning(sh, name, ": maximum nameref depth (8) exceeded");
+                    b.global = 1;
+                    return b;
+                }
+                Value *n = nv->str.len ? bindingat(sh, nv->str, c) : 0;
+                if (!n) break;
+                nn = nv->str;
+                nv = n;
+            }
+            if (!(nv->attrs & V_NAMEREF)) {
+                b.name   = nn;
+                b.global = !c;
+                return b;
+            }
+        }
+        // The last nameref names nothing that exists
+        Str t = nv->str;
+        Str rn, rs;
+        if (!t.len) {
+            b.name = nn;
+            b.self = 1;
+        } else if (!validvarname(t) && splitref(t, &rn, &rs)) {
+            b.name   = rn;
+            b.sub    = rs;
+            b.hassub = 1;
+        } else {
+            b.name   = t;
+            b.global = 1;
+        }
+        return b;
+    }
+    Value *g = rawlookup(sh, name);
+    if (!g || !(g->attrs & V_NAMEREF)) return b;
+    if (!g->str.len) {
+        b.self = 1;
+        return b;
+    }
+    Ref r = resolveref(sh, name);
+    if (r.hassub) {
+        b.name   = r.name;
+        b.sub    = r.sub;
+        b.hassub = 1;
+    } else if (r.name.data) {
+        b.name   = r.name;
+        b.global = r.global;
+    } else {
+        b.fail = 1;
+    }
+    return b;
+}
+
+// The visible binding of a variable, after namerefs, or null.
+static Value *lookup(Shell *sh, Str name)
+{
+    Value *v = rawlookup(sh, name);
+    if (!v || !(v->attrs & V_NAMEREF)) return v;
+    Ref r = resolveref(sh, name);
+    if (!r.name.data || r.hassub) return 0;
+    return r.global ? globalvalue(sh, r.name) : rawlookup(sh, r.name);
 }
 
 // A binding the current subshell level may modify in place. The slot is
@@ -232,11 +423,20 @@ struct Got {
     b32 set;
 };
 
+static Got getelem(Shell *, Arena *, Str name, Str sub);  // expand.cpp
+
 // A variable's value as a string, computing dynamic ones.
 static Got getvar(Shell *sh, Arena *a, Str name)
 {
     Got    r = {};
-    Value *v = lookup(sh, name);
+    Value *v = rawlookup(sh, name);
+    if (v && (v->attrs & V_NAMEREF)) {
+        Ref ref = resolveref(sh, name);
+        if (ref.hassub) return getelem(sh, a, ref.name, ref.sub);
+        v = !ref.name.data ? 0
+          : ref.global     ? globalvalue(sh, ref.name)
+          :                  rawlookup(sh, ref.name);
+    }
     if (!v) return r;
     if (v->dyn) {
         r.value = dynvalue(sh, a, v);
@@ -306,6 +506,7 @@ enum : i32 {  // setvar flags
     SV_QUIET  = 1<<2,  // no readonly message
     SV_FORCE  = 1<<3,  // ignore readonly (internal updates)
     SV_UNDERTEMP = 1<<4,  // the binding below any temporary ones
+    SV_NOREF  = 1<<5,  // name itself, even a nameref
 };
 
 static void varchanged(Shell *, Str name);
@@ -534,6 +735,27 @@ static void setpstat(Shell *sh, i32 *statuses, i32 n)
     for (i32 i = 0; i < n; i++) sh->pstat[i] = (u8)statuses[i];
 }
 
+static b32 assignelem(Shell *, Arena, Str name, Str sub, Str lhs, Str value, i32 flags);
+
+// Can a nameref name this: a variable or an array element?
+static b32 validnameref(Str s)
+{
+    Str rn, rs;
+    return validvarname(s) || splitref(s, &rn, &rs);
+}
+
+// The variable an array assignment to name goes to, after namerefs.
+static Str arraytarget(Shell *sh, Str name, i32 *flags)
+{
+    Value *v = rawlookup(sh, name);
+    if (!v || !(v->attrs & V_NAMEREF)) return name;
+    Ref r = resolveref(sh, name);
+    if (!r.name.data) return name;
+    if (r.global) *flags |= SV_GLOBAL;
+    *flags |= SV_NOREF;
+    return r.name;
+}
+
 // Make an owned binding an indexed array, its value becoming element 0.
 static void toarray(Shell *sh, Value *val)
 {
@@ -570,6 +792,7 @@ static void toassoc(Shell *sh, Value *val, b32 fresh)
 static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str value, i32 flags = 0)
 {
     Store *st  = sh->store;
+    if (!(flags & SV_NOREF)) name = arraytarget(sh, name, &flags);
     Value *val = assignslot(sh, scratch, name, flags);
     if (!val) return 0;
     if (val->attrs & V_NOASSIGN) return 1;
@@ -599,6 +822,23 @@ static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str val
 static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
 {
     Store *st  = sh->store;
+    Value *top = rawlookup(sh, name);
+    if (top && !(flags & SV_NOREF) && anyref(top)) {
+        Bind b = assignref(sh, name);
+        if (b.fail) return 0;
+        if (b.hassub) {
+            Str word = concat3(&scratch, b.name, "[", concat(&scratch, b.sub, "]"));
+            return assignelem(sh, scratch, b.name, b.sub, word, value, flags);
+        }
+        if (b.self && !validnameref(value)) {
+            // A nameref without a value: the assignment gives it one
+            Str msg = concat3(&scratch, "`", value, "': not a valid identifier");
+            builtinerror(sh, scratch, sh->bltname, msg);
+            return 0;
+        }
+        name   = b.name;
+        flags |= SV_NOREF | (b.global ? SV_GLOBAL : 0);
+    }
     Value *val = assignslot(sh, scratch, name, flags);
     if (!val) return 0;
     if (val->attrs & V_NOASSIGN) return 1;
@@ -763,9 +1003,19 @@ static void poplocals(Shell *sh, Frame *f)
 }
 
 // Push a temporary binding (NAME=value before a builtin or function).
+// The variable a temporary binding of name binds: what a nameref names.
+static Str tempname(Shell *sh, Str name)
+{
+    Value *t = rawlookup(sh, name);
+    if (!t || !(t->attrs & V_NAMEREF)) return name;
+    Ref r = resolveref(sh, name);
+    return r.name.data && !r.hassub ? r.name : name;
+}
+
 static b32 pushtemp(Shell *sh, Arena scratch, Str name, Str value)
 {
     Store *st = sh->store;
+    name = tempname(sh, name);
     Var   *v  = upsertvar(sh, name);
     if (v->top && (v->top->attrs & V_READONLY)) {
         shellerror(sh, scratch, concat(&scratch, name, ": readonly variable"));
@@ -774,7 +1024,7 @@ static b32 pushtemp(Shell *sh, Arena scratch, Str name, Str value)
     Value *n = (Value *)salloc(st, sizeof(Value));
     n->below = v->top;
     n->depth = sh->funcdepth + 1;
-    n->attrs = V_TEMP|V_EXPORT | (v->top ? v->top->attrs & ~(V_TEMP|V_LOCAL|V_ARRAY|V_ASSOC) : 0);
+    n->attrs = V_TEMP|V_EXPORT | (v->top ? v->top->attrs & ~(V_TEMP|V_LOCAL|V_ARRAY|V_ASSOC|V_NAMEREF) : 0);
     jset(st, &v->top, n);
     Value *val = n;
     if (val->attrs & V_INTEGER) {
@@ -789,6 +1039,7 @@ static b32 pushtemp(Shell *sh, Arena scratch, Str name, Str value)
 
 static void poptemp(Shell *sh, Str name)
 {
+    name = tempname(sh, name);
     Var *v = findvar(sh, name);
     if (!v) return;
     Value **slot = &v->top;

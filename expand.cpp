@@ -874,6 +874,22 @@ static Param getelems(X *x, Str name, Str sub)
     return r;
 }
 
+// ${name[sub]} for one element, as a nameref to it reads.
+static Got getelem(Shell *sh, Arena *a, Str name, Str sub)
+{
+    X    *x = newx(sh, a);
+    Param p = getelems(x, name, sub);
+    Got   r = {};
+    if (p.list) {
+        r.value = joinparams(a, Args{p.lv, p.ln}, p.star ? starsep(sh) : Str(" "));
+        r.set   = p.ln > 0;
+    } else {
+        r.value = p.value;
+        r.set   = p.set;
+    }
+    return r;
+}
+
 // Does the variable have a value, or for an array, has it been assigned?
 static b32 valuevisible(Value *v)
 {
@@ -1023,6 +1039,14 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         p = getkeys(x, name, sub=="*");
         got = 1;
         indirect = 0;
+    } else if (indirect && !hassub && identstart(name[0]) &&
+               (rawlookup(sh, name) ? rawlookup(sh, name)->attrs & V_NAMEREF : 0)) {
+        // ${!ref} names the variable a nameref refers to
+        Ref ref = resolveref(sh, name);
+        p.value = ref.last ? ref.last->str : Str{};
+        p.set   = !!p.value.data;
+        got = 1;
+        indirect = 0;
     } else if (indirect) {
         if (rest.len && find(":-=?+#%/^,~@", takehead(rest, 1))<0) {
             badsubst(x, whole);  // checked before the indirection
@@ -1148,6 +1172,8 @@ static void expandbraced(X *x, Str whole, i32 ctx)
                 expansionerror(sh, a, m);
             }
             Str v = expandword(x, word, wctx);
+            Value *self = elem ? 0 : rawlookup(sh, name);
+            b32 refself = self && (self->attrs & V_NAMEREF) && !self->str.len;
             b32 ok = elem ? assignelem(sh, *x->a, name, sub, uname, v, 0)
                           : setvar(sh, *x->a, name, v);
             if (!ok) {
@@ -1159,8 +1185,12 @@ static void expandbraced(X *x, Str whole, i32 ctx)
                 sh->status = 2;
                 escape(sh, ESC_DISCARD);
             }
-            Param q = elem ? getelems(x, name, sub) : getparam(x, name);
-            putvalue(x, q.value, ctx);
+            if (refself) {
+                putvalue(x, v, ctx);  // it gave the nameref its value
+            } else {
+                Param q = elem ? getelems(x, name, sub) : getparam(x, name);
+                putvalue(x, q.value, ctx);
+            }
         } else {
             Str msg = word.len ? expandword(x, word, wctx)
                     : colon    ? Str("parameter null or not set")
@@ -2251,6 +2281,7 @@ static Sub evalsub(Shell *sh, Arena *a, Str name, Str sub, Str word)
 
 static b32 assignelem(Shell *sh, Arena scratch, Str name, Str sub, Str word, Str value, i32 flags)
 {
+    if (!(flags & SV_NOREF)) name = arraytarget(sh, name, &flags);
     Sub s = evalsub(sh, &scratch, name, sub, word);
     if (!s.ok) return 0;
     return setelem(sh, scratch, name, s.idx, s.key, value, flags);
@@ -2354,6 +2385,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
     Arena *a  = &scratch;
     Store *st = sh->store;
     Slice<Str> words = compoundwords(sh, a, body);
+    if (!(flags & SV_NOREF)) name = arraytarget(sh, name, &flags);
 
     Var   *var = findvar(sh, name);
     Value *cur = var ? var->top : 0;

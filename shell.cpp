@@ -478,6 +478,7 @@ struct Shell {
     iz       lastargcap;   // read through the dynamic variable _ while
     b32      lastargdirty; // no one assigned, unset or declared _
     i32      cmdnamelen;   // from its call until a simple command ends
+    Str      bltname;      // the builtin running (or "((") for messages
     Task    *psubs;        // procsubs started at this subshell level, to join
     i64      psubpid;      // the last procsub joined, and its status,
     i32      psubstatus;   // for a repeated wait
