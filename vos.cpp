@@ -1074,13 +1074,15 @@ static Dirent *os_list(Os *os, Arena *a, Str dir, i32 *err)
         *err = E_ACCES;
         return 0;
     }
-    Dirent *head = 0;
+    // Newest first, as tmpfs lists them, where specs are recorded
+    Dirent  *head = 0;
+    Dirent **tail = &head;
     for (VNode *n = res.node->child; n; n = n->next) {
         Dirent *d = alloc<Dirent>(a);
         d->name = clone(a, n->name);
         d->type = n->type;
-        d->next = head;
-        head = d;
+        *tail = d;
+        tail  = &d->next;
     }
     return head;
 }

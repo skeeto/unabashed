@@ -757,7 +757,7 @@ static Str patreplace(X *x, Str v, Str pat, Str rep, b32 amp, i32 mode, b32 all,
         } else {
             from = m.end;
         }
-        if (!all || mode!=PF_FIRST || from>v.len) break;
+        if (!all || mode!=PF_FIRST || from>=v.len) break;  // while text remains
     }
     print(&b, cuthead(v, from<v.len ? from : v.len));
     return finish(&b);
@@ -1345,6 +1345,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         XField rf = expandfield(x, repword, pctx);
         Str rep = amp ? ampquote(x->a, rf) : rf.data;
         i32 pf  = patflags(sh);
+        if (sh->shopt[S_NOCASEMATCH]) pf |= PM_NOCASE;  // unlike # and %
         if (!pat.len && mode==PF_FIRST) {
             // An empty pattern replaces nothing
             if (p.list) putlist(x, p.lv, p.ln, p.star, ctx);
