@@ -1664,11 +1664,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         lim = capped ? (iz)nchars : lim;
         iz  k = 0;
         b32 slash = 0;
-        if (exact) {
-            k = lim;
-        } else {
-            for (; k<lim && rest[k]!=delim; k++) slash |= rest[k]=='\\';
-        }
+        for (; k<lim && (exact || rest[k]!=delim); k++) slash |= rest[k]=='\\';
         if (raw || !slash) {
             b32 found = k < lim;
             s = clone(&scratch, takehead(rest, k));
