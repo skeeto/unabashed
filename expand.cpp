@@ -65,6 +65,7 @@ static Str  procsubst(Shell *, Arena *, Str body, b32 output);
 static void expansionerror(Shell *, Arena, Str msg);
 static void fatalerror(Shell *, Arena, Str msg);
 static Arith evalarith(Shell *, Arena *, Str);
+static Arith evalinteger(Shell *, Arena *, Str);
 static Arith arithraw(Shell *, Arena *, Str);
 
 static X *newx(Shell *sh, Arena *a)
@@ -797,7 +798,8 @@ static b32 allsub(Str sub)
 // An indexed subscript's value: the text expanded, then evaluated.
 static i64 subindex(X *x, Str sub)
 {
-    return evalarith(x->sh, x->a, expandword(x, sub, XC_ARITH|XC_DQUOTE)).value;
+    // As bash, an error abandons any -c, eval or source text too
+    return evalinteger(x->sh, x->a, expandword(x, sub, XC_ARITH|XC_DQUOTE)).value;
 }
 
 // An associative subscript: the text expanded, quotes removed.

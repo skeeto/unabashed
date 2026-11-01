@@ -155,6 +155,8 @@ static void keepcmdtext(Shell *sh, byte *beg, byte *end)
 struct ShellArith {
     Shell *sh;
     Arena *a;
+    Str    who;       // the command, for messages: "((", "let", or none
+    b32    rawsub;    // let under array_expand_once: subscripts as is
     b32    readonly;  // an assignment hit a readonly variable
 };
 
@@ -173,17 +175,34 @@ static Str arithindex(Shell *sh, Arena *a, Str name, Str sub)
     return finish(&b);
 }
 
+// Evaluate an indexed subscript in arithmetic: expanded first, unless
+// let runs under array_expand_once, which takes it as it is.
+static i64 arithsubindex(ShellArith *c, X *x, Arena *a, Str sub)
+{
+    return c->rawsub ? evalinteger(c->sh, a, sub).value : subindex(x, sub);
+}
+
 static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
 {
     ShellArith *c = (ShellArith *)ctx;
     if (ref->hassub) {
         X     *x = newx(c->sh, a);
         Value *v = lookup(c->sh, ref->name);
+        b32    assoc = v && v->arr && v->arr->bucket;
         ref->sub = arithindex(c->sh, a, ref->name, ref->sub);
-        if (!(v && v->arr && v->arr->bucket) && ref->sub.len && !allsub(ref->sub)) {
+        if (!assoc && !ref->sub.len) {
+            // As bash: reported (twice) and read as unset, but the
+            // expression goes on
+            Str msg = concat(a, ref->name, "[]: bad array subscript");
+            shellerror(c->sh, *a, msg);
+            shellerror(c->sh, *a, msg);
+            *isset = 0;
+            return {};
+        }
+        if (!assoc && !allsub(ref->sub)) {
             // Evaluate an indexed subscript once: the assignment that
             // may follow (a[RANDOM%6]++) reuses this index
-            ref->sub = fmti64(a, subindex(x, ref->sub));
+            ref->sub = fmti64(a, arithsubindex(c, x, a, ref->sub));
         }
         Param p = getelems(x, ref->name, ref->sub);
         if (p.list) {
@@ -202,7 +221,19 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
     ShellArith *c = (ShellArith *)ctx;
     Str v = fmti64(a, value);
     if (ref->hassub) {
+        Value *var = lookup(c->sh, ref->name);
+        b32    assoc = var && var->arr && var->arr->bucket;
         ref->sub = arithindex(c->sh, a, ref->name, ref->sub);
+        if (!assoc && !ref->sub.len) {
+            // As bash: reported, and the expression goes on without it
+            Str msg = concat3(a, "`", ref->name, "[]': not a valid identifier");
+            if (c->who.len) msg = concat3(a, c->who, ": ", msg);
+            shellerror(c->sh, *a, msg);
+            return {};
+        }
+        if (!assoc && c->rawsub && !allsub(ref->sub)) {
+            ref->sub = fmti64(a, arithsubindex(c, 0, a, ref->sub));
+        }
         Sub s = evalsub(c->sh, a, ref->name, ref->sub, {});
         if (!s.ok) {
             return concat3(a, ref->name, "[", concat(a, ref->sub, "]: bad array subscript"));
@@ -220,9 +251,13 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
     return {};
 }
 
-static Arith arithrun(Shell *sh, Arena *a, Str expr, b32 *readonly)
+static Arith arithrun(Shell *sh, Arena *a, Str expr, b32 *readonly, Str who = {})
 {
-    ShellArith c = {sh, a, 0};
+    ShellArith c = {};
+    c.sh     = sh;
+    c.a      = a;
+    c.who    = who;
+    c.rawsub = who=="let" && sh->shopt[S_ARRAY_EXPAND_ONCE];
     ArithEnv env = {};
     env.ctx     = &c;
     env.get     = arithget;
@@ -270,7 +305,7 @@ static Arith evalinteger(Shell *sh, Arena *a, Str expr)
 static Arith evalarithcmd(Shell *sh, Arena *a, Str expr, Str who)
 {
     b32 readonly = 0;
-    Arith r = arithrun(sh, a, expr, &readonly);
+    Arith r = arithrun(sh, a, expr, &readonly, who);
     if (!r.ok && readonly) {
         shellerror(sh, *a, r.err);  // bash reports these with no prefix
     } else if (!r.ok) {
