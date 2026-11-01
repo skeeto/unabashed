@@ -478,8 +478,10 @@ static Str capresult(Shell *sh, Arena scratch, Str s)
 
 static Str readwholefile(Shell *, Arena *, Str, i32 *);
 
-// The file named by $(< file), or a null string if src is not that form.
-static Str fileread(Shell *sh, Arena *a, Str src)
+static Str redirtarget(Shell *, Arena *, Word *, b32 *);
+
+// The file word of $(< file), or null if src is not that form.
+static Word *fileread(Shell *sh, Arena *a, Str src)
 {
     Str t = trim(src);
     if (!t.len || t[0]!='<') return {};
@@ -491,9 +493,9 @@ static Str fileread(Shell *sh, Arena *a, Str src)
     if (p.status!=PARSE_OK || !n || n->kind!=N_SIMPLE || n->words || !n->redirs ||
             n->redirs->next || n->redirs->op!=R_INPUT || n->redirs->src!=0 ||
             parseunit(L).status!=PARSE_EOF) {
-        return {};
+        return 0;
     }
-    return n->redirs->word->text;
+    return n->redirs->word;
 }
 
 // Run a command substitution and return its output, without trailing
@@ -502,10 +504,16 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
 {
     sh->nsubst++;
     if (kind != 2) {
-        Str word = fileread(sh, a, src);
-        if (word.data) {
-            // $(< file): read the file in the current shell
-            Str name = expandstring(sh, a, word);
+        Word *word = fileread(sh, a, src);
+        if (word) {
+            // $(< file): read the file in the current shell, its name
+            // expanded as a redirection's
+            b32 ok;
+            Str name = redirtarget(sh, a, word, &ok);
+            if (!ok) {
+                sh->status = 1;
+                return {};
+            }
             i32 err;
             Str data = readwholefile(sh, a, name, &err);
             if (err) {
@@ -590,10 +598,14 @@ static Handle capturewriter(Shell *sh, File *f)
 
 // Redirections
 
+// A redirection's word: one field, not split in POSIX mode, nor globbed
+// there unless interactive.
 static Str redirtarget(Shell *sh, Arena *a, Word *w, b32 *ok)
 {
     *ok = 0;
-    Slice<Str> r = expandwords(sh, a, w, sh->interactive ? 0 : XW_NOSPLIT*0);
+    b32 posix = sh->opt[O_POSIX];
+    i32 flags = (posix ? XW_NOSPLIT : 0) | (posix && !sh->interactive ? XW_NOGLOB : 0);
+    Slice<Str> r = expandwords(sh, a, w, flags);
     if (r.len != 1) {
         shellerror(sh, *a, concat(a, w->text, ": ambiguous redirect"));
         return {};

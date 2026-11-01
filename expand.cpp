@@ -742,18 +742,27 @@ static void putrep(Buf *b, Str rep, b32 amp, Str m)
 
 static Str patreplace(X *x, Str v, Str pat, Str rep, b32 amp, i32 mode, b32 all, i32 pflags)
 {
-    Arena *a = x->a;
+    Arena    *a  = x->a;
+    PatSearch ps = {};
+    if (all && mode==PF_FIRST) {
+        ps = patsearch(pat, v, pflags, a);
+    }
     Buf b(a, v.len + rep.len);
     iz from = 0;
     for (;;) {
-        PatSpan m = patfind(pat, v, from, mode, pflags, *a);
+        PatSpan m = ps.s.data ? searchnext(&ps, from, *a)
+                  :             patfind(pat, v, from, mode, pflags, *a);
         if (!m.ok) break;
         print(&b, span(v.data+from, v.data+m.beg));
         putrep(&b, rep, amp, span(v.data+m.beg, v.data+m.end));
         if (m.end == m.beg) {
             if (m.end == v.len) { from = v.len; break; }
-            putbyte(&b, v[m.end]);
-            from = m.end + 1;
+            // Copy one character, as bash does: a whole valid one in a
+            // UTF-8 locale, else one byte
+            iz clen = pflags&PM_UTF8 ? glibclen(v, m.end) : 1;
+            clen = clen ? clen : 1;
+            print(&b, span(v.data+m.end, v.data+m.end+clen));
+            from = m.end + clen;
         } else {
             from = m.end;
         }

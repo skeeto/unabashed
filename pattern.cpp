@@ -279,6 +279,7 @@ struct PatSeq {
 enum : i32 {
     PAT_MAXNEST  = 32,   // nesting of extglob groups
     PAT_MAXLEVEL = 128,  // nesting of evaluations at match time
+    PAT_MAXFORKS = 10,   // divergent brackets split into forks
 };
 
 enum : i32 { PM_NOENDRULE = 1<<30 };  // internal: see endrule
@@ -293,6 +294,17 @@ struct PatComp {
     b32  memo;       // has both groups and stars: memoize evalseq
     iz   lastclose;  // index of the last ], or -1
     i32  forks;      // PN_FORK nodes made so far
+    struct PatRest *rests;  // rests of the pattern compiled for forks
+};
+
+// The pattern from beg to end compiled once at a nesting level, shared
+// by every fork alternative that continues there.
+struct PatRest {
+    PatRest *next;
+    iz       beg;
+    iz       end;
+    i32      nest;
+    PatSeq   seq;
 };
 
 static i32 peekc(PatComp *k, iz i, iz end)  // -1 at the end
@@ -679,7 +691,21 @@ static i32 endflag(PatComp *k, Slice<PatNode> q, i32 op, iz i, Arena scratch)
 // follows.
 static PatSeq prefixseq(PatComp *k, PatNode nd, iz i, iz end, Arena *a)
 {
-    PatSeq rest = i<=end ? compileseq(k, i, end, a) : PatSeq{};
+    PatSeq rest = {};
+    if (i <= end) {
+        PatRest *r = k->rests;
+        for (; r && (r->beg!=i || r->end!=end || r->nest!=k->nest); r = r->next) {}
+        if (!r) {
+            r = alloc<PatRest>(a);
+            r->beg  = i;
+            r->end  = end;
+            r->nest = k->nest;
+            r->seq  = compileseq(k, i, end, a);
+            r->next = k->rests;
+            k->rests = r;
+        }
+        rest = r->seq;
+    }
     PatSeq r    = {alloc<PatNode>(a, rest.len+1), rest.len+1};
     r.nodes[0] = nd;
     for (iz j = 0; j < rest.len; j++) r.nodes[j+1] = rest.nodes[j];
@@ -796,7 +822,7 @@ static PatSeq compileseq(PatComp *k, iz i, iz end, Arena *a)
             if (k->lastclose >= i+2) {
                 b = parsebracket(k, i+1, k->pat.len, &t);
             }
-            if (b.diverge && !b.neg && k->forks<4) {
+            if (b.diverge && !b.neg && k->forks<PAT_MAXFORKS) {
                 *a = t;
                 q  = push(a, q, forkbracket(k, i, end, b, a));
                 break;
@@ -865,6 +891,7 @@ static PatSeq patcompile(PatComp *k, Str pat, i32 flags, b32 wide, Arena *a)
     k->deep      = 0;
     k->lastclose = -1;
     k->forks     = 0;
+    k->rests     = 0;
     for (iz i = 0; i < pat.len; i++) {
         k->lastclose = pat[i]==']' ? i : k->lastclose;
     }
@@ -2281,5 +2308,122 @@ static PatSpan patfind(Str pat, Str s, iz from, i32 mode, i32 flags, Arena scrat
     PatSpan r = findspan(pat, cuthead(s, from), mode, flags, scratch);
     r.beg += from;
     r.end += from;
+    return r;
+}
+
+// Repeated PF_FIRST searches of one string, as x//p/r makes them, each
+// from where the last match ended. Compiling the pattern, the string's
+// context and, for a pattern of varying length, the set of every place
+// a match starts once for the whole string makes each search cost what
+// it examines, where patfind on each remainder costs the remainder. The
+// same answers as patfind; patterns where findspan probes, or must test
+// for a match first, take patfind each time.
+struct PatSearch {
+    Str    pat;
+    Str    s;
+    i32    flags;
+    b32    slow;    // patfind on each remainder
+    b32    none;    // nothing can match
+    PatSeq q;
+    iz     len;     // truelen, or -1
+    PatCtx x;
+    PosSet starts;  // len<0: the starts of matches, as s.len-start
+};
+
+static PatSearch patsearch(Str pat, Str s, i32 flags, Arena *a)
+{
+    PatSearch p = {};
+    p.pat   = pat;
+    p.s     = s;
+    p.flags = flags;
+    b32 multi = (flags&PM_UTF8) && !(allascii(pat) && allascii(s));
+    b32 wide  = multi && glibcvalid(pat) && glibcvalid(s);
+    PatComp k = {};
+    if (!pat.len || (multi && !wide) || !s.len ||
+            (flags&(PM_PATHNAME|PM_PERIOD|PM_DOTDOT))) {
+        p.slow = 1;
+        return p;
+    }
+    p.q = patcompile(&k, pat, flags, wide, a);
+    if (k.deep) {
+        p.none = 1;
+        return p;
+    }
+    p.len = truelen(p.q, wide);
+    iz  mlen = bashmatchlen(pat, wide);
+    b32 bs   = pat.len==1 && pat[0]=='\\';
+    if (k.quirk || (mlen>=0 && mlen!=p.len) || bs) {
+        p.slow = 1;
+        return p;
+    }
+    Arena   t    = *a;
+    Str     any  = anypat(&t, pat, PF_FIRST, flags, wide);
+    PatComp ka   = {};
+    PatSeq  qa   = patcompile(&ka, any, flags, wide, &t);
+    b32     same = qa.len == p.q.len+any.len-pat.len;
+    b32     lead = qa.len && qa.nodes[0].kind==PN_STAR;
+    b32     tail = qa.len && qa.nodes[qa.len-1].kind==PN_STAR;
+    if (ka.quirk || !same || !lead || !tail) {
+        p.slow = 1;  // findspan tests each remainder for a match first
+        return p;
+    }
+
+    p.x = makectx(s, flags, wide, a);
+    p.x.clean = 1;
+    if (p.len < 0) {
+        Str    rs = revstr(a, s, wide);
+        PatSeq rq = revseq(a, p.q, wide);
+        PatCtx rx = makectx(rs, flags, wide, a);
+        rx.clean = 1;
+        PosSet from = newset(a, 0, rx.words);
+        for (iz i = 0; i < rx.words; i++) from.w[i] = boundword(&rx, i);
+        p.starts = evalseq(&rx, rq, 0, from, 0, a);
+    }
+    return p;
+}
+
+// The largest member of s no greater than lim, or -1.
+static iz setmaxle(PosSet s, iz lim)
+{
+    for (iz i = lim>>6 < s.hi ? lim>>6 : s.hi-1; i >= s.lo && lim >= 0; i--) {
+        u64 v = s.w[i-s.lo];
+        if (i == lim>>6 && (lim&63) != 63) {
+            v &= ((u64)2 << (lim&63)) - 1;
+        }
+        if (v) return i<<6 | (63 - (iz)__builtin_clzll(v));
+    }
+    return -1;
+}
+
+static PatSpan searchnext(PatSearch *p, iz from, Arena scratch)
+{
+    PatSpan r = {};
+    if (p->none || from>p->s.len) {
+        return r;
+    } else if (p->slow) {
+        return patfind(p->pat, p->s, from, PF_FIRST, p->flags, scratch);
+    }
+    iz n = p->s.len;
+    if (p->len >= 0) {
+        for (iz i = from; i < n; i += cunit(&p->x, i).len) {
+            Arena  t = scratch;
+            PosSet e = evalseq(&p->x, p->q, 0, setone(&t, i), 0, &t);
+            if (!setempty(e)) {
+                r.beg = i;
+                r.end = setmax(e);
+                r.ok  = 1;
+                return r;
+            }
+        }
+        return r;
+    }
+    iz rpos = setmaxle(p->starts, n-from);
+    if (rpos < 0) {
+        return r;
+    }
+    r.beg = n - rpos;
+    PosSet f = evalseq(&p->x, p->q, 0, setone(&scratch, r.beg), 0, &scratch);
+    r.end = setmax(f);
+    r.ok  = 1;
     return r;
 }

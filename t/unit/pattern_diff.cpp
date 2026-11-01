@@ -31,6 +31,13 @@
 // - under FNM_PATHNAME, bash lets a final run of * and ? holding a *
 //   match slashes, and fails a run of two or more wildcards starting
 //   with a * where the string has a slash;
+// - a bracket whose end depends on the character it matches (bash
+//   finds the end by a rescan after a match; a fork in pattern.cpp)
+//   between stars: bash's star loop commits to the first place the
+//   part before the next star matches, which pattern.cpp does not
+//   model (notes/m4.md);
+// - [:x:] with an unknown name, unterminated, or next to a range dash:
+//   bash skips it and reads the bracket on, glibc gives up on it;
 // - brackets: under FNM_PATHNAME bash takes one holding a slash
 //   literally; bash reads [. .] and [= =] its own way (folding them
 //   under FNM_CASEFOLD, and when unterminated); glibc fails a bracket
@@ -38,7 +45,7 @@
 //   string holds a dot;
 // - in UTF-8 with non-ASCII characters: classes and case folding
 //   (glibc uses its Unicode tables, pattern.cpp is ASCII-only),
-//   brackets, invalid sequences, and ? (glibc lets ?? match é).
+//   brackets, invalid sequences, and ? (glibc lets ?? match Ã©).
 //
 // This is free and unencumbered software released into the public domain.
 #include <fnmatch.h>
@@ -172,7 +179,7 @@ static b32 hasbyte(Str s, u8 c)
 }
 
 // Cases where bash and glibc differ, as listed at the top
-static b32 knowngap(Str pat, Str s, i32 flags)
+static b32 knowngap(Str pat, Str s, i32 flags, Arena scratch)
 {
     // A trailing unpaired backslash
     iz bs = 0;
@@ -181,6 +188,16 @@ static b32 knowngap(Str pat, Str s, i32 flags)
 
     // extglob groups, where glibc's matcher is not bash's
     if (hasgroup(pat, flags)) return 1;
+
+    // A bracket whose end depends on the character it matches (a fork in
+    // pattern.cpp) with stars around it: bash commits to the first place
+    // the part before the next star matches, a cut that is exact only
+    // when brackets end in one place. pattern.cpp tries every place.
+    PatComp k = {};
+    patcompile(&k, pat, flags&DF_PATH ? PM_PATHNAME : 0, 0, &scratch);
+    iz stars = 0;
+    for (iz i = 0; i < pat.len; i++) stars += pat[i] == '*';
+    if (k.forks && stars>1) return 1;
 
     // Under FNM_PATHNAME, a final run of * and ? holding a * matches
     // slashes in bash
@@ -228,6 +245,26 @@ static b32 knowngap(Str pat, Str s, i32 flags)
     }
     if ((flags&DF_PERIOD) && bracket && starq && hasbyte(s, '.')) return 1;
 
+    // [:x:] with an unknown name, unterminated, or as a range end:
+    // bash skips an unknown class and reads the rest of the bracket on,
+    // glibc gives up on the bracket
+    static Str classes[] = {
+        "alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower",
+        "print", "punct", "space", "upper", "xdigit",
+    };
+    for (iz i = 0; i+1 < pat.len; i++) {
+        if (pat[i]!='[' || pat[i+1]!=':') continue;
+        if (i>0 && pat[i-1]=='-') return 1;
+        iz j = i + 2;
+        for (; j+1<pat.len && !(pat[j]==':' && pat[j+1]==']'); j++) {}
+        if (j+1 >= pat.len) return 1;
+        Str  name = span(pat.data+i+2, pat.data+j);
+        b32  known = 0;
+        for (iz c = 0; c < countof(classes); c++) known |= name == classes[c];
+        if (!known) return 1;
+        if (j+2<pat.len && pat[j+2]=='-') return 1;
+    }
+
     // Non-ASCII in UTF-8: classes, case, invalid sequences
     if ((flags&DF_UTF8) && !(allascii(pat) && allascii(s))) {
         if (flags & DF_CASE) return 1;
@@ -261,13 +298,14 @@ static void showcase(FILE *f, Str pat, Str s, i32 flags)
 // Compare one case; 0 on a difference.
 static b32 check(Arena a, Str pat, Str s, i32 flags, b32 verbose, b32 gaps)
 {
-    if (!gaps && knowngap(pat, s, flags)) return 1;
+    if (!gaps && knowngap(pat, s, flags, a)) return 1;
     b32 want = glibcrun(a, pat, s, flags);
     b32 got  = ourrun(a, pat, s, flags);
     if (got == want) return 1;
     if (verbose) {
         showcase(stdout, pat, s, flags);
         printf("\tglibc %d ours %d\n", want, got);
+        fflush(stdout);  // before the AFL mode traps
     }
     return 0;
 }
@@ -361,7 +399,7 @@ static i32 parseflags(Str s)
 
 int main(int argc, char **argv)
 {
-    iz    cap = (iz)1 << 28;
+    iz    cap = (iz)1 << 26;
     Arena perm = {};
     perm.beg = (byte *)malloc((uz)cap);
     perm.end = perm.beg + cap;

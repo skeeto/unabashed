@@ -127,10 +127,15 @@ static Str expand(Arena *a, Str op, Str pat, Str s, i32 flags)
         PatSpan m = patfind(pat, s, 0, PF_FIRST, flags, *a);
         return m.ok ? rep : s;
     }
-    Str r   = {};
-    iz  str = 0;
+    Str       r   = {};
+    iz        str = 0;
+    PatSearch ps  = patsearch(pat, s, flags, a);
     while (str < s.len) {
         PatSpan m = patfind(pat, s, str, PF_FIRST, flags, *a);
+        PatSpan n = searchnext(&ps, str, *a);
+        if (n.ok!=m.ok || (m.ok && (n.beg!=m.beg || n.end!=m.end))) {
+            return "patsearch differs from patfind";
+        }
         if (!m.ok) break;
         r   = catstr(a, r, span(s.data+str, s.data+m.beg));
         r   = catstr(a, r, rep);
