@@ -1926,7 +1926,11 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     b32 execonly = name=="exec" && (argv.len==1 || (argv.len==2 && argv[1]=="--"));
     b32 commit   = execonly && !sh->subshell;
     i64 lastbg   = sh->lastbg;
-    if (!doredirs(sh, n->redirs, a, execonly && !commit)) {
+    Str savedname = sh->bltname;
+    if (n->redirs && findbuiltin(name)) sh->bltname = name;  // for messages
+    b32 redirected = doredirs(sh, n->redirs, a, execonly && !commit);
+    sh->bltname = savedname;
+    if (!redirected) {
         unwind(sh, mark);
         sh->status = 1;
         checkerrexit(sh);

@@ -871,6 +871,10 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
             }
             return assignelem(sh, scratch, b.name, b.sub, word, value, flags|SV_NOREF);
         }
+        Value *self = b.self ? rawlookup(sh, b.name) : 0;
+        if (self && (self->attrs & V_READONLY) && !(flags & SV_FORCE)) {
+            return 0;  // bash finds no variable to assign, and says nothing
+        }
         if (b.self && !validnameref(value)) {
             // A nameref without a value: the assignment gives it one
             Str msg = concat3(&scratch, "`", value, "': not a valid identifier");

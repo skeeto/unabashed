@@ -721,8 +721,8 @@ static void disposecoproc(Shell *sh, Coproc *c)
         }
     }
     Arena scratch = *scratchat(sh, sh->capdepth+1);
-    unsetvar(sh, concat(&scratch, c->name, "_PID"));
-    unsetvar(sh, c->name);
+    unsetvar(sh, concat(&scratch, c->name, "_PID"), 1);  // even readonly, as bash
+    unsetvar(sh, tempname(sh, c->name));  // what a nameref names
     Fdtab *t = sh->fds;
     i32 fds[2] = {c->rfd, c->wfd};
     for (i32 i = 0; i < 2; i++) {

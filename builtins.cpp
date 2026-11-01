@@ -1065,9 +1065,15 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             continue;
         }
         if (onref) {
-            // as ksh93, a nameref is never an integer or case-mapped
-            off |= V_INTEGER|V_LOWER|V_UPPER|V_CAPITAL;
-            on  &= ~(V_INTEGER|V_LOWER|V_UPPER|V_CAPITAL);
+            // as ksh93, a nameref loses -ilcu, unless given them again
+            off |= (V_INTEGER|V_LOWER|V_UPPER|V_CAPITAL) & ~on;
+        }
+        if (onref && (on & V_INTEGER) && eq<a.len) {
+            // the name evaluates to a number, never a valid name, and
+            // bash quietly deletes the variable it made
+            if (!self) unsetvar(sh, vname);
+            status = 1;
+            continue;
         }
         if ((on & V_ASSOC) && fresh) {
             toassoc(sh, setattrs(sh, vname, 0, 0), 1);
