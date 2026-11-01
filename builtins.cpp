@@ -985,8 +985,8 @@ static i32 b_shift(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         return 1;
     }
-    sh->args.v += n;
-    sh->args.n -= n;
+    sh->args.v += (iz)n;
+    sh->args.n -= (iz)n;
     return 0;
 }
 

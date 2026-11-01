@@ -1,5 +1,6 @@
 // Win32 platform layer: no CRT, no headers, runs on Windows XP and later
-// $ g++ -std=c++20 -O2 -s -nostartfiles -static-libgcc -o unabashed.exe main_win32.cpp
+// $ g++ -std=c++20 -O2 -s -nostartfiles -static-libgcc -Wl,--stack,0x1000000
+//       -o unabashed.exe main_win32.cpp
 //
 // Imports only kernel32.dll. Anything newer than XP must be resolved at
 // run time with a fallback.
@@ -930,6 +931,27 @@ static i64 os_now(Os *os)
     return unixns(t);
 }
 
+// The main thread's stack reservation, from this image's PE header,
+// so that deep shell recursion fails as cleanly as on Linux.
+extern "C" byte __ImageBase[];
+
+static iz stackreserve()
+{
+    i32 lfanew = 0;
+    __builtin_memcpy(&lfanew, __ImageBase+0x3c, 4);
+    byte *opt   = __ImageBase + lfanew + 24;
+    c16   magic = 0;
+    __builtin_memcpy(&magic, opt, 2);
+    u64 r64 = 0;
+    u32 r32 = 0;
+    if (magic == 0x20b) {
+        __builtin_memcpy(&r64, opt+72, 8);
+        return (iz)r64;
+    }
+    __builtin_memcpy(&r32, opt+72, 4);
+    return (iz)r32;
+}
+
 static byte *fiberstack(Os *, iz) { return 0; }    // unused on Win32
 static void  fiberunstack(Os *, byte *, iz) {}
 
@@ -1030,6 +1052,6 @@ void mainCRTStartup()
         }
         info.std[i] = h;
     }
-    info.stack = (iz)1<<21;  // the PE default reservation
+    info.stack = stackreserve();
     ExitProcess(sh_main(&os, &info));
 }

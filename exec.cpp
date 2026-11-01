@@ -234,6 +234,7 @@ static void runjob(Shell *sh, SubJob *j, Arena scratch)
 // Run a job in a synchronous subshell and return its exit status.
 // Everything it changes is rolled back. With cap, its standard output
 // is collected there.
+[[gnu::noinline]]
 static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
 {
     Shell     saved = *sh;
@@ -1141,18 +1142,24 @@ static void leaveframe(Shell *sh, Frame *f)
     sh->frame = f->up;
 }
 
-static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
+[[gnu::noinline]]
+static void checkfuncnest(Shell *sh, Str name, Arena scratch)
 {
-    checkstack(sh);
     Got nest = getvar(sh, &scratch, "FUNCNEST");
     i64 limit = 0;
     if (nest.set && parsei64(nest.value, &limit) && limit>0 && sh->funcdepth>=limit) {
-        shellerror(sh, scratch, concat3(&scratch, argv[0],
+        shellerror(sh, scratch, concat3(&scratch, name,
                    Str(": maximum function nesting level exceeded ("),
                    concat(&scratch, nest.value, ")")));
         sh->status = 1;
         escape(sh, ESC_ABORT);
     }
+}
+
+static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
+{
+    checkstack(sh);
+    checkfuncnest(sh, argv[0], scratch);
     Frame f = {};
     f.up   = sh->frame;
     f.name = argv[0];
@@ -1310,6 +1317,7 @@ static b32 doassignments(Shell *sh, Arena *a, Word *w, iz n)
     return 1;
 }
 
+[[gnu::noinline]]
 static void runsimple(Shell *sh, Node *n, Arena scratch)
 {
     sh->line    = n->line;
@@ -1528,7 +1536,7 @@ static Stat envstat(void *ctx, Str path, b32 follow)
         fd = 2;
     } else if (startswith(path, "/dev/fd/")) {
         TestNum n = testparseint(cuthead(path, 8));
-        fd = n.ok && n.value>=0 ? n.value : FDMAX;
+        fd = n.ok && n.value>=0 ? n.value : (i64)FDMAX;
     }
     if (fd >= 0) {
         Stat  s = {};
@@ -1833,19 +1841,264 @@ static void timereport(Shell *sh, Arena scratch, i64 real, b32 posix)
 }
 
 static void executenode(Shell *, Node *, Arena);
+static void executeone(Shell *, Node *, Arena);
 
 static void execute(Shell *sh, Node *n, Arena scratch)
 {
     if (n && (n->flags & CMD_TIME) && !sh->exiting && !sh->flow) {
         i64 start = os_now(sh->os);
-        executenode(sh, n, scratch);
+        executeone(sh, n, scratch);
         timereport(sh, scratch, os_now(sh->os)-start, n->flags & CMD_TIMEPOSIX);
         return;
     }
     executenode(sh, n, scratch);
 }
 
+// Compound command cases, kept out of executenode so that its frame
+// stays small: every level of shell recursion passes through it.
+
+[[gnu::noinline]]
+static void execfuncdef(Shell *sh, Node *n, Arena scratch)
+{
+    // Errors cite, as bash does, the definition's line in a
+    // function, and elsewhere where the parser has got to
+    Str name = n->name->text;
+    sh->line = sh->funcdepth || !sh->lexer ? n->line : sh->lexer->lineno;
+    if (n->name->flags & (W_HASDOLLAR|W_QUOTED)) {
+        shellerror(sh, scratch, concat3(&scratch, "`", name, "': not a valid identifier"));
+        sh->status = 1;
+        return;
+    }
+    Builtin *special = sh->opt[O_POSIX] ? findbuiltin(name) : 0;
+    if (special && (special->flags & B_SPECIAL)) {
+        shellerror(sh, scratch, concat3(&scratch, "`", name, "': is a special builtin"));
+        sh->status = 2;
+        if (!sh->interactive) {
+            sh->exiting = 1;
+            escape(sh, ESC_EXIT);
+        }
+        return;
+    }
+    sh->line = n->line;
+    Node *body = n->a;
+    if (n->redirs) {
+        // f() { ...; } >file: the redirections belong to the body,
+        // and their errors cite the definition's line
+        Node *g = alloc<Node>(&scratch);
+        *g = *body;
+        g->redirs = n->redirs;
+        g->line   = n->line;
+        body = g;
+    }
+    Func *old = findfunc(sh, name);
+    if (old && (old->attrs & V_READONLY)) {
+        shellerror(sh, scratch, concat(&scratch, name, ": readonly function"));
+        sh->status = 1;
+        return;
+    }
+    definefunc(sh, scratch, name, body);
+    sh->status = 0;
+}
+
+[[gnu::noinline]]
+static void execsubshell(Shell *sh, Node *n, Arena scratch)
+{
+    SubJob j = {};
+    j.kind = SUB_NODE;
+    j.node = n->a;
+    j.newloops = 1;
+    sh->status = subshell(sh, &j, scratch, 0);
+    checkerrexit(sh);
+}
+
+[[gnu::noinline]]
+static void execfor(Shell *sh, Node *n, Arena scratch)
+{
+    sh->line = n->line;
+    Slice<Str> list = {};
+    if (n->words) {
+        list = expandwords(sh, &scratch, n->words, 0);
+    }
+    // As bash, the header is traced as source text, every iteration
+    Str head = {};
+    if (sh->opt[O_XTRACE] && n->kind==N_FOR) {
+        Buf b(&scratch, 64);
+        print(&b, "for ");
+        print(&b, n->name->text);
+        print(&b, " in");
+        for (Word *w = n->words; w; w = w->next) {
+            putbyte(&b, ' ');
+            print(&b, w->text);
+        }
+        head = finish(&b);
+    }
+    Str var = n->name->text;
+    if (!validvarname(var)) {
+        shellerror(sh, scratch, concat3(&scratch, "`", var, "': not a valid identifier"));
+        sh->status = 1;
+        return;
+    }
+    // $? carries into the body, perhaps from the list's expansion
+    if (!list.len) sh->status = 0;
+    sh->loopdepth++;
+    for (iz i = 0; i < list.len; i++) {
+        Arena it = scratch;
+        if (head.data && sh->opt[O_XTRACE]) traceline(sh, it, head);
+        if (!setvar(sh, it, var, list[i])) {
+            sh->status = 1;
+            break;
+        }
+        execute(sh, n->b, it);
+        if (sh->flow && loopflow(sh)) break;
+        if (sh->exiting) break;
+    }
+    sh->loopdepth--;
+}
+
+[[gnu::noinline]]
+static void execarithfor(Shell *sh, Node *n, Arena scratch)
+{
+    sh->line = n->line;
+    Word *init = n->arith;
+    Word *test = init ? init->next : 0;
+    Word *step = test ? test->next : 0;
+    // As with (( )), an arithmetic error fails the loop with status 1
+    if (!arithpart(sh, scratch, init)) {
+        sh->status = 1;
+        return;
+    }
+    i32 status = 0;
+    sh->loopdepth++;
+    for (;;) {
+        Arena it = scratch;
+        Arith r = {};
+        if (!arithpart(sh, it, test, &r)) status = 1;
+        if (!r.ok || !r.value) break;
+        execute(sh, n->b, it);
+        status = sh->status;
+        if (sh->flow && loopflow(sh)) break;
+        if (sh->exiting) break;
+        if (!arithpart(sh, it, step)) {
+            status = 1;
+            break;
+        }
+    }
+    sh->loopdepth--;
+    sh->status = status;
+}
+
+[[gnu::noinline]]
+static void execcase(Shell *sh, Node *n, Arena scratch)
+{
+    sh->line = n->line;
+    if (sh->opt[O_XTRACE]) {
+        traceline(sh, scratch, concat3(&scratch, "case ", n->words->text, " in"));
+    }
+    Str word = expandstring(sh, &scratch, n->words->text, wordctx(sh, n->words));
+    b32 ran  = 0;
+    for (Case *c = n->cases; c; c = c->next) {
+        if (!casematch(sh, &scratch, word, c->patterns)) continue;
+        ran = 1;
+        for (;;) {
+            if (!c->body) sh->status = 0;  // an empty body succeeds
+            execute(sh, c->body, scratch);
+            if (c->term==CASE_FALLTHROUGH && c->next && !sh->flow) {
+                c = c->next;
+                continue;
+            }
+            break;
+        }
+        if (c->term != CASE_TESTNEXT || sh->flow) break;
+    }
+    if (!ran) sh->status = 0;
+}
+
+[[gnu::noinline]]
+static void execarith(Shell *sh, Node *n, Arena scratch)
+{
+    sh->line = n->line;
+    Str text = expandstring(sh, &scratch, n->arith->text, XC_ARITH|XC_DQUOTE);
+    if (sh->opt[O_XTRACE]) {
+        traceline(sh, scratch, concat3(&scratch, "(( ", text, " ))"));
+    }
+    Arith r = evalarithcmd(sh, &scratch, text, "((");
+    sh->status = r.ok ? !r.value : 1;
+    checkerrexit(sh);
+}
+
+[[gnu::noinline]]
+static void execcond(Shell *sh, Node *n, Arena scratch)
+{
+    sh->line = n->line;
+    sh->status = condeval(sh, &scratch, n->cond) ? 0 : 1;
+    checkerrexit(sh);
+}
+
+// Groups, if branches and the right sides of lists are followed in a
+// loop rather than by recursion, so that each level of shell function
+// calls costs as little stack as possible.
 static void executenode(Shell *sh, Node *n, Arena scratch)
+{
+    for (;;) {
+        if (!n || sh->exiting || sh->flow) {
+            return;
+        }
+        if (n->flags & CMD_TIME) {
+            execute(sh, n, scratch);
+            return;
+        }
+        if (n->redirs || (n->flags & CMD_INVERT)) {
+            break;
+        }
+        switch (n->kind) {
+        case N_SIMPLE:
+            checkstack(sh);
+            runsimple(sh, n, scratch);
+            return;
+        case N_GROUP:
+            n = n->a;
+            continue;
+        case N_IF:
+            sh->noerrexit++;
+            execute(sh, n->a, scratch);
+            sh->noerrexit--;
+            if (sh->flow || sh->exiting) return;
+            if (!sh->status) {
+                n = n->b;
+            } else if (n->c) {
+                n = n->c;
+            } else {
+                sh->status = 0;
+                return;
+            }
+            continue;
+        case N_CONNECT:
+            switch (n->connector) {
+            case '|':
+            case '&':
+                break;
+            case T_ANDAND:
+            case T_OROR:
+                sh->noerrexit++;
+                execute(sh, n->a, scratch);
+                sh->noerrexit--;
+                if (sh->flow || sh->exiting) return;
+                if ((n->connector==T_ANDAND) != (sh->status==0)) return;
+                n = n->b;
+                continue;
+            default:
+                execute(sh, n->a, scratch);
+                n = n->b;
+                continue;
+            }
+            break;
+        }
+        break;
+    }
+    executeone(sh, n, scratch);
+}
+
+static void executeone(Shell *sh, Node *n, Arena scratch)
 {
     if (!n || sh->exiting || sh->flow) {
         return;
@@ -1908,59 +2161,17 @@ static void executenode(Shell *sh, Node *n, Arena scratch)
         }
         break;
 
-    case N_FUNCDEF: {
-        // Errors cite, as bash does, the definition's line in a
-        // function, and elsewhere where the parser has got to
-        Str name = n->name->text;
-        sh->line = sh->funcdepth || !sh->lexer ? n->line : sh->lexer->lineno;
-        if (n->name->flags & (W_HASDOLLAR|W_QUOTED)) {
-            shellerror(sh, scratch, concat3(&scratch, "`", name, "': not a valid identifier"));
-            sh->status = 1;
-            break;
-        }
-        Builtin *special = sh->opt[O_POSIX] ? findbuiltin(name) : 0;
-        if (special && (special->flags & B_SPECIAL)) {
-            shellerror(sh, scratch, concat3(&scratch, "`", name, "': is a special builtin"));
-            sh->status = 2;
-            if (!sh->interactive) {
-                sh->exiting = 1;
-                escape(sh, ESC_EXIT);
-            }
-            break;
-        }
-        sh->line = n->line;
-        Node *body = n->a;
-        if (n->redirs) {
-            // f() { ...; } >file: the redirections belong to the body,
-            // and their errors cite the definition's line
-            Node *g = alloc<Node>(&scratch);
-            *g = *body;
-            g->redirs = n->redirs;
-            g->line   = n->line;
-            body = g;
-        }
-        Func *old = findfunc(sh, name);
-        if (old && (old->attrs & V_READONLY)) {
-            shellerror(sh, scratch, concat(&scratch, name, ": readonly function"));
-            sh->status = 1;
-            break;
-        }
-        definefunc(sh, scratch, name, body);
-        sh->status = 0;
-    } break;
+    case N_FUNCDEF:
+        execfuncdef(sh, n, scratch);
+        break;
 
     case N_GROUP:
         execute(sh, n->a, scratch);
         break;
 
-    case N_SUBSHELL: {
-        SubJob j = {};
-        j.kind = SUB_NODE;
-        j.node = n->a;
-        j.newloops = 1;
-        sh->status = subshell(sh, &j, scratch, 0);
-        checkerrexit(sh);
-    } break;
+    case N_SUBSHELL:
+        execsubshell(sh, n, scratch);
+        break;
 
     case N_IF:
         sh->noerrexit++;
@@ -2004,118 +2215,25 @@ static void executenode(Shell *sh, Node *n, Arena scratch)
         runselect(sh, n, scratch);
         break;
 
-    case N_FOR: {
-        sh->line = n->line;
-        Slice<Str> list = {};
-        if (n->words) {
-            list = expandwords(sh, &scratch, n->words, 0);
-        }
-        // As bash, the header is traced as source text, every iteration
-        Str head = {};
-        if (sh->opt[O_XTRACE] && n->kind==N_FOR) {
-            Buf b(&scratch, 64);
-            print(&b, "for ");
-            print(&b, n->name->text);
-            print(&b, " in");
-            for (Word *w = n->words; w; w = w->next) {
-                putbyte(&b, ' ');
-                print(&b, w->text);
-            }
-            head = finish(&b);
-        }
-        Str var = n->name->text;
-        if (!validvarname(var)) {
-            shellerror(sh, scratch, concat3(&scratch, "`", var, "': not a valid identifier"));
-            sh->status = 1;
-            break;
-        }
-        // $? carries into the body, perhaps from the list's expansion
-        if (!list.len) sh->status = 0;
-        sh->loopdepth++;
-        for (iz i = 0; i < list.len; i++) {
-            Arena it = scratch;
-            if (head.data && sh->opt[O_XTRACE]) traceline(sh, it, head);
-            if (!setvar(sh, it, var, list[i])) {
-                sh->status = 1;
-                break;
-            }
-            execute(sh, n->b, it);
-            if (sh->flow && loopflow(sh)) break;
-            if (sh->exiting) break;
-        }
-        sh->loopdepth--;
-    } break;
+    case N_FOR:
+        execfor(sh, n, scratch);
+        break;
 
-    case N_ARITHFOR: {
-        sh->line = n->line;
-        Word *init = n->arith;
-        Word *test = init ? init->next : 0;
-        Word *step = test ? test->next : 0;
-        // As with (( )), an arithmetic error fails the loop with status 1
-        if (!arithpart(sh, scratch, init)) {
-            sh->status = 1;
-            break;
-        }
-        i32 status = 0;
-        sh->loopdepth++;
-        for (;;) {
-            Arena it = scratch;
-            Arith r = {};
-            if (!arithpart(sh, it, test, &r)) status = 1;
-            if (!r.ok || !r.value) break;
-            execute(sh, n->b, it);
-            status = sh->status;
-            if (sh->flow && loopflow(sh)) break;
-            if (sh->exiting) break;
-            if (!arithpart(sh, it, step)) {
-                status = 1;
-                break;
-            }
-        }
-        sh->loopdepth--;
-        sh->status = status;
-    } break;
+    case N_ARITHFOR:
+        execarithfor(sh, n, scratch);
+        break;
 
-    case N_CASE: {
-        sh->line = n->line;
-        if (sh->opt[O_XTRACE]) {
-            traceline(sh, scratch, concat3(&scratch, "case ", n->words->text, " in"));
-        }
-        Str word = expandstring(sh, &scratch, n->words->text, wordctx(sh, n->words));
-        b32 ran  = 0;
-        for (Case *c = n->cases; c; c = c->next) {
-            if (!casematch(sh, &scratch, word, c->patterns)) continue;
-            ran = 1;
-            for (;;) {
-                if (!c->body) sh->status = 0;  // an empty body succeeds
-                execute(sh, c->body, scratch);
-                if (c->term==CASE_FALLTHROUGH && c->next && !sh->flow) {
-                    c = c->next;
-                    continue;
-                }
-                break;
-            }
-            if (c->term != CASE_TESTNEXT || sh->flow) break;
-        }
-        if (!ran) sh->status = 0;
-    } break;
+    case N_CASE:
+        execcase(sh, n, scratch);
+        break;
 
-    case N_ARITH: {
-        sh->line = n->line;
-        Str text = expandstring(sh, &scratch, n->arith->text, XC_ARITH|XC_DQUOTE);
-        if (sh->opt[O_XTRACE]) {
-            traceline(sh, scratch, concat3(&scratch, "(( ", text, " ))"));
-        }
-        Arith r = evalarithcmd(sh, &scratch, text, "((");
-        sh->status = r.ok ? !r.value : 1;
-        checkerrexit(sh);
-    } break;
+    case N_ARITH:
+        execarith(sh, n, scratch);
+        break;
 
-    case N_COND: {
-        sh->line = n->line;
-        sh->status = condeval(sh, &scratch, n->cond) ? 0 : 1;
-        checkerrexit(sh);
-    } break;
+    case N_COND:
+        execcond(sh, n, scratch);
+        break;
 
     case N_COPROC:
         shellerror(sh, scratch, "coproc: not supported until M3a");
@@ -2150,7 +2268,7 @@ static void selectmenu(Shell *sh, Arena scratch, Slice<Str> list)
     i64 columns = 80;
     Got g = getvar(sh, &scratch, "COLUMNS");
     if (!g.set || !parsei64(g.value, &columns) || columns<=0) columns = 80;
-    iz cols = columns / colwidth;
+    iz cols = (iz)(columns / colwidth);
     cols = cols ? cols : 1;
     iz rows = list.len/cols + (list.len%cols != 0);
     cols = list.len/rows + (list.len%rows != 0);
@@ -2231,7 +2349,7 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
         if (menu) continue;
         i64 choice = 0;
         b32 ok = parsei64(trim(reply), &choice) && choice>=1 && choice<=list.len;
-        if (!setvar(sh, it, var, ok ? list[choice-1] : Str(""))) {
+        if (!setvar(sh, it, var, ok ? list[(iz)choice-1] : Str(""))) {
             sh->status = 1;
             break;
         }

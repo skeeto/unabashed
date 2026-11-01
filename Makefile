@@ -14,7 +14,7 @@ WARN    = -Wall -Wextra -Wconversion -Wno-sign-conversion \
           -Wno-unused-parameter -Wno-unused-function
 DEBUG   = -g3 -fsanitize=undefined -fsanitize-trap
 RELEASE = -O2 -s
-WIN32   = -nostartfiles -static-libgcc
+WIN32   = -nostartfiles -static-libgcc -Wl,--stack,0x1000000
 SOURCES = base.cpp api.cpp unabashed.cpp parse.cpp print.cpp wide.cpp \
           fibers.cpp check.cpp shell.cpp array.cpp vars.cpp expand.cpp exec.cpp \
           builtins.cpp arith.cpp pattern.cpp brace.cpp \

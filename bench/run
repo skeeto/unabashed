@@ -1,0 +1,16 @@
+#!/bin/sh
+# Usage: bench/run SHELL... : time each benchmark under each shell,
+# after checking that every shell prints the same output.
+cd "$(dirname "$0")"
+for b in b1 b2 b7 b9 b10; do
+    ref=
+    for sh in "$@"; do
+        out=$("$sh" $b.sh 2>&1 | cksum)
+        [ -z "$ref" ] && ref=$out
+        [ "$out" = "$ref" ] || echo "$b: $sh output differs"
+        start=$(date +%s.%N)
+        "$sh" $b.sh >/dev/null 2>&1
+        end=$(date +%s.%N)
+        printf '%-4s %-28s %6.2fs\n' $b "$sh" "$(echo "$end - $start" | bc)"
+    done
+done
