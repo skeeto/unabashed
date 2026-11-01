@@ -1678,16 +1678,41 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             done = 1;
         }
     }
-    // A pipe the platform can look into is read a line at a time:
-    // exactly through the delimiter, so nothing past it is consumed
+    // Read a line at a time where that consumes nothing past the
+    // delimiter: a regular file in blocks, then seeking back to just
+    // past it, as bash does, and a pipe the platform can look into
+    // (os_peek), exactly through it. Otherwise a byte at a time.
     b32 peekable = in && in->kind==F_OS && (in->flags & OF_READ);
+    b32 seekable = 0;
+    if (peekable && os_peek(sh->os, in->h, 0, 0)<0) {
+        peekable = 0;
+        seekable = os_seek(sh->os, in->h, 0, 1) >= 0;
+    }
     u8 *ahead = 0;
     iz  alen = 0, aoff = 0;
+    iz  look = 128;  // grows while lines are longer
     for (; !done;) {
         if (nchars>=0 && count>=nchars) break;
-        if (aoff==alen && peekable) {
+        if (aoff==alen && seekable) {
             ahead = ahead ? ahead : allocbytes(&scratch, 1<<12);
-            iz n = os_peek(sh->os, in->h, ahead, 1<<12);
+            iz n = fdread(sh, fd, ahead, look);
+            n = n<0 ? 0 : n;
+            iz want = n;
+            for (iz k = 0; k<n && !exact; k++) {
+                if (ahead[k] == delim) {
+                    want = k + 1;
+                    break;
+                }
+            }
+            if (want==look && look<(1<<12)) look *= 2;
+            if (nchars>=0 && want>nchars-count) want = (iz)(nchars - count);
+            if (want < n) os_seek(sh->os, in->h, want-n, 1);
+            alen = want;
+            aoff = 0;
+            seekable = n > 0;  // at the end: as before, for its status
+        } else if (aoff==alen && peekable) {
+            ahead = ahead ? ahead : allocbytes(&scratch, 1<<12);
+            iz n = os_peek(sh->os, in->h, ahead, look);
             peekable = n >= 0;
             iz want = n;
             for (iz k = 0; k<n && !exact; k++) {
@@ -1696,6 +1721,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                     break;
                 }
             }
+            if (want==look && look<(1<<12)) look *= 2;
             if (nchars>=0 && want>nchars-count) want = (iz)(nchars - count);
             alen = aoff = 0;
             if (want > 0) {
