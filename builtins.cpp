@@ -35,6 +35,9 @@ static Str usage(Str name)
         {"eval",     "eval [arg ...]"},
         {"exec",     "exec [-cl] [-a name] [command [argument ...]] [redirection ...]"},
         {"wait",     "wait [-fn] [-p var] [id ...]"},
+        {"jobs",     "jobs [-lnprs] [jobspec ...] or jobs -x command [args]"},
+        {"disown",   "disown [-h] [-ar] [jobspec ... | pid ...]"},
+        {"suspend",  "suspend [-f]"},
         {"builtin",  "builtin [shell-builtin [arg ...]]"},
         {"caller",   "caller [expr]"},
     };
@@ -1334,19 +1337,44 @@ static i32 readbyte(Shell *sh, i32 fd)
     return n==1 ? c : n<0 ? -2 : -1;
 }
 
-// Validate a read -t timeout: a non-negative decimal with an optional
-// fraction. Timeouts themselves arrive with M3.
-static b32 validtimeout(Str s)
+// Parse a read -t timeout, a non-negative decimal with an optional
+// fraction of which microseconds count, into nanoseconds. False if
+// invalid.
+static b32 parsetimeout(Str s, i64 *ns)
 {
     b32 dot = 0;
+    i64 sec = 0, usec = 0, scale = 100000;
     for (iz i = 0; i < s.len; i++) {
         if (s[i]=='.' && !dot) {
             dot = 1;
         } else if (!digit(s[i])) {
             return 0;
+        } else if (!dot) {
+            if (sec > (i64)1<<31) return 0;
+            sec = sec*10 + (s[i] - '0');
+        } else if (scale) {
+            usec += (s[i] - '0') * scale;
+            scale /= 10;
         }
     }
+    *ns = sec*1000000000 + usec*1000;
     return 1;
+}
+
+// Is input waiting on a file, or its end? For read -t 0.
+static b32 inputready(Shell *sh, File *f)
+{
+    if (!f || !(f->flags & OF_READ)) return 0;
+    switch (f->kind) {
+    case F_OS:
+        return taskreadable(sh->sched, f->h);
+    case F_MEM:
+        return 1;
+    case F_PIPE:
+        if (f->pipe->osr != BADHANDLE) return taskreadable(sh->sched, f->pipe->osr);
+        return f->pipe->len || !f->pipe->writers;
+    }
+    return 0;
 }
 
 static b32 ifsmember(Str ifs, u8 c)
@@ -1363,6 +1391,8 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     i32 delim = '\n', fd = 0;
     i64 nchars = -1;
     b32 exact = 0;
+    b32 timed = 0;
+    i64 timeout = 0;
     Str prompt = {};
     Str arrname = {};
     iz  i = 1;
@@ -1400,10 +1430,11 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                 exact = c == 'N';
                 break;
             case 't':
-                if (!validtimeout(val)) {
+                if (!parsetimeout(val, &timeout)) {
                     builtinerror(sh, scratch, "read", concat(&scratch, val, ": invalid timeout specification"));
                     return 1;
                 }
+                timed = 1;
                 break;
             case 'u': {
                 i64 v;
@@ -1428,6 +1459,22 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     // The prompt and -s apply only to a terminal, which input never is
     (void)silent;
     (void)prompt;
+    File *in = sh->fds->fd[fd];
+    if (timed && !timeout) {
+        return !inputready(sh, in);  // -t 0: is there input?
+    }
+    if (!timed) {
+        Got tm = getvar(sh, &scratch, "TMOUT");  // the default timeout
+        if (tm.set && !parsetimeout(tm.value, &timeout)) timeout = 0;
+    }
+    if (timeout && in) {
+        // Not for a regular file, nor text in memory, which never wait
+        if (in->kind==F_MEM || (in->kind==F_OS && os_fstat(sh->os, in->h).type==FT_FILE)) {
+            timeout = 0;
+        }
+    }
+    Task *self = sh->sched->cur;
+    i64 deadline = timeout ? os_now(sh->os) + timeout : 0;
     // The first name is checked now, the rest as they are assigned
     Str rn, rs;
     if (i<nargs && !validvarname(args[i]) && !splitref(args[i], &rn, &rs)) {
@@ -1439,12 +1486,20 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     Buf line(&scratch, 128);
     Buf esc(&scratch, 128);
     b32 eof = 0;
+    b32 timedout = 0;
     i64 count = 0;
     for (;;) {
         if (nchars>=0 && count>=nchars) break;
-        sh->intrread = sh->sched->cur->introk = 1;
+        sh->intrread = self->introk = 1;
+        self->deadline = deadline;
         i32 c = readbyte(sh, fd);
-        sh->intrread = sh->sched->cur->introk = 0;
+        self->deadline = 0;
+        sh->intrread = self->introk = 0;
+        if (self->timedout) {
+            self->timedout = 0;
+            timedout = 1;
+            break;
+        }
         if (c == -2) {
             Str msg = concat(&scratch, fmti64(&scratch, fd), ": read error: Bad file descriptor");
             builtinerror(sh, scratch, "read", msg);
@@ -1455,7 +1510,14 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         if (c==delim && !exact) break;
         if (c=='\\' && !raw) {
+            self->deadline = deadline;
             i32 d = readbyte(sh, fd);
+            self->deadline = 0;
+            if (self->timedout) {
+                self->timedout = 0;
+                timedout = 1;
+                break;
+            }
             if (d < 0) {
                 eof = 1;
                 break;
@@ -1507,12 +1569,12 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         for (iz k = 0; k < fields.len; k++) {
             setelem(sh, scratch, arrname, k, {}, fields[k], SV_FORCE);
         }
-        return eof;
+        return timedout ? 128+14 : eof;
     }
     iz  nvars = nargs - i;
     if (!nvars) {
         if (!setvar(sh, scratch, "REPLY", s)) return 2;
-        return eof;
+        return timedout ? 128+14 : eof;
     }
     // Split into the variables; the last takes the rest of the line
     iz pos = 0;
@@ -1595,7 +1657,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         if (!assignto(sh, scratch, args[i+v], val)) return v==nvars-1 ? 1 : 2;
     }
-    return eof;
+    return timedout ? 128+14 : eof;
 }
 
 
@@ -1884,27 +1946,6 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
         sh->childsig = 0;
     }
     escape(sh, ESC_EXIT);
-}
-
-// Interim: wait knows process substitutions only. Without arguments,
-// as bash, it waits for the last one if $! names it.
-static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena)
-{
-    iz  i = nargs>1 && args[1]=="--" ? 2 : 1;
-    b32 found;
-    if (i == nargs) {
-        waitpsub(sh, sh->lastbg, &found);
-        return 0;
-    }
-    i32 status = 0;
-    for (; i < nargs; i++) {
-        i64 pid;
-        if (parsei64(args[i], &pid)) {
-            i32 st = waitpsub(sh, pid, &found);
-            status = found ? st : 0;
-        }
-    }
-    return status;
 }
 
 static i32 b_true(Shell *, Str *, iz, Arena)
@@ -2489,12 +2530,18 @@ static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 b_trap(Shell *, Str *, iz, Arena);  // trap.cpp
 static i32 b_kill(Shell *, Str *, iz, Arena);
+static i32 b_jobs(Shell *, Str *, iz, Arena);  // jobs.cpp
+static i32 b_wait(Shell *, Str *, iz, Arena);
+static i32 b_disown(Shell *, Str *, iz, Arena);
+static i32 b_fg(Shell *, Str *, iz, Arena);
+static i32 b_suspend(Shell *, Str *, iz, Arena);
 
 static Builtin builtins[] = {
     {".",        b_source,   B_SPECIAL},
     {":",        b_colon,    B_SPECIAL},
     {"[",        b_test,     0},
     {"alias",    b_alias,    0},
+    {"bg",       b_fg,       0},
     {"break",    b_break,    B_SPECIAL},
     {"builtin",  b_builtin,  0},
     {"caller",   b_caller,   0},
@@ -2503,14 +2550,17 @@ static Builtin builtins[] = {
     {"compgen",  b_compgen,  0},
     {"continue", b_continue, B_SPECIAL},
     {"declare",  b_declare,  B_DECL},
+    {"disown",   b_disown,   0},
     {"echo",     b_echo,     0},
     {"eval",     b_eval,     B_SPECIAL},
     {"exec",     b_exec,     B_SPECIAL},
     {"exit",     b_exit,     B_SPECIAL},
     {"export",   b_export,   B_SPECIAL|B_DECL},
     {"false",    b_false,    0},
+    {"fg",       b_fg,       0},
     {"getopts",  b_getopts,  0},
     {"hash",     b_hash,     0},
+    {"jobs",     b_jobs,     0},
     {"kill",     b_kill,     0},
     {"let",      b_let,      0},
     {"local",    b_local,    B_DECL},
@@ -2523,6 +2573,7 @@ static Builtin builtins[] = {
     {"shift",    b_shift,    B_SPECIAL},
     {"shopt",    b_shopt,    0},
     {"source",   b_source,   0},
+    {"suspend",  b_suspend,  0},
     {"test",     b_test,     0},
     {"times",    b_times,    B_SPECIAL},
     {"trap",     b_trap,     B_SPECIAL},

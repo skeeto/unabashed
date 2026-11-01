@@ -25,6 +25,8 @@ struct OsInfo {
     iz     stack;    // usable bytes of the calling thread's stack, 0 if unknown
     u64    chaos;    // test layers: seed for random yields, 0 for none
     u64    sigign;   // signals ignored on entry (bit n-1 for signal n)
+    b32    ownstd;   // test layers: std are the shell's own references,
+                     // closed (with every descriptor) as it returns
 };
 
 // Errors are Linux errno numbers on every platform.

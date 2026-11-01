@@ -198,7 +198,9 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.uid     = info.euid = 1000;
     info.gid     = info.egid = 1000;
     info.host    = "oracle";
-    for (i32 i = 0; i < 3; i++) info.std[i] = ctx->fd[i];
+    // Its own references: exec may close them before the process exits
+    for (i32 i = 0; i < 3; i++) info.std[i] = os_dup(os, ctx->fd[i]);
+    info.ownstd  = 1;
     info.reserve = (iz)1<<22;
     i32 status = sh_main(os, &info);
     os->marks[m].dead = 1;
@@ -588,6 +590,9 @@ static b32 oracle(Test *t, char *suite, char *name, b32 verbose)
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
     vreset(&os->vos, va, testfakes, ntestfakes);
+    // run-all runs from a terminal, where nobody types: some tests time
+    // out reads from it
+    os->vos.ttyin = 1;
     // The suite expects a populated /bin, as on a real system: the
     // fakes stand in for it, and the shell for /bin/sh
     for (iz i = 0; i < ntestfakes; i++) {
@@ -655,7 +660,7 @@ int main(int argc, char **argv)
     static Os os = {};
     byte base = 0;
     stackbase = &base;
-    os.heapcap         = (iz)1<<28;
+    os.heapcap         = (iz)1<<29;  // half for the shells: room for background vprocs
     os.heap            = (byte *)malloc((uz)os.heapcap);
     os.vos.outcap      = (iz)1<<20;
     os.vos.out.data    = (u8 *)malloc((uz)os.vos.outcap);

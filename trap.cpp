@@ -144,7 +144,8 @@ static b32 trapset(Shell *sh, i32 idx)  // an action, not ignored or default
 static b32 trapignored(Shell *sh, i32 sig)
 {
     if (sig>0 && sig<NSIGNAL && (sh->hardign & sigbit(sig))) return 1;
-    return sh->traps && sh->traps[sig].data && !sh->traps[sig].len;
+    if (sh->traps && sh->traps[sig].data) return !sh->traps[sig].len;
+    return sig>0 && sig<NSIGNAL && (sh->asyncign & sigbit(sig));
 }
 
 // How the process should handle a real signal, per the main shell's
@@ -706,6 +707,8 @@ static i32 killpid(Shell *sh, i64 pid, i32 sig)
     return os_kill(sh->os, pid, sig);
 }
 
+static i64 jobspecpid(Shell *, Arena, Str who, Str spec);  // jobs.cpp
+
 static i32 b_kill(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     i32 sig = 15;
@@ -748,12 +751,20 @@ static i32 b_kill(Shell *sh, Str *args, iz nargs, Arena scratch)
     i32 status = 0;
     for (; i < nargs; i++) {
         Str a = args[i];
+        i64 pid;
         if (a.len && a[0]=='%') {
-            builtinerror(sh, scratch, "kill", concat(&scratch, a, ": no such job"));
-            status = 1;
+            pid = jobspecpid(sh, scratch, "kill", a);
+            if (pid < 0) {
+                status = 1;
+                continue;
+            }
+            i32 err = killpid(sh, pid, sig);
+            if (err) {
+                builtinerror(sh, scratch, "kill", concat3(&scratch, a, Str(": "), errtext(err)));
+                status = 1;
+            }
             continue;
         }
-        i64 pid;
         Str digits = a.len && a[0]=='-' ? cuthead(a, 1) : a;
         b32 ok = digits.len>0;
         for (iz k = 0; k < digits.len; k++) ok &= digit(digits[k]);

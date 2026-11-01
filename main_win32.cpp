@@ -190,6 +190,7 @@ W32(b32,    SetConsoleCtrlHandler(void *, b32));
 W32(byte *, VirtualAlloc(byte *, iz, i32, i32));
 W32(b32,    VirtualFree(byte *, iz, i32));
 W32(b32,    SetEvent(uz));
+W32(void,   Sleep(i32));
 W32(i32,    WaitForMultipleObjects(i32, uz *, b32, i32));
 W32(i32,    WaitForSingleObject(uz, i32));
 W32(b32,    WriteConsoleW(uz, c16 *, i32, i32 *, uz));
@@ -1188,13 +1189,16 @@ static Io *os_wait(Os *os, i64 deadline)
         handles[n] = h ? h->done : io->h;
         ios[n++]   = io;
     }
-    if (!n) return 0;
     i32 timeout = INFINITE;
     if (deadline == WAIT_POLL) {
         timeout = 0;
     } else if (deadline > 0) {
         i64 left = (deadline - os_now(os) + 999999) / 1000000;
         timeout = left<0 ? 0 : left>(1<<30) ? (1<<30) : (i32)left;
+    }
+    if (!n) {
+        if (deadline > 0) Sleep(timeout);  // a timer alone
+        return 0;
     }
     i32 r = WaitForMultipleObjects(n, handles, 0, timeout);
     if (r<0 || r>=n) return 0;

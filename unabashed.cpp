@@ -165,6 +165,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "proc.cpp"
 #include "builtins.cpp"
 #include "trap.cpp"
+#include "jobs.cpp"
 
 
 // Startup
@@ -594,10 +595,12 @@ static i32 sh_main(Os *os, OsInfo *info)
             runexittrap(sh, scratch);
         }
     }
-    if (sh->psubs) {
-        // Procsubs still running end on EOF once the shell's ends of
-        // their pipes close, as at a process exit. The platform's own
-        // handles stay open.
+    if (sh->jobs) orphanjobs(sh);
+    if (sh->psubs || sh->sched->orphans) {
+        // Procsubs and background jobs still running end on EOF once
+        // the shell's ends of their pipes close, as at a process exit,
+        // and are waited for: a fiber cannot outlive its process. The
+        // platform's own handles stay open.
         Fdtab *t = sh->fds;
         for (i32 fd = 0; fd < t->top; fd++) {
             File *f = t->fd[fd];
@@ -609,7 +612,9 @@ static i32 sh_main(Os *os, OsInfo *info)
             }
         }
         joinpsubs(sh);
+        joinorphans(sh->sched);
     }
+    if (info->ownstd) closeall(sh);
     freesched(sh->sched);
     if (sh->killsig) return WSIGNALED | (128 + sh->killsig);
     return sh->status & 255;

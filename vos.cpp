@@ -39,7 +39,7 @@ struct VNode {
     i32    prog;    // index+1 into the program table, or 0
 };
 
-enum : i32 { VK_FREE, VK_FILE, VK_DIR, VK_PIPEREAD, VK_PIPEWRITE, VK_NULL };
+enum : i32 { VK_FREE, VK_FILE, VK_DIR, VK_PIPEREAD, VK_PIPEWRITE, VK_NULL, VK_TTY };
 
 enum { VPIPECAP = 1<<16 };
 
@@ -63,7 +63,7 @@ struct VFile {      // open file description
 enum { VOS_HANDLES = 1024 };
 
 enum : i32 { VP_FREE, VP_RUN, VP_BLOCK, VP_EXIT };
-enum : i32 { VW_NONE, VW_READ, VW_WRITE, VW_PROC, VW_IO, VW_YIELD, VW_SLEEP };
+enum : i32 { VW_NONE, VW_READ, VW_WRITE, VW_PROC, VW_IO, VW_YIELD, VW_SLEEP, VW_TTY };
 
 // A process: slot 0 is the outermost shell, the rest are spawned.
 struct VProc {
@@ -76,7 +76,7 @@ struct VProc {
     i64     pid;
     u64     sigpend;  // shells: signals not yet taken by os_sigpending
     u64     sigign;   // fakes: signals they ignore (Spawn.sigign)
-    i64     until;    // VW_SLEEP: virtual time to wake at
+    i64     until;    // VW_SLEEP, VW_IO with a deadline: time to wake at
     Fiber  *fiber;    // where to resume it
     Fiber  *own;      // its own fiber, freed once reaped
     iz      stack;
@@ -111,6 +111,7 @@ struct Vos {
     iz      outcap;
     Str     in;          // its standard input
     iz      inpos;
+    b32     ttyin;       // or else a terminal that never delivers input
 };
 
 static VNode *vnew(Vos *v, VNode *dir, Str name, i32 type, i32 mode)
@@ -341,8 +342,9 @@ static b32 vready(Vos *v, VProc *p)
     case VW_PROC:  return v->procs[p->wproc].state == VP_EXIT;
     case VW_YIELD: return 1;
     case VW_SLEEP: return v->clock >= p->until;
+    case VW_TTY:   return p->intr;
     case VW_IO:
-        if (p->intr) return 1;
+        if (p->intr || (p->until && v->clock>=p->until)) return 1;
         for (Io *io = p->ios; io; io = io->next) {
             if (vioready(v, io)) return 1;
         }
@@ -358,7 +360,8 @@ static b32 vadvance(Vos *v)
     i64 when = -1;
     for (i32 i = 0; i < v->nprocs; i++) {
         VProc *p = v->procs + i;
-        if (p->state==VP_BLOCK && p->wait==VW_SLEEP && (when<0 || p->until<when)) {
+        b32 timed = p->wait==VW_SLEEP || (p->wait==VW_IO && p->until);
+        if (p->state==VP_BLOCK && timed && (when<0 || p->until<when)) {
             when = p->until;
         }
     }
@@ -537,6 +540,31 @@ static i32 vdevfd(Str path)
     return n;
 }
 
+// A read from a terminal nobody types at: it blocks until a signal
+// fails it, or the scheduler finds nothing else can ever run.
+static iz vttyread(Os *os, Vos *v)
+{
+    VProc *me = v->procs + v->cur;
+    for (;;) {
+        if (me->intr) {
+            me->intr = 0;
+            return -1;
+        }
+        me->wait = VW_TTY;
+        if (!vschedule(os, v)) {
+            vdeadlock(v);
+            return -1;
+        }
+    }
+}
+
+static b32 vistty(Vos *v, Handle h)
+{
+    if (h == 0) return v->ttyin;
+    VFile *f = vfile(v, h);
+    return f && f->kind==VK_TTY;
+}
+
 static Opened os_open(Os *os, Arena, Str path, i32 flags, i32 mode)
 {
     Vos   *v = osvos(os);
@@ -575,10 +603,10 @@ static Opened os_open(Os *os, Arena, Str path, i32 flags, i32 mode)
         r.h = n;
         return r;
     }
-    if (path == "/dev/null") {
+    if (path=="/dev/null" || path=="/dev/tty") {
         Handle h = vnewhandle(v);
         if (h == BADHANDLE) { r.err = E_MFILE; return r; }
-        v->files[h].kind  = VK_NULL;
+        v->files[h].kind  = path=="/dev/tty" ? VK_TTY : VK_NULL;
         v->files[h].flags = flags;
         r.h = h;
         return r;
@@ -719,6 +747,7 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
     if (!f) return 0;
     switch (f->kind) {
     case VK_NULL:
+    case VK_TTY:
         return 1;
     case VK_FILE:
         if (!(f->flags & OF_WRITE)) return 0;
@@ -760,6 +789,9 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
 static iz os_read(Os *os, Handle h, u8 *buf, iz len)
 {
     Vos *v = osvos(os);
+    if (vistty(v, h)) {
+        return vttyread(os, v);
+    }
     if (h == 0) {
         iz n = v->in.len - v->inpos;
         n = n<len ? n : len;
@@ -841,12 +873,12 @@ static Stat os_stat(Os *os, Arena, Str path, b32 follow)
         r.err = E_NOENT;
         return r;
     }
-    if (path == "/dev/null") {
+    if (path=="/dev/null" || path=="/dev/tty") {
         Stat r = {};
         r.type = FT_CHAR;
         r.mode = 0666;
         r.dev  = 2;
-        r.ino  = 1;
+        r.ino  = path=="/dev/tty" ? 2 : 1;
         return r;
     }
     VResolved res = vresolve(v, path, follow);
@@ -863,7 +895,7 @@ static Stat os_fstat(Os *os, Handle h)
     Vos *v = osvos(os);
     Stat r = {};
     if (h < 3) {
-        r.type = FT_PIPE;
+        r.type = h==0 && v->ttyin ? FT_CHAR : FT_PIPE;
         r.mode = 0600;
         return r;
     }
@@ -872,7 +904,7 @@ static Stat os_fstat(Os *os, Handle h)
         r.err = E_BADF;
     } else if (f->node) {
         r = vstat(f->node);
-    } else if (f->kind == VK_NULL) {
+    } else if (f->kind==VK_NULL || f->kind==VK_TTY) {
         r.type = FT_CHAR;
         r.mode = 0666;
     } else {
@@ -1084,6 +1116,7 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
     VFile *f = io->op==IO_PROC ? 0 : vfile(v, io->h);
     switch (io->op) {
     case IO_READ:
+        if (vistty(v, io->h)) return 0;  // never
         if (f && f->kind==VK_PIPEREAD) {
             VPipe *p = f->pipe;
             if (p->len==p->pos && p->writers) return 0;
@@ -1167,8 +1200,12 @@ static Io *os_wait(Os *os, i64 deadline)
             yielded = 1;
             continue;
         }
-        me->wait = VW_IO;
-        if (!vschedule(os, v)) {
+        if (deadline>0 && v->clock>=deadline) return 0;
+        me->wait  = VW_IO;
+        me->until = deadline>0 ? deadline : 0;
+        b32 ok = vschedule(os, v);
+        me->until = 0;
+        if (!ok) {
             if (deadline > 0) {
                 v->clock = v->clock>deadline ? v->clock : deadline;
             } else {

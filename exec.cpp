@@ -26,6 +26,16 @@ static Str      runfunsub(Shell *, Arena *, Str src, b32 valsub, Arena);
 static void     joinpsubs(Shell *);
 static void     closeall(Shell *);
 
+// Jobs (jobs.cpp)
+static void     runasync(Shell *, Node *, Arena);
+static void     runcoproc(Shell *, Node *, Arena);
+static void     notifyjobs(Shell *, Arena);
+static void     polljobs(Shell *);
+static void     cleanupjobs(Shell *);
+static void     orphanjobs(Shell *);
+static void     coprocfdclosed(Shell *, i32 fd);
+static void     hidecoproc(Shell *, Arena *);
+
 // Signals and traps (trap.cpp)
 static void     checksigs(Shell *, Arena);
 static void     runerrtrap(Shell *);
@@ -41,7 +51,7 @@ static b32      trapignored(Shell *, i32 sig);
 static u64 ignoredsigs(Shell *sh)
 {
     u64 m = sh->hardign;
-    for (i32 sig = 1; sh->traps && sig < NSIGNAL; sig++) {
+    for (i32 sig = 1; (sh->traps || sh->asyncign) && sig < NSIGNAL; sig++) {
         if (trapignored(sh, sig)) m |= (u64)1 << (sig-1);
     }
     return m;
@@ -273,6 +283,7 @@ struct SubJob {
     Node *node;
     Str   src;
     b32   newloops;  // break and continue cannot see enclosing loops
+    b32   nojobs;    // a ( list ): it starts with no jobs or coprocesses
     Func *fn;        // SUB_CALL: a function and its arguments
     Str  *argv;
     iz    argc;
@@ -325,6 +336,12 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     // locals are not journaled: restore it by hand
     Frame frame = sh->frame ? *sh->frame : Frame{};
     if (j->newloops) sh->loopdepth = 0;
+    if (j->nojobs) {
+        sh->jobs   = 0;
+        sh->curjob = sh->prevjob = 0;
+        sh->bgstats = 0;
+        if (sh->coprocs) hidecoproc(sh, &scratch);
+    }
     if (cap) {
         File *out = newfile(sh, F_CAPTURE, OF_WRITE);
         out->cap = cap;
@@ -345,6 +362,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
         pid    = sh->childpid;
     }
     sigleave(sh, &sig);
+    if (sh->jobs) orphanjobs(sh);  // its jobs run on
     unwind(sh, saved.undo);
     if (sh->psubs) {
         // Its procsubs end with it, once their descriptors are closed
@@ -598,15 +616,22 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                 shellerror(sh, *a, "redirection error: cannot duplicate fd: Too many open files");
                 return 0;
             }
+            Str var = r->srcvar->text;
+            b32 elem = find(var, "[") >= 0;  // {arr[i]}
             if (r->op==R_CLOSE || r->op==R_MOVEIN || r->op==R_MOVEOUT) {
-                Got g = getvar(sh, a, r->srcvar->text);
-                fd = parsefd(g.value);
+                Str val = elem ? expandstring(sh, a, concat3(a, "${", var, "}"))
+                               : getvar(sh, a, var).value;
+                fd = parsefd(val);
                 if (fd < 0) {
                     shellerror(sh, *a, concat(a, r->srcvar->text, ": ambiguous redirect"));
                     return 0;
                 }
             } else {
-                setvar(sh, *a, r->srcvar->text, fmti64(a, fd));
+                if (elem) {
+                    assignto(sh, *a, var, fmti64(a, fd));
+                } else {
+                    setvar(sh, *a, var, fmti64(a, fd));
+                }
                 // The new descriptor outlives the command
                 kept |= !sh->shopt[S_VARREDIR_CLOSE];
             }
@@ -690,6 +715,7 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                 }
                 if (w == "-") {
                     fdset(sh, fd, 0, kept, a);
+                    if (sh->coprocs) coprocfdclosed(sh, fd);
                     break;
                 }
                 src = parsefd(w);
@@ -735,9 +761,11 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                 fileunref(sh, t->fd[src]);
                 t->fd[src] = 0;
             }
+            if (move && sh->coprocs) coprocfdclosed(sh, src);
         } break;
         case R_CLOSE:
             if (t->fd[fd]) fdset(sh, fd, 0, kept, a);
+            if (sh->coprocs) coprocfdclosed(sh, fd);
             break;
         case R_HEREDOC:
         case R_HEREDOCSTRIP:
@@ -1094,6 +1122,11 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     for (i32 fd = 0; fd < t->top; fd++) {
         File *f = t->fd[fd];
         if (!f) continue;
+        b32 cloexec = 0;
+        for (Coproc *c = sh->coprocs; c; c = c->next) {
+            cloexec |= fd==c->rfd || fd==c->wfd;
+        }
+        if (cloexec) continue;  // a coprocess's: bash makes them close-on-exec
         SpawnFd sf = {fd, BADHANDLE};
         // A File already given to an earlier descriptor shares its handle
         b32 shared = 0;
@@ -1196,6 +1229,12 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     // writes next
     for (i32 i = 0; i < npumps; i++) {
         taskjoin(s, pumps[i]);
+    }
+    if (sh->jobs || sh->coprocs) {
+        // as bash after each foreground job: drop the jobs already
+        // reported, and a coprocess that ended
+        polljobs(sh);
+        cleanupjobs(sh);
     }
     return status;
 }
@@ -2210,6 +2249,7 @@ static void execsubshell(Shell *sh, Node *n, Arena scratch)
     j.kind = SUB_NODE;
     j.node = n->a;
     j.newloops = 1;
+    j.nojobs   = 1;
     sh->childsig  = 0;
     sh->tailnode  = tailcommand(n->a);
     sh->taillevel = sh->subshell + 2;
@@ -2446,8 +2486,13 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     b32   invert = n->flags & CMD_INVERT;
     if (invert) sh->noerrexit++;
 
+    b32 stdinredir = sh->stdinredir;
     if (n->kind!=N_SIMPLE && n->kind!=N_CONNECT && n->kind!=N_FUNCDEF && n->redirs) {
+        for (Redir *r = n->redirs; r; r = r->next) {
+            sh->stdinredir |= r->src==0 && !r->srcvar;  // & reads it then
+        }
         if (!doredirs(sh, n->redirs, &scratch, 0)) {
+            sh->stdinredir = stdinredir;
             unwind(sh, mark);
             sh->status = 1;
             if (invert) sh->noerrexit--;
@@ -2478,20 +2523,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
             runpipeline(sh, n, scratch);
             break;
         case '&':
-            // Background jobs arrive in M3a; run synchronously meanwhile,
-            // but in a subshell as bash would
-            {
-                SubJob j = {};
-                j.kind = SUB_NODE;
-                j.node = n->a;
-                j.newloops = 1;
-                i32   depth = ++sh->capdepth;
-                Arena child = *scratchat(sh, depth);
-                subshell(sh, &j, child, 0);
-                sh->capdepth = depth - 1;
-                sh->lastbg   = sh->lastpid;  // $!: the subshell's BASHPID
-            }
-            sh->status = 0;
+            runasync(sh, n->a, scratch);
             execute(sh, n->b, scratch);
             break;
         default:
@@ -2576,14 +2608,14 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         break;
 
     case N_COPROC:
-        shellerror(sh, scratch, "coproc: not supported until M3a");
-        sh->status = 1;
+        runcoproc(sh, n, scratch);
         break;
     }
 
-    if (n->kind!=N_SIMPLE && n->kind!=N_CONNECT) {
-        unwind(sh, mark);
+    if (n->kind!=N_SIMPLE && n->kind!=N_CONNECT && n->kind!=N_COPROC) {
+        unwind(sh, mark);  // a coproc's descriptors stay open
     }
+    sh->stdinredir = stdinredir;
     if (n->kind==N_SUBSHELL && n->redirs) {
         reportchild(sh, scratch, n);
     }
@@ -2838,6 +2870,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             // command sets it: a compound command's redirections cite
             // its last line
             sh->line = L->lineno;
+            if (sh->jobs && !outer) notifyjobs(sh, *L->a);
             runcommand(sh, r.cmd, *L->a, reader);
         }
         // Syncing options the command may have changed

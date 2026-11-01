@@ -1006,11 +1006,12 @@ static i32 fake_xcase(Os *os, FakeCtx *ctx)
     FkProg p  = fkprog(os, ctx);
     FkOpt  o  = fkopts(&p, 1);
     i32    op = 0;
+    b32    unbuffered = 0;
     for (i32 c; (c = fkgetopt(&o, "lnu")) != -1;) {
         switch (c) {
         case 'l': op = 'l'; break;
         case 'u': op = 'u'; break;
-        case 'n': break;
+        case 'n': unbuffered = 1; break;
         default:
             print(&p.err, "casemod: usage: casemod [-lnu] [file]\n");
             flush(&p.err);
@@ -1040,6 +1041,7 @@ static i32 fake_xcase(Os *os, FakeCtx *ctx)
             if (op=='l') c = lowercase(c);
             putbyte(&p.out, c);
         }
+        if (unbuffered) flush(&p.out);  // -n: as it is read, for coprocesses
     }
     fkclosein(&p, &in);
     return fkexit(&p, 0);

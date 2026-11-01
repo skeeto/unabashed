@@ -342,6 +342,37 @@ enum : i32 {  // the trap table: EXIT, signals 1-64, then the others
     NTRAP
 };
 
+// Background jobs and the coprocess (jobs.cpp)
+struct Job {
+    Job   *next;      // the next older job
+    i64    owner;     // BASHPID of the level that started it
+    i64    pid;       // its $!
+    Task  *task;      // until joined: its vproc, or its program's waiter
+    Str    text;      // the command, as jobs lists it
+    Str    wd;        // where it started
+    i32    id;        // its job number
+    i32    status;    // once done: exit status, WSIGNALED for a signal
+    b32    done;
+    b32    notified;  // listed as done, or waited for
+    b32    nohup;     // disown -h
+};
+
+struct Bgstat {       // the status of a job no longer listed
+    Bgstat *next;
+    i64     pid;
+    i32     status;
+};
+
+struct Coproc {       // bash 5.3 allows several
+    Coproc *next;     // the next older
+    Str  name;
+    i64  owner;
+    i64  pid;
+    i32  rfd;         // the shell's ends, -1 once closed
+    i32  wfd;
+    b32  dead;
+};
+
 struct Shell {
     Os      *os;
     Sched   *sched;        // shared by every vproc of the process
@@ -426,12 +457,21 @@ struct Shell {
     Task    *psubs;        // procsubs started at this subshell level, to join
     i64      psubpid;      // the last procsub joined, and its status,
     i32      psubstatus;   // for a repeated wait
+    Job     *jobs;         // background jobs, newest first (jobs.cpp)
+    i32      curjob;       // job numbers of %+ and %-, or 0
+    i32      prevjob;
+    Bgstat  *bgstats;      // statuses of jobs no longer listed, for wait
+    Coproc  *coprocs;      // coprocesses, newest first
+    b32      stdinredir;   // input is a pipe or redirected: & keeps it,
+                           // rather than reading /dev/null
 
     // Signals and traps (trap.cpp)
     Str     *traps;        // NTRAP actions in the store, or null
     Str     *shown;        // what trap lists in a subshell until it sets one
     Sigproc *sig;          // this level's pending signals
     u64      hardign;      // ignored on entry: cannot be trapped
+    u64      asyncign;     // INT and QUIT in a background job: ignored
+                           // unless trapped, as bash without job control
     i32      intrap;       // running trap actions
     i32      trapbusy;     // DEBUG, ERR, RETURN actions running: not again
     i32      trapstatus;   // $? before the running trap, for its exit

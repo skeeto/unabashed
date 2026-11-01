@@ -31,6 +31,9 @@ struct Vproc {
 };
 
 static void copytraps(Shell *c, Shell *sh);
+static Job *copyjobs(Store *, Job *);  // jobs.cpp
+static void closecoproc(Shell *);
+static void orphanjobs(Shell *);
 static void reportpipeline(Shell *, Arena, Node **stages, i32 n, i32 *statuses,
                            i64 *pids, Node *job);
 
@@ -284,6 +287,9 @@ static Shell *vproccopy(Shell *sh, Vproc *m)
     c->intrap   = 0;
     c->trapbusy = 0;
     c->intrread = 0;
+    c->jobs     = copyjobs(st, sh->jobs);  // to list, not to wait for
+    c->bgstats  = 0;
+    closecoproc(c);
     copytraps(c, sh);
     sigenter(c, &m->sig, c->bashpid, 0);
     return c;
@@ -303,6 +309,8 @@ static void vprocmain(Task *t)
     m->sig.task = t;
     if (__builtin_setjmp(top.jmp)) {
         // escaped
+    } else if (m->sig.pending && (checksigs(sh, *scratchat(sh, 0)), sh->exiting)) {
+        // killed before it ran
     } else if (m->node) {
         execute(sh, m->node, *scratchat(sh, 0));
     } else {
@@ -324,6 +332,7 @@ static void vprocmain(Task *t)
     sigleave(sh, &m->sig);
 
     unwind(sh, 0);
+    orphanjobs(sh);
     closeall(sh);
     joinpsubs(sh);
     releasefuncs(sh, sh->funcs);
@@ -345,6 +354,7 @@ static Vproc *vprocwith(Shell *sh, File *in, File *out)
     if (in) {
         fileunref(c, t->fd[0]);
         t->fd[0] = copyfile(c, in);
+        c->stdinredir = 1;
     }
     if (out) {
         fileunref(c, t->fd[1]);
@@ -364,6 +374,10 @@ static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops
     Vproc *m = vprocwith(sh, in, out);
     Shell *c = m->sh;
     if (newloops) c->loopdepth = 0;
+    if (node->kind != N_SIMPLE) {
+        c->jobs = 0;  // as bash's subshell for a compound stage
+        c->curjob = c->prevjob = 0;
+    }
     c->simplestages += node->kind == N_SIMPLE;
     m->node = copynode(&m->perm, node);
     // A simple command, or the last of a ( list ), is what bash would
@@ -569,17 +583,20 @@ static b32 directstage(Shell *sh, Arena scratch, Node *n, b32 first)
 // with the stage's descriptors, then the program starts and the
 // subshell is rolled back. Returns its process, or BADHANDLE with
 // *status set if it did not start, or with *retry set if it turned out
-// to be shell code after all.
+// to be shell code after all. A background command (stage false) is
+// not a pipeline stage that BASH_SUBSHELL leaves out.
 static Handle spawndirect(Shell *sh, Node *stage, File *in, File *out,
-                          Arena scratch, i32 *status, b32 *retry)
+                          Arena scratch, i32 *status, b32 *retry, b32 isstage = 1)
 {
     Undo *mark = sh->undo;
     if (in) {
         in->refs++;
         fdset(sh, 0, in, 0, &scratch);
     }
-    out->refs++;
-    fdset(sh, 1, out, 0, &scratch);
+    if (out) {
+        out->refs++;
+        fdset(sh, 1, out, 0, &scratch);
+    }
     Spawnto sp = {BADHANDLE, 0, 0};
     SubJob  j  = {};
     j.kind = SUB_NODE;
@@ -587,9 +604,9 @@ static Handle spawndirect(Shell *sh, Node *stage, File *in, File *out,
     i32   depth = ++sh->capdepth;
     Arena child = *scratchat(sh, depth);
     sh->spawnto = &sp;
-    sh->simplestages++;
+    sh->simplestages += isstage;
     *status = subshell(sh, &j, child, 0);
-    sh->simplestages--;
+    sh->simplestages -= isstage;
     sh->spawnto  = 0;
     sh->capdepth = depth - 1;
     unwind(sh, mark);
@@ -676,6 +693,8 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     i32   last  = nstages - 1;
     Node *stage = stages[last];
     Undo *mark  = sh->undo;
+    b32   redir = sh->stdinredir;
+    sh->stdinredir = 1;
     sh->status = before;
     fdset(sh, 0, in[last], 0, &scratch);
     i32   depth = ++sh->capdepth;
@@ -705,6 +724,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         j.kind = SUB_NODE;
         j.node = stage;
         j.newloops = stage->kind != N_SIMPLE;
+        j.nojobs   = stage->kind != N_SIMPLE;
         Node group;
         if (stage->kind == N_SUBSHELL) {
             group = *stage;
@@ -723,6 +743,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         sh->simplestages -= stage->kind == N_SIMPLE;
     }
     sh->capdepth = depth - 1;
+    sh->stdinredir = redir;
     unwind(sh, mark);
     i32 lastsig = escaped ? 0 : sh->childsig;
     pids[last]  = sh->childpid;

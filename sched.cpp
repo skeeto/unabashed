@@ -34,6 +34,9 @@ struct Task {
     b32     intr;      // its wait was failed by a signal (taskinterrupt)
     b32     introk;    // in a read or wait builtin: any signal with an
                        // action interrupts its wait
+    b32     timedout;  // its wait was failed by its deadline
+    b32     waitany;   // woken when any task finishes (wait -n)
+    i64     deadline;  // os_now time when its pipe or OS wait fails, or 0
     Task   *joiner;    // a task waiting for this one to finish
     Task   *sib;       // its creator's list of procsubs to join later
     i64     pid;       // a procsub's BASHPID, for $! and wait
@@ -98,6 +101,8 @@ struct Sched {
     i32     budget;      // safe points until the next yield check
     Sigproc *sigprocs;   // every live virtual process
     Sigproc *top;        // the outermost shell's, for the process's signals
+    Task   *orphans;     // jobs whose level ended, to join (jobs.cpp)
+    iz      nbg;         // job vprocs not yet joined, orphans included
     u64     chaos;       // random state for chaos mode, 0 if off
     Handle  err;         // where to report a deadlock
 };
@@ -175,6 +180,33 @@ static void wake(Sched *s, Task *t)
 
 static void deadlock(Sched *s);
 static void taskinterrupt(Sched *s, Task *t, b32 all);
+static b32  taskfail(Sched *s, Task *t, i32 err);
+
+// The earliest deadline of a blocked task, or 0 if none.
+static i64 nextdeadline(Sched *s)
+{
+    i64 when = 0;
+    for (Task *t = s->all; t; t = t->all) {
+        if (t->state==TS_BLOCKED && t->deadline && (!when || t->deadline<when)) {
+            when = t->deadline;
+        }
+    }
+    return when;
+}
+
+// Fail the waits of the blocked tasks whose deadlines have passed.
+static void expiretimers(Sched *s)
+{
+    i64 now = os_now(s->os);
+    for (Task *t = s->all; t; t = t->all) {
+        if (t->state!=TS_BLOCKED || !t->deadline || t->deadline>now) continue;
+        if (taskfail(s, t, E_AGAIN)) {
+            t->timedout = 1;
+        } else {
+            t->deadline = 0;  // the platform owns its operation: wait it out
+        }
+    }
+}
 
 // Run other tasks until the current one is runnable again. The caller
 // has already queued it (yield), blocked it, or finished it.
@@ -192,8 +224,9 @@ static void schedule(Sched *s)
             }
             return;
         }
-        if (s->npending) {
-            Io *io = os_wait(s->os, WAIT_FOREVER);
+        i64 deadline = nextdeadline(s);
+        if (s->npending || deadline) {
+            Io *io = os_wait(s->os, deadline ? deadline : WAIT_FOREVER);
             if (io) {
                 s->npending--;
                 wake(s, (Task *)io->ctx);
@@ -207,6 +240,10 @@ static void schedule(Sched *s)
                     s->top->pending |= m;
                     if (s->top->task) taskinterrupt(s, s->top->task, 0);
                 }
+                continue;
+            }
+            if (deadline) {
+                expiretimers(s);
                 continue;
             }
         }
@@ -259,6 +296,14 @@ static void deadlock(Sched *s)
 static void taskinterrupt(Sched *s, Task *t, b32 all)
 {
     if (t->state != TS_BLOCKED || (!all && !t->introk)) return;
+    if (taskfail(s, t, E_INTR)) t->intr = 1;
+}
+
+// Fail the wait of a blocked task, waking it: its pipe wait fails, its
+// OS operation is withdrawn with err, a join returns early. False if
+// the operation cannot be withdrawn.
+static b32 taskfail(Sched *s, Task *t, i32 err)
+{
     switch (t->wait) {
     case W_PIPE:
         for (Task **p = t->waitlist; *p; p = &(*p)->next) {
@@ -271,18 +316,18 @@ static void taskinterrupt(Sched *s, Task *t, b32 all)
         t->failed   = 1;
         break;
     case W_IO:
-        if (!os_cancel(s->os, &t->io)) return;
+        if (!os_cancel(s->os, &t->io)) return 0;
         s->npending--;
-        t->io.err  = E_INTR;
+        t->io.err  = err;
         t->io.done = 1;
         break;
     case W_JOIN:
         break;
     default:
-        return;
+        return 0;
     }
-    t->intr = 1;
     wake(s, t);
+    return 1;
 }
 
 static void block(Sched *s, i32 why)
@@ -305,6 +350,7 @@ static void yield(Sched *s)
 static void safepointslow(Sched *s)
 {
     s->budget = s->chaos ? (i32)(chaosrand(s) % 8) : 1024;
+    if (nextdeadline(s)) expiretimers(s);  // even while others keep busy
     while (s->npending) {
         Io *io = os_wait(s->os, WAIT_POLL);
         if (!io) break;
@@ -340,6 +386,9 @@ static void taskentry(Os *, void *arg)
             wake(s, t->joiner);
             t->joiner = 0;
         }
+        for (Task *w = s->all; w; w = w->all) {
+            if (w->waitany && w->state==TS_BLOCKED && w->wait==W_JOIN) wake(s, w);
+        }
         schedule(s);  // returns when the task is reused
     }
 }
@@ -362,11 +411,15 @@ static Task *taskspawn(Sched *s, void (*fn)(Task *), void *arg, iz stack)
     }
     t->fn     = fn;
     t->arg    = arg;
+    t->io     = {};
     t->status = 0;
     t->failed = 0;
     t->cancel = 0;
     t->intr   = 0;
     t->introk = 0;
+    t->timedout = 0;
+    t->waitany  = 0;
+    t->deadline = 0;
     t->joiner = 0;
     t->sib    = 0;
     t->pid    = 0;
@@ -411,6 +464,19 @@ static b32 taskjoinintr(Sched *s, Task *t, i32 *status)
     return 1;
 }
 
+// Wait until some task finishes, as wait -n does: false if a signal
+// interrupted the wait (as in taskjoinintr).
+static b32 taskwaitany(Sched *s)
+{
+    Task *self = s->cur;
+    self->introk  = 1;
+    self->waitany = 1;
+    block(s, W_JOIN);
+    self->waitany = 0;
+    self->introk  = 0;
+    return !self->intr;
+}
+
 // Ask a task to stop at its next wait on a Pipe, waking it if blocked
 // on one now.
 static void taskcancel(Sched *s, Task *t)
@@ -453,7 +519,7 @@ static void taskio(Sched *s, Io *io)
 // Read up to len bytes: 0 at end of file, -1 on error.
 static iz taskread(Sched *s, Handle h, u8 *buf, iz len)
 {
-    if (s->ntasks == 1) {
+    if (s->ntasks==1 && !s->cur->deadline) {
         return os_read(s->os, h, buf, len);
     }
     Io *io = &s->cur->io;
@@ -489,6 +555,41 @@ static i32 taskwrite(Sched *s, Handle h, u8 *buf, iz len)
         len -= io->n;
     }
     return 0;
+}
+
+// Could a read of h complete now, with data or at end of file? A
+// zero-length read submitted and withdrawn if it does not complete at
+// once (read -t 0).
+static b32 taskreadable(Sched *s, Handle h)
+{
+    Io io = {};
+    io.op  = IO_READ;
+    io.h   = h;
+    io.buf = (u8 *)&io;
+    io.len = 0;
+    io.ctx = s->cur;
+    os_submit(s->os, &io);
+    while (!io.done) {
+        // It may be ready and only deferred (chaos): poll once more
+        Io *r = os_wait(s->os, WAIT_POLL);
+        if (!r) break;
+        if (r != &io) {
+            s->npending--;
+            wake(s, (Task *)r->ctx);
+        }
+    }
+    if (io.done) return !io.err;
+    if (os_cancel(s->os, &io)) return 0;
+    // The platform owns it now: wait for its verdict
+    while (!io.done) {
+        Io *r = os_wait(s->os, WAIT_FOREVER);
+        if (!r) return 0;
+        if (r != &io) {
+            s->npending--;
+            wake(s, (Task *)r->ctx);
+        }
+    }
+    return !io.err;
 }
 
 static i32 taskwaitproc(Sched *s, Handle proc)
@@ -572,10 +673,17 @@ static iz pipereadraw(Sched *s, Pipe *p, u8 *buf, iz len)
 // pipe has an OS form, every reader reads that.
 static iz piperead(Sched *s, Pipe *p, u8 *buf, iz len)
 {
-    if (p->osr != BADHANDLE) {
-        return taskread(s, p->osr, buf, len);
+    for (;;) {
+        if (p->osr != BADHANDLE) {
+            return taskread(s, p->osr, buf, len);
+        }
+        if (p->len || !p->writers) {
+            return pipereadraw(s, p, buf, len);
+        }
+        // A program may take it over meanwhile: then read its OS form,
+        // or bytes would be read around the pump's
+        if (!waiton(s, &p->rwait)) return -1;
     }
-    return pipereadraw(s, p, buf, len);
 }
 
 // Write all bytes. Returns 0 or an E_* error: E_PIPE without readers.

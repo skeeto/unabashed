@@ -40,9 +40,16 @@ Done (core foundation):
   per-spawn ignored signals, reports of deaths by signals, SIGPIPE
   dispositions, wait and read interrupted; tests `t/exec/622`-`630`.
 
+- Jobs (`jobs.cpp`, see "Jobs" below): `&` on fiber vprocs or as
+  programs started directly, `$!`, the job table, `jobs`, `wait` (pids,
+  job specs, `-n`, `-p`, `-f`), `disown`, `kill %N`, reports of jobs
+  killed by signals, coprocesses (several, as bash 5.3), `fg`/`bg`/
+  `suspend` without job control; timers in the scheduler and `read -t`
+  (see "Timers" below); tests `t/exec/631`-`636`.
+
 Remaining M3a work (see "Plan for the rest of M3a" below): launcher
-fibers for external stages with comsubs, fork-on-exec, interim fiber
-`&`/wait/coproc, the isolate fuzzer, timers.
+fibers for external stages with comsubs, fork-on-exec, the isolate
+fuzzer.
 
 ## Model
 
@@ -120,10 +127,10 @@ stderr when no vos process can run.
    parent's memory only for things the parent cannot free before the
    join: function bodies (refcounted anyway) and capture buffers. The
    stage's own AST is copied into the vproc (`copynode`). This holds
-   while every fiber is joined within the command that created it; an
-   interim fiber `&` breaks it and must copy everything it references
-   (it already does, except capture `Buf`s, which a background job must
-   not inherit: give it the capture as an OS pipe plus pump instead).
+   while every fiber is joined within the command that created it. A
+   background job breaks it, so it copies everything it references, and
+   its captures become OS pipes plus pumps (`detachcaptures`); its
+   level's end hands it to the Sched as an orphan (see "Jobs").
 4. **A capture `Buf` may be written by several vprocs** (`F_CAPTURE` in
    a fiber's fd table). This is safe because a `print` to a `Buf` never
    yields, and the capture outlives every writer: the capturing
@@ -159,6 +166,9 @@ Scheduler (sched.cpp):
 | `iz taskread(Sched *, Handle, u8 *, iz)` | 0 EOF, -1 error |
 | `i32 taskwrite(Sched *, Handle, u8 *, iz)` | 0, or `E_PIPE`/`E_*` |
 | `i32 taskwaitproc(Sched *, Handle proc)` | exit status |
+| `b32 taskwaitany(Sched *)` | block until any task finishes (`wait -n`); false if a signal interrupted it |
+| `Task.deadline` | an `os_now` time: the task's next pipe or OS wait fails there with `Task.timedout` set (see "Timers") |
+| `b32 taskreadable(Sched *, Handle)` | could a read complete now, with data or EOF (`read -t 0`) |
 | `Pipe *newpipe(Sched *)` | one reader, one writer |
 | `iz piperead(Sched *, Pipe *, u8 *, iz)` / `i32 pipewrite(...)` / `void pipeclose(Sched *, Pipe *, b32 writer)` | |
 | `Task *spawnpump(Sched *, Pump *)` | `PUMP_TOHANDLE` (Pipe → handle), `PUMP_FROMHANDLE` (handle → Pipe), `PUMP_TEXT` (string → handle, unused now), `PUMP_TOBUF` (handle → capture); the pump owns `h` and its pipe end |
@@ -463,17 +473,105 @@ The trap oracle (`run-trap`, which prints a binary diff: run it with
 `diff -a` to see) differs only in `declare -ft` and SIGCHLD traps of
 background jobs.
 
-Not done: job specs (`kill %1`: no job table yet), `wait -n` and
-signals during `read -t` (timers), Ctrl-C on Win32, extdebug, the
+Not done: Ctrl-C on Win32, extdebug, the
 `declare -t` trace attribute, SIGCHLD traps, bash's quirk that a
 subshell resetting an inherited ignored SIGQUIT still ignores it. The
 execscript oracle differs only in the order of trap listings
-(exec.right was made where SIGUSR1 > SIGTERM), getconf (no fake) and
-coproc.
+(exec.right was made where SIGUSR1 > SIGTERM) and getconf (no fake).
 
 Bash 5.3 oddity, not copied: run as a script file, `shopt -s lastpipe;
 echo e | exit 7` exits 0; with `-c` (how specs run) it exits 7, which is
 what unabashed does.
+
+## Jobs
+
+`jobs.cpp`; `Job`, `Bgstat`, `Coproc` are in shell.cpp. Interim until
+M5b makes them real processes.
+
+**Starting** (`runasync`, from `executeone`'s `&`): `a & b &` is two
+jobs, `a && b &` and `a | b &` one, as bash. Without job control the
+job's input is `/dev/null`, unless the level's input is a pipe or
+redirected (`Shell.stdinredir`: pipeline stages after the first, and a
+compound command redirecting fd 0, as bash's `stdin_redir`). INT and
+QUIT are ignored in the job unless it traps them (`Shell.asyncign`,
+folded into `trapignored`, so programs it starts ignore them too). Then:
+- a direct external (`directbg`: as a direct pipeline stage, its output
+  an OS handle or a capture) starts through `spawndirect` and gets a
+  **waiter** task (`spawnwaiter`, SMALLSTACK) whose `IO_PROC` is
+  submitted at once, so the program's end is seen even before the
+  waiter first runs; `$!` is the program's pid;
+- anything else becomes a background vproc (`spawnbg`): no jobs of its
+  own, coprocess descriptors closed, captures detached, then a `yield`
+  so that it runs until it blocks, as a forked child runs alongside its
+  parent; `$!` is its BASHPID. `throttlejobs` makes `&` wait for one to
+  finish while `MAXBG` (4) are live (`Sched.nbg`): the test harness
+  reserves about 16 MiB per vproc.
+
+**The table** (`Shell.jobs`, newest first, in the store; `curjob`,
+`prevjob` follow bash's `set_current_job`/`reset_current` for running
+jobs). Each Job has its owner's BASHPID: subshells see the parent's jobs
+but cannot wait for them or change them. A command substitution shares
+the parent's list (listing it, as bash); a vproc gets a copy
+(`copyjobs`, no tasks); a `( list )`, a compound pipeline stage and a
+background job start with none (`SubJob.nojobs`), as bash's
+`without_job_control`. New job numbers are the highest + 1.
+- `polljobs` notices ended jobs: it drains completed `Io`s, joins
+  finished vprocs and exited waiters, and records the status (with
+  `WSIGNALED`). Ends are noticed only there (jobs, wait, job creation,
+  after each foreground program, before each top-level command), which
+  keeps scripts deterministic on the vos.
+- Bash's non-interactive notification rules: a job that ends stays,
+  unreported, until `jobs` lists it or `wait` collects it (`notified`;
+  `cleanupjobs` then drops it, keeping its status in `Shell.bgstats` for
+  a later `wait PID`). Before each top-level command of the outermost
+  `runsource` (`notifyjobs`), a job killed by a signal other than INT,
+  TERM, PIPE or one this shell traps is reported on stderr (`NAME: line
+  N:   PID Killed    cmd`) and dropped.
+- `wait` with no arguments waits for the running jobs, drops them and
+  the dead ones, except a dead job `$!` names that was not waited for,
+  and forgets the saved statuses; then the last procsub as before.
+- Orphans: when a level ends (sync subshell, vproc, the shell), its
+  running jobs go to `Sched.orphans`, reaped when done; `sh_main` closes
+  its descriptors and joins them before returning, but drops waiters (a
+  program outlives the shell; a fiber cannot).
+
+**Coprocesses** (`runcoproc`): two OS pipes, the ends moved to the
+highest free descriptors below 64 as bash (so `63 60` first); NAME[0],
+NAME[1], NAME_PID. Several may exist (bash 5.3's MULTIPLE_COPROCS),
+newest first in `Shell.coprocs`. Their descriptors are close-on-exec
+(`runprogram` skips them) and closed in subshells (`closecoproc`,
+`hidecoproc` for a `( list )`), not in command substitutions. Closing
+or moving one (`n>&-`, `n<&m-`, also `{NAME[1]}>&-`, which redirections
+now accept) sets its variable element to -1 (`coprocfdclosed`). When
+the coprocess has ended and the shell notices, `cleanupjobs` unsets the
+variables and closes the descriptors (`disposecoproc`), as bash's
+`coproc_reap`.
+
+Job specs (`findjob`): `%N %% %+ %- %name %?text`, a missing `%` is
+accepted with bash's warning, ambiguity reported. `kill %N` uses
+`jobspecpid`. `jobs -x` is not done.
+
+## Timers
+
+`Task.deadline` makes a task's pipe or OS wait fail at that `os_now`
+time. `schedule()` passes the earliest deadline of the blocked tasks to
+`os_wait`; when it returns without an `Io`, `expiretimers` fails the
+expired waits (`taskfail`, as signals use) and sets `Task.timedout`.
+`safepointslow` expires timers too, so busy tasks do not starve them.
+A wait the platform cannot withdraw (a Win32 helper's read) is waited
+out instead: its deadline is cleared.
+- `read -t T` (and `TMOUT`): the deadline is set around each byte read;
+  `taskread` then never takes the single-task fast path. On timeout
+  the bytes read so far are assigned and the status is 142. Regular
+  files and in-memory text never time out (bash: regular files). `-t 0`
+  reports whether input is ready (`inputready`: `taskreadable` submits a
+  zero-length read and withdraws it).
+- `os_wait` with only a deadline sleeps (POSIX poll on the self-pipe,
+  Win32 `Sleep`); on the vos a deadline is a wake time for `VW_IO`, and
+  `vadvance` jumps the clock to it when nothing else can run.
+- The vos's `/dev/tty` (`VK_TTY`) never delivers input; the oracle's
+  standard input is such a terminal (`Vos.ttyin`), as run-all's is, so
+  read2.sub and read7.sub time out as recorded.
 
 ## Platform API additions
 
@@ -544,18 +642,25 @@ In suggested order, each with the API to use:
 4. **Here-documents and captures for externals**: done (see
    "Materialization"); `&` must use `capturewriter`.
 5. **Traps and SIGPIPE**: done (see "Signals and traps").
-6. **Interim `&`, wait and coproc** as fiber vprocs: `spawnvproc` with a
-   job table entry instead of a join; `wait` joins. These outlive the
-   command, so see invariant 3.
+6. **Interim `&`, wait and coproc**: done (see "Jobs").
 7. **Fork-on-exec** (POSIX): `exec ext` while other tasks are alive
    forks so that `$$` is kept; otherwise `execve` directly.
-8. **Timers**: `read -t`, `sleep` builtin, `wait -n` need a deadline in
-   `schedule()` (a timer list in `Sched`, `os_wait(deadline)`); the vos
-   advances its clock to the deadline when nothing else can run.
+8. **Timers**: done for `read -t` (see "Timers"); a `sleep` builtin
+   (loadable in bash) can use `Task.deadline` with no wait.
 9. **Fuzzers**: chaos (same output for every seed, per writer) and
    isolate (`( S ); declare -p` equals `declare -p`), both vos only.
 
 ## Known limits
+
+- Jobs: no job control (`set -m` is accepted but changes nothing), so
+  the jobs oracle differs where it uses `set -m` (fg, bg, stopped jobs,
+  notifications) and suspend; `jobs -x` is not done. A background vproc
+  still running when the shell exits is waited for (a fiber cannot
+  outlive its process), unlike bash, which leaves it running. The
+  coproc oracle differs only for lack of an awk fake and /etc/passwd.
+- Win32: `read -t` on an empty pipe or console cannot time out once a
+  helper thread owns the read (it ends when data or EOF arrives); M3b's
+  File state machine (or `CancelSynchronousIo`) fixes that.
 
 - Win32: a program cannot open `/dev/fd/N`, so `diff <(a) <(b)` and
   `cat <(f)` fail there ("No such file or directory"); builtins,
@@ -566,9 +671,10 @@ In suggested order, each with the API to use:
   first write waits for the client (`ConnectNamedPipe` in a helper,
   cancelled when the program exits without opening it).
 - Each vproc reserves two arenas plus scratch pools (about 16 MiB of
-  address space); the test harness's 128 MiB of reservations allows
-  about a dozen live vprocs (procsubs and shell stages together), and
-  more abort with "unexpected out of memory".
+  address space); the test harness's 256 MiB of reservations allows
+  a dozen or two live vprocs (procsubs, shell stages and background
+  jobs together, nested shells included), and more abort with
+  "unexpected out of memory".
 
 - Win32 helper threads issue whole-length reads; the File state machine
   and Peek-exact reads are M3b. A helper read in flight on a handle
