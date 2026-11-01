@@ -161,15 +161,16 @@ struct ShellArith {
 };
 
 // An indexed subscript as arithmetic expanded it (arithsubscript): its
-// double quotes are backslash-quoted, but as in bash they are still
-// removed when it is evaluated.
+// double quotes and brackets are backslash-quoted, but as in bash they
+// are still removed when it is evaluated: $(( a[a[0]] )).
 static Str arithindex(Shell *sh, Arena *a, Str name, Str sub)
 {
     Value *v = lookup(sh, name);
-    if ((v && v->arr && v->arr->bucket) || find(sub, "\\\"")<0) return sub;
+    if ((v && v->arr && v->arr->bucket) || find(sub, "\\")<0) return sub;
     Buf b(a, sub.len);
     for (iz i = 0; i < sub.len; i++) {
-        i += sub[i]==0x5c && i+1<sub.len && sub[i+1]==0x22;
+        u8 n = i+1<sub.len ? sub[i+1] : 0;
+        i += sub[i]==0x5c && (n=='"' || n=='[' || n==']');
         putbyte(&b, sub[i]);
     }
     return finish(&b);

@@ -549,12 +549,20 @@ static Str quotevalue(Arena *a, Str s)
     return finish(&b);
 }
 
-static void printdecl(Shell *sh, Arena *a, Str name, Value *v)
+// A variable as declare -p shows it. Listed by export or readonly in
+// POSIX mode, that command is named instead, with only -a or -A.
+static void printdecl(Shell *sh, Arena *a, Str name, Value *v, Str cmd = {})
 {
-    Str let = attrletters(a, v->attrs & ~(V_LOCAL|V_TEMP));
-    bprint(sh, "declare -");
-    bprint(sh, let.len ? let : Str("-"));
-    bprint(sh, " ");
+    if (cmd.len && sh->opt[O_POSIX]) {
+        Str let = attrletters(a, v->attrs & (V_ARRAY|V_ASSOC));
+        bprint(sh, cmd);
+        bprint(sh, let.len ? concat3(a, " -", let, " ") : Str(" "));
+    } else {
+        Str let = attrletters(a, v->attrs & ~(V_LOCAL|V_TEMP));
+        bprint(sh, "declare -");
+        bprint(sh, let.len ? let : Str("-"));
+        bprint(sh, " ");
+    }
     bprint(sh, name);
     Array *arr = varray(sh, a, v);
     if (arr) {
@@ -587,6 +595,7 @@ static void printassign(Shell *sh, Arena *a, Str name, Value *v)
     }
     if (!v->str.data && !v->dyn) return;
     Str val = v->dyn ? dynvalue(sh, a, v) : v->str;
+    if (!val.data) return;
     bprint(sh, name);
     bprint(sh, "=");
     if (ansicshouldquote(val)) {
@@ -809,7 +818,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             if (want && (v->attrs & want) != want) continue;
             if (name=="readonly" && !(v->attrs & V_READONLY)) continue;
             if (name=="export" && !(v->attrs & V_EXPORT)) continue;
-            if (print || name=="export" || name=="readonly" || want) {
+            if (name=="export" || name=="readonly") {
+                printdecl(sh, &scratch, all[k].name, v, name);
+            } else if (print || want) {
                 printdecl(sh, &scratch, all[k].name, v);
             } else {
                 printassign(sh, &scratch, all[k].name, v);
@@ -838,7 +849,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 status = 1;
                 continue;
             }
-            printdecl(sh, &scratch, a, v);
+            printdecl(sh, &scratch, a, v, name=="export" || name=="readonly" ? name : Str{});
             continue;
         }
         iz  eq = 0;
@@ -854,7 +865,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             sub    = rs;
             hassub = 1;
         }
-        if (!validvarname(vname)) {
+        if (!validvarname(vname) || (hassub && (name=="export" || name=="readonly"))) {
             notident(sh, scratch, name, a);
             status = 1;
             continue;
@@ -992,7 +1003,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             // A new local may shadow a caller's readonly local, but
             // never a readonly global
             b32 shadow = mklocal && cur->depth!=sh->funcdepth;
-            if (shadow ? !cur->depth : eq<a.len || (off & V_READONLY)) {
+            u32 bad    = V_ARRAY|V_ASSOC|V_INTEGER|V_LOWER|V_UPPER|V_CAPITAL;
+            if (shadow ? !cur->depth : eq<a.len || (off & V_READONLY) || ((on|off) & bad)) {
                 Str msg = concat(&scratch, vname, ": readonly variable");
                 // export -a and readonly -a run declare, which names itself
                 if ((name=="export" || name=="readonly") && !(on & (V_ARRAY|V_ASSOC))) {

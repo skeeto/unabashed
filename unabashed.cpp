@@ -276,6 +276,28 @@ static void sourcebashenv(Shell *sh, Arena scratch)
     runsource(sh, src, file, scratch);
 }
 
+// SHELLOPTS or BASHOPTS inherited from the environment turns on the
+// options it names, as in bash.
+static void importopts(Shell *sh, Arena scratch, b32 shopt)
+{
+    Str list = getvar(sh, &scratch, shopt ? Str("BASHOPTS") : Str("SHELLOPTS")).value;
+    while (list.len) {
+        Cut c = cut(list, ':');
+        list = c.tail;
+        if (!shopt) {
+            setoptionbyname(sh, c.head, 1);
+            continue;
+        }
+        for (i32 k = 0; k < S_COUNT; k++) {
+            if (shoptnames[k] != c.head) continue;
+            sh->shopt[k] = 1;
+            if (k==S_ARRAY_EXPAND_ONCE || k==S_ASSOC_EXPAND_ONCE) {
+                sh->shopt[S_ARRAY_EXPAND_ONCE] = sh->shopt[S_ASSOC_EXPAND_ONCE] = 1;
+            }
+        }
+    }
+}
+
 static void initvars(Shell *sh, OsInfo *info, Arena scratch)
 {
     // The environment: exported variables
@@ -299,6 +321,7 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     setvar(sh, scratch, "OSTYPE", "linux-gnu");
     setvar(sh, scratch, "OPTERR", "1");
     setvar(sh, scratch, "OPTIND", "1");
+    setattrs(sh, "OPTIND", V_INTEGER, 0);
     setvar(sh, scratch, "IFS", " \t\n");
     setvar(sh, scratch, "PS4", "+ ");
     setvar(sh, scratch, "HOSTNAME", info->host.len ? info->host : Str("oracle"));
@@ -340,7 +363,7 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     setvar(sh, scratch, "SHLVL", fmti64(a, lvl));
     setattrs(sh, "SHLVL", V_EXPORT, 0);
 
-    dynamic(sh, "LINENO", DYN_LINENO, V_INTEGER);
+    dynamic(sh, "LINENO", DYN_LINENO);
     dynamic(sh, "RANDOM", DYN_RANDOM, V_INTEGER);
     dynamic(sh, "SRANDOM", DYN_SRANDOM, V_INTEGER);
     dynamic(sh, "SECONDS", DYN_SECONDS, V_INTEGER);
@@ -354,19 +377,23 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     dynamic(sh, "BASH_SOURCE", DYN_BASH_SOURCE, V_ARRAY);
     dynamic(sh, "BASH_ARGV", DYN_BASH_ARGV, V_ARRAY);
     dynamic(sh, "BASH_ARGC", DYN_BASH_ARGC, V_ARRAY);
-    dynamic(sh, "PIPESTATUS", DYN_PIPESTATUS, V_ARRAY);
+    sh->pstatdirty = 1;  // PIPESTATUS exists once a command has run
+    setvar(sh, scratch, "BASH_LOADABLES_PATH", "/usr/local/lib/bash:/usr/lib/bash:/opt/local/lib/bash:/usr/pkg/lib/bash:/opt/pkg/lib/bash:.");
+    dynamic(sh, "COMP_WORDBREAKS", DYN_COMP_WORDBREAKS);
     dynamic(sh, "DIRSTACK", DYN_DIRSTACK, V_ARRAY);
+    importopts(sh, scratch, 0);
+    importopts(sh, scratch, 1);
+    dynamic(sh, "SHELLOPTS", DYN_SHELLOPTS, V_READONLY);
+    dynamic(sh, "BASHOPTS", DYN_BASHOPTS, V_READONLY);
     dynamic(sh, "BASH_ALIASES", DYN_BASH_ALIASES, V_ASSOC);
     dynamic(sh, "BASH_CMDS", DYN_BASH_CMDS, V_ASSOC);
     dynamic(sh, "_", DYN_UNDERSCORE);
-    sh->npstat = 1;
     static Str versinfo[] = {"5", "3", "0", "1", "release", "x86_64-pc-linux-gnu"};
     for (iz i = 0; i < countof(versinfo); i++) {
         setelem(sh, scratch, "BASH_VERSINFO", i, {}, versinfo[i]);
     }
     setattrs(sh, "BASH_VERSINFO", V_READONLY, 0);
-    setelem(sh, scratch, "GROUPS", 0, {}, fmti64(a, info->gid));
-    setattrs(sh, "GROUPS", V_NOASSIGN, 0);
+    dynamic(sh, "GROUPS", DYN_GROUPS, V_ARRAY|V_NOASSIGN);
     dynamic(sh, "BASH_ARGV0", DYN_BASH_ARGV0);
     dynamic(sh, "HISTCMD", DYN_HISTCMD, V_INTEGER);
     varchanged(sh, "LANG");

@@ -418,6 +418,8 @@ struct Shell {
     Args     argvbase;     // the bottom of BASH_ARGV, in the store
     b32      argvinit;     // argvbase is set
     b32      listing;      // listing every variable: BASH_ARGV stays as is
+    u64      dynread;      // dynamic variables read so far, by DYN_ bit
+    i32      lastrandom;   // RANDOM's last value, for listings
     Undo    *undo;
     Escape  *esc;
     Node    *current;      // simple command being run, for messages

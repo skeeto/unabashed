@@ -31,7 +31,8 @@ enum : i32 {  // dynamic variables, computed when read
     DYN_FUNCNAME, DYN_BASH_COMMAND, DYN_HISTCMD, DYN_BASH_LINENO,
     DYN_BASH_SOURCE, DYN_BASH_ARGV0, DYN_PIPESTATUS, DYN_UNDERSCORE,
     DYN_BASH_ARGV, DYN_BASH_ARGC, DYN_DIRSTACK, DYN_BASH_ALIASES,
-    DYN_BASH_CMDS,
+    DYN_BASH_CMDS, DYN_SHELLOPTS, DYN_BASHOPTS, DYN_COMP_WORDBREAKS,
+    DYN_GROUPS,
 };
 
 struct Value {
@@ -388,8 +389,20 @@ static Array *dynarray(Shell *, Arena *, Value *);
 static Str dynvalue(Shell *sh, Arena *a, Value *v)
 {
     switch (v->dyn) {
+    case DYN_LINENO:   case DYN_RANDOM:    case DYN_SRANDOM:
+    case DYN_SECONDS:  case DYN_EPOCHSECONDS: case DYN_EPOCHREALTIME:
+    case DYN_BASHPID:  case DYN_BASH_SUBSHELL: case DYN_BASH_COMMAND:
+    case DYN_HISTCMD:  case DYN_BASH_ARGV0: case DYN_COMP_WORDBREAKS:
+        // bash computes these when read and keeps the value, so a
+        // listing shows them valueless until then
+        if (sh->listing && !(sh->dynread & (u64)1<<v->dyn)) return {};
+        if (sh->listing && v->dyn==DYN_RANDOM) return fmti64(a, sh->lastrandom);
+        sh->dynread |= (u64)1<<v->dyn;
+        break;
+    }
+    switch (v->dyn) {
     case DYN_LINENO:        return fmti64(a, sh->line);
-    case DYN_RANDOM:        return fmti64(a, nextrandom(sh));
+    case DYN_RANDOM:        return fmti64(a, sh->lastrandom = nextrandom(sh));
     case DYN_SRANDOM: {
         u64 x = (u64)dynnow(sh) * 0x9e3779b97f4a7c15u;
         return fmti64(a, (i64)(u32)(x >> 32));
@@ -416,10 +429,28 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
         return r->len ? r->e[0].val : Str{};
     }
     case DYN_BASH_COMMAND:  return cmdtext(sh, a);
-    case DYN_HISTCMD:       return "1";
+    case DYN_HISTCMD:       return sh->interactive ? Str("1") : Str("0");
     case DYN_BASH_ARGV0:    return dollar0(sh);
     case DYN_PIPESTATUS:    return fmti64(a, sh->npstat ? sh->pstat[0] : 0);
     case DYN_UNDERSCORE:    return sh->lastarg.data ? sh->lastarg : Str("");
+    case DYN_COMP_WORDBREAKS: return " \t\n\"'@><=;|&(:";
+    case DYN_GROUPS: {
+        Array *r = dynarray(sh, a, v);
+        return r->len ? r->e[0].val : Str{};
+    }
+    case DYN_SHELLOPTS:
+    case DYN_BASHOPTS: {
+        // the options on, colon-separated, in listing order
+        b32  shopt = v->dyn == DYN_BASHOPTS;
+        i32  n     = shopt ? (i32)S_COUNT : (i32)O_COUNT;
+        Buf b(a, 256);
+        for (i32 k = 0; k < n; k++) {
+            if (!(shopt ? sh->shopt[k] : sh->opt[k])) continue;
+            if (b.len) putbyte(&b, ':');
+            print(&b, shopt ? shoptnames[k] : setoptions[k].name);
+        }
+        return finish(&b);
+    }
     }
     return v->str;
 }
@@ -759,6 +790,17 @@ static Array *dynarray(Shell *sh, Arena *a, Value *v)
     if (d==DYN_BASH_ARGV || d==DYN_BASH_ARGC) return argvarray(sh, a, d);
     if (d==DYN_DIRSTACK || d==DYN_BASH_ALIASES || d==DYN_BASH_CMDS) {
         return tablearray(sh, a, d);
+    }
+    if (d == DYN_GROUPS) {
+        // empty in a listing until read, as bash fills it in then
+        Array *r = alloc<Array>(a);
+        r->isset = 1;
+        if (sh->listing && !(sh->dynread & (u64)1<<d)) return r;
+        sh->dynread |= (u64)1<<d;
+        r->cap = r->len = 1;
+        r->e   = alloc<Elem>(a);
+        r->e[0].val = fmti64(a, sh->gid);
+        return r;
     }
     if (d!=DYN_FUNCNAME && d!=DYN_BASH_LINENO && d!=DYN_BASH_SOURCE) return 0;
     iz n = 0, nsrc = 0;
@@ -1302,19 +1344,20 @@ static void unsetfunc(Shell *sh, Str name)
 
 // Environment
 
-static void collectexports(Var *v, Buf *names, Arena *a, Slice<Str> *out)
+static void collectexports(Shell *sh, Var *v, Arena *a, Slice<Str> *out)
 {
     if (!v) return;
     Value *t = v->top;
-    if (t && (t->attrs & V_EXPORT) && t->str.data && !(t->attrs & (V_ARRAY|V_ASSOC))) {
-        Buf b(a, v->name.len + t->str.len + 1);
+    if (t && (t->attrs & V_EXPORT) && (t->str.data || t->dyn) && !(t->attrs & (V_ARRAY|V_ASSOC))) {
+        Str val = t->dyn ? dynvalue(sh, a, t) : t->str;
+        Buf b(a, v->name.len + val.len + 1);
         print(&b, v->name);
         putbyte(&b, '=');
-        print(&b, t->str);
+        print(&b, val);
         *out = push(a, *out, finish(&b));
     }
     for (i32 i = 0; i < 4; i++) {
-        collectexports(v->child[i], names, a, out);
+        collectexports(sh, v->child[i], a, out);
     }
 }
 
@@ -1353,7 +1396,7 @@ static b32 envless(Str *a, Str *b)
 static Slice<Str> makeenv(Shell *sh, Arena *a)
 {
     Slice<Str> env = {};
-    collectexports(sh->vars, 0, a, &env);
+    collectexports(sh, sh->vars, a, &env);
     exportfuncs(sh->funcs, a, &env);
     sort(env.data, env.len, envless, *a);
     return env;
