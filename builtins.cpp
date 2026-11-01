@@ -1019,6 +1019,19 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 continue;
             }
         }
+        if (cur && (cur->attrs & V_TEMP) && cur->depth==sh->funcdepth+1 &&
+                !mklocal && !hassub && (on & (V_EXPORT|V_READONLY))) {
+            // var=value export var: as bash, the temporary value and the
+            // attribute reach the variable beneath, which outlives it
+            Value *under = assignslot(sh, scratch, vname, SV_UNDERTEMP|SV_FORCE);
+            Str    v     = eq<a.len && !append ? val : cur->str;
+            Str    old   = under->str;
+            under->str   = sclone(sh->store, v);
+            under->dyn   = 0;
+            under->attrs |= (cur->attrs & ~(V_TEMP|V_LOCAL)) | (on & (V_EXPORT|V_READONLY));
+            if ((byte *)old.data >= sh->store->mark) sfreestr(sh->store, old);
+            sh->exportgen++;
+        }
         b32 fresh = !cur || (mklocal && cur->depth!=sh->funcdepth);
         if (mklocal) {
             makelocal(sh, &scratch, vname);
@@ -1375,6 +1388,17 @@ static i32 setoptionbyname(Shell *sh, Str name, b32 on)
             sh->opt[k] = on;
             if (k==O_EMACS && on) sh->opt[O_VI] = 0;
             if (k==O_VI && on) sh->opt[O_EMACS] = 0;
+            if (k == O_IGNOREEOF) {
+                // as bash, the option and IGNOREEOF follow one another
+                byte  mem[256];
+                Arena a = {mem, mem+sizeof(mem)};
+                if (on) {
+                    setvar(sh, a, "IGNOREEOF", "10");
+                } else {
+                    unsetvar(sh, "IGNOREEOF");
+                }
+                sh->opt[k] = on;
+            }
             return 1;
         }
     }

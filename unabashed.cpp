@@ -204,6 +204,8 @@ static void varchanged(Shell *sh, Str name)
             shellerror(sh, scratch, concat3(&scratch, "BASH_XTRACEFD: ", g.value,
                                             Str(": invalid value for trace file descriptor")));
         }
+    } else if (name == "IGNOREEOF") {
+        sh->opt[O_IGNOREEOF] = !!lookup(sh, name);  // set or not
     } else if (name == "PIPESTATUS") {
         sh->pstatdirty = 1;
     } else if (name == "PATH") {
