@@ -677,7 +677,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                        u32 baseon, b32 local)
 {
     u32 on = baseon, off = 0;
-    b32 print = 0, funcs = 0, funcnames = 0, global = 0;
+    b32 print = 0, funcs = 0, funcnames = 0, global = 0, inherit = 0;
     iz  i = 1;
     for (; i < nargs; i++) {
         Str a = args[i];
@@ -714,7 +714,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             case 'f': funcs = 1; continue;
             case 'F': funcnames = 1; funcs = 1; continue;
             case 'g': global = 1; continue;
-            case 'I': continue;
+            case 'I': inherit = 1; continue;
             default:
                 invalidoption(sh, scratch, name, span(a.data+k-1, a.data+k+1));
                 return 2;
@@ -1023,7 +1023,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 !mklocal && !hassub && (on & (V_EXPORT|V_READONLY))) {
             // var=value export var: as bash, the temporary value and the
             // attribute reach the variable beneath, which outlives it
-            Value *under = assignslot(sh, scratch, vname, SV_UNDERTEMP|SV_FORCE);
+            Value *under = belowtemp(sh, vname, cur);
             Str    v     = eq<a.len && !append ? val : cur->str;
             Str    old   = under->str;
             under->str   = sclone(sh->store, v);
@@ -1034,7 +1034,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         }
         b32 fresh = !cur || (mklocal && cur->depth!=sh->funcdepth);
         if (mklocal) {
-            makelocal(sh, &scratch, vname);
+            makelocal(sh, &scratch, vname, inherit);
             cur = rawlookup(sh, vname);
             if (cur && !cur->str.data && !cur->arr) cur = 0;
         }

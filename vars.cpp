@@ -1115,7 +1115,8 @@ static b32 unsetvar(Shell *sh, Str name, b32 force = 0)
 }
 
 // Make a variable local to the current function. Returns its binding.
-static Value *makelocal(Shell *sh, Arena *scratch, Str name)
+// With inherit (declare -I), it takes the value and attributes it hides.
+static Value *makelocal(Shell *sh, Arena *scratch, Str name, b32 inherit = 0)
 {
     Store *st = sh->store;
     Var   *v  = upsertvar(sh, name);
@@ -1127,7 +1128,7 @@ static Value *makelocal(Shell *sh, Arena *scratch, Str name)
     n->depth = sh->funcdepth;
     n->attrs = V_LOCAL;
     Value *t = v->top;
-    if (t && sh->shopt[S_LOCALVAR_INHERIT]) {
+    if (t && (sh->shopt[S_LOCALVAR_INHERIT] || inherit)) {
         n->str   = sclone(st, t->str);
         if (t->arr) n->arr = acopy(st, t->arr, 0);
         n->attrs |= t->attrs & ~(V_READONLY|V_TEMP);
@@ -1135,8 +1136,8 @@ static Value *makelocal(Shell *sh, Arena *scratch, Str name)
         // As bash: the export attribute carries over, and the value of
         // a temporary binding made for this very call
         n->attrs |= t->attrs & V_EXPORT;
-        if ((t->attrs & V_TEMP) && t->depth==sh->funcdepth) {
-            n->str = sclone(st, t->str);
+        if ((t->attrs & V_TEMP) && t->depth>=sh->funcdepth) {
+            n->str = sclone(st, t->str);  // or for the declaring builtin
         }
     }
     jset(st, &v->top, n);
@@ -1189,6 +1190,22 @@ static void poplocals(Shell *sh, Frame *f)
     f->locals    = 0;
     f->nlocals   = 0;
     f->caplocals = 0;
+}
+
+// The binding just beneath the temporary binding t, owned, made global
+// if there is none (var=x export var).
+static Value *belowtemp(Shell *sh, Str name, Value *t)
+{
+    Store  *st   = sh->store;
+    Var    *v    = findvar(sh, name);
+    Value **slot = &v->top;
+    while (*slot != t) slot = &(*slot)->below;
+    slot = &ownvalue(sh, slot)->below;
+    if (!*slot) {
+        Value *n = (Value *)salloc(st, sizeof(Value));
+        jset(st, slot, n);
+    }
+    return ownvalue(sh, slot);
 }
 
 // Push a temporary binding (NAME=value before a builtin or function).
@@ -1347,7 +1364,10 @@ static void unsetfunc(Shell *sh, Str name)
 static void collectexports(Shell *sh, Var *v, Arena *a, Slice<Str> *out)
 {
     if (!v) return;
+    // A local declared without a value hides nothing from programs: as
+    // bash, the binding it shadows is the one they get
     Value *t = v->top;
+    while (t && t->depth && !t->str.data && !t->dyn && !t->arr) t = t->below;
     if (t && (t->attrs & V_EXPORT) && (t->str.data || t->dyn) && !(t->attrs & (V_ARRAY|V_ASSOC))) {
         Str val = t->dyn ? dynvalue(sh, a, t) : t->str;
         Buf b(a, v->name.len + val.len + 1);
