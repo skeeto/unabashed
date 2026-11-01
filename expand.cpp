@@ -320,6 +320,8 @@ struct Param {
     iz   ln;
 };
 
+static Param getelems(X *, Str name, Str sub);
+
 static Param getparam(X *x, Str name)
 {
     Shell *sh = x->sh;
@@ -357,7 +359,16 @@ static Param getparam(X *x, Str name)
         }
         return r;
     }
-    Got g = getvar(sh, x->a, name);
+    Value *v = rawlookup(sh, name);
+    if (v && (v->attrs & V_NAMEREF)) {
+        // A nameref to arr[@] expands like "${arr[@]}"
+        Ref ref = resolveref(sh, name);
+        if (ref.hassub) return getelems(x, ref.name, ref.sub);
+        v = !ref.name.data ? 0
+          : ref.global     ? globalvalue(sh, ref.name)
+          :                  rawlookup(sh, ref.name);
+    }
+    Got g = getvalue(sh, x->a, v);
     r.value = g.value;
     r.set   = g.set;
     return r;
@@ -1760,8 +1771,12 @@ static void expandinto(X *x, Str s, i32 ctx)
                 for (; e<s.len && identchar(s[e]); e++) {}
                 Str name = span(s.data+i+1, s.data+e);
                 Param p = getparam(x, name);
-                if (!p.set && sh->opt[O_NOUNSET]) unbound(x, name);
-                putvalue(x, p.value, ctx);
+                if (!p.set && !p.list && sh->opt[O_NOUNSET]) unbound(x, name);
+                if (p.list) {
+                    putlist(x, p.lv, p.ln, p.star, ctx);
+                } else {
+                    putvalue(x, p.value, ctx);
+                }
                 i = e;
                 continue;
             }
@@ -2281,7 +2296,8 @@ static Sub evalsub(Shell *sh, Arena *a, Str name, Str sub, Str word)
 
 static b32 assignelem(Shell *sh, Arena scratch, Str name, Str sub, Str word, Str value, i32 flags)
 {
-    if (!(flags & SV_NOREF)) name = arraytarget(sh, name, &flags);
+    if (!(flags & SV_NOREF)) name = arraytarget(sh, scratch, name, &flags);
+    if (!name.data) return 0;
     Sub s = evalsub(sh, &scratch, name, sub, word);
     if (!s.ok) return 0;
     return setelem(sh, scratch, name, s.idx, s.key, value, flags);
@@ -2385,7 +2401,8 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
     Arena *a  = &scratch;
     Store *st = sh->store;
     Slice<Str> words = compoundwords(sh, a, body);
-    if (!(flags & SV_NOREF)) name = arraytarget(sh, name, &flags);
+    if (!(flags & SV_NOREF)) name = arraytarget(sh, scratch, name, &flags, 1);
+    if (!name.data) compoundfail(sh);
 
     Var   *var = findvar(sh, name);
     Value *cur = var ? var->top : 0;

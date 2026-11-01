@@ -149,10 +149,13 @@ static void refwarning(Shell *sh, Str name, Str msg)
 
 // Follow the namerefs from name, as bash does: a chain may not come
 // back to where it started or name itself, and is at most 8 long.
-static Ref resolveref(Shell *sh, Str name)
+static Value *globalvalue(Shell *, Str name);
+
+// With global, only global bindings take part, as for declare -g.
+static Ref resolveref(Shell *sh, Str name, b32 global = 0)
 {
     Ref    r = {};
-    Value *v = rawlookup(sh, name);
+    Value *v = global ? globalvalue(sh, name) : rawlookup(sh, name);
     r.name = name;
     for (i32 level = 0; v && (v->attrs & V_NAMEREF); level++) {
         if (level == NAMEREF_MAX) {
@@ -175,7 +178,7 @@ static Ref resolveref(Shell *sh, Str name)
             r.hassub = 1;
             return r;
         }
-        Value *n = rawlookup(sh, t);
+        Value *n = global ? globalvalue(sh, t) : rawlookup(sh, t);
         if (n && (t==name || t==r.name)) {
             refwarning(sh, name, ": circular name reference");
             r.loop = 1;
@@ -231,6 +234,7 @@ struct Bind {
     b32 self;      // assign name itself, a nameref
     b32 global;    // the global binding of name
     b32 fail;
+    b32 local;     // decided in a function's scope
 };
 
 static Bind assignref(Shell *sh, Str name)
@@ -242,6 +246,7 @@ static Bind assignref(Shell *sh, Str name)
     if (v && v->depth) {
         // found in the scope of function d
         i32 d = v->depth;
+        b.local = 1;
         if (!(v->attrs & V_NAMEREF)) return b;
         Value *nv = v;
         Str    nn = name;
@@ -426,9 +431,10 @@ struct Got {
 static Got getelem(Shell *, Arena *, Str name, Str sub);  // expand.cpp
 
 // A variable's value as a string, computing dynamic ones.
+static Got getvalue(Shell *, Arena *, Value *);
+
 static Got getvar(Shell *sh, Arena *a, Str name)
 {
-    Got    r = {};
     Value *v = rawlookup(sh, name);
     if (v && (v->attrs & V_NAMEREF)) {
         Ref ref = resolveref(sh, name);
@@ -437,6 +443,13 @@ static Got getvar(Shell *sh, Arena *a, Str name)
           : ref.global     ? globalvalue(sh, ref.name)
           :                  rawlookup(sh, ref.name);
     }
+    return getvalue(sh, a, v);
+}
+
+// A binding's value as a string, null when unset.
+static Got getvalue(Shell *sh, Arena *a, Value *v)
+{
+    Got r = {};
     if (!v) return r;
     if (v->dyn) {
         r.value = dynvalue(sh, a, v);
@@ -736,6 +749,7 @@ static void setpstat(Shell *sh, i32 *statuses, i32 n)
 }
 
 static b32 assignelem(Shell *, Arena, Str name, Str sub, Str lhs, Str value, i32 flags);
+static Value *setattrs(Shell *, Str name, u32 on, u32 off);
 
 // Can a nameref name this: a variable or an array element?
 static b32 validnameref(Str s)
@@ -744,13 +758,30 @@ static b32 validnameref(Str s)
     return validvarname(s) || splitref(s, &rn, &rs);
 }
 
-// The variable an array assignment to name goes to, after namerefs.
-static Str arraytarget(Shell *sh, Str name, i32 *flags)
+// The variable an array assignment to name goes to, after namerefs, or
+// null after an error. A nameref without a value, given a whole list,
+// stops being a nameref; given an element, it is an error, as is a
+// list for a nameref to an element.
+static Str arraytarget(Shell *sh, Arena scratch, Str name, i32 *flags, b32 list = 0)
 {
     Value *v = rawlookup(sh, name);
     if (!v || !(v->attrs & V_NAMEREF)) return name;
     Ref r = resolveref(sh, name);
-    if (!r.name.data) return name;
+    if (r.hassub) {
+        Str msg = concat3(&scratch, "`", r.last->str, "': not a valid identifier");
+        builtinerror(sh, scratch, sh->bltname, msg);
+        return {};
+    } else if (!r.name.data && r.last && !r.last->str.len && list) {
+        shellerror(sh, scratch, concat3(&scratch, "warning: ", name, ": removing nameref attribute"));
+        Value *nv = setattrs(sh, name, 0, V_NAMEREF);
+        nv->str = {};
+        return name;
+    } else if (!r.name.data && r.last && !r.last->str.len) {
+        builtinerror(sh, scratch, sh->bltname, "`': not a valid identifier");
+        return {};
+    } else if (!r.name.data) {
+        return name;
+    }
     if (r.global) *flags |= SV_GLOBAL;
     *flags |= SV_NOREF;
     return r.name;
@@ -792,7 +823,8 @@ static void toassoc(Shell *sh, Value *val, b32 fresh)
 static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str value, i32 flags = 0)
 {
     Store *st  = sh->store;
-    if (!(flags & SV_NOREF)) name = arraytarget(sh, name, &flags);
+    if (!(flags & SV_NOREF)) name = arraytarget(sh, scratch, name, &flags);
+    if (!name.data) return 0;
     Value *val = assignslot(sh, scratch, name, flags);
     if (!val) return 0;
     if (val->attrs & V_NOASSIGN) return 1;
@@ -827,8 +859,17 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
         Bind b = assignref(sh, name);
         if (b.fail) return 0;
         if (b.hassub) {
-            Str word = concat3(&scratch, b.name, "[", concat(&scratch, b.sub, "]"));
-            return assignelem(sh, scratch, b.name, b.sub, word, value, flags);
+            Str    word = concat3(&scratch, b.name, "[", concat(&scratch, b.sub, "]"));
+            Value *base = rawlookup(sh, b.name);
+            if (base && (base->attrs & V_NAMEREF) && b.local) {
+                return assignelem(sh, scratch, b.name, b.sub, word, value, flags);
+            } else if (base && (base->attrs & V_NAMEREF)) {
+                // a nameref cannot be an array
+                shellerror(sh, scratch, concat3(&scratch, "warning: ", b.name, ": removing nameref attribute"));
+                Value *nv = setattrs(sh, b.name, 0, V_NAMEREF);
+                nv->str = {};
+            }
+            return assignelem(sh, scratch, b.name, b.sub, word, value, flags|SV_NOREF);
         }
         if (b.self && !validnameref(value)) {
             // A nameref without a value: the assignment gives it one

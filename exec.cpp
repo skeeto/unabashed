@@ -2002,11 +2002,12 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         sh->lastbg = lastbg;
         Slice<Str> env = makeenv(sh, a);
         for (iz i = 0; i < nassign; i++) {
-            Str entry = concat3(a, as[i].name, "=", tempvalue(sh, a, as[i]));
+            Str tname = tempname(sh, as[i].name);  // what a nameref names
+            Str entry = concat3(a, tname, "=", tempvalue(sh, a, as[i]));
             b32 replaced = 0;
             for (iz k = 0; k < env.len; k++) {
                 Cut c = cut(env[k], '=');
-                if (c.head == as[i].name) {
+                if (c.head == tname) {
                     env[k]   = entry;
                     replaced = 1;
                 }

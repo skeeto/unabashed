@@ -699,11 +699,14 @@ static i64 jobspecpid(Shell *sh, Arena scratch, Str who, Str spec)
 
 static void setcoprocvars(Shell *sh, Arena scratch, Coproc *c)
 {
-    Value *v = assignslot(sh, scratch, c->name, 0);
+    i32 flags = 0;
+    Str name  = arraytarget(sh, scratch, c->name, &flags, 1);
+    if (!name.data) return;
+    Value *v = assignslot(sh, scratch, name, flags);
     if (!v) return;
     toarray(sh, v);
-    setelem(sh, scratch, c->name, 0, {}, fmti64(&scratch, c->rfd));
-    setelem(sh, scratch, c->name, 1, {}, fmti64(&scratch, c->wfd));
+    setelem(sh, scratch, name, 0, {}, fmti64(&scratch, c->rfd), flags);
+    setelem(sh, scratch, name, 1, {}, fmti64(&scratch, c->wfd), flags);
     setvar(sh, scratch, concat(&scratch, c->name, "_PID"), fmti64(&scratch, c->pid));
 }
 
