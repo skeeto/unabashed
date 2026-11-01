@@ -187,6 +187,21 @@ static void varchanged(Shell *sh, Str name)
         }
         if (sh->lexer) sh->lexer->utf8 = utf8;
         sh->utf8 = utf8;
+    } else if (name == "BASH_XTRACEFD") {
+        // Traces go to an open descriptor it names, else to stderr
+        Arena none = {};
+        Got g = getvar(sh, &none, name);
+        i64 fd = 0;
+        sh->tracefd = 2;
+        if (g.value.len && parsei64(g.value, &fd) && fd>=0 && fd<FDMAX && sh->fds->fd[fd]) {
+            sh->tracefd = (i32)fd;
+        } else if (g.value.len) {
+            byte  mem[512];
+            Arena scratch = {mem, mem+sizeof(mem)};
+            if (g.value.len > 256) g.value = takehead(g.value, 256);
+            shellerror(sh, scratch, concat3(&scratch, "BASH_XTRACEFD: ", g.value,
+                                            Str(": invalid value for trace file descriptor")));
+        }
     } else if (name == "PIPESTATUS") {
         sh->pstatdirty = 1;
     } else if (name == "PATH") {

@@ -454,6 +454,7 @@ struct Shell {
     b32      ingetopts;    // its own OPTIND updates keep the position
     Slice<u8> compargs;    // declaration builtin: which args are name=(...)
     u8       cmdname[32];  // bash's this_command_name: a function's name
+    i32      tracefd;      // BASH_XTRACEFD, or 2 (or 0 when never set)
     i32      cmdnamelen;   // from its call until a simple command ends
     Task    *psubs;        // procsubs started at this subshell level, to join
     i64      psubpid;      // the last procsub joined, and its status,

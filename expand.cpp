@@ -27,6 +27,8 @@ enum : i32 {  // expansion contexts
     XC_ARITH   = 1<<4,  // $((...)) text: double quotes are removed
     XC_PATTERN = 1<<5,  // a pattern: backslash-quote the result
     XC_ASSIGNW = 1<<6,  // looks like an assignment: XC_ASSIGN after =
+    XC_NOPSUB  = 1<<7,  // <(...) and >(...) are plain text
+    XC_SUBQ    = 1<<8,  // array subscripts expand once, quoted (as in arithmetic)
 };
 
 enum : i32 {  // expandwords flags
@@ -34,6 +36,7 @@ enum : i32 {  // expandwords flags
     XW_NOGLOB  = 1<<1,
     XW_NOBRACE = 1<<2,
     XW_ASSIGN  = 1<<3,
+    XW_SUBQ    = 1<<4,  // subscripts expand once, quoted (unset name[sub])
 };
 
 struct XField {
@@ -937,7 +940,9 @@ static iz assignwords(X *x, Str name, Str *out)
     out[n++] = "declare";
     out[n++] = concat(x->a, "-", let.len ? let : Str("-"));
     Array *arr = varray(sh, x->a, val);
-    if (arr) {
+    if (arr && !(arr->len || arr->n) && !arr->isset) {
+        out[n++] = name;  // declared, never assigned
+    } else if (arr) {
         out[n++] = concat3(x->a, name, "=", arrayassign(x->a, arr));
     } else {
         Got g = getvar(sh, x->a, name);
@@ -1311,6 +1316,19 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         return;
     }
 
+    if (op=='@' && rest=="@A" && p.list && p.array) {
+        // An array variable's declaration even when it has no elements;
+        // a scalar's assignment, as ${name@A}
+        Value *val = lookup(sh, name);
+        if (val && (val->arr || (val->attrs & (V_ARRAY|V_ASSOC)))) {
+            Str v[3];
+            iz  n = assignwords(x, name, v);
+            putlist(x, v, n, p.star, ctx);
+        } else if (p.ln) {
+            putvalue(x, assignform(x, name, p.lv[0]), ctx);
+        }
+        return;
+    }
     if (op=='@' && p.list && !p.ln) {
         return;  // no values: nothing to transform, nor to check
     }
@@ -1356,6 +1374,10 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         } else if (t == 'A') {
             if (p.set && identstart(name[0])) {
                 putvalue(x, assignform(x, name, p.value), ctx);
+            } else if (val && (val->arr || (val->attrs & (V_ARRAY|V_ASSOC)))) {
+                // an array without element 0: declared alone
+                Str let = attrletters(x->a, val->attrs & ~(V_LOCAL|V_TEMP));
+                putvalue(x, concat3(x->a, "declare -", let, concat(x->a, " ", name)), ctx);
             }
         } else if (p.set) {
             putvalue(x, transform(x, name, p.value, t), ctx);
@@ -1403,6 +1425,76 @@ static Str tildeprefix(X *x, Str prefix, b32 *ok)
 // The scanner
 
 // Append the expansion of s (word text) in context ctx.
+// The ']' closing the subscript opened at s[i], skipping quotes and
+// expansions, or -1.
+static iz skiprawsub(Shell *sh, Arena *a, Str s, iz i)
+{
+    i32 depth = 0;
+    for (iz e = i; e < s.len; e++) {
+        u8 c = s[e];
+        if (c == '\\') {
+            e++;
+        } else if (c == '\'') {
+            for (e++; e<s.len && s[e]!='\''; e++) {}
+        } else if (c == '"') {
+            for (e++; e<s.len && s[e]!='"'; e++) {
+                if (s[e] == '\\') {
+                    e++;
+                } else if (s[e]=='$' && e+1<s.len && (s[e+1]=='(' || s[e+1]=='{')) {
+                    e = skipdollar(sh, a, s, e, 1) - 1;
+                }
+            }
+        } else if (c=='$' && e+1<s.len && (s[e+1]=='(' || s[e+1]=='{')) {
+            e = skipdollar(sh, a, s, e) - 1;
+        } else if (c == '`') {
+            iz end = skipbackquote(s, e);
+            if (end < 0) return -1;
+            e = end - 1;
+        } else if (c == '[') {
+            depth++;
+        } else if (c==']' && !--depth) {
+            return e;
+        }
+    }
+    return -1;
+}
+
+// Is the word as written an array reference, name[sub]? For unset, as
+// bash, its subscript expands once and is not expanded again.
+static b32 arrayrefword(Shell *sh, Arena a, Str t)
+{
+    if (!t.len || !identstart(t[0])) return 0;
+    iz i = 1;
+    for (; i<t.len && identchar(t[i]); i++) {}
+    return i<t.len && t[i]=='[' && skiprawsub(sh, &a, t, i)==t.len-1;
+}
+
+// An array subscript in arithmetic text (bash 5.2 and later): expanded
+// now as a word of its own, with its quotes removed, and the result's
+// special characters backslash-quoted so that evaluating the reference
+// expands it to itself rather than a second time. Returns the index
+// past the ']', or 0 when the subscript is malformed or empty.
+static iz arithsubscript(X *x, Str s, iz i)
+{
+    iz e = skiprawsub(x->sh, x->a, s, i);
+    if (e<0 || e==i+1) return 0;
+    // Each byte keeps its flags, so that the result splits as it would
+    // have (for unset)
+    XField v = expandfield(x, span(s.data+i+1, s.data+e), XC_NOPSUB);
+    xputc(x, '[', 0);
+    for (iz k = 0; k < v.data.len; k++) {
+        u8 c = v.data[k];
+        u8 f = v.flags[k] & ~XF_NULL;
+        if (c=='[' || c==']' || c=='$' || c=='`' || c=='~' || c=='\\' ||
+                c=='\'' || c=='"') {
+            xputc(x, '\\', f);
+        }
+        xputc(x, c, f);
+    }
+    xputc(x, ']', 0);
+    return e + 1;
+}
+
 static void expandinto(X *x, Str s, i32 ctx)
 {
     Shell *sh = x->sh;
@@ -1457,6 +1549,14 @@ static void expandinto(X *x, Str s, i32 ctx)
             }
         }
         tildeok = 0;
+
+        if (c=='[' && (ctx & (XC_ARITH|XC_SUBQ))) {
+            iz e = arithsubscript(x, s, i);
+            if (e) {
+                i = e;
+                continue;
+            }
+        }
 
         if (c=='\'' && !dq && !hd) {
             iz e = i + 1;
@@ -1651,7 +1751,7 @@ static void expandinto(X *x, Str s, i32 ctx)
         }
 
         if ((c=='<' || c=='>') && i+1<s.len && s[i+1]=='(' && !dq && !hd &&
-                !(ctx & XC_ARITH)) {
+                !(ctx & (XC_ARITH|XC_NOPSUB))) {
             // Process substitution: the parser kept <(...) only where
             // it is one
             iz  e    = skipdollar(sh, x->a, s, i);
@@ -2013,6 +2113,7 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
             // A declaration builtin's assignment argument gets tilde
             // expansion after = even in posix mode
             i32 ctx = flags&XW_ASSIGN && w->flags&W_ASSIGNMENT ? XC_ASSIGNW : wordctx(sh, w);
+            ctx |= flags&XW_SUBQ ? XC_SUBQ : 0;
             expandinto(x, texts[t], ctx);
             fields.len = 0;
             for (iz k = 0; k < x->done.len; k++) {
@@ -2309,8 +2410,20 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
                     badarraysub(sh, scratch, it.word);
                     compoundfail(sh);
                 }
-                X *x = newx(sh, a);
-                ind = subindex(x, it.sub);
+                // Unlike a[sub]=v, quotes in the subscript are removed.
+                // bash then removes them once more, which drops each
+                //  (its internal escape) before the next byte.
+                X  *x   = newx(sh, a);
+                Str sub = expandword(x, it.sub, 0);
+                if (find(sub, "") >= 0) {
+                    Buf b(a, sub.len);
+                    for (iz i = 0; i < sub.len; i++) {
+                        if (sub[i]==1 && i+1<sub.len) i++;
+                        putbyte(&b, sub[i]);
+                    }
+                    sub = finish(&b);
+                }
+                ind = evalarith(sh, a, sub).value;
                 if (ind < 0) {
                     Value *v = lookup(sh, name);
                     ind += (v && v->arr ? amax(v->arr) : -1) + 1;

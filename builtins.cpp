@@ -198,7 +198,7 @@ static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
 static i32 b_test(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     Str        name = args[0];
-    TestCtx    tc   = {sh, &scratch};
+    TestCtx    tc   = {sh, &scratch, 0};
     TestEnv    env  = testenv(&tc);
     TestResult r    = name=="["
         ? testbracket(&env, &scratch, args+1, nargs-1)
@@ -901,7 +901,23 @@ static i32 b_readonly(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 // unset 'name[sub]': one element, or for an indexed array's @ and *,
 // every element. Element 0 of a scalar is the scalar itself.
-static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub)
+// BASH_COMPAT as a number like 51, or 53 when unset or not understood.
+static i32 compatlevel(Shell *sh)
+{
+    Arena none = {};
+    Str   v    = getvar(sh, &none, "BASH_COMPAT").value;
+    i32   n    = 0;
+    for (iz i = 0; i < v.len; i++) {
+        if (v[i] == '.') continue;
+        if (v[i]<'0' || v[i]>'9' || n>1000) return 53;
+        n = n*10 + (v[i] - '0');
+    }
+    return n>=31 && n<=53 ? n : 53;
+}
+
+// With raw, an associative key is used as it is, not expanded
+// (array_expand_once).
+static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0)
 {
     Var *v = findvar(sh, name);
     if (!v || !v->top) return 0;
@@ -912,11 +928,14 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub)
     }
     X *x = newx(sh, &scratch);
     if (cur->arr && cur->arr->bucket) {
-        Str key = subkey(x, sub);
+        Str key = raw ? sub : subkey(x, sub);
         Value *val = ownvalue(sh, &v->top);
         hdel(sh->store, val->arr, key);
         varchanged(sh, name);
         return 0;
+    }
+    if (cur->arr && allsub(sub) && compatlevel(sh)<=51) {
+        return unsetvar(sh, name) ? 0 : 1;  // the whole array, as bash 5.1
     }
     if (cur->arr && allsub(sub)) {
         Value *val = ownvalue(sh, &v->top);
@@ -970,8 +989,18 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
         Str base = name;
         Cut br = cut(name, '[');
         if (br.ok) base = br.head;
-        b32 valid = validvarname(base);
+        Str rn0, rs0;
+        b32 valid = validvarname(base) && (!br.ok || splitref(name, &rn0, &rs0));
         if (!valid && vars) {
+            if (i<sh->compargs.len && sh->compargs[i]==2) {
+                // its subscript was quoted as it expanded: show it bare
+                Buf b(&scratch, name.len);
+                for (iz k = 0; k < name.len; k++) {
+                    k += name[k]==0x5c && k+1<name.len;
+                    putbyte(&b, name[k]);
+                }
+                name = finish(&b);
+            }
             notident(sh, scratch, "unset", name);
             status = 1;
             continue;
@@ -990,7 +1019,9 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         Str rn, rs;
         if (br.ok && splitref(name, &rn, &rs)) {
-            status |= unsetelem(sh, scratch, rn, rs);
+            b32 raw = sh->shopt[S_ARRAY_EXPAND_ONCE] &&
+                      !(i<sh->compargs.len && sh->compargs[i]==2);
+            status |= unsetelem(sh, scratch, rn, rs, raw);
             continue;
         }
         if (!unsetvar(sh, base)) {
@@ -1182,6 +1213,10 @@ static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
         b32 *slot = oflag ? &sh->opt[idx] : &sh->shopt[idx];
         if (set || unset) {
             *slot = set;
+            if (!oflag && (idx==S_ARRAY_EXPAND_ONCE || idx==S_ASSOC_EXPAND_ONCE)) {
+                // two names for one option
+                sh->shopt[S_ARRAY_EXPAND_ONCE] = sh->shopt[S_ASSOC_EXPAND_ONCE] = set;
+            }
             if (!oflag && idx==S_EXTDEBUG) {
                 // as bash: extdebug sets errtrace and functrace with it
                 sh->opt[O_ERRTRACE] = sh->opt[O_FUNCTRACE] = set;

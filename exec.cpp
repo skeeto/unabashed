@@ -158,12 +158,28 @@ struct ShellArith {
     b32    readonly;  // an assignment hit a readonly variable
 };
 
+// An indexed subscript as arithmetic expanded it (arithsubscript): its
+// double quotes are backslash-quoted, but as in bash they are still
+// removed when it is evaluated.
+static Str arithindex(Shell *sh, Arena *a, Str name, Str sub)
+{
+    Value *v = lookup(sh, name);
+    if ((v && v->arr && v->arr->bucket) || find(sub, "\\\"")<0) return sub;
+    Buf b(a, sub.len);
+    for (iz i = 0; i < sub.len; i++) {
+        i += sub[i]==0x5c && i+1<sub.len && sub[i+1]==0x22;
+        putbyte(&b, sub[i]);
+    }
+    return finish(&b);
+}
+
 static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
 {
     ShellArith *c = (ShellArith *)ctx;
     if (ref->hassub) {
         X     *x = newx(c->sh, a);
         Value *v = lookup(c->sh, ref->name);
+        ref->sub = arithindex(c->sh, a, ref->name, ref->sub);
         if (!(v && v->arr && v->arr->bucket) && ref->sub.len && !allsub(ref->sub)) {
             // Evaluate an indexed subscript once: the assignment that
             // may follow (a[RANDOM%6]++) reuses this index
@@ -186,6 +202,7 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
     ShellArith *c = (ShellArith *)ctx;
     Str v = fmti64(a, value);
     if (ref->hassub) {
+        ref->sub = arithindex(c->sh, a, ref->name, ref->sub);
         Sub s = evalsub(c->sh, a, ref->name, ref->sub, {});
         if (!s.ok) {
             return concat3(a, ref->name, "[", concat(a, ref->sub, "]: bad array subscript"));
@@ -881,7 +898,7 @@ static void tracewords(Shell *sh, Arena a, Str *words, iz nwords)
         print(&b, tracequote(sh, &a, words[i]));
     }
     putbyte(&b, '\n');
-    fdwrite(sh, 2, finish(&b));
+    fdwrite(sh, sh->tracefd ? sh->tracefd : 2, finish(&b));
 }
 
 // Trace one assignment, on its own line, before it is performed. An
@@ -894,7 +911,7 @@ static void traceassign(Shell *sh, Arena a, Str name, b32 append, Str value)
     print(&b, append ? Str("+=") : Str("="));
     if (value.len) print(&b, tracequote(sh, &a, value));
     putbyte(&b, '\n');
-    fdwrite(sh, 2, finish(&b));
+    fdwrite(sh, sh->tracefd ? sh->tracefd : 2, finish(&b));
 }
 
 static void traceline(Shell *sh, Arena a, Str text)
@@ -903,7 +920,7 @@ static void traceline(Shell *sh, Arena a, Str text)
     print(&b, traceprefix(sh, &a));
     print(&b, text);
     putbyte(&b, '\n');
-    fdwrite(sh, 2, finish(&b));
+    fdwrite(sh, sh->tracefd ? sh->tracefd : 2, finish(&b));
 }
 
 
@@ -1729,6 +1746,11 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             } else if (decl && (w->flags & W_ASSIGNMENT)) {
                 // Brace expanded, but not split or globbed
                 more = expandwords(sh, a, &one2, XW_NOSPLIT|XW_NOGLOB|XW_ASSIGN);
+            } else if (argv[0]=="unset" && arrayrefword(sh, *a, w->text)) {
+                // compargs 2: its subscript was expanded and quoted
+                more = expandwords(sh, a, &one2, XW_SUBQ);
+                while (compargs.len < argv.len) compargs = push(a, compargs, (u8)0);
+                for (iz i = 0; i < more.len; i++) compargs = push(a, compargs, (u8)2);
             } else {
                 more = expandwords(sh, a, &one2, 0);
             }
@@ -1913,6 +1935,7 @@ static b32 condeval(Shell *sh, Arena *a, Cond *c);
 struct TestCtx {
     Shell *sh;
     Arena *a;
+    b32    cond;  // [[ ]]: -v subscripts were already expanded, quoted
 };
 
 static Stat envstat(void *ctx, Str path, b32 follow)
@@ -1990,11 +2013,29 @@ static b32 envvarset(void *ctx, Str name)
     }
     Str rn, rs;
     if (splitref(name, &rn, &rs)) {
+        // In [[ ]], as bash 5.3, the subscript is not expanded again: it
+        // was expanded once, its result backslash-quoted
         Arena a = *((TestCtx *)ctx)->a;
         X    *x = newx(sh, &a);
-        Value *v = lookup(sh, rn);
-        if (v && v->arr && v->arr->bucket && allsub(rs)) {
-            return !!hfind(v->arr, rs);  // a key, as bash 5.3 has it
+        if (!((TestCtx *)ctx)->cond) {
+            Value *v = lookup(sh, rn);
+            if (v && v->arr && v->arr->bucket && (allsub(rs) || sh->shopt[S_ARRAY_EXPAND_ONCE])) {
+                return !!hfind(v->arr, rs);  // a key as it is (array_expand_once)
+            }
+            return getelems(x, rn, rs).set;
+        }
+        Buf   b(&a, rs.len);
+        for (iz i = 0; i < rs.len; i++) {
+            if (rs[i]=='\\' && i+1<rs.len) i++;
+            putbyte(&b, rs[i]);
+        }
+        Str    key = finish(&b);
+        Value *v   = lookup(sh, rn);
+        if (v && v->arr && v->arr->bucket) {
+            return !!hfind(v->arr, key);
+        }
+        if (!allsub(rs)) {
+            rs = fmti64(&a, evalarith(sh, &a, key).value);
         }
         return getelems(x, rn, rs).set;
     }
@@ -2025,9 +2066,11 @@ static TestEnv testenv(TestCtx *t)
     return e;
 }
 
-static Str condword(Shell *sh, Arena *a, Word *w)
+// With subq, for -v and the arithmetic operators, array subscripts
+// expand once, as in arithmetic.
+static Str condword(Shell *sh, Arena *a, Word *w, b32 subq = 0)
 {
-    return expandstring(sh, a, w->text, wordctx(sh, w));
+    return expandstring(sh, a, w->text, wordctx(sh, w) | (subq ? XC_SUBQ : 0));
 }
 
 // Trace one [[ ]] primary as it is evaluated, operands unquoted. The
@@ -2072,9 +2115,9 @@ static b32 condeval(Shell *sh, Arena *a, Cond *c)
         r = arg.len > 0;
     } break;
     case C_UNARY: {
-        TestCtx tc = {sh, a};
+        TestCtx tc = {sh, a, 1};
         TestEnv e = testenv(&tc);
-        Str arg = condword(sh, a, c->left->op);
+        Str arg = condword(sh, a, c->left->op, c->op->text=="-v");
         tracecond(sh, *a, c->invert, c->op->text, arg, 0);
         TestResult t = testunary(&e, a, c->op->text, arg);
         if (t.status == 2) {
@@ -2084,7 +2127,9 @@ static b32 condeval(Shell *sh, Arena *a, Cond *c)
     } break;
     case C_BINARY: {
         Str op = c->op->text;
-        Str lhs = condword(sh, a, c->left->op);
+        b32 arith = op=="-eq" || op=="-ne" || op=="-lt" || op=="-le" ||
+                    op=="-gt" || op=="-ge";
+        Str lhs = condword(sh, a, c->left->op, arith);
         if (op=="==" || op=="=" || op=="!=") {
             Str pat = expandpattern(sh, a, c->right->op->text, wordctx(sh, c->right->op));
             tracecond(sh, *a, c->invert, op, lhs, &pat);
@@ -2097,9 +2142,8 @@ static b32 condeval(Shell *sh, Arena *a, Cond *c)
             tracecond(sh, *a, c->invert, op, lhs, &rhs);
             shellerror(sh, *a, "=~: regular expressions arrive in M4");
             r = 0;
-        } else if (op=="-eq" || op=="-ne" || op=="-lt" || op=="-le" ||
-                   op=="-gt" || op=="-ge") {
-            Str rhs = condword(sh, a, c->right->op);
+        } else if (arith) {
+            Str rhs = condword(sh, a, c->right->op, 1);
             tracecond(sh, *a, c->invert, op, lhs, &rhs);
             // An arithmetic error makes just this primary false
             Arith x = evalarithcmd(sh, a, lhs, "[[");
@@ -2108,7 +2152,7 @@ static b32 condeval(Shell *sh, Arena *a, Cond *c)
         } else {
             Str rhs = condword(sh, a, c->right->op);
             tracecond(sh, *a, c->invert, op, lhs, &rhs);
-            TestCtx tc = {sh, a};
+            TestCtx tc = {sh, a, 1};
             TestEnv e = testenv(&tc);
             TestResult t = testbinary(&e, a, op, lhs, rhs);
             if (t.status == 2) shellerror(sh, *a, t.err);
