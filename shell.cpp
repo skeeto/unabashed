@@ -405,6 +405,7 @@ struct Shell {
     Var     *vars;
     Func    *funcs;
     Alias   *aliases;
+    uz       aliasseq;     // aliases defined so far
     Args     args;
     Str      name;         // $0
     Str      iname;        // input name in syntax errors: -c or a file

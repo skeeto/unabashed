@@ -977,15 +977,9 @@ static b32 splitref(Str s, Str *name, Str *sub)
 
 // splitref, and under assoc_expand_once, name[key] for an associative
 // array whose key holds brackets: the key then runs to the last ].
-static b32 splitrefonce(Shell *sh, Str s, Str *name, Str *sub)
+static b32 splitrefassoc(Shell *sh, Str s, Str *name, Str *sub)
 {
-    if (splitref(s, name, sub)) return 1;
-    if (!sh->shopt[S_ASSOC_EXPAND_ONCE]) return 0;
-    b32 oneword = 0;  // an unquoted name[sub] argument of the builtin
-    for (iz i = 0; i < sh->nbltargs; i++) {
-        oneword |= sh->bltargs[i].data==s.data && i<sh->compargs.len && sh->compargs[i]==3;
-    }
-    if (!oneword) return 0;
+    if (!sh->shopt[S_ASSOC_EXPAND_ONCE] || !s.len) return 0;
     Cut c = cut(s, '[');
     if (!c.ok || !validvarname(c.head) || s[s.len-1]!=']') return 0;
     Value *v = lookup(sh, c.head);
@@ -993,6 +987,34 @@ static b32 splitrefonce(Shell *sh, Str s, Str *name, Str *sub)
     *name = c.head;
     *sub  = span(s.data+c.head.len+1, s.data+s.len-1);
     return 1;
+}
+
+// As declare parses name[key] under assoc_expand_once: the key ends
+// at the first ], brackets in it not nesting.
+static b32 splitrefflat(Shell *sh, Str s, Str *name, Str *sub)
+{
+    Cut c = cut(s, '[');
+    if (!c.ok || cut(c.tail, ']').head.len != c.tail.len-1) return 0;
+    return splitrefassoc(sh, s, name, sub);
+}
+
+// Is s an unquoted name[sub] argument of the running builtin, which
+// assoc_expand_once takes as it is?
+static b32 onewordarg(Shell *sh, Str s)
+{
+    if (!sh->shopt[S_ASSOC_EXPAND_ONCE]) return 0;
+    for (iz i = 0; i < sh->nbltargs; i++) {
+        if (sh->bltargs[i].data==s.data && i<sh->compargs.len && sh->compargs[i]==3) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static b32 splitrefonce(Shell *sh, Str s, Str *name, Str *sub)
+{
+    if (splitref(s, name, sub)) return 1;
+    return onewordarg(sh, s) && splitrefassoc(sh, s, name, sub);
 }
 
 // The list for ${name[@]@A}: declare, its options, and the assignment.
@@ -2301,13 +2323,13 @@ static void badarraysub(Shell *sh, Arena a, Str word)
 // Evaluate the subscript of name[sub] for an assignment: a key if the
 // array is associative, else an index, negative ones counting back
 // from the end. word is the text for error messages.
-static Sub evalsub(Shell *sh, Arena *a, Str name, Str sub, Str word)
+static Sub evalsub(Shell *sh, Arena *a, Str name, Str sub, Str word, b32 raw = 0)
 {
     Sub    r = {};
     Value *v = lookup(sh, name);
     X     *x = newx(sh, a);
-    if (v && v->arr && v->arr->bucket) {
-        r.key = subkey(x, sub);
+    if (v && ((v->arr && v->arr->bucket) || (v->attrs & V_ASSOC))) {
+        r.key = raw ? sub : subkey(x, sub);
         if (!r.key.len) {
             if (word.data) badarraysub(sh, *a, word);
             return r;
@@ -2336,9 +2358,9 @@ static b32 assignelem(Shell *sh, Arena scratch, Str name, Str sub, Str word, Str
 {
     if (!(flags & SV_NOREF)) name = arraytarget(sh, scratch, name, &flags);
     if (!name.data) return 0;
-    Sub s = evalsub(sh, &scratch, name, sub, word);
+    Sub s = evalsub(sh, &scratch, name, sub, word, flags & SV_RAWKEY);
     if (!s.ok) return 0;
-    return setelem(sh, scratch, name, s.idx, s.key, value, flags);
+    return setelem(sh, scratch, name, s.idx, s.key, value, flags & ~SV_RAWKEY);
 }
 
 // Assign to NAME or NAME[SUB], the left side of an assignment.
@@ -2346,6 +2368,7 @@ static b32 assignto(Shell *sh, Arena scratch, Str lhs, Str value, i32 flags = 0)
 {
     Str name, sub;
     if (splitrefonce(sh, lhs, &name, &sub)) {
+        flags |= onewordarg(sh, lhs) ? SV_RAWKEY : 0;
         return assignelem(sh, scratch, name, sub, lhs, value, flags);
     }
     return setvar(sh, scratch, lhs, value, flags);
@@ -2546,7 +2569,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
             Str key = f[k];
             Str v   = k+1<f.len ? f[k+1] : Str("");
             if (!key.len) {
-                badarraysub(sh, scratch, key);
+                badarraysub(sh, scratch, words[k]);
                 failed = 1;
                 break;
             }

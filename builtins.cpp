@@ -849,7 +849,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         Str sub    = {};
         b32 hassub = 0;
         Str rn, rs;
-        if (splitref(vname, &rn, &rs)) {
+        if (splitref(vname, &rn, &rs) || splitrefflat(sh, vname, &rn, &rs)) {
             vname  = rn;
             sub    = rs;
             hassub = 1;
@@ -1182,6 +1182,16 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
         return 1;
     }
     X *x = newx(sh, &scratch);
+    if (cur->dyn==DYN_BASH_ALIASES || cur->dyn==DYN_BASH_CMDS) {
+        // the alias or command table itself
+        Str key = raw ? sub : subkey(x, sub);
+        if (cur->dyn == DYN_BASH_CMDS) {
+            hashremove(sh, key);
+        } else if (Alias *a = findalias(sh->aliases, key)) {
+            if (a->value.data) undefalias(sh, a);
+        }
+        return 0;
+    }
     if (cur->arr && cur->arr->bucket) {
         Str key = raw ? sub : subkey(x, sub);
         Value *val = ownvalue(sh, &v->top);
@@ -2414,7 +2424,6 @@ static i32 b_alias(Shell *sh, Str *args, iz nargs, Arena scratch)
         return 0;
     }
     i32 status = 0;
-    Store *st = sh->store;
     for (; i < nargs; i++) {
         Cut c = cut(args[i], '=');
         if (!c.ok) {
@@ -2436,21 +2445,7 @@ static i32 b_alias(Shell *sh, Str *args, iz nargs, Arena scratch)
             status = 1;
             continue;
         }
-        Alias **slot = &sh->aliases;
-        for (u64 h = hash(c.head); *slot; h <<= 2) {
-            if ((*slot)->name == c.head) break;
-            slot = &(*slot)->child[h>>62];
-        }
-        if (!*slot) {
-            Alias *a = (Alias *)salloc(st, sizeof(Alias));
-            a->name = sclone(st, c.head);
-            if (slot == &sh->aliases) *slot = a; else jset(st, slot, a);
-        }
-        Str v = sclone(st, c.tail);
-        if (!v.data) v.data = (u8 *)"";
-        Alias *a = *slot;
-        jwrite(st, &a->value.data, (uz)v.data);
-        jwrite(st, &a->value.len, (uz)v.len);
+        defalias(sh, c.head, c.tail);
     }
     return status;
 }
@@ -2475,8 +2470,7 @@ static i32 b_unalias(Shell *sh, Str *args, iz nargs, Arena scratch)
             status = 1;
             continue;
         }
-        jwrite(sh->store, &a->value.data, 0);
-        jwrite(sh->store, &a->value.len, 0);
+        undefalias(sh, a);
     }
     return status;
 }

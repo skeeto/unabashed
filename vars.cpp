@@ -30,7 +30,8 @@ enum : i32 {  // dynamic variables, computed when read
     DYN_EPOCHSECONDS, DYN_EPOCHREALTIME, DYN_BASHPID, DYN_BASH_SUBSHELL,
     DYN_FUNCNAME, DYN_BASH_COMMAND, DYN_HISTCMD, DYN_BASH_LINENO,
     DYN_BASH_SOURCE, DYN_BASH_ARGV0, DYN_PIPESTATUS, DYN_UNDERSCORE,
-    DYN_BASH_ARGV, DYN_BASH_ARGC,
+    DYN_BASH_ARGV, DYN_BASH_ARGC, DYN_DIRSTACK, DYN_BASH_ALIASES,
+    DYN_BASH_CMDS,
 };
 
 struct Value {
@@ -520,6 +521,7 @@ enum : i32 {  // setvar flags
     SV_FORCE  = 1<<3,  // ignore readonly (internal updates)
     SV_UNDERTEMP = 1<<4,  // the binding below any temporary ones
     SV_NOREF  = 1<<5,  // name itself, even a nameref
+    SV_RAWKEY = 1<<6,  // an associative subscript used as it is
 };
 
 static void varchanged(Shell *, Str name);
@@ -646,6 +648,97 @@ static Array *argvarray(Shell *sh, Arena *a, i32 d)
     }
 }
 
+enum { NALIASBUCKETS = 64 };  // bash's alias table
+
+// Define an alias, or give it a new value.
+static void defalias(Shell *sh, Str name, Str value)
+{
+    Store  *st   = sh->store;
+    Alias **slot = &sh->aliases;
+    for (u64 h = hash(name); *slot; h <<= 2) {
+        if ((*slot)->name == name) break;
+        slot = &(*slot)->child[h>>62];
+    }
+    if (!*slot) {
+        Alias *a = (Alias *)salloc(st, sizeof(Alias));
+        a->name = sclone(st, name);
+        if (slot == &sh->aliases) *slot = a; else jset(st, slot, a);
+    }
+    Alias *a = *slot;
+    if (!a->value.data) jwrite(st, &a->seq, ++sh->aliasseq);  // new again
+    Str v = sclone(st, value);
+    if (!v.data) v.data = (u8 *)"";
+    jwrite(st, &a->value.data, (uz)v.data);
+    jwrite(st, &a->value.len, (uz)v.len);
+}
+
+static void undefalias(Shell *sh, Alias *a)
+{
+    jwrite(sh->store, &a->value.data, 0);
+    jwrite(sh->store, &a->value.len, 0);
+}
+
+// The defined aliases, oldest first.
+static Slice<Alias *> aliasesbyage(Shell *sh, Arena *a)
+{
+    Slice<Alias *> all = {};
+    Alias *stack[256];
+    i32 top = 0;
+    if (sh->aliases) stack[top++] = sh->aliases;
+    while (top) {
+        Alias *t = stack[--top];
+        if (t->value.data) all = push(a, all, t);
+        for (i32 k = 0; k < 4 && top < 252; k++) {
+            if (t->child[k]) stack[top++] = t->child[k];
+        }
+    }
+    for (iz k = 1; k < all.len; k++) {
+        for (iz j = k; j>0 && all[j]->seq<all[j-1]->seq; j--) {
+            Alias *t = all[j]; all[j] = all[j-1]; all[j-1] = t;
+        }
+    }
+    return all;
+}
+
+// DIRSTACK, BASH_ALIASES and BASH_CMDS, built as bash builds them when
+// read: the directory stack (the working directory alone, until pushd
+// exists), and the alias and command tables walked in bash's bucket
+// order into associative arrays of the same size. A listing shows them
+// empty, as bash shows the values it built when created.
+static Array *tablearray(Shell *sh, Arena *a, i32 d)
+{
+    Store st = {};
+    st.a = *a;  // a scratch store, discarded with the scratch arena
+    Array *r = 0;
+    if (d == DYN_DIRSTACK) {
+        r = newarray(&st);
+        Value *pwd = rawlookup(sh, "PWD");
+        if (!sh->listing) aput(&st, r, 0, pwd && pwd->str.data ? pwd->str : sh->cwd);
+    } else if (d == DYN_BASH_CMDS) {
+        r = newassoc(&st, NHASHCMD);
+        for (iz b = 0; sh->cmdhash && !sh->listing && b < NHASHCMD; b++) {
+            for (HashCmd *h = sh->cmdhash[b]; h; h = h->next) {
+                hput(&st, r, h->name, h->path);
+            }
+        }
+    } else {
+        r = newassoc(&st, NALIASBUCKETS);
+        Slice<Alias *> all = sh->listing ? Slice<Alias *>{} : aliasesbyage(sh, &st.a);
+        // bash's own table, 64 buckets with the newest first in each,
+        // is walked into the array, which reverses each chain again
+        for (iz b = 0; b < NALIASBUCKETS; b++) {
+            for (iz k = all.len-1; k >= 0; k--) {
+                if ((hashkey(all[k]->name) & (NALIASBUCKETS-1)) == (u32)b) {
+                    hput(&st, r, all[k]->name, all[k]->value);
+                }
+            }
+        }
+    }
+    *a = st.a;
+    r->isset = 1;
+    return r;
+}
+
 // The elements of FUNCNAME and BASH_LINENO, built in scratch from the
 // call frames, with "main" at the bottom when running a script. Null
 // for other variables.
@@ -664,6 +757,9 @@ static Array *dynarray(Shell *sh, Arena *a, Value *v)
         return r;
     }
     if (d==DYN_BASH_ARGV || d==DYN_BASH_ARGC) return argvarray(sh, a, d);
+    if (d==DYN_DIRSTACK || d==DYN_BASH_ALIASES || d==DYN_BASH_CMDS) {
+        return tablearray(sh, a, d);
+    }
     if (d!=DYN_FUNCNAME && d!=DYN_BASH_LINENO && d!=DYN_BASH_SOURCE) return 0;
     iz n = 0, nsrc = 0;
     for (Frame *f = sh->frame; f; f = f->up) n++;
@@ -749,6 +845,7 @@ static void setpstat(Shell *sh, i32 *statuses, i32 n)
 }
 
 static b32 assignelem(Shell *, Arena, Str name, Str sub, Str lhs, Str value, i32 flags);
+static void hashenter(Shell *, Str name, Str path, uz hits);  // exec.cpp
 static Value *setattrs(Shell *, Str name, u32 on, u32 off);
 
 // Can a nameref name this: a variable or an array element?
@@ -828,6 +925,11 @@ static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str val
     Value *val = assignslot(sh, scratch, name, flags);
     if (!val) return 0;
     if (val->attrs & V_NOASSIGN) return 1;
+    switch (val->dyn) {
+    case DYN_BASH_ALIASES: defalias(sh, key, value);   return 1;
+    case DYN_BASH_CMDS:    hashenter(sh, key, value, 0); return 1;
+    case DYN_DIRSTACK:     return 1;  // no pushd yet
+    }
     toarray(sh, val);
     Array *arr = val->arr;
     Str old = {};

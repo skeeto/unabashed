@@ -228,7 +228,7 @@ static void varchanged(Shell *sh, Str name)
 
 static void dynamic(Shell *sh, Str name, i32 dyn, u32 attrs = 0)
 {
-    Value *v = setattrs(sh, name, attrs & ~V_ARRAY, 0);
+    Value *v = setattrs(sh, name, attrs & ~(V_ARRAY|V_ASSOC), 0);
     v->dyn    = dyn;
     v->attrs |= attrs;
 }
@@ -355,6 +355,9 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     dynamic(sh, "BASH_ARGV", DYN_BASH_ARGV, V_ARRAY);
     dynamic(sh, "BASH_ARGC", DYN_BASH_ARGC, V_ARRAY);
     dynamic(sh, "PIPESTATUS", DYN_PIPESTATUS, V_ARRAY);
+    dynamic(sh, "DIRSTACK", DYN_DIRSTACK, V_ARRAY);
+    dynamic(sh, "BASH_ALIASES", DYN_BASH_ALIASES, V_ASSOC);
+    dynamic(sh, "BASH_CMDS", DYN_BASH_CMDS, V_ASSOC);
     dynamic(sh, "_", DYN_UNDERSCORE);
     sh->npstat = 1;
     static Str versinfo[] = {"5", "3", "0", "1", "release", "x86_64-pc-linux-gnu"};

@@ -267,6 +267,7 @@ struct Alias {
     Str    name;
     Str    value;
     b32    expanding;  // currently being expanded
+    uz     seq;        // order of definition, for BASH_ALIASES
 };
 
 // Look up an alias by name. Returns null if not found.
@@ -459,6 +460,24 @@ static iz skipsubscript(Str s, iz i)
             for (i++; i<s.len && s[i]!='\''; i++) {}
         } else if (c == '"') {
             for (i++; i<s.len && s[i]!='"'; i++) {
+                if (s[i] == '\\') i++;
+            }
+        } else if (c=='$' && i+1<s.len && (s[i+1]=='(' || s[i+1]=='{')) {
+            // a substitution may hold brackets: a[$(echo ])]=x
+            u8  open  = s[i+1];
+            u8  close = open=='(' ? ')' : '}';
+            i32 inner = 0;
+            for (i++; i < s.len; i++) {
+                if (s[i] == '\\') {
+                    i++;
+                } else if (s[i] == open) {
+                    inner++;
+                } else if (s[i]==close && !--inner) {
+                    break;
+                }
+            }
+        } else if (c == '`') {
+            for (i++; i<s.len && s[i]!='`'; i++) {
                 if (s[i] == '\\') i++;
             }
         } else if (c == '[') {
