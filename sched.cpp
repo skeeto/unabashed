@@ -851,13 +851,20 @@ static Handle pipeosread(Sched *s, Pipe *p)
     return p->osr;
 }
 
+// Join a pump from newpump and return its Pump to the pool.
+static i32 joinpump(Sched *s, Task *t)
+{
+    Pump *p = (Pump *)t->arg;
+    i32   r = taskjoin(s, t);
+    p->next = s->freepumps;
+    s->freepumps = p;
+    return r;
+}
+
 // Stop a pump from newpump, once its handle's other end is closed,
 // and return its Pump to the pool.
 static void endpump(Sched *s, Task *t)
 {
-    Pump *p = (Pump *)t->arg;
     taskcancel(s, t);
-    taskjoin(s, t);
-    p->next = s->freepumps;
-    s->freepumps = p;
+    joinpump(s, t);
 }

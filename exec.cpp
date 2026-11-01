@@ -1258,7 +1258,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
             if (npumps == countof(pumps)) continue;
             OsPipe p = os_pipe(sh->os);
             if (p.err) continue;
-            Pump *pp = alloc<Pump>(&a);
+            Pump *pp = newpump(s);  // may outlive this call
             pp->pipe = f->pipe;
             pp->kind = PUMP_FROMHANDLE;
             pp->h    = p.r;
@@ -1288,6 +1288,24 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         if (err != E_NOSYS) {
             for (i32 i = 0; i < nclose; i++) os_close(sh->os, closeafter[i]);
             return -err;
+        }
+    }
+    // Killed while the program runs (or any other escape): it runs on,
+    // so its output pumps do too, orphaned for the Sched to join
+    Escape e = {};
+    if (npumps) {
+        e.up    = sh->esc;
+        e.undo  = sh->undo;
+        e.frame = sh->frame;
+        e.bout  = sh->bout;
+        sh->esc = &e;
+        if (__builtin_setjmp(e.jmp)) {
+            sh->esc = e.up;
+            for (i32 i = 0; i < npumps; i++) {
+                pumps[i]->sib = s->orphans;
+                s->orphans    = pumps[i];
+            }
+            escape(sh, e.why);
         }
     }
     Spawned r = os_spawn(sh->os, a, &sp);
@@ -1328,8 +1346,9 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     }
     // What the program wrote is passed on before anything the shell
     // writes next
+    if (npumps) sh->esc = e.up;
     for (i32 i = 0; i < npumps; i++) {
-        taskjoin(s, pumps[i]);
+        joinpump(s, pumps[i]);
     }
     if (sh->jobs || sh->coprocs) {
         // as bash after each foreground job: drop the jobs already
@@ -1958,6 +1977,19 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         for (iz i = nassign-1; i >= 0; i--) {
             if (pushed[i]) poptemp(sh, as[i].name);
         }
+    }
+    {
+        // An array element cannot be bound for one command: reported,
+        // and the command runs without it, as in bash
+        iz kept = 0;
+        for (iz i = 0; i < nassign; i++) {
+            if (validvarname(as[i].name)) {
+                as[kept++] = as[i];
+            } else {
+                shellerror(sh, scratch, concat3(&scratch, "`", as[i].name, "': not a valid identifier"));
+            }
+        }
+        nassign = kept;
     }
 
     if (sh->opt[O_XTRACE]) {

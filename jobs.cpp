@@ -77,6 +77,11 @@ static b32 iswaiter(Task *t)
 
 static void jointask(Sched *s, Task *t, i32 *status)
 {
+    if (t->fn == pumpmain) {
+        // a program's output pump, orphaned by runprogram
+        joinpump(s, t);
+        return;
+    }
     s->nbg -= !iswaiter(t);
     i32 st = taskjoin(s, t);
     if (status) *status = st;
