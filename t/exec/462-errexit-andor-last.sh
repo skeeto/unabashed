@@ -1,0 +1,8 @@
+(set -e; true && false; echo a); echo "st=$?"
+(set -e; false || false; echo b); echo "st=$?"
+(set -e; false && true; echo "c st=$?"); echo "st=$?"
+(set -e; true || false; echo d); echo "st=$?"
+(set -e; false || (exit 5); echo e); echo "st=$?"
+(set -e; { false; echo inner; } && echo then; echo f); echo "st=$?"
+(set -e; { false; echo inner2; } || echo else2; echo g); echo "st=$?"
+(set -e; { true; false; } ; echo h); echo "st=$?"

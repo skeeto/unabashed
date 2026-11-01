@@ -1,0 +1,3045 @@
+# Command lines for t/unit/fakes_test.cpp, one per line, each run in
+# /home/oracle on a fresh copy of fakes.fixture. The harness parses a
+# small subset of bash: words with ' " $'' quoting and backslashes,
+# | && || ; and the redirections < > >> 2> 2>> 2>&1 >&2 <<<. No
+# expansions or globs: $ * ? [ ] { } ~ must be quoted. Names of bash
+# builtins (echo, true, pwd, ...) are given as /opt/fakes/bin paths.
+
+# bash test helpers
+recho a 'b c' '' $'\001\037\177' $'x\ty' "d\"e"
+recho
+zecho a 'b  c' d
+zecho
+printenv HOME
+printenv NOPE
+printenv HOM
+printenv PATH LANG
+printenv | cat
+xcase -u lines
+xcase -l mixed
+xcase mixed
+xcase -u < words
+xcase -n -u words
+xcase -z lines
+xcase nofile
+cat lines | xcase -l -
+xcase lines -u
+
+# cat
+cat lines
+cat lines words
+cat nofile
+cat dir
+cat lines nofile words
+cat nofile lines 2>&1
+cat -n words
+cat -b words
+cat -s blanks
+cat -sn blanks
+cat -E words
+cat -T tabs
+cat -A bin
+cat -v bin
+cat -e nonl
+cat -t tabs
+cat -n lines words
+cat nonl lines
+cat - < lines
+cat lines - < words
+cat lines | cat -n
+cat -z lines
+cat --foo lines
+cat empty
+cat 'a b'
+cat "it's"
+cat $'a\nb'
+cat '#x' 'x#' '=' 'a:b' '@' '~' 'a]'
+cat ro
+cat lnk
+cat dangle
+cat dirlnk
+cat -vET bin
+cat <<< 'here string'
+
+# echo, true, false
+/opt/fakes/bin/echo a b c
+/opt/fakes/bin/echo -n a b
+/opt/fakes/bin/echo -e 'a\tb\nc'
+/opt/fakes/bin/echo -e 'x\101\0101\x41\x\q\\'
+/opt/fakes/bin/echo -e 'stop\cnot' more
+/opt/fakes/bin/echo -E 'a\tb'
+/opt/fakes/bin/echo -nx z
+/opt/fakes/bin/echo -- a
+/opt/fakes/bin/echo -neE 'a\tb'
+/opt/fakes/bin/echo -e '\0' | od -c
+/opt/fakes/bin/echo -e '\e[1m\a\b\f\r\v' | od -c
+/opt/fakes/bin/echo
+/opt/fakes/bin/true
+/opt/fakes/bin/false
+/opt/fakes/bin/true --x
+/opt/fakes/bin/false || /opt/fakes/bin/echo failed
+
+# rm
+rm lines; ls
+rm nofile
+rm -f nofile; ls
+rm
+rm -f
+rm dir
+rm -r dir; ls
+rm -rf dir emptydir nofile; ls
+rm -R dir; ls
+rm .
+rm -r .
+rm -r dir/..
+rm emptydir
+rm -d emptydir; ls
+rm -d dir
+rm ro; ls
+rm lnk dangle; ls
+rm dirlnk; ls dir
+rm -r /
+rm -z lines
+rm 'a b'
+rm "it's"
+rm lines lines
+
+# mkdir
+mkdir new; ls
+mkdir dir
+mkdir x/y
+mkdir -p x/y/z; ls x x/y
+mkdir -p dir/sub
+mkdir -p lines/x
+mkdir lines
+mkdir -m 700 m; ls -ld m | cut -c1-10
+mkdir -m u=rwx,go=rx m2; ls -ld m2 | cut -c1-10
+mkdir -m 1777 st; ls -ld st | cut -c1-10
+mkdir -m g+w gw; ls -ld gw | cut -c1-10
+mkdir -m xyz q
+mkdir
+mkdir -v a b
+mkdir -pv p/q
+mkdir -z a
+mkdir a a
+mkdir dangle
+
+# rmdir
+rmdir emptydir; ls
+rmdir nofile
+rmdir lines
+rmdir dir
+rmdir
+mkdir -p a/b/c; rmdir -p a/b/c; ls
+rmdir dirlnk
+rmdir emptydir emptydir
+
+# touch
+touch newf; ls
+touch x/y
+touch -d xyz lines
+touch -d @1000000000 lines; ls -l lines
+touch -c nofile; ls
+touch -d @0 a b; ls -l a b
+touch -t 200102030405.06 t1; ls -l t1
+touch -t 0102030405 t2; ls -l t2
+touch -d @1000000000 lines; touch -r lines n2; ls -l n2
+touch -r nofile n3
+touch
+touch -d @1000000000.5 frac; ls -l frac
+touch dir; ls -ld dir | cut -c1-10
+touch -d @2000000000 future; ls -l future
+
+# chmod
+chmod 600 lines; ls -l lines | cut -c1-10
+chmod +x lines; ls -l lines | cut -c1-10
+chmod -r lines; ls -l lines | cut -c1-10
+chmod u=rwx,g=rx,o= lines; ls -l lines | cut -c1-10
+chmod a+X lines; ls -l lines | cut -c1-10
+chmod 744 lines; chmod a+X lines; ls -l lines | cut -c1-10
+chmod g+u lines; ls -l lines | cut -c1-10
+chmod =r lines; ls -l lines | cut -c1-10
+chmod 4755 lines; ls -l lines | cut -c1-10
+chmod 2644 lines; ls -l lines | cut -c1-10
+chmod 4755 lines; chmod 755 lines; ls -l lines | cut -c1-10
+chmod 1777 dir; ls -ld dir | cut -c1-10
+chmod u+s,g+s dir; ls -ld dir | cut -c1-10
+chmod g+s dir; chmod 755 dir; ls -ld dir | cut -c1-10
+chmod g+s dir; chmod 00755 dir; ls -ld dir | cut -c1-10
+chmod 0 lines; cat lines
+chmod 777 lines; chmod -w lines; ls -l lines | cut -c1-10
+chmod -w lines; ls -l lines | cut -c1-10
+chmod +w ro; ls -l ro | cut -c1-10
+chmod o=u-w ro; ls -l ro | cut -c1-10
+chmod u-w,g+w lines; ls -l lines | cut -c1-10
+chmod a=,u+r lines; ls -l lines | cut -c1-10
+chmod go=u lines; ls -l lines | cut -c1-10
+chmod +t lines; ls -l lines | cut -c1-10
+chmod xyz lines
+chmod 8 lines
+chmod u+q lines
+chmod
+chmod 755
+chmod 755 nofile
+chmod -R go-rwx dir; ls -ld dir dir/a dir/sub dir/sub/c | cut -c1-10
+chmod 600 lnk; ls -l lines | cut -c1-10
+chmod 755 dangle
+chmod -f 755 nofile
+chmod a-x,u+w dir; ls -ld dir | cut -c1-10
+chmod --foo lines
+chmod 644 lines nofile words; ls -l lines words | cut -c1-10
+
+# ls
+ls
+ls -a
+ls -A
+ls dir
+ls -a dir
+ls -A dir
+ls dir emptydir
+ls lines dir nofile
+ls nofile
+ls nofile dir
+ls -d dir
+ls -d dir lines
+ls -1 dir/sub
+ls lnk dirlnk dangle
+ls -r
+ls -r dir lines words
+ls -z
+ls emptydir
+ls -l lines | cut -d ' ' -f 1-5
+touch -d @1000000000 lines words; ls -lt lines words
+touch -d @1000000000 lines; touch -d @1000000001 words; ls -t lines words; ls -tr lines words
+touch -d @1000000000 x; ln -s x y; ls -l y | sed 's/.* y/y/'
+ls -l dirlnk | sed 's/.* dirlnk/dirlnk/'
+ls -n lines | cut -d ' ' -f 1-4
+ls -o lines | cut -d ' ' -f 1-3
+ls -g lines | cut -d ' ' -f 1-3
+ls -ld emptydir | cut -c1-10
+mkfifo ff; ls -l ff | cut -c1-10
+touch -d @1000000000 dir/a dir/b lines; ls -l lines dir/a dir/b
+ls dirlnk
+ls lines lines
+
+# wc
+wc lines
+wc -l lines
+wc -w words
+wc -c bin
+wc lines words
+wc -l lines words
+wc < lines
+wc -l < lines
+cat lines | wc
+cat lines | wc -c
+wc -c lines - < words
+wc nofile lines
+wc lines nofile
+wc nofile lines 2>&1
+wc -lw words nonl
+wc -L words tabs
+wc empty
+wc nonl
+wc dir
+wc -m lines
+wc -z
+wc -cl lines
+wc -wc lines nums
+wc <<< 'here string'
+wc < /dev/null
+wc bin
+
+# head and tail
+head lines
+head -n 3 lines
+head -3 lines
+head -n -9 lines
+head -c 5 lines
+head -c -50 lines
+head lines words
+head -q lines words
+head -v nonl
+head -n 2 nonl
+head nofile
+head nofile lines
+head -n x lines
+head -c x lines
+head -n 0 lines
+head dir
+head -n 2 lines - < words
+head -n -1 nonl
+tail lines
+tail -n 3 lines
+tail -3 lines
+tail +10 lines
+tail -n +11 lines
+tail -c 5 lines
+tail -c +50 lines
+tail -n 1 nonl
+tail -n 2 nonl
+tail lines words
+tail nofile
+tail -n x lines
+tail -n 0 lines
+cat lines | tail -n 2
+cat lines | head -n 2
+tail -1 words
+tail -n 2 blanks
+tail -c 3 nonl
+tail -q -n 1 lines words
+tail dir
+
+# sort
+sort mixed
+sort -r mixed
+sort -f mixed
+sort -u dup
+sort nums
+sort -n nums
+sort -nr nums
+sort -nu nums
+sort -k2 keys
+sort -k2n keys
+sort -k2,2n keys
+sort -k2,2n -k1,1 keys
+sort -k3 keys
+sort -k2,2 -k3r keys
+sort -t: -k2 csv
+sort -t: -k3,3 csv
+sort -t: -k2r csv
+sort -r -k2n keys
+sort lines words
+sort nofile
+sort -t ab lines
+sort -z
+sort -s -k1,1 keys
+sort -c lines
+sort -c dup
+sort -o out mixed; cat out
+sort -o mixed mixed; cat mixed
+sort nonl lines
+sort -b -k2 keys
+sort empty
+sort -n words
+sort -k1.2 lines
+sort -k1.2,1.3 -k1 lines
+sort -fu mixed
+sort -rn nums lines
+
+# uniq
+uniq dup
+uniq -c dup
+uniq -d dup
+uniq -u dup
+uniq -i mixed
+sort -f mixed | uniq -i
+sort -f mixed | uniq -ic
+uniq -c lines
+uniq dup out; cat out
+uniq nofile
+uniq a b c
+uniq -f 1 keys
+uniq -s 1 dup
+uniq -w 1 keys
+uniq nonl
+uniq -dc dup
+uniq empty
+
+# cut
+cut -c 2- lines
+cut -c 1,3 lines
+cut -c -2,4- words
+cut -d: -f2 csv
+cut -d: -f2,3 csv
+cut -s -d: -f2 csv
+cut -d: -f1- csv
+cut -d: -f3- csv
+cut -d : -f 4 csv
+cut -f2 tabs
+cut -f 2-1 lines
+cut -c a lines
+cut -f x lines
+cut -f1 -c1 lines
+cut lines
+cut -f 0 lines
+cut -c 0 lines
+cut -d ab -f1 lines
+cut -d: -c1 lines
+cut -s -c1 lines
+cut -c1 nonl
+cut -b 1-3 lines
+cut -c - lines
+cut -c 3,1-2 lines
+cut -f 1,1,2 tabs
+cut -c 2 lines nofile words
+
+# tr
+tr a-z A-Z < lines
+tr -d aeiou < lines
+tr -s l < words
+tr -s ' ' < words
+tr -c a-z X < words
+tr -cd a-z < words
+tr '[:lower:]' '[:upper:]' < mixed
+tr '[:upper:]' '[:lower:]' < mixed
+tr a-c x < mixed
+tr abc '[x*]' < mixed
+tr 'a-e' 'xy' < mixed
+tr c-a x < lines
+tr '\141' z < mixed
+tr 'a\' x < mixed
+tr . '\012' <<< 'a.b.c'
+tr -ds a b <<< 'aabbcc'
+tr <<< x
+tr a <<< x
+tr -d <<< x
+tr -d a b <<< x
+tr -ds a <<< x
+tr '[:digit:]' '#' < nums
+tr -d '[:space:]' < words
+tr '[=a=]' A < mixed
+tr 'a\-z' '123' <<< 'a-z'
+tr '[a*3]' x <<< a
+tr a '[x*2]yz' <<< abc
+tr '[:foo:]' x <<< a
+tr -s '\n' < blanks
+tr '\n' ' ' < lines
+tr -z a b
+tr -c '\n' . < lines
+tr '\t\\' 'TB' <<< $'a\tb\\c'
+tr -s 'a-z' < dup
+tr -t abc xy <<< abc
+tr '[:alpha:]' '' <<< abc
+
+# od
+od lines
+od -c lines
+od -b nonl
+od -x nonl
+od -c bin
+od -An -c bin
+od -t x1 bin
+od -An -t x1 bin
+od -c -x words
+od -Ad -b nonl
+od -Ax -c nonl
+od -An -b nonl
+od -b -c nonl
+od -c rep
+od -v -c rep
+od -t d1 bin
+od -t u1 bin
+od -t a bin
+od -t x4 -t o2 -t d2 nonl
+od -t x2 nonl
+od -t o4 lines
+od -t d4 bin
+od -t u2 bin
+od -t d2 bin
+od -d nonl
+od -s bin
+od -i lines
+od -t q lines
+od -z
+od -A q lines
+od -N 5 lines
+od -j 5 -N 5 -c lines
+od -w8 -c lines
+od nofile
+od -c < empty
+od -An -c < empty
+od -c lines words
+od -t xC nonl
+od -t x8 lines
+od -t o1 -t x1 -t c nonl
+od -c nofile nonl
+od -t d8 bin
+od -t c -w4 nonl
+
+# grep
+grep e lines
+grep -v e lines
+grep -c e lines
+grep -n t lines
+grep -i APPLE mixed
+grep -x two lines
+grep -w bar words
+grep -w ba words
+grep -o 'o.' words
+grep -l e lines words nums
+grep -L e lines words nums
+grep -h o lines words
+grep -H o lines
+grep -c o lines words
+grep e lines words
+grep -q e lines
+grep -q zzz lines
+grep zzz lines
+grep e nofile
+grep e nofile lines
+grep e nofile lines 2>&1
+grep -s e nofile lines
+grep -q e nofile lines
+grep e dir
+grep -e one -e two lines
+grep -E 'one|two' lines
+grep 'one\|two' lines
+grep -F 'a.b' <<< 'a.b axb'
+grep -F 'x.y' <<< 'xzy'
+grep '^t' lines
+grep 'e$' lines
+grep '[[:digit:]]' nums
+grep '[^0-9]' nums
+grep -E '^[0-9]+$' nums
+grep '^[0-9]\{2\}$' nums
+grep -E '^[0-9]{2}$' nums
+grep -E 'e{2}' lines
+grep 'e\{2\}' lines
+grep '\(e\).*\1' lines
+grep -E '(e).*\1' lines
+grep 'tw\?o' lines
+grep -E 'tw?o' lines
+grep -E 'f(ou|iv)r?' lines
+grep '\<t' lines
+grep 'e\>' lines
+grep '\bt' words
+grep '\w\+d' words
+grep '' empty
+grep -c '' nonl
+grep a bin
+grep -c a bin
+grep -o 'o\|e' words
+grep '[' lines
+grep '[a' lines
+grep '\(' lines
+grep -E '(' lines
+grep -E ')' lines
+grep 'a\{1' lines
+grep -E 'a{1' lines
+grep -E '*e' lines
+grep '*e' lines
+grep '\1' lines
+grep 'a\' lines
+grep '[b-a]' lines
+grep -E 'a{2,1}' lines
+grep '[[:foo:]]' lines
+grep '[:alpha:]' lines
+grep
+grep -z
+grep -m 2 e lines
+grep -n -o e lines
+grep -v '' lines
+grep -f nofile lines
+grep -e '' lines
+grep -ic 'apple' mixed
+grep 'x\{99999\}' lines
+grep -E 'a|' words
+grep '[]a]' <<< ']'
+grep '[^]a]' <<< ']b'
+grep 'a.c' <<< $'abc\na\tc\nac'
+grep -E 'a+b?c*' <<< $'xab\nxc'
+grep -x -e one -e 'tw.' lines
+grep -w -o 'b[a-z]*' words
+grep -c -v e lines words
+grep -E '(o|e)\1' lines
+grep -n '' nonl
+grep -E 'x*' nonl
+grep -i 'ä' <<< 'ä'
+grep -E 'a{,2}b' <<< aaab
+grep 'a\{,2\}b' <<< aaab
+grep '\.' nums
+grep -F -x -e two -e six lines
+grep -o '' lines
+grep -E '^$' blanks | wc -l
+grep -L zz dir lines
+
+# sed
+sed 's/e/E/' lines
+sed 's/e/E/g' lines
+sed 's/e/E/2' lines
+sed 's/e/E/2g' lines
+sed -n 's/e/E/p' lines
+sed -n '3p' lines
+sed -n '3,5p' lines
+sed -n '$p' lines
+sed -n '/^t/p' lines
+sed -n '/two/,/five/p' lines
+sed -n '2,/e/p' lines
+sed -n '0,/e/p' lines
+sed -n '1,/e/p' lines
+sed -n '1~3p' lines
+sed -n '2,+2p' lines
+sed -n '5,2p' lines
+sed -n '/four/,3p' lines
+sed '3q' lines
+sed -n '3q' lines
+sed '2d' lines
+sed '/e/d' lines
+sed '2,$d' lines
+sed '$!d' lines
+sed = lines
+sed -n '$=' lines
+sed 'y/abc/xyz/' mixed
+sed 's/\(o\)\(n\)/\2\1/' lines
+sed 's/[aeiou]/<&>/g' lines
+sed 's/o/\n/' lines
+sed 's|/|:|g' <<< '/a/b/c'
+sed 's/a\/b/X/' <<< 'a/b'
+sed 's,a\,b,X,' <<< 'a,b'
+sed -e 's/one/1/' -e 's/two/2/' lines
+sed 's/one/1/;s/two/2/' lines
+sed -n '/one/{p;p}' lines
+sed '2!d' lines
+sed -n '2{p;q}' lines
+sed '1i head' lines
+sed '1a after' lines
+sed '2c changed' lines
+sed '2,4c changed' lines
+sed '2,4!c changed' lines
+sed '$a end' nonl
+sed '1i\  indented' nonl
+sed p nonl
+sed -n p nonl
+sed '' nonl lines
+sed 's/x*/-/g' <<< 'abc'
+sed 's/b*/X/g' <<< 'abc'
+sed 's/\(a\|ab\)\(c\|bcd\)/[\1][\2]/' <<< 'abcd'
+sed -E 's/(a|ab)(c|bcd)/[\1][\2]/' <<< 'abcd'
+sed -E 's/(x+)(y*)/<\2\1>/g' <<< 'xxyy xy x'
+sed 's/./\U&/' lines
+sed 's/\w\+/\u&/g' words
+sed -E 's/(.)(.*)/\U\1\E\2!/' lines
+sed 's/.*/\L&/' mixed
+sed 'N;s/\n/ /' lines
+sed '$!N;s/\n/ /' lines
+sed -n 'h;n;G;p' lines
+sed ':a;N;$!ba;s/\n/,/g' lines
+sed 's/e/E/;t;s/o/O/' lines
+sed 's/e/E/;T;s/o/O/' lines
+sed -n '/e/{s/e/E/2;t done;p;d;:done;s/$/ (two)/p}' lines
+sed 'N;P;D' lines
+sed '$!N;$!D' lines
+sed -n 'x;$p' lines
+sed '1!G;h;$!d' lines
+sed 'k' lines
+sed 's/x/y' lines
+sed 's/x/y/z' lines
+sed p nofile
+sed p nofile lines
+sed -e p -e 'p;s/a' lines
+sed 'y/abc/de/' lines
+sed '/x' lines
+sed '3,' lines
+sed '{p' lines
+sed 'p}' lines
+sed 's/\(x/y/' lines
+sed 'q 5' lines
+sed q5 lines
+sed '2Q' lines
+sed -n
+sed
+sed 'a' lines
+sed 's/a/b/gg' lines
+sed 's/a/\1/' lines
+sed 'pq' lines
+sed 1 lines
+sed 'b nolabel' lines
+sed -n '/[0-9]/p' nums
+sed -E 's/[0-9]+/N/g' nums
+sed 's/^/> /' nonl
+sed -i 's/one/ONE/' lines; cat lines
+sed -i -e '1d' lines words; head -n 2 lines words
+sed -i 's/x/y/' nofile
+sed -i p dir
+sed -s -n '$p' lines words
+sed -n '$p' lines words
+sed -n '/e/=' lines
+sed 's/e/&&/3' lines
+sed y/ab/ba/ <<< abba
+sed 'y/a\nb/xyz/' <<< 'anb'
+sed 'y/a\/b/x+y/' <<< 'a/b'
+sed '2q' nofile lines
+sed -n 'P' lines
+sed 'D' lines
+sed '1~2d' lines
+sed '0~4d' lines
+sed -n '/ONE/Ip' lines
+sed 's/ONE/1/I' lines
+sed -f nofile lines
+sed -n '2{n;p}' lines
+sed '$!n;s/^/>/' lines
+sed -n '/two/,+1p' lines
+sed 's/[[:upper:]]/(&)/g' mixed
+sed -E 's/a|b/X/g' mixed
+sed 's/a\|b/X/g' mixed
+sed 's/\./,/' nums
+sed 's/[/]/X/' <<< 'a/b'
+sed -n 's/\(.\)\(.\)/\2\1/gp' <<< abcde
+sed 's/^\(.*\)$/[\1]/' lines
+sed 'G' nonl
+sed '=' nonl
+sed '$d' nonl
+sed -n '1!p' nonl
+sed 's/n/N/2' nonl
+sed '#n' lines
+sed '/^$/d' blanks
+sed '/^$/,/^$/d' blanks
+sed -n '/b/,/b/p' blanks
+sed 's/a/b/ ; s/b/c/ ' dup
+sed 'z;s/^/x/' dup
+sed -n -e '2{' -e p -e '}' lines
+
+# expr
+expr 1 + 2
+expr 7 - 10
+expr 6 '*' 7
+expr 7 / 2
+expr -7 / 2
+expr 7 % 3
+expr -7 % 3
+expr 1 / 0
+expr 1 % 0
+expr 1 + a
+expr a = a
+expr a '<' b
+expr 10 '<' 9
+expr 10 '<' 9a
+expr 2 '>=' 2
+expr 1 '!=' 1
+expr 2 '>' 10
+expr 2 '<=' 1
+expr b '==' b
+expr '' '|' 0
+expr 0 '&' 1
+expr 3 '|' 4
+expr '' '|' ''
+expr 3 '&' 4
+expr 0 '|' x
+expr length abcd
+expr index abcdef dc
+expr index abc z
+expr substr abcdef 2 3
+expr substr abcdef 0 3
+expr substr abcdef 5 99
+expr substr abcdef 2 x
+expr match abcd 'a.c'
+expr abc : 'a\(b\)'
+expr abc : 'x\(b\)'
+expr abc : 'ab'
+expr abc : '.*'
+expr abc : 'x'
+expr abc : 'b'
+expr aaa : 'a*'
+expr abc : '\(a\)\(b\)'
+expr '(' 1 + 2 ')' '*' 3
+expr 1 + 2 '*' 3
+expr 10 - 2 - 3
+expr 100 / 10 / 2
+expr
+expr 1 +
+expr '(' 1
+expr 1 2
+expr -1 + 2
+expr +5 + 1
+expr -- 3
+expr -- -- 3
+expr 0
+expr ''
+expr 00
+expr -0
+expr a
+expr 1 + '('
+expr '(' ')'
+expr 5 + 3 ')'
+expr + match
+expr + +
+expr length
+expr abc : '\('
+expr 08 + 1
+expr ' 1' + 1
+expr 2 = 2.0
+expr X : x
+expr match
+expr index abc
+expr substr abc 1
+expr 3 + ''
+expr length + length
+expr '(' length ')'
+expr 1 '|' 0 '&' 0
+expr 1 = 1 = 1
+expr -9 '<' -10
+expr a '<' B
+
+# env
+env | cat
+env -i
+env -i A=1 B=2
+env A=1 printenv A
+env -u HOME printenv HOME
+env -u HOME env | cat
+env -u
+env -u a=b true
+env nosuchprog
+env ./dir
+env ./ro
+env -z
+env - A=1
+env -i PATH=/opt/fakes/bin seq 2
+env -C dir cat a
+env -C nodir cat a
+env -C dir
+env FOO=bar env | cat
+env HOME=/x printenv HOME
+env --foo
+env printenv SHLVL
+env -i A=1 PATH=/opt/fakes/bin env A=2 env
+env PATH=/nonexist cat lines
+env A=1 B= printenv B
+env /usr/local/bin/zecho via path
+printenv SHLVL
+printenv SHLVL; printenv SHLVL
+printenv SHLVL && printenv SHLVL
+X=1 printenv X
+X=1 Y=2 env | cat
+
+# sleep
+sleep 0
+sleep 0.0 0s 0m 0h 0d .0
+sleep
+sleep x
+sleep 1 x
+sleep 1.2.3
+sleep -1
+
+# date
+date -d @1700000000
+date -u -d @0
+date -d @0 '+%a %A %b %B %c %C %d %D %e %F %g %G %h %H %I %j %k %l %m %M %n %N %p %P %r %R %s %S %t %T %u %U %V %w %W %x %X %y %Y %z %Z %%'
+date -d @1700000000 '+%-d %_d %05d %-m %_H %^a %#b %:z %::z %q %10Y %-j %Ez %O'
+date -d @1700000000.123456789 +%s.%N
+date -d @-1 +%F_%T
+date -d @951782400 '+%j %U %V %W %G %g'
+date -d @1609459200 '+%G-W%V-%u %U %W'
+date -d @1704067200 '+%G-W%V-%u'
+date -d @1735603200 '+%G-W%V-%u'
+date -d @1230681600 '+%G-W%V-%u %a'
+date -d xyz
+date -z
+date -d @0 +%Y extra
+date -d @abc
+date -d @0 +
+date -d @0 '+%#Z %#p %^B %10A|%-10A|%_5d|%010s'
+date -d @0 nope
+date -d @86399 '+%I %l %p %k'
+date -d @43200 '+%I %l %p %P'
+date -d '  @5  ' +%s
+date -d @1700000000 -u +%c
+
+# cp, mv, ln
+cp lines copy; cat copy
+cp lines dir; ls dir
+cp lines words dir; ls dir
+cp lines words nodir
+cp lines words csv
+cp
+cp lines
+cp nofile x
+cp dir x
+cp -r dir d2; ls -a d2 d2/sub
+cp -r dir emptydir; ls emptydir emptydir/dir
+cp lines nodir/x
+cp lines lines
+cp lnk lines
+cp ro rocopy; ls -l rocopy | cut -c1-10
+cp lines ro
+cp -f lines ro; cat ro
+cp -p ro p2; ls -l p2 | cut -c1-10
+touch -d @1000000000 lines; cp -p lines p3; ls -l p3
+touch -d @1000000000 lines; cp -a lines p4; ls -l p4
+cp -r dirlnk d3; ls -l d3 | sed 's/.* d3/d3/'
+cp dirlnk d4
+cp -r dir dir/sub
+cp lines dir/a; cat dir/a
+cp dir/a dir/b emptydir; ls emptydir
+cp -r dir lines
+cp lnk lnkcopy; ls -l lnkcopy | cut -c1-10
+cp -z a b
+mv lines moved; ls
+mv lines dir; ls dir
+mv lines words dir; ls . dir
+mv nofile x
+mv
+mv lines
+mv lines nodir/x
+mv lines words nodir
+mv lines lines
+mv lnk lines
+mv dir emptydir; ls emptydir
+mv emptydir lines
+mv lines dir/a; cat dir/a
+mv dir dir/sub
+mv dir/a emptydir; ls dir emptydir
+mv lnk lnk2; cat lnk2
+mv lines emptydir/; ls emptydir
+mv -z a b
+ln lines hard; cat hard; ls
+ln -s lines soft; cat soft
+ln -s nowhere s2; ls -l s2 | sed 's/.* s2/s2/'
+ln lines words
+ln lines nodir/x
+ln -s lines nodir/x
+ln dir e
+ln lines dir; ls dir
+ln lines dir; ln lines dir
+ln -s lines words lnk
+ln
+ln lines
+ln -s dir/a; ls -l a | sed 's/.* a/a/'
+ln -sf lines words; cat words
+ln -f lines words; cat words
+ln nofile h
+ln -s nofile h2; ls -l h2 | sed 's/.* h2/h2/'
+ln -sf words dir; ls dir
+ln -s lines nums csv dir; ls dir
+ln -sn emptydir dirlnk
+ln -z a b
+
+# tee
+tee out1 < lines; cat out1
+cat lines | tee -a l2 l3 > /dev/null; cat l2 l3
+tee nodir/x < lines
+tee -z
+tee out < /dev/null; wc -c out
+tee -a nonl < lines; cat nonl
+tee ro < words
+tee < words
+tee - < nonl
+
+# mktemp
+mktemp | wc -c
+mktemp -d | wc -c
+mktemp fooXXX | wc -c; ls | wc -l
+mktemp foo
+mktemp fooXX
+mktemp -z
+mktemp -d nodir/fooXXXXXX
+mktemp nodir/fooXXXXXX
+mktemp -u XXXX | wc -c; ls | wc -l
+mktemp -p dir XXXX | cut -c1-4; ls dir | wc -l
+mktemp -t XXXX | cut -c1-5
+mktemp -t a/XXXX
+mktemp a b
+mktemp -q foo
+mktemp -d dXXXX > /dev/null; ls -l | grep -c 'drwx------'
+mktemp tXXXXX > /dev/null; ls -l | grep -c '^-rw------- '
+mktemp -p /tmp | cut -c1-9
+mktemp -p nodir
+
+# mkfifo
+mkfifo ff ff
+mkfifo nodir/ff
+mkfifo -m 600 ff; ls -l ff | cut -c1-10
+mkfifo
+mkfifo -m xyz ff
+mkfifo lines
+
+# cmp
+cmp lines lines
+cmp lines words
+cmp -s lines words
+cmp lines nofile
+cmp nofile lines
+cmp nonl nonl
+cmp empty lines
+cmp lines empty
+cmp lines - <<< 'one'
+cmp - lines <<< 'one'
+cmp nonl - <<< 'no newline'
+cmp
+cmp a b c
+cmp -z
+cmp dup dup
+cmp dir lines
+cmp lines lnk
+cmp dup mixed
+cmp nums lines
+
+# diff
+diff lines lines
+diff lines words
+diff dup mixed
+diff nonl words
+diff nonl - <<< 'no newline'
+diff empty lines
+diff lines empty
+diff nofile lines
+diff lines
+diff a b c
+diff -q lines words
+diff -s lines lines
+diff bin nonl
+sed 3d lines | diff lines -
+sed 's/two/2/' lines | diff lines -
+sed '3a extra' lines | diff lines -
+sed -e 2d -e '5a x' -e 's/nine/9/' lines | diff lines -
+sed -e 1d -e '$a x' lines | diff lines -
+sed -n '2,3p' lines | diff - lines
+diff -z
+diff dup dup
+diff lines lnk
+sort dup | diff dup -
+diff nonl nonl
+diff - lines < nonl
+
+# basename, dirname
+basename /a/b/
+basename a.c .c
+basename /
+basename //
+basename a b c
+basename
+basename -a /x/y z/w
+basename -s .c a.c b.c
+basename .c .c
+basename a.c c
+basename '' ''
+basename -z
+dirname a
+dirname /a/b/
+dirname /
+dirname //a
+dirname a/ b/c
+dirname
+dirname a//b//
+dirname ''
+dirname /a
+
+# seq
+seq 3
+seq 2 4
+seq 5 -2 1
+seq -w 8 10
+seq -s, 3
+seq -s '' 3
+seq 1.5 3
+seq 0.1 0.25 1
+seq -w 1 3 10
+seq -1 1
+seq a
+seq 1 0
+seq 1 0 3
+seq
+seq 1 2 3 4
+seq -w -1 1
+seq 10 -3 1
+seq -s ': ' 2 4
+seq 0
+seq 1.0 3
+seq -w 0.5 1.5
+seq -z
+
+# uname, id, whoami, pwd
+uname
+uname -s -m -n
+uname -o
+uname -smo
+uname -z
+uname x
+id
+id -u
+id -g
+id -un
+id -gn
+id -G
+id -Gn
+id -n
+id -z
+id root
+id -u root
+id -gn root
+id nosuch
+id -ug
+id -r
+id a b
+whoami
+whoami x
+/opt/fakes/bin/pwd
+/opt/fakes/bin/pwd -P
+/opt/fakes/bin/pwd -z
+/opt/fakes/bin/pwd x
+
+# pipelines and redirections
+cat lines | grep e | sort | uniq -c | sort -rn | head -n 3
+seq 10 | tail -n 3 | tr '\n' ' '
+cat words | tr -s ' \t' '\n\n' | sort -u
+grep -c e lines > out; cat out
+cat lines >> words; tail -n 2 words
+cat nofile 2> err; cat err
+cat nofile 2>> err; cat nofile 2>> err; wc -l err
+ls nofile lines 2>&1 | cat
+seq 3 >&2
+sort < nums | uniq | wc -l
+grep zzz lines || /opt/fakes/bin/echo none
+grep e lines > /dev/null && /opt/fakes/bin/echo some
+
+# Hardening round: edge cases, malformed input, UTF-8, hostile options.
+# Each was also checked against the image's real coreutils.
+
+# helpers
+recho $'\x80\xff\xa0' $'\n' ' '
+recho -n -e --
+zecho -n a
+printenv ''
+printenv A=B
+printenv -0
+xcase -u nonl
+xcase -l bin | od -c
+xcase -u empty
+
+# echo
+/opt/fakes/bin/echo -e '\0101\01011'
+/opt/fakes/bin/echo -e '\x4g\x41\x414'
+/opt/fakes/bin/echo -e 'a\' b
+/opt/fakes/bin/echo -e '\c' x
+/opt/fakes/bin/echo -e '\08\09' | od -c
+/opt/fakes/bin/echo -e 'é'
+/opt/fakes/bin/echo -e
+/opt/fakes/bin/echo -
+/opt/fakes/bin/echo -n -e 'a\nb'
+/opt/fakes/bin/echo -En 'a\n'
+/opt/fakes/bin/echo -e -n -E 'q\n'
+/opt/fakes/bin/echo -ee 'a\tb'
+/opt/fakes/bin/echo -e '\0400' | od -b
+
+# cat
+cat -n nonl lines
+cat -b blanks words
+cat -A nonl
+cat -s nonl blanks
+cat -sb blanks
+cat -et bin
+cat -u lines
+cat -n empty nonl
+cat -v $'\xff\xfe'
+cat dir lines
+cat -- -n
+cat -nA tabs
+cat -E blanks nonl
+
+# wc
+wc -l -c lines
+wc -c -l lines
+wc - < lines
+cat lines | wc -l
+wc -w bin
+wc -L words
+wc -L tabs
+wc -lwc nonl empty
+wc -m words
+wc < empty
+cat rep | wc -c
+wc -l lines lines lines
+
+# head/tail
+head -n -2 lines
+head -n -20 lines
+head -c -3 words
+head -5 lines words
+head -q -n 1 lines words
+head -v -n 1 lines
+head -n 99999999999999999999 lines
+head -c 0 lines
+head -n1 - < words
+head -3c lines
+tail -n +0 lines
+tail +11 lines
+tail -c 4 lines
+tail -c +40 lines
+tail -1 nonl
+tail empty
+tail -n -2 lines
+tail -n 2 lines words
+tail -n +20 lines
+tail -n 1 blanks
+tail -q -n1 lines words
+tail -2 - < words
+
+# sort
+sort -rn nums
+sort -r dup
+sort nonl
+sort -t : -k3,3r csv
+sort -c nums
+sort -k 0 keys
+sort -k 1.0 keys
+sort -t ab keys
+sort -n -r -u nums
+sort -b words
+sort -o out lines; cat out
+sort -z bin | od -c
+sort -k2.2,2.2 keys
+sort -nk2 -k1,1r keys
+sort -t '' keys
+
+# uniq
+uniq -ci mixed
+uniq -D dup
+uniq -f x dup
+
+# cut
+cut -c 3- lines
+cut -c -2 lines
+cut -c 2-1 lines
+cut -f 0 csv
+cut -d: -f 0 csv
+cut -d '' -f 1 csv
+cut -d ab -f 1 csv
+cut -d: -s -f2 csv
+cut csv
+cut -f1 -c1 csv
+cut -d: -f 1,1,2 csv
+cut -d: -f 3,1 csv
+cut -c 1-3,2-5 lines
+cut -d: -f2 nonl
+cut -c 99999999999999999999 lines
+cut -b 1-2 lines
+cut -c 1- empty
+cut -d: -f 2- csv
+cut -d: -f -2 csv
+cut -c 3,1 words
+cut -f 2 tabs
+cut -f 1- tabs
+cut -c 1-2-3 lines
+cut -c , lines
+cut -c 1, lines
+cut -n -c 1 lines
+cut -d: -f 1 -z csv | od -c
+cut -c 2 nofile lines
+
+# tr
+tr a-z A-Z < words
+tr -d '[:digit:]' < csv
+tr -c a-z '\n' < words
+tr -cs a-z '\n' < words
+tr a-c x < lines
+tr -t abc x < lines
+tr '[a*3]' xyz < lines
+tr abc '[x*]' < lines
+tr abcdef '[x*2]yz' < lines
+tr z-a x < lines
+tr '\' x < lines
+tr -d < lines
+tr a < lines
+tr -d a b < lines
+tr '[=e=]' X < lines
+tr '\101\102' xy < mixed
+tr '\777' x < lines
+tr '[:alpha:]' < lines
+tr a-z '[:upper:]' < lines
+tr '[:upper:]' a < mixed
+tr '[:foo:]' x < lines
+tr -s '[:space:]' < words
+tr -ds e ' ' < words
+tr -d '\000' < bin | od -c
+tr 'a-' xy < csv
+tr -- '-a' xy < csv
+tr '\\' x <<< 'a\b'
+tr 'a\-z' 'xyz' <<< 'a-z'
+tr '[:digit:]' '[x*]' < csv
+tr '[:digit:][:alpha:]' x < csv
+tr -c '[:alnum:]' '_' < csv
+tr '\t\n' '#%' < tabs
+tr '[a-c]' x < lines
+tr -s 'a-z' < rep
+tr 'a-ce-g' 'A-CE-G' <<< abcdefgh
+tr -d 'a-' < csv
+tr '' x < lines
+tr x '' < lines
+tr -s '' < lines
+tr '[' x <<< 'a[b'
+tr '[x' y <<< 'a[xb'
+tr 'a]' xy <<< 'a]b'
+tr '[:a' xyz <<< 'a[:b'
+
+# od
+od -An -tx1 empty
+od empty
+od -A d lines
+od -A x -t x2 lines
+od -t o1 nonl
+od -t c nonl
+od -w4 -c nonl
+od -v rep
+od rep
+od -j 2 -N 3 -c lines
+od -t x4 lines
+od -t u2 nonl
+od -t o2 nonl
+od -An -c words
+od -t x1z nonl
+od -A n -t c -w8 bin
+od -t q bin
+od -A q bin
+od -j 100 lines
+od -N 0 lines
+od -t x1 -t c nonl
+od -c - < nonl
+od -s nonl
+od -i nonl
+od -l lines
+od -o nonl
+od -t d8 lines
+od -t u4 lines
+od -t f4 lines
+od -w3 -tx2 nonl
+od -w0 nonl
+od -j 5 nonl lines
+od -t x1 -A o -j 3 -N 9 lines
+
+# grep
+grep -c x empty
+grep -n '^$' blanks
+grep -e a -e b dup
+grep -E 'a|' dup
+grep 'e\|o' lines
+grep '\(e\)\1' lines
+grep -E '(e)\1' lines
+grep '*a' csv
+grep -E '*a' csv
+grep -E 'e{,1}n' lines
+grep 'e\{1,0\}' lines
+grep -E 'e**' lines
+grep -E 'e+?' lines
+grep -E '(a*)*b' rep
+grep -E '(a|aa)*b' rep
+grep -E '^(a+)+$' rep
+grep -cE '^(a|a)*c' rep
+grep -E '(a*)*$' rep
+grep -E 'a{32768}' rep
+grep -E 'a{2,1}' rep
+grep -E 'a{1' rep
+grep 'a\{1' rep
+grep -o 'a\{7\}' rep
+grep -c '\(a*\)*\1b' rep
+grep -E '(a*)+\1c' rep
+grep -w the words
+grep -x 'two' lines
+grep -o 'e.' lines
+grep -l e lines words
+grep -L e lines words
+grep -h e lines words
+grep -H e lines
+grep -s e nofile
+grep -c . bin
+grep -a a bin | od -c
+grep '[[:alpha:]]' csv
+grep '[a-]' csv
+grep '[]a]' csv
+grep '[^]a]' csv
+grep '[[.a.]]' csv
+grep '[[=a=]]' csv
+grep '[[:foo:]]' csv
+grep '[:alpha:]' csv
+grep '\w' csv
+grep '\bfo' words
+grep '\<the\>' words
+grep 'th\?e' words
+grep 'o\+' words
+grep -F 'a.' csv
+grep -F -x 'a:b:c' csv
+grep -e '' -c lines
+grep -E '()' -c lines
+grep -E 'a||b' csv
+grep -E '^*' -c csv
+grep -E '[[:digit:]]+' csv
+grep -E 'x\' lines
+grep 'x\' lines
+grep '\x' lines
+grep -E '\d' csv
+grep -vi apple mixed
+grep -ic banana mixed
+grep -n -v e lines
+grep -m 0 e lines
+grep -q e lines nofile
+grep -q z lines nofile
+grep -nH . nonl
+grep -o 'x*' lines
+grep -ow 'a' csv
+grep -x '' blanks
+grep -c -x '' blanks
+grep '^\(.*\)\1$' lines
+grep -E '^(.+)\1$' <<< $'abab\nabc\naa'
+grep -E 'a{0}b' csv
+grep -E 'a{0,0}' -c csv
+grep -E '(^|:)d' csv
+grep -E 'f($|:)' csv
+grep 'a^b' <<< 'a^b'
+grep 'a$b' <<< 'a$b'
+grep -E 'a^b' <<< 'a^b'
+grep '\(^a\)' csv
+grep 'x\(*a\)' <<< 'x*a'
+grep '\{1\}' <<< '{1}'
+grep -E '{1}' <<< '{1}'
+grep -E 'a{1}{2}' <<< aa
+grep -E 'a+*' <<< aaa
+grep -F -e a -e x csv
+grep -F '' -c csv
+grep -f nofile csv
+grep -E '[a' csv
+grep '[[:alpha:]' csv
+grep -E '[z-a]' csv
+grep -i '[A-C]' csv
+grep -E '.{3}:' csv
+grep -e
+grep -y A mixed
+grep -z a dup | od -c
+grep -E 'a|b|c|d|e|f' -c csv
+grep -c '.*.*.*.*.*.*.*.*.*.*.*.*.*.*.*.*.*.*.*.*x' rep
+grep -E -c '(.*)*(.*)*(.*)*(.*)*x' rep
+grep -E -c '(a?){30}a{30}' rep
+grep -c '\(a*\)*\(a*\)*\(a*\)*\1\2\3x' rep
+grep -E '\(' <<< 'a(b'
+grep '\.' csv
+grep -w '' blanks
+grep -c -w 'o' words
+grep -o -i 'E' lines
+grep -n -o 'e' lines
+grep -b e lines
+grep -ob e lines
+grep -A1 two lines
+grep -C1 two lines
+grep -lc e lines
+grep -E 'a{,}' <<< 'a{,}'
+grep -E 'a{x' <<< 'a{x'
+grep -E 'a{1,2,3}' <<< 'a{1,2,3}'
+LANG=C.UTF-8 grep -o . <<< $'\xc3\xa9x'
+LANG=C.UTF-8 grep -c '^.$' <<< $'\xc3\xa9'
+LANG=C.UTF-8 grep -i $'\xc3\x89' <<< $'\xc3\xa9'
+grep -c '^..$' <<< $'\xc3\xa9'
+
+# sed
+sed 2q lines
+sed -n '/two/,/four/p' lines
+sed '0,/one/d' lines
+sed '1,/one/d' lines
+sed -n '2,1p' lines
+sed '1~3d' lines
+sed -n '0~4p' lines
+sed 's/x*/-/g' <<< abc
+sed 's/b*/X/2' <<< abc
+sed 's/\(.\)\(.\)/\2\1/' lines
+sed 's/o/\n/' words
+sed 's/./&&/g' <<< abc
+sed 's/./\&/g' <<< abc
+sed 'y/abc/xyz/' csv
+sed 'y/ab/x/' csv
+sed 's/a/b/q' csv
+sed -n 'p;p' nonl
+sed -n '/e/{p;q;}' lines
+sed '{' lines
+sed '}' lines
+sed k lines
+sed 's/a' lines
+sed 's/\(/x/' lines
+sed 'a foo' nonl
+sed 'i\  bar' nonl
+sed '2,4c\X' lines
+sed '2c\' lines
+sed G nonl
+sed -n '$p' nonl
+sed 'n;d' lines
+sed -n '/two/,+2p' lines
+sed -n '/two/,~4p' lines
+sed 's/x/y/;ta;s/$/!/;:a' <<< $'x\nz'
+sed 'b end' lines
+sed 'bx;:x' -n lines
+sed 's/[/]/x/' <<< 'a/b'
+sed 's|/|x|g' <<< 'a/b/c'
+sed 's/a/\//' csv
+sed -E 's/(a|b)+/X/' csv
+sed -r 's/(.)(.)/\2\1/g' csv
+sed 's/A/x/I' mixed
+sed '/apple/Id' mixed
+sed = nonl
+sed -z 's/\n/,/g' lines
+sed 's/\t/T/g' tabs
+sed 's/a/\x41/' csv
+sed 's/.*/\U&/' words
+sed 's/\(.\)\(.*\)/\u\1\U\2\E!/' words
+sed -e 'a\' -e 'foo' nonl
+sed -n -e '#n' -e p nonl
+sed $'#n\np' nonl
+sed 'N' nonl
+sed '$!N;P;D' lines
+sed 'N;N;s/\n/+/g' lines
+sed 'x;$!d' lines
+sed -n 'H;${x;s/\n/,/g;p;}' lines
+sed '3,$d' lines
+sed '2,4!d' lines
+sed -n '/t/!p' lines
+sed '1d;1d' lines
+sed q empty
+sed '' empty
+sed 's/e/E/w out' lines
+sed 's/e/E/gp' -n lines
+sed 's/e//3' lines
+sed 's/[aeiou]//g' lines
+sed 's/$/ </' nonl
+sed '/one/,/one/d' lines
+sed '/one/,3d' lines
+sed '5,/e/d' lines
+sed '2,/x/d' lines
+sed -n '/^t/,/^t/p' lines
+sed -n '12,$p' lines
+sed '0d' lines
+sed '0,5d' lines
+sed 's/x/y/0' lines
+sed 's/x/y/gg' lines
+sed 's/x/y/pp' lines
+sed 's/x/\3/' lines
+sed -E 's/(x)/\2/' lines
+sed 'y/a\/b/x\ny/' <<< 'a/b'
+sed 'y/a/' lines
+sed 'y/a/b/g' lines
+sed 's/a/b/ ; s/c/d/' csv
+sed -e 's/a/b/' -e '' csv
+sed 2 lines
+sed '2,' lines
+sed ',2d' lines
+sed '\,a,d' csv
+sed 's/\./!/' csv
+sed -n '/\//p' <<< 'a/b'
+sed '=' -n lines
+sed 'a\' lines
+sed 'i\' lines
+sed ':a;N;$!ba;s/\n/ /g' lines
+sed ':a;s/^.\{1,8\}$/ &/;ta' lines
+sed 's/\(a\|b\)*/X/' csv
+sed 's/a*/X/g' rep
+sed -n 'l' tabs
+sed 's/a/b/' -i lines; cat lines
+sed -i.bak 's/a/b/' csv; cat csv csv.bak
+sed -n '1{p' lines
+sed -n '1{p}' lines
+sed '1{;p;}' -n lines
+sed '}'
+sed '' -n lines
+sed --posix p empty
+sed -n 'p' - < nonl
+sed 's/^*/X/' <<< '*a'
+sed -E 's/a{2}/X/' rep
+sed 's/a\{2\}/X/g' rep
+sed 's/a\{2,\}/X/g' rep
+sed 's/\n/X/' lines
+sed 'N;s/^/>/Mg' lines
+sed 'q5' lines
+sed 'Q' lines
+sed '2Q3' lines
+sed 'e' lines
+sed 'F' nonl
+sed 'z;=' nonl
+sed 'v' lines
+sed -n 'L' lines
+sed '1~0p' -n lines
+sed '2~0p' -n lines
+sed 'T;s/^/x/' lines
+sed 's/one/1/;T;s/$/!/' lines
+sed -n '/one/{n;p}' lines
+sed '$!{N};P;D' blanks
+sed 'c\' empty
+sed 'd;s/a/b/' lines
+sed 's/x/y/;q;p' lines
+
+# expr
+expr 9223372036854775807 + 1
+expr -- -1 + 1
+expr 5 / 0
+expr 5 % 0
+expr abc : x
+expr abc : '\(x\)'
+expr 1 '|' 0
+expr 0 '|' ''
+expr '' '&' 1
+expr length abc
+expr substr abc 0 1
+expr substr abc 2 99
+expr substr abc 4 1
+expr index abc cb
+expr index abc x
+expr match abc 'a.'
+expr a + 1
+expr 1 ')'
+expr -5 % 3
+expr 5 % -3
+expr -5 / 3
+expr -9223372036854775808 / -1
+expr -9223372036854775808 % -1
+expr 9223372036854775807 '*' 2
+expr +1 + 1
+expr 01 + 1
+expr 01 = 1
+expr a '!=' b
+expr 2 '>=' 10
+expr 2 '>=' 10a
+expr aaa : 'a\{2\}'
+expr abc : 'a*\{'
+expr abc : '\(.*\)c'
+expr 'a\nb' : '.*'
+expr length a b
+expr substr abc x 1
+expr index
+expr 3 - - 2
+expr - 1
+expr -
+expr '!' = '!'
+expr '(' = '('
+expr 1 + '(' 2
+expr 1 '|' 1 / 0
+expr 0 '&' 1 / 0
+expr 18446744073709551616 + 0
+expr -0 + 0
+expr 00 = 0
+expr 1 = 01.0
+expr 9223372036854775807 + 0
+expr -9223372036854775808 - 1
+expr x : '\(\(\(\(\(\(\(\(\(\(x\)\)\)\)\)\)\)\)\)\)'
+expr ab : '\(a\)\(b\)'
+expr abc : '^a'
+expr '^a' : '^a'
+expr abc : 'a\|x'
+expr abc : 'a\+'
+expr abc : '[[:alpha:]]*'
+expr abc : '['
+expr 5 : 5
+expr 05 : 5
+expr 1 : '\(1*\)*'
+
+# seq
+seq 1 0.5 3
+seq x
+seq 9223372036854775806 9223372036854775807
+seq 1e2 100
+seq -w 1 0.5 2
+seq 1 100000 | tail -1
+seq -s ': ' 2
+seq -- -2 -1
+seq -2
+seq 1.5
+seq 0.1 0.1 0.5
+seq -w 0.5 1
+seq 5 1
+seq 1 -1 1
+seq 3 -1 -1
+seq -w 98 101
+seq -w -10 2 0
+seq 1 1.0 3
+seq 1.00 3
+seq -f '%03g' 3
+seq 1 '' 3
+seq ' 1' 2
+seq 1x
+seq inf 1
+seq nan
+seq 0x10 0x12
+seq 2 1e1
+seq -s '\n' 2
+seq -w 10 -1 8
+seq 1 0.1 1.3
+seq 000 2
+
+# date
+date -d @0
+date -d @-1 +%F
+date -d @1000000000 +%s
+date -d @1234567890 '+%Y-%m-%d %H:%M:%S %j %U %W %V %G %u %w'
+date -d @1234567890 '+%a %A %b %B %e %k %l %p %I %y %C %Z %z'
+date -d @1234567890 '+%n%t%%|%D|%T|%R|%r|%h|%c|%x|%X'
+date -d @1234567890 '+%-d %_m %05Y %^a %#b %-H %_H %03d'
+date -d @1234567890.123456789 +%N
+date -d @1234567890 +%:z%::z
+date -d @1234567890 +%q%P
+date -d @1e3
+date -u -d @86399
+date -d @9999999999
+date -d @-62135596801 +%F
+date -d @253402300800 +%F
+date -d @1234567890 '+%G-%V %g'
+date -d @1293753600 '+%G %V %U %W %j'
+date -d @1234567890 +
+date -d @1234567890 '+%'
+date -d @1234567890 '+%Q'
+date -d @1234567890 '+%E'
+date -d @1234567890 '+%Ey %Od'
+date -d @1234567890 '+%10A|%-10A|%^10b|%#p'
+date -d @1234567890 '+%s %-s %010s'
+date -d @1234567890 '+%F %+4Y %_5d'
+date -d @1234567890 -R
+date -d @1234567890 -I
+date -d @0 x
+date -d @0 +%Y +%m
+date -d @
+date -d @+5 +%s
+date -d '@ 5' +%s
+date -d @1234567890 '+%u %w %a'
+date -d @951782400 '+%F %j %a'
+date -d @4107542400 '+%F %a %V'
+date -d @-2208988800 '+%F %a'
+
+# ls
+ls dir lines
+ls nofile lines
+ls -d dir dirlnk
+ls -l dirlnk | cut -c1-10
+ls -1 emptydir
+ls emptydir lines
+ls -d
+ls -d .
+ls -t lines
+ls -U dir | sort
+ls -f emptydir
+touch -d @1000000000 lines; ls -o lines
+touch -d @1000000000 lines; ls -g lines
+touch -d @1000000000 lines; ls -n lines
+ls 'a b'
+ls lnk dangle
+ls -l dangle | cut -c1-10
+ls -d dir/ dir//
+ls dir/sub/c
+ls -dr lines words
+ls -x
+ls -q lines
+ls -lA emptydir
+
+# mktemp
+mktemp abcX
+mktemp -d foo.XXX | wc -c
+mktemp x/y.XXX
+mktemp -p dir | cut -c1-8
+mktemp -u | wc -c
+mktemp -t a.XXXXXX | wc -c
+mktemp abc
+mktemp XXX/
+mktemp -q x/y.XXX
+mktemp ''
+mktemp -d -p nodir
+
+# cp
+cp lines new; cat new
+cp lnk x; ls -l x | cut -c1
+cp ro x; ls -l x | cut -c1-10
+cp lines dir/
+cp -r emptydir lines
+cp dangle x
+cp -P dangle x; ls -l x | cut -c1
+cp -r dirlnk x; ls x
+cp words dir/a; cat dir/a
+cp -p ro x; ls -l x | cut -c1-10
+cp -r dir/. emptydir; ls -a emptydir
+cp -r . sub
+cp -r .. sub
+
+# mv
+mv lines x; ls
+mv lnk x; cat x
+mv lines words emptydir; ls emptydir
+mv dir/a .; ls
+mv lines dir/sub/
+mv . x
+mv lines emptydir/x/y
+mv lines dangle; ls -l dangle | cut -c1
+mv dirlnk x; ls x
+mv words lines; cat lines
+mv emptydir dir; ls dir
+
+# ln
+ln -s lines l2; ls -l l2 | cut -c1; cat l2
+ln lines h; cat h
+ln -s x lines
+ln -sf words lines; cat lines
+ln dir hd
+ln -s a b c
+ln -s lines dir; ls dir
+ln nofile x
+ln lines lines
+ln -s lines lines
+ln -sf lines lines
+ln -f lines lines
+ln lines dir/; ls dir
+ln -s nowhere x; ls -l x | cut -c1
+ln -s dir dl; ls dl
+ln -sn dir dirlnk; ls dir
+ln -s lines emptydir/; cat emptydir/lines
+ln -sf dir dirlnk; ls dir
+
+# tee
+tee a b < lines; cat a b
+tee -a lines < words; cat lines
+tee dir < nonl
+tee nodir/x < nonl
+tee < nonl
+tee lines lines < nonl; cat lines
+tee -i x < nonl
+tee -x < nonl
+
+# mkfifo
+mkfifo f; ls -l f | cut -c1
+mkfifo -m 600 f; ls -l f | cut -c1-10
+mkfifo nodir/f
+mkfifo -m xyz f
+
+# cmp
+cmp lines nonl
+cmp nonl lines
+cmp - lines < lines
+cmp lines - < words
+cmp lines
+cmp a b c d
+cmp -s nofile lines
+cmp -l nonl words
+cmp -b lines words
+cmp -n 3 lines words
+cmp -i 2 lines words
+cmp csv csv x
+
+# diff
+diff lines nonl
+diff nonl lines
+diff - lines < words
+diff blanks dup
+diff empty nonl
+diff
+diff dir lines
+diff lines dir
+diff dir emptydir
+diff -a bin nonl
+diff keys csv
+
+# basename/dirname
+basename ''
+basename a/b/
+basename a.txt .txt
+basename .txt .txt
+basename -a a/x b/y
+basename a/b.c b.c
+basename /a/b//
+basename -z a | od -c
+basename -- -a
+basename a.c ''
+basename ///a///
+dirname //
+dirname a/
+dirname /a/b//
+dirname a b
+dirname ///
+dirname a//b
+dirname -z a | od -c
+dirname ./a
+dirname ../
+
+# uname/id/whoami/pwd
+uname -sm
+uname -x
+uname -s -s
+uname a
+uname -n -o
+id -g -n
+id -nu root
+id -g root
+id nosuchuser
+id -u -g
+id root oracle
+id -x
+id -ur
+whoami -x
+/opt/fakes/bin/pwd -L
+/opt/fakes/bin/pwd -x
+
+# env
+env -i /opt/fakes/bin/printenv
+env -i A=1 B=2 /opt/fakes/bin/printenv
+env nosuchcmd
+env ./lines
+env -- A=1 /opt/fakes/bin/printenv A
+env -i A=1
+env '=a' printenv
+env A= printenv A
+env -u 'A=B' printenv
+env -0 -i A=1 B=2 | od -c
+env -x
+env -i PATH=/opt/fakes/bin recho a b
+env -i PATH=/nowhere recho a
+env -i PATH= recho a
+env -i PATH=:/opt/fakes/bin recho a
+env -i PATH=/opt/fakes/bin:/usr/local/bin printenv
+env -i /opt/fakes/bin/env A=1 /opt/fakes/bin/env
+
+# touch/chmod
+touch -d @1.5 x; ls -l x
+touch -d '@-1' x; ls -l x
+touch -d @ x
+touch -d @1e3 x
+touch nodir/x
+touch dir/; ls -ld dir | cut -c1
+touch ''
+touch -a lines
+touch -m lines
+touch -c dangle; ls dangle
+touch dangle; cat nowhere
+touch -h lines
+chmod u+s lines; ls -l lines | cut -c1-10
+chmod g+s,o+t dir; ls -ld dir | cut -c1-10
+chmod -R go-rwx dir; ls -l dir | cut -c1-10
+chmod a-r ro; ls -l ro | cut -c1-10
+chmod 999 lines
+chmod +x nofile
+chmod 0 lines; ls -l lines | cut -c1-10
+chmod g=u lines; ls -l lines | cut -c1-10
+chmod o+X dir lines; ls -ld dir lines | cut -c1-10
+chmod 'u=rw,=r' lines; ls -l lines | cut -c1-10
+chmod -- -w lines; ls -l lines | cut -c1-10
+chmod =,u+x lines; ls -l lines | cut -c1-10
+chmod 644
+chmod 7777 lines; ls -l lines | cut -c1-10
+chmod 10000 lines
+chmod a+rwx,g-w,o= lines; ls -l lines | cut -c1-10
+chmod u=g lines; ls -l lines | cut -c1-10
+chmod ugo+ lines; ls -l lines | cut -c1-10
+chmod 755 lnk; ls -l lines | cut -c1-10
+chmod -c 600 lines
+chmod -v 644 lines
+chmod 0755 lines; ls -l lines | cut -c1-10
+chmod 00644 dir; ls -ld dir | cut -c1-10
+chmod u-x,+X dir; ls -ld dir | cut -c1-10
+chmod ,, lines
+chmod +, lines
+
+# rm/mkdir/rmdir edge cases
+rm -r dirlnk; ls dir
+rm -f ''
+rm ''
+rm -r emptydir/
+rm -r dir/./sub; ls dir
+rm -r ./
+mkdir ''
+mkdir -p ''
+mkdir -p a//b/./c; ls a/b
+mkdir -p dir/../q; ls q
+mkdir dir/sub/../../n; ls n
+mkdir -p nonl/x
+mkdir -m 777 m; ls -ld m | cut -c1-10
+mkdir -p -m 700 p/q; ls -ld p p/q | cut -c1-10
+mkdir x/
+mkdir dangle/x
+rmdir dir/sub/
+rmdir -p dir/sub
+rmdir ''
+rmdir .
+rmdir -p emptydir/
+rmdir dir/sub/..
+rmdir -v emptydir
+
+# sleep
+sleep 1s 0.0m
+sleep 0.5x
+
+# pipes and mixtures
+seq 1 20 | grep 1 | wc -l
+seq 10 | sort -rn | head -3
+printenv | sort | head -2
+cat lines | sed -n '3,5p' | tr a-z A-Z | od -c
+seq 1 1000 | sort | tail -2
+seq 1 100000 | wc
+seq 1 50000 | sort -n | tail -1
+seq 1 50000 | sort -rn | head -1
+seq 1 50000 | uniq | wc -l
+seq 1 50000 | grep -c '1.*1.*1'
+seq 1 20000 | sed -n '$p'
+seq 1 20000 | tr 0-9 a-j | tail -1
+seq 1 20000 | cut -c 2- | tail -1
+seq 1 20000 | od | tail -2
+seq 1 3000 | diff - lines | head -5
+
+# UTF-8 locale
+LANG=C.UTF-8 od -c <<< $'\xc3\xa9\xe2\x82\xac'
+LANG=C.UTF-8 od -t a <<< $'\xc3\xa9'
+LANG=C.UTF-8 cat -v <<< $'\xc3\xa9\xe2\x82\xac'
+LANG=C.UTF-8 cat -A <<< $'\xc3\xa9\t'
+LANG=C.UTF-8 wc -m <<< $'\xc3\xa9\xe2\x82\xacx'
+LANG=C.UTF-8 wc <<< $'\xc3\xa9 \xe2\x82\xac'
+LANG=C.UTF-8 wc -L <<< $'\xc3\xa9\xe2\x82\xacx'
+LANG=C.UTF-8 wc -m <<< $'\xff\xc3x'
+LANG=C.UTF-8 wc -w <<< $'a\xc2\xa0b'
+LANG=C.UTF-8 cut -c 1 <<< $'\xc3\xa9x'
+LANG=C.UTF-8 cut -b 1-2 <<< $'\xc3\xa9x'
+LANG=C.UTF-8 tr -d $'\xa9' <<< $'\xc3\xa9x' | od -c
+LANG=C.UTF-8 tr a-z A-Z <<< $'\xc3\xa9x'
+LANG=C.UTF-8 tr '[:lower:]' '[:upper:]' <<< $'\xc3\xa9x'
+LANG=C.UTF-8 sort <<< $'\xc3\xa9\nz\na\nA\n\xe2\x82\xac'
+LANG=C.UTF-8 sort -f <<< $'b\nA\na\nB'
+LANG=C.UTF-8 grep -o '.' <<< $'\xe2\x82\xac'
+LANG=C.UTF-8 grep -c '^.$' <<< $'\xff'
+LANG=C.UTF-8 grep -o '[^a]' <<< $'\xc3\xa9a'
+LANG=C.UTF-8 grep -ic $'\xc3\x89' <<< $'\xc3\xa9'
+LANG=C.UTF-8 grep -c '[[:alpha:]]' <<< $'\xc3\xa9'
+LANG=C.UTF-8 grep -c '\w' <<< $'\xc3\xa9'
+LANG=C.UTF-8 sed 's/./X/' <<< $'\xc3\xa9x'
+LANG=C.UTF-8 sed 's/./X/g' <<< $'\xe2\x82\xac\xc3'
+LANG=C.UTF-8 sed 'y/a/b/' <<< $'\xc3\xa9a'
+LANG=C.UTF-8 sed $'y/\xc3\xa9/e/' <<< $'\xc3\xa9a'
+LANG=C.UTF-8 sed 's/.*/\U&/' <<< $'\xc3\xa9a'
+LANG=C.UTF-8 expr length $'\xc3\xa9x'
+LANG=C.UTF-8 expr substr $'\xc3\xa9xy' 2 1
+LANG=C.UTF-8 expr index $'\xc3\xa9xy' y
+LANG=C.UTF-8 expr $'\xc3\xa9xy' : '..'
+LANG=C.UTF-8 expr $'\xc3\xa9xy' : '\(.\)'
+LANG=C.UTF-8 expr length $'\xff\xfe'
+LANG=C.UTF-8 recho $'\xc3\xa9' $'\xe2\x80\x8b'
+LANG=C.UTF-8 ls
+LANG=C.UTF-8 uniq -i <<< $'\xc3\xa9\n\xc3\x89'
+LANG=C.UTF-8 head -c 1 <<< $'\xc3\xa9'
+LANG=C.UTF-8 xcase -u <<< $'\xc3\xa9a'
+LANG=C.UTF-8 /opt/fakes/bin/echo -e '\xc3\xa9'
+LANG=C.UTF-8 od -An -tx1 <<< $'\xc3\xa9'
+LANG=C.UTF-8 basename $'\xc3\xa9/\xc3\xa9.c' .c
+LANG=C.UTF-8 cat nofile$'\xc3\xa9'
+cat nofile$'\xc3\xa9'
+cat $'a\x01b'
+LANG=C.UTF-8 cat $'a\x01b'
+cat $'a\xffb'
+LANG=C.UTF-8 cat $'a\xffb'
+cat $'a\tb'
+rm $'a\nb'
+ls $'x\ny'
+LANG=C.UTF-8 ls $'\xc3\xa9'
+LANG=C.UTF-8 rm "it's"
+cat 'a b' "c'd" 'e"f' 'g\h' '$x' '!y' 'a*'
+LANG=C.UTF-8 date -d @0 '+%a %b'
+LANG=C.UTF-8 seq 1.5 2.5
+LANG=C.UTF-8 sort -n <<< $'1,5\n1.4\n1.6'
+LANG=C.UTF-8 tr -c 'a' '_' <<< $'\xc3\xa9a'
+
+# all bytes through cat -v and od
+cat -v <<< $'\x01\x02\x03\x04\x05\x06\x07\x08\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f'
+cat -v <<< $'\x80\x81\x82\x8f\x90\x9f\xa0\xa1\xbf\xc0\xdf\xe0\xfe\xff'
+cat -T <<< $'\x80\x09\xff'
+cat -A <<< $'\x0d\x0c'
+od -c <<< $'\x01\x07\x08\x09\x0b\x0c\x0d\x1b\x7f\x80\xff\x5c'
+od -t a <<< $'\x01\x07\x08\x09\x0b\x0c\x0d\x1b\x20\x7f\x80\xff\xa0'
+od -t c -t x1 bin
+od -b -c <<< 'xy'
+od -t x2 <<< 'abc'
+od -t d2 <<< $'\xff\xff\x01\x80'
+od -t d1 -t u1 -t o1 <<< $'\x80\xff'
+od -t x1 -w5 lines
+od -c -w1 nonl
+od -N 3 -j 8 -A x lines
+od -j 3 -c - nonl < lines
+od -t o4 <<< 'abcdefg'
+od -t d4 <<< 'abcdefg'
+od -t u8 <<< 'abcdefg'
+od -t x1 -v rep
+od -t x1 -N 17 rep
+od -c -N 34 rep
+od -c rep -A n
+od -A d -c empty
+od -A x empty
+od -t x1 dup dup
+od -An -w2 -tx1 dup
+od -t x1 -j 0x10 lines
+od -t x1 -j 1k lines
+od -t x1 -N 1x lines
+od -t x1 -j 010 lines
+od -t xz lines
+od -t x3 lines
+od -t d16 lines
+od -t xS lines
+od -t xC lines
+od -t xI nonl
+od -t dL nonl
+od -t oC nonl
+od -tx1 -tc -tu1 -An nonl
+od +1 nonl
+od nonl +1
+od -c nonl +2
+od -c nonl lines +2
+od -x -A n
+
+# sed corners
+sed -E 's/(a|ab)(c|bcd)/[\1,\2]/' <<< abcd
+sed -E 's/(a*)(ab)*b/[\1,\2]/' <<< aabb
+sed -E 's/(a|b)*c/[\1]/' <<< abac
+sed 's/b*/x/g' <<< abc
+sed 's/b*/x/2' <<< abbc
+sed '/two/s//2/' lines
+sed -n '/o/{//p}' lines
+sed 's//x/' lines
+sed 'y/abc/\n\t\\/' <<< abcd | od -c
+sed '2,4!c\X' lines
+sed -n '/two/,/four/{=;p}' lines
+sed 'a\  x' nonl
+sed 'a   x' nonl
+sed 'a\ttab' nonl
+sed 'a te\xt' nonl
+sed 'a\' nonl
+sed 's/a/b/;#comment' csv
+sed 'p # comment' -n nonl
+sed 'y/a/b/;p' -n csv
+sed '$!N;D' lines
+sed n nonl
+sed 'n;n;s/^/X/' lines
+sed '2 , 4 p' -n lines
+sed '2,4 !p' -n lines
+sed '2!!p' -n lines
+sed '2! p' -n lines
+sed '/x/,/y/s//z/' <<< $'axb\nyy'
+sed 's/./X/3' lines
+sed 's/\(a\)\|b/[\1]/g' <<< abab
+sed -E 's/a|$/X/g' <<< bab
+sed 's/^/X/g' blanks
+sed -E 's/()/X/g' <<< ab
+sed 's/[[:space:]]*$//' <<< $'a  \t'
+sed 's/\s/_/g;s/\S/./g' words
+sed 's/\W/_/g' csv
+sed 's/\B/-/g' <<< 'ab cd'
+sed 's/\b/|/g' <<< 'ab cd'
+sed 's/\</</g;s/\>/>/g' <<< 'ab cd'
+sed 's/\`/S/g' <<< 'ab'
+sed "s/\\'/E/g" <<< 'ab'
+sed 's/a\{,2\}/X/' rep
+sed -n '$=' empty
+sed -n '$=' nonl lines
+sed = empty
+sed '1~2!d' lines
+sed '0~3d' lines
+sed '2,~4d' lines
+sed '/three/,~4d' lines
+sed '4,2d' lines
+sed '/four/,2d' lines
+sed '$,/x/d' lines
+sed '/one/,/t/!d' lines
+sed -n '/one/,/o/p' lines
+sed 's/e/\n/2;P;D' lines
+sed 'H;$!d;x' lines
+sed 'G;G' nonl
+sed -n 'x;p' lines
+sed '$x' lines
+sed 's/x/y/;t;s/$/!/' <<< $'x\nz'
+sed ':a;/e$/{N;ba}' lines
+sed -n ':top;p;s/.//;t top' <<< abc
+sed 'b;s/a/b/' csv
+sed ': ;b' <<< x
+sed ':' <<< x
+sed 'b x' <<< x
+sed ':x;:x' <<< x
+sed -e ':a' -e 's/a/b/;ta' rep
+sed 's/a/x/w /dev/stdout' csv
+sed -n 's/a/x/pw /dev/stdout' csv
+sed 'w /dev/stderr' nonl
+sed 's/\(\)/x/' csv
+sed -E 's/(((((((((a)))))))))\9/x/' <<< aa
+sed 's/\(a\)\(b\)\(c\)\(d\)\(e\)\(f\)\(g\)\(h\)\(i\)\(j\)/\10/' <<< abcdefghij
+sed 's/x/\0/' <<< axb
+sed -E 's/x/\0/' <<< axb
+sed 's/x/a\cb/' <<< axb
+sed 's/x/\d065\o101\x41/' <<< axb
+sed 's/\d065/B/' <<< aAb
+sed 's/[\n]/X/' <<< 'a\nb'
+sed 's/[\t]/X/' <<< $'a\tb'
+sed 's/[a\]]/X/g' <<< 'a]\b'
+sed --expression=p -n nonl
+sed -n --quiet p nonl
+sed -e
+sed -i
+sed -i p
+sed -i s/a/b/ nofile
+sed -i s/a/b/ dir
+sed -i -n 1p lines words; cat lines words
+sed -s 1d lines words
+sed -n -s '$=' lines words
+sed '$d' nonl lines
+sed 'N;P;D' nonl
+sed 'q;s/a/b/' empty
+sed '1!G;$p;h;d' lines
+sed 'c\' lines
+sed -E 's/a+?/X/' rep
+sed -E 's/a{2}{3}/X/' rep
+sed 's/a\{2\}\{3\}/X/' rep
+sed 's/*/X/g' <<< 'a*b'
+sed 's/a\*/X/g' <<< 'a*b'
+sed 's/\(*\)/X/g' <<< 'a*b'
+sed 's/^*/X/g' <<< '*b'
+sed -E 's/^*/X/g' <<< '*b'
+sed -E 's/a|*b/X/g' <<< 'a*b'
+sed 's/a\|*b/X/g' <<< 'a*b'
+sed -E 's/(*)/X/g' <<< 'a*b'
+sed -E 's/(+a)/X/g' <<< 'a+b'
+sed 's/\(^a\)/X/' <<< aa
+sed 's/b\(^a\)/X/' <<< 'b^a'
+sed 's/\(a$\)b/X/' <<< 'a$b'
+sed 's/a\{1,\}b/X/' <<< aab
+sed 's/x\{0\}/Y/g' <<< ab
+sed 's/a**/X/' <<< aa
+sed 's/[a-c-e]/X/g' <<< 'b-d'
+sed 's/[--z]/X/g' <<< '-a'
+sed 's/[z-a]/X/' <<< a
+sed 's/[[:alpha:]-z]/X/' <<< a
+sed 's/[[.-.]]/X/' <<< 'a-b'
+sed 's/[[.space.]]/X/' <<< 'a b'
+sed 's/[[=a=]b]/X/g' <<< abc
+sed 's/a\{1,2/X/' <<< a
+sed 's/a\{1,2\}\{/X/' <<< a
+sed 's/a/b/' -- csv
+sed -- 's/a/b/' csv
+sed -n '/a/p;/a/p' csv
+
+# grep corners
+grep -o 'a*' <<< baaab
+grep -oE 'a|ab' <<< abc
+grep -oE '(a|ab)(c|bcd)' <<< abcd
+grep -ow foo <<< 'xfoo foo'
+grep -w foo <<< 'xfoo foox'
+grep -w foo <<< 'foo_ foo'
+grep -xE 'a|ab' <<< ab
+grep -i '[[:upper:]]' mixed
+grep -ic '[A-Z]' mixed
+grep -e -x <<< 'a-xb'
+grep -- -x <<< 'a-xb'
+grep -Fi APPLE mixed
+grep -Fw an mixed
+grep -Fw a <<< 'aa a'
+grep -Fx Apple mixed
+grep -F -e '' -e x csv
+grep -Fc '' empty
+grep -F -o an mixed
+grep -F -o '' mixed
+grep -c -v '' blanks
+grep -Lv e lines words
+grep -lv e lines words
+grep -m1 -c e lines
+grep -m1 -v e lines
+grep -m1 e lines words
+grep -o -v e lines
+grep -hc e lines words
+grep -o a bin
+grep -v a bin
+grep -l a bin
+grep -n a bin
+grep -q a bin
+grep -c x bin
+grep -a -c . bin
+grep -oE '\<' lines
+grep 'a\{0\}' -c csv
+grep '[]-a]' <<< ']^a'
+grep -c '[a-a]' csv
+grep -o '[--/]' <<< 'a-.b/'
+grep -o '[%--]' <<< 'a%+,-b'
+grep -o '[\]' <<< 'a\b'
+grep '[[:alpha:]-z]' csv
+grep -E 'a{1,2}{3}' <<< aaaaaa
+grep -c '\(\)' csv
+grep -oE '(|a)+' <<< aab
+grep -oE '(a|)+b' <<< aab
+grep '\(a\|b\)*\1' <<< abb
+grep -E '(a)|\1' csv
+grep '\1' csv
+grep -E '(a)\2' csv
+grep -e 'a\' csv
+grep -F 'a\' <<< 'a\'
+grep -E 'a{1,2}?' -o <<< aaa
+grep -E 'a{,}' -o <<< aaa
+grep -E '^+' <<< '+a'
+grep -E '^{1}' <<< '{1}'
+grep -E 'a|^b' -c csv
+grep -E '(^a|b$)' <<< $'ab\nba\nb'
+grep '^*' <<< '*x'
+grep -E 'x{0,1}{0,1}' -c csv
+grep 'a\|' -c csv
+grep '\|a' -c csv
+grep '\(\|a\)' -c csv
+grep -E '[[:space:][:digit:]]' csv
+grep -E '[^[:alnum:]]' csv
+grep -c '[[:punct:]]' csv
+grep -c '[[:xdigit:]]' csv
+grep -c '[[:cntrl:]]' bin
+grep -c '[[:print:]]' bin
+grep -c '[[:graph:]]' blanks
+grep -c '[[:blank:]]' words
+grep '[[:ALPHA:]]' csv
+grep '[[:alpha:' csv
+grep '[[:alpha' csv
+grep '[[.' csv
+grep '[[=' csv
+grep '[[=ab=]]' csv
+grep '[[.ab.]]' csv
+grep '[[.NUL.]]' csv
+grep -E 'a{1}{,2}' -o <<< aaa
+grep -E '(a){0}\1' <<< a
+grep '\(a\)\{0\}\1' <<< a
+grep -E '\(a\)' <<< '(a)'
+grep -E '\{' <<< '{'
+grep '\{' <<< '{'
+grep -E 'a\{' <<< 'a{'
+grep 'a\}' <<< 'a}'
+grep -E 'a}' <<< 'a}'
+grep -E ']' <<< ']'
+grep -e a -f empty csv
+grep -f empty csv
+grep -v -f empty csv
+grep -c -f csv csv
+grep -f lines -c words
+grep -w -f lines -c words
+grep -x -f csv -c csv
+grep -E -f nums -c nums
+grep -i -E 'APPLE|banana' -c mixed
+grep -n -H -c e lines
+grep -H -h e lines
+grep -h -H e lines
+grep -l -c e lines
+grep -L -c e lines
+grep -q -c e lines
+grep -s -q e nofile
+grep -c e - lines < words
+grep -r e emptydir
+grep -s e dir
+grep -c e dir lines
+grep -y -c APPLE mixed
+grep -Ec 'a{0,32767}'  csv
+grep -Ec 'a{32767,}'  csv
+grep -E 'a{-1}' csv
+grep -E 'a{1,-1}' csv
+grep -E 'a{99999999999}' csv
+grep 'a\{99999999999\}' csv
+grep -m -1 e lines
+grep -m x e lines
+grep -m 99999999999999999999 -c e lines
+grep -E -w 'a|ab' -o <<< 'ab a'
+grep -o -w 'ab*' <<< 'abb ab a abc'
+grep -x -o 'a*' <<< aaa
+grep -ow '' <<< 'a b'
+grep -v -x -c '' blanks
+grep -c '^' empty
+grep -c '$' nonl
+grep -o '$' nonl
+grep -b -o 'o' words
+grep -nb two lines
+grep -Fx -e two -e three lines
+grep -iF -e TWO -e x lines
+grep -E 'tw(o|elve)' lines
+grep -E '^(o|t|f)' -c lines
+grep -c 'e$' lines
+grep -c 'e\$' lines
+grep -c '\^o' lines
+grep '^\^' <<< '^a'
+grep 'x^' <<< 'x^'
+grep '$x' <<< '$x'
+grep -E '$x' <<< '$x'
+grep -E 'x$y' <<< 'x$y'
+grep -E '(^)' -c csv
+grep -E '($)' -c csv
+grep -E '()+' -c csv
+grep -E '(a*)+' -o <<< aab
+grep -E '(a*)*' -o <<< aab
+grep -oE 'a*?' <<< aab
+grep '\(a*\)\{2\}' -o <<< aab
+grep -E '(a|b|ab)*c' -o <<< ababc
+
+# expr corners
+expr abc : '\(b\)'
+expr length +
+expr + length
+expr index abcabc ''
+expr substr abc -1 2
+expr substr abc 1 -1
+expr substr abc 99999999999999999999 1
+expr substr abc 1 99999999999999999999
+expr 3 '*' -2
+expr -3 / 2
+expr -7 % 2
+expr '' = ''
+expr '' '<' a
+expr 2 '<' 10
+expr 2 '<' 10a
+expr - '<' a
+expr : : :
+expr a : a : a
+expr 1 - 2 - 3
+expr 2 '*' 3 % 4
+expr 0 '|' 0
+expr a '&' 0
+expr 1 '&' a
+expr -1 '|' 2
+expr 00 '|' 1
+expr -0 '|' 1
+expr ' ' '|' 1
+expr 1 : 1 + 1
+expr '(' 1 '|' 0 ')' '&' 3
+expr 5 '>' 4 '>' 0
+expr 1 '=' 1 '=' 1
+expr 9 '<' 10 = 1
+expr abc '>' abd
+expr 10 = 10.0
+expr '\(' : '\\('
+expr ab : 'a\(x\)*b'
+expr ab : 'a\(x*\)b'
+expr abcabc : '\(abc\)\1'
+expr aXbXc : '.*X'
+expr aaa : 'a*' + 1
+expr 1 '+' 1 '+'
+expr '(' 1 '+' ')'
+expr '(' ')' + 1
+expr length length
+expr length '('
+expr substr substr 1 1
+expr index index n
+expr match match ma
+expr quote
+expr + + + 1
+expr 99999999999999999999 '>' 1
+expr 99999999999999999999 = 99999999999999999998
+expr -99999999999999999999 '<' 1
+expr 1 / 1 / 0
+expr 4611686018427387904 '*' 2
+expr 3037000500 '*' 3037000500
+expr -1 '*' -9223372036854775808
+expr 0 - -9223372036854775808
+expr 9223372036854775807 - -1
+expr ab : '\(a\)\(b\)\(c\)*'
+expr ab : 'a\{1\}b'
+expr aab : 'a\{1,\}b'
+expr a : 'a\{1'
+expr a : '*a'
+expr '*a' : '*a'
+expr a : '\(*a\)'
+expr ab : 'a\|b'
+expr ab : 'b\|a'
+expr ab : '\(a\|ab\)'
+expr abc : '.\{2\}'
+
+# sort/uniq/cut/tr corners
+sort -n <<< $' 3\n2\n  1'
+sort -n <<< $'-\n.5\n-.5\n1e3\n+1\n0'
+sort -n <<< $'1 b\n1 a\n01 c'
+sort -ns <<< $'1 b\n1 a\n01 c'
+sort -f <<< $'a\nA\nb\nB'
+sort -fs <<< $'a\nA\nb\nB'
+sort -k1,1 -u keys
+sort -cu dup
+sort -c -u lines
+sort -ru dup
+sort -t: -k2,2 -u csv
+sort -k2b -k1 keys
+sort -k1.3,1.2 keys
+sort -k3,1 keys
+sort -t '\t' tabs
+sort -t $'\t' -k2 tabs
+sort -k1.5 keys
+sort -k2,2 -k1,1r keys
+sort -rk2 keys
+sort -k2,2nr keys
+sort -k2nr,2 keys
+sort -k 2 -k 1 keys
+sort -k2.1n keys
+sort -bk2 <<< $'x  b\ny a\nz  c'
+sort -k2 <<< $'x  b\ny a\nz  c'
+sort -t ' ' -k2 <<< $'x  b\ny a\nz  c'
+sort -k1,1 -k2.2 <<< $'a bc\na ab'
+sort -n -k2 nums
+sort -k0 keys
+sort -k1. keys
+sort -k1.x keys
+sort -k a keys
+sort -k1,1x keys
+sort -k1n,1 -k2 keys
+sort -o nodir/x lines
+sort lines -o lines; cat lines
+sort -m lines words
+sort -u -n <<< $'1\n01\n1.0\n2'
+sort -r -n -s <<< $'1 b\n1 a'
+sort -nr <<< $'-1\n-2\n-0\n0'
+sort -n <<< $'1.10\n1.9\n1.09'
+sort -n <<< $'abc\n-\n'
+sort <<< $'\n\n'
+sort -z <<< $'b\na'
+sort -t: -k1,1 -k2,2n <<< $'a:10\na:9\nb:1'
+sort -s -t: -k1,1 <<< $'a:2\nb:1\na:1'
+uniq -f1 -s1 <<< $'x ab\ny ac\nz bc'
+uniq -c -u dup
+uniq -c -d dup
+uniq -z <<< $'a\na'
+uniq -w0 dup
+uniq -s 99 dup
+uniq -ic <<< $'A\na\nb'
+uniq -d -u dup
+uniq -D -c dup
+uniq -f 2 <<< $'a b\nc d'
+uniq -s 1 -w 1 <<< $'ab\nab\nac'
+uniq -c nonl
+uniq lines nodir/x
+uniq - out < dup; cat out
+uniq -f -1 dup
+uniq -c <<< $'\n\n'
+cut -s -c 1 csv
+cut -d: -c 1 csv
+cut -d ' ' -f 2 words
+cut -d ' ' -f 1-3 words
+cut -c 2- nonl
+cut -b 1-2 -n lines
+cut -f1 bin | od -c
+cut -c 1-3,5- lines
+cut -c 0-2 lines
+cut -c 3-3 lines
+cut -c 2,4-,1 lines
+cut -d: -f 2 -s nonl
+cut -d: -f 1 empty
+cut -d '\' -f 2 <<< 'a\b'
+cut -d $'\n' -f 1 lines
+cut -d: -f 2,3 <<< 'a:b:c:d'
+cut -d: -f 1 <<< ':::'
+cut -d: -f 4 <<< 'a:b'
+cut -d: -f 2- -s <<< 'abc'
+cut -c 1-2 -c 3 lines
+cut -f 1 -f 2 csv
+cut -c 1-18446744073709551616 lines
+cut -c 18446744073709551615 lines
+cut -d: -f 2 csv nofile
+cut -z -d: -f 2 csv | od -c
+tr -s ab xy <<< aabbab
+tr -s a-z '[x*]' <<< aabbcc
+tr -ds a b <<< aabbab
+tr -cs a '\n' <<< 'aabbaa cc'
+tr -c ab x <<< abcd
+tr -c ab xy <<< abcd
+tr -cd '\n' < lines
+tr '[x*0]' a <<< x
+tr a '[x*0]' <<< a
+tr ab '[x*010]' <<< ab
+tr a '[x*08]' <<< a
+tr a '[x*1x]' <<< a
+tr a '[x*' <<< a
+tr '[:upper:]' '[:upper:]' <<< aB
+tr '[:lower:][:upper:]' '[:upper:][:lower:]' <<< aB
+tr 'a[:upper:]' 'b[:lower:]' <<< aB
+tr '[:upper:]a' '[:lower:]' <<< aB
+tr -d '[:alpha:]' x <<< ab
+tr -s a b c <<< a
+tr '\-' x <<< 'a-b'
+tr 'a-a' x <<< a
+tr '\0' x <<< a
+tr -d '\0-\10' < bin | od -c
+tr '\60-\71' x < csv
+tr '[:digit:]' '[=x=]' < csv
+tr '[=x=]' '[:digit:]' < csv
+tr '[:space:]' '[:upper:]' <<< ab
+tr -t '[:lower:]' 'xy' <<< ab
+tr a-z '[:lower:]' <<< ab
+tr '[:lower:]' a-z <<< ab
+tr '[:lower:]' '[:lower:]' <<< ab
+tr -c '[:upper:]' '[:lower:]' <<< ab
+tr '\n' <<< ab
+tr 'abc' 'xy' <<< abc
+tr -t 'abc' 'xy' <<< abc
+tr '\a\b\f\n\r\t\v' 1234567 <<< $'\a\b\f\r\t\v' | od -c
+tr '\q' x <<< 'q\'
+tr 'a\' xy <<< 'a\'
+tr '\1234' x <<< $'S4'
+tr '\400' x <<< a
+tr '[.a.]' x <<< 'a.[]'
+tr '[a]' x <<< 'a[]'
+tr '[]' x <<< 'a[]'
+tr 'z-' x <<< 'z-'
+tr -- '-z' x <<< 'z-'
+tr '[a-z]' '[A-Z]' <<< '[a]'
+tr '[:digit:]*' x <<< '1*'
+
+# head/tail/wc corners
+head -c 1k lines | wc -c
+head -c 1K lines | wc -c
+head -n 1b lines | wc -l
+head -n 2x lines
+head -n -0 lines | wc -l
+head -c -0 nonl
+head -n '' lines
+head -n ' 2' lines
+head -n +2 lines
+head -c 99999999999999999999999 nonl
+head -z -n 1 <<< $'a\nb'
+head -1 -2 lines
+head -3l lines
+head -2c lines
+tail -c -0 nonl
+tail -n +1 nonl
+tail -z -n 1 <<< $'a\nb'
+tail -n 3 nonl
+tail -c +1 nonl
+tail -c +0 nonl
+tail -0 lines
+tail -n '' lines
+tail -3l lines
+tail -3c lines
+tail +3c lines
+tail +c lines
+tail -l lines
+tail -c lines
+tail -n 1 - - < nonl
+tail -n 99999999999999999999 lines | wc -l
+tail -c 99999999999999999999 nonl
+tail -n +99999999999999999999 lines
+head -n 1 -q nofile lines
+tail -n 1 -v nonl
+tail -1 empty nonl
+wc -l - lines < words
+wc -c - < lines
+wc lines - < words
+wc -L <<< $'a\tb'
+wc -L <<< $'abc\rd'
+wc -L <<< $'ab\bc'
+wc -L <<< $'\x80\x81'
+wc -L <<< $'a\fb'
+wc -L <<< $'a\vb'
+wc -w <<< $'a\vb\fc\rd'
+wc -w <<< $'a\x80b \xffc'
+wc -lL lines words
+wc -cL nonl
+wc -m nonl
+wc -mc nonl
+wc -l empty empty
+wc -c nofile
+wc -w empty words
+cat empty | wc -c
+cat words | wc lines -
+
+# grep context and offsets
+grep -A2 -B1 e lines
+grep -C1 -n 'e$' lines
+grep -A1 -m2 e lines
+grep -B2 twelve lines
+grep -A5 eleven lines
+grep -c -A1 e lines
+grep -o -b 'e.' lines
+grep -nb -H two lines words
+grep -A1 -v e lines
+grep -C 1 -e one -e twelve lines
+grep -A x e lines
+grep -C -1 e lines
+grep -A1 o words lines
+grep -B1 -h o words lines
+grep -bv e lines
+grep -A0 e lines
+grep -m1 -A3 t lines
+
+# grep and binary data
+grep -c b bin
+grep -a -n . bin | od -c
+grep -o . bin
+grep -l . bin lines
+grep -L . bin empty
+grep -c -v a bin
+grep -v '' -c lines
+grep -v -x '' -c blanks
+grep -e '' -v lines
+grep -m 0 -c e lines
+grep -L -m 0 e lines
+
+# UTF-8 regular expressions
+LANG=C.UTF-8 grep -o '[^[:alpha:]]' <<< $'\xc3\xa9-\xc2\xbf'
+LANG=C.UTF-8 grep -o '[[:punct:]]' <<< $'\xc2\xbf\xc3\xa9!'
+LANG=C.UTF-8 grep -o $'[\xc3\xa9x]' <<< $'\xc3\xa9yx'
+LANG=C.UTF-8 grep -o $'[\xc3\xa0-\xc3\xa9]' <<< $'\xc3\xa9'
+LANG=C.UTF-8 grep -o $'\xc3\xa9*' <<< $'\xc3\xa9\xc3\xa9x'
+LANG=C.UTF-8 grep -oE $'(\xc3\xa9|x){2}' <<< $'x\xc3\xa9y'
+LANG=C.UTF-8 grep -o '\w*' <<< $'x\xc3\xa9 y'
+LANG=C.UTF-8 grep -o '\W' <<< $'x\xc3\xa9 y'
+LANG=C.UTF-8 grep -ow t <<< $'\xc3\xa9t\xc3\xa9'
+LANG=C.UTF-8 grep -o '\<t' <<< $'\xc3\xa9t t'
+LANG=C.UTF-8 grep -io $'\xc3\xa9t' <<< $'\xc3\x89T\xc3\x89'
+LANG=C.UTF-8 grep -i $'\xcf\x83' <<< $'\xce\xa3'
+LANG=C.UTF-8 grep -ic $'\xd0\xb4' <<< $'\xd0\x94'
+LANG=C.UTF-8 grep -c '^.\{3\}$' <<< $'\xe2\x82\xac\xc3\xa9x'
+LANG=C.UTF-8 grep -c '^...$' <<< $'a\xcc\x81b'
+LANG=C.UTF-8 grep -o '.' <<< $'a\xffb'
+LANG=C.UTF-8 grep -c $'\xff' <<< $'a\xffb'
+LANG=C.UTF-8 grep -o '[^a]' <<< $'\xffa\xc3'
+LANG=C.UTF-8 grep -o '[[:upper:]]' <<< $'\xc3\x89\xc3\xa9E'
+LANG=C.UTF-8 grep -io '[[:upper:]]' <<< $'\xc3\xa9e'
+LANG=C.UTF-8 grep -F -o $'\xc3\xa9' <<< $'x\xc3\xa9'
+LANG=C.UTF-8 grep -o '[[=e=]]' <<< 'xe'
+LANG=C.UTF-8 grep -c $'[[.\xc3\xa9.]]' <<< $'\xc3\xa9'
+LC_ALL=C.UTF-8 grep -o . <<< $'\xc3\xa9'
+LC_ALL=C LANG=C.UTF-8 grep -o . <<< $'\xc3\xa9' | od -c
+LC_CTYPE=C.UTF-8 grep -o . <<< $'\xc3\xa9'
+LANG=en_US.UTF-8 grep -o . <<< $'\xc3\xa9' | od -c
+LANG=C.utf8 grep -o . <<< $'\xc3\xa9'
+LANG=C.UTF-8 sed 's/[^x]/Y/g' <<< $'\xc3\xa9x\xff'
+LANG=C.UTF-8 sed 's/\(.\)\(.\)/\2\1/' <<< $'\xc3\xa9x'
+LANG=C.UTF-8 sed 's/.*/\L&/' <<< $'\xc3\x89\xce\xa3A'
+LANG=C.UTF-8 sed 's/\w\+/\u&/g' <<< $'\xc3\xa9t\xc3\xa9 x'
+LANG=C.UTF-8 sed $'y/\xc3\xa9\xc3\xa0/ea/' <<< $'\xc3\xa0\xc3\xa9'
+LANG=C.UTF-8 sed $'y/ab/\xc3\xa9/' <<< ab
+LANG=C.UTF-8 sed -n 'l' <<< $'\xc3\xa9\x01\xff'
+sed -n 'l' <<< $'\xc3\xa9\x01\xff\\'
+sed -n 'l 10' rep
+sed -n 'l 1' rep
+sed -n 'l 0' rep
+sed -n 'l' rep
+LANG=C.UTF-8 expr $'\xc3\xa9\xc3\xa9' : '.*'
+LANG=C.UTF-8 expr $'x\xc3\xa9y' : 'x\(.\)'
+LANG=C.UTF-8 expr substr $'\xc3\xa9\xc3\xa0\xc3\xb9' 2 2
+LANG=C.UTF-8 expr index $'\xc3\xa9\xc3\xa0' $'\xc3\xa0'
+LANG=C.UTF-8 expr length $'\xe2\x82\xac'
+
+# UTF-8 wc and quoting
+LANG=C.UTF-8 wc -m <<< $'\xe2\x82\xac\xed\xa0\x80\xc0\x80'
+LANG=C.UTF-8 wc -L <<< $'\xe4\xb8\x80\xe4\xb8\x80x'
+LANG=C.UTF-8 wc -L <<< $'a\xcc\x81\xe2\x80\x8b'
+LANG=C.UTF-8 wc -w <<< $'a\xe2\x80\x83b\xe3\x80\x80c'
+LANG=C.UTF-8 wc -w <<< $'a\xe2\x80\xafb'
+LANG=C.UTF-8 wc -w <<< $'a\xffb c'
+LANG=C.UTF-8 wc -c <<< $'\xc3\xa9'
+LANG=C.UTF-8 wc <<< $'\xc3\xa9 \xc3\xa9'
+LANG=C.UTF-8 wc -lmwcL <<< $'\xc3\xa9\tx'
+wc -m <<< $'\xc3\xa9'
+LANG=C.UTF-8 cat $'\xc3\xa9 x'
+LANG=C.UTF-8 cat $'\xe2\x80\x8b'
+LANG=C.UTF-8 cat $'a\xe2\x80\xa8b'
+LANG=C.UTF-8 cat $'\xc2\x80'
+LANG=C.UTF-8 cat $'\xc3\xa9\x01'
+LANG=C.UTF-8 rm $'it\'s\xc3\xa9'
+LANG=C.UTF-8 seq x
+LANG=C.UTF-8 seq $'\xc3\xa9'
+LANG=C.UTF-8 seq $'a\x01'
+LANG=C.UTF-8 head -n x lines
+LANG=C.UTF-8 mkdir -m x y
+LANG=C.UTF-8 cut -c x lines
+LANG=C.UTF-8 sort -k x keys
+LANG=C.UTF-8 od -t q lines
+LANG=C.UTF-8 mktemp abc
+LANG=C.UTF-8 tr -d
+LANG=C.UTF-8 expr 1 + a
+LANG=C.UTF-8 expr '(' 1
+LANG=C.UTF-8 ls -q $'\xc3\xa9\x01'
+LANG=C.UTF-8 sort -t ab keys
+LANG=C.UTF-8 uniq -f x dup
+LANG=C.UTF-8 tr 'a\' x <<< a
+LANG=C.UTF-8 date -d xyzzy
+
+# ls columns
+ls -C
+ls -x dir
+ls -C -a dir
+ls -xa
+ls -Cr
+ls -C dir emptydir lines
+ls -x1
+ls -1x
+ls -lx lines
+touch -d @1000000000 lines; ls -xl lines
+ls -C nofile
+COLUMNS=20 ls -C
+COLUMNS=20 ls -x
+COLUMNS=1 ls -x
+COLUMNS=0 ls -C
+COLUMNS=x ls -C
+COLUMNS=200 ls -C
+ls -q 'a b'
+ls -Cd dir dirlnk lines
+
+# cmp options
+cmp -l lines words
+cmp -l lines lines
+cmp -l -b lines words
+cmp -lb nonl words
+cmp -b nonl words
+cmp -n 0 lines words
+cmp -n 2 -l lines words
+cmp -i 4 lines nums
+cmp -i 4:0 lines words
+cmp -i x lines words
+cmp lines words 4 0
+cmp lines words 1 1 1
+cmp lines words x
+cmp -s lines nofile
+cmp -s - nofile < lines
+cmp -ls lines words
+cmp -n x lines words
+cmp -b bin nonl
+cmp -l empty lines
+cmp -i 100 lines words
+cmp -i 1k lines words
+
+# diff directories
+diff dir dirlnk
+diff dir/ emptydir/
+diff emptydir dir
+mkdir d2; diff dir d2
+cp -r dir d2; diff dir d2
+cp -r dir d2; /opt/fakes/bin/echo X >> d2/a; diff dir d2
+cp -r dir d2; rm d2/b; mkdir d2/b; diff dir d2
+cp -r dir d2; diff -q dir d2
+cp -r dir d2; /opt/fakes/bin/echo X >> d2/a; diff -q dir d2
+cp -r dir d2; diff -s dir d2
+diff lines emptydir
+diff dir/a dir
+diff - dir < lines
+
+# sed additions
+sed -s -n 'F;1p' lines words
+sed 'F' - < nonl
+sed -n '2,~4p' lines
+sed -n '5,~4p' lines
+sed -n '4,~4p' lines
+sed -n '/two/,~3p' lines
+sed '2,~0d' lines
+sed 'w out' lines; cat out
+sed -n '/e/w out' lines; cat out
+sed 's/e/E/w out' nonl; cat out
+sed -n 'w /dev/stdout' nonl
+sed 'w' lines
+sed 's/a/b/w' csv
+sed -z 's/^/>/' lines | od -c
+sed -z 'N;s/\x00/+/' <<< x
+sed -z = lines | od -c
+sed 's/\x41/a/' mixed
+sed 's/A/\x5c/' mixed
+sed 's/\d97/X/' csv
+sed 's/\o141/X/' csv
+sed 's/\cA/X/' bin | od -c
+sed 's/a/\cZ/' csv | od -c
+sed 's/\x4/X/' csv
+sed 's/\xq/X/' csv
+sed 's/x/\d/' <<< x
+sed 'y/abc/\x41\o102\d067/' csv
+sed 'y/a/\t/' csv
+sed 'y/\t/a/' tabs
+sed 's/[[:space:]]/_/g;s/[\t]/T/' tabs
+sed -n '/a/,/c/M p' csv
+sed 'N;s/^./X/Mg;s/.$/Y/Mg' lines
+sed 'N;s/a$/Q/M' <<< $'a\nb'
+sed -E 's/^*/X/' <<< x
+sed -E 's/x|+/X/' <<< x
+sed -E 's/(?)/X/' <<< x
+sed -E 's/a{1}*/X/' <<< aa
+sed 's/a*\?/X/' <<< aa
+sed 's/a\{1\}\+/X/' <<< aa
+sed 's/^*a/X/' <<< '*a'
+sed 's/\(*\)/X/' <<< '*'
+sed 's/a\|*b/X/' <<< '*b'
+sed 's/[a-c-e]/X/' <<< d
+sed 's/[a-]/X/' <<< '-'
+sed 's/[[:alpha:]-]/X/' <<< '-'
+sed 's/[%--]/X/' <<< ','
+sed -n '$!{$!p}' lines
+sed '1!!d' lines
+sed '1 ! d' lines
+sed -n '1,3!p' lines
+sed '2,4{2!d}' lines
+sed 'a\' empty
+sed '$i\' nonl
+sed '1c\' nonl
+sed '$c\' nonl
+sed -e 'a\' -e '' lines
+sed 's//x/;s/e/E/' lines
+sed '/e/s//E/g' lines
+sed 's/e/E/;s//X/' lines
+sed -n '//p' lines
+sed '\,,d' lines
+sed --expression=p -n --quiet nonl
+sed --expression p -n nonl
+sed --silent -e p nonl
+sed --regexp-extended 's/(a)/[\1]/' csv
+sed --null-data 's/\n/,/g' lines
+sed --separate -n '$p' lines words
+sed --in-place=.b 's/a/b/' csv; cat csv csv.b
+sed --posix -n 1p lines
+sed --debug p nonl
+sed --xyz p nonl
+sed --qu p nonl
+sed -i.orig 1d lines words; cat lines.orig words.orig | wc -l
+sed -i -e 1d nofile lines; head -1 lines
+sed -i 'w /dev/stdout' nonl
+
+# expr: bignums and laziness
+expr 99999999999999999999 + 1
+expr 99999999999999999999 '*' 99999999999999999999
+expr 100000000000000000000 / 3
+expr 100000000000000000000 % 7
+expr -100000000000000000000 / 7
+expr -100000000000000000000 % 7
+expr 100000000000000000000 / -7
+expr 00099 + 1
+expr -0 '*' 5
+expr 0 - 0
+expr -00 = 0
+expr 5 - 10
+expr -5 - -10
+expr 18446744073709551615 + 1
+expr 1 / 0 '|' 1
+expr 1 '|' a + 1
+expr 0 '&' a + 1
+expr 0 '&' 1 : '['
+expr 1 '|' 1 : '['
+expr '' '|' 1 / 0
+expr 3 '|' '(' 1 / 0 ')'
+expr 0 '|' 0 '|' 7
+expr 1 '&' 2 '&' 0
+expr 99999999999999999999 '<' 100000000000000000000
+expr -99999999999999999999 '<' -100000000000000000000
+expr 99999999999999999999 = 0099999999999999999999
+expr substr abc 18446744073709551616 1
+expr substr abc 1 -18446744073709551616
+expr substr abc -18446744073709551616 1
+
+# seq additions
+seq 9223372036854775807 9223372036854775807
+seq 9223372036854775800 3 9223372036854775807
+seq -9223372036854775807 -9223372036854775805
+seq 1e1
+seq 1.5e1 2e1
+seq 1e-1 0.1 0.3
+seq 2.5e0 3.5e0
+seq 1E2 100
+seq 1e 2
+seq 1e+1 11
+seq 0x1F 0x21
+seq 0X10 16
+seq 0x 1
+seq 0xg 1
+seq '  3'
+seq '3 '
+seq 1 -inf
+seq 5 inf 1
+seq 1 inf 3
+seq INF 1
+seq NaN
+seq -nan
+seq 1 nan 3
+seq -w 1e1
+seq -w 0x8 0xa
+seq -s, 1e0 3
+seq 0.000000000000000001 0.000000000000000001 0.000000000000000003
+seq 0.0000000000000000001 1
+seq 1 0.5e0 2
+
+# date additions
+date -d @0 -R
+date -d @1234567890 -Iseconds
+date -d @1234567890 -Ih
+date -d @1234567890 -Iminutes
+date -d @1234567890.5 -Ins
+date -d @1234567890 -Idate
+date -d @1234567890 -Ix
+date -d @1234567890 -R +%s
+date -d @253402300799 +%F
+date -d @253402300800 +%Y
+date -d @-62167219200 +%F
+date -d @-62167219201 +%F
+date -d @1234567890 '+%+4Y %+6Y %+2Y'
+date -d '@  12' +%s
+date -d '@ -12' +%s
+
+# basename and dirname -z, chmod and rmdir verbose
+basename -z a b | od -c
+basename -az a b | od -c
+dirname -z a/b c | od -c
+chmod -v 600 lines nofile
+chmod -c 644 lines
+chmod -c 600 lines dir
+chmod -v u+s lines
+chmod -cf 700 nofile
+rmdir -v emptydir nofile
+rmdir -pv a/b
+mkdir -p a/b; rmdir -pv a/b
+rmdir -v dir
+
+# misc fixed paths
+mktemp aXXXb | wc -c
+mktemp XXXa/b
+mktemp -d aXXX.d | wc -c
+mktemp -u XXX/
+mktemp -t abXXX/
+cp -d lnk x; ls -l x | cut -c1
+cp -L lnk x; ls -l x | cut -c1
+cp -H lnk x; ls -l x | cut -c1
+cp -rL dirlnk x; ls -l x | cut -c1
+cp -r dirlnk x; ls -ld x | cut -c1
+cp -rH dirlnk x; ls -ld x | cut -c1
+cp -a lnk x; ls -l x | cut -c1
+mv .. x
+mv dir/.. x
+ln -f lnk lines
+ln -sf lnk lines
+ln -sf ../oracle/lines lines
+ln -f lines dir/lines; ls dir
+ln -sfn dir dirlnk; ls dir
+head -n ' 3' lines
+head -c +3 lines
+head -n '	2' lines
+tail -n ' 2' lines
+tail +2c lines
+tail -2b lines | wc -c
+tail +2l nonl
+tail -1 lines -
+tail -1 -- lines
+tail +1 lines nonl
+tail -3 lines nonl
+head -2 lines -3
+head -2 -n 3 lines
+od -j 0x3 -N 0x4 -c lines
+od -j 07 -N 1 -c lines
+od -j 1b -c lines
+od -j 1x lines
+od -N 1kB lines | head -1
+od -j 64 lines
+od -j 63 lines
+od -tx1z -w4 nonl
+od -t a -t x1z nonl
+od -c lines 10
+od -c lines 10.
+od -c lines 1b
+od -c lines +0x10
+od -c lines x
+od +5 < lines
+od -w8 -t x4 lines
+od -w6 -t x4 lines
+od -w12 -t x8 lines
+uniq -D keys
+uniq -D -d dup
+uniq -D -u dup
+uniq -Di mixed
+uniq -D -f1 keys
+cut -c 1-2-3,4 lines
+cut -f 1-2-3 csv
+cut -f 99999999999999999999 csv
+cut -f 1-99999999999999999999 csv
+cut -d $'\n' -f 2 lines
+cut -d $'\n' -f 1,3 -s lines
+sort -m dup mixed
+sort -mr lines words
+sort -m -u dup dup
+sort -m nofile lines
+sort -k1,0 keys
+sort -k1, keys
+sort -k1.1x keys
+sort -k 2.0 keys
+sort -k 1,2.0 keys
+sort -k 1.2b keys
+sort -bk1 keys
+sort -b <<< $'  b\na\n c'
+sort -br <<< $'  b\na\n c'
+sort -bu <<< $'  a\na'
+tr '[a*]' x <<< a
+tr a '[b*010x]' <<< a
+tr a '[b*0x10]' <<< a
+tr a '[b*7]' <<< a
+tr a '[=b=]' <<< a
+tr '[=a=]' b <<< a
+tr -d '[=a=]' <<< a
+tr '[:upper:]' '[:lower:][:upper:]' <<< A
+tr 'a[:upper:]' 'b[:lower:]' <<< aA
+tr -t '[:upper:]a' '[:lower:]' <<< Aa
+tr '[:lower:]' '[:upper:]x' <<< ax
+tr '[:digit:]' '[:alpha:]' < csv
+tr '[:upper:]' '[:digit:]' <<< A
+tr '\1000' x <<< $'@0'
+tr '\0777' x <<< a
+tr '\08' x <<< 8

@@ -1,0 +1,652 @@
+# Brace expansion of words with other expansions, as raw words.
+# "> WORD" then one "= RAW" line per resulting word ("=" alone for an
+# empty one). Written by hand and checked against bash 5.3 with
+# t/unit/brace_rawcheck.sh, which expands each word and the expected
+# raw words (with brace expansion off) and compares the results.
+
+# a dollar-brace is not a brace expression
+> ${x}{a,b}
+= ${x}a
+= ${x}b
+> {a,b}${x}
+= a${x}
+= b${x}
+> {a,${x}}
+= a
+= ${x}
+> {a,${a,b}}
+= a
+= ${a,b}
+> ${a,b}
+= ${a,b}
+> "${a,b}"
+= "${a,b}"
+> ${a,b}{c,d}
+= ${a,b}c
+= ${a,b}d
+> ${x:-{a,b}}
+= ${x:-{a,b}}
+> ${y:-{a,b}}
+= ${y:-{a,b}}
+> "${x}"{a,b}
+= "${x}"a
+= "${x}"b
+> "${x}{a,b}"
+= "${x}{a,b}"
+> $x{a,b}
+= $xa
+= $xb
+> {$x,$b}
+= $x
+= $b
+> $${a,b}
+= $${a,b}
+> {a,$}{b,c}
+= ab
+= ac
+= $b
+= $c
+> $\{a,b}
+= $\{a,b}
+> \${a,b}
+= \$a
+= \$b
+> '$'{x,b}
+= '$'x
+= '$'b
+> "$"{x,b}
+= "$"x
+= "$"b
+> ${x}{1..3}
+= ${x}1
+= ${x}2
+= ${x}3
+> {${x}..3}
+= {${x}..3}
+> {1..${x}}
+= {1..${x}}
+> {${x},{1..2}}
+= ${x}
+= 1
+= 2
+> ${a}}{b,c}
+= ${a}}b
+= ${a}}c
+> {${a}},b}
+= ${a}}
+= b
+> ${a}{b}{c,d}
+= ${a}{b}c
+= ${a}{b}d
+> ${a:+{b}}{c,d}
+= ${a:+{b}}c
+= ${a:+{b}}d
+> ${a:+x,y}{c,d}
+= ${a:+x,y}c
+= ${a:+x,y}d
+> {${a:+x,y},z}
+= ${a:+x,y}
+= z
+> "${a:+x,y}"{c,d}
+= "${a:+x,y}"c
+= "${a:+x,y}"d
+
+# command substitution contents are skipped
+> $(echo a,b){c,d}
+= $(echo a,b)c
+= $(echo a,b)d
+> {$(echo a,b),c}
+= $(echo a,b)
+= c
+> {a,$(echo })}
+= a
+= $(echo })
+> {a,$(: {b,c}; echo x)}
+= a
+= $(: {b,c}; echo x)
+> {a,b}$(echo ,)
+= a$(echo ,)
+= b$(echo ,)
+> "$(: {a,b}; echo x)"{c,d}
+= "$(: {a,b}; echo x)"c
+= "$(: {a,b}; echo x)"d
+> {a,"$(echo })"}
+= a
+= "$(echo })"
+> {a,"$(echo "}")"}
+= a
+= "$(echo "}")"
+> {a,$(echo "}")}
+= a
+= $(echo "}")
+> {a,$(echo '}')}
+= a
+= $(echo '}')
+> {a,$(echo \))}
+= a
+= $(echo \))
+> {a,$(echo $(echo }))}
+= a
+= $(echo $(echo }))
+> {a,$(echo ${x}})}
+= a
+= $(echo ${x}})
+> {a,$(echo `echo }`)}
+= a
+= $(echo `echo }`)
+> {a,$( (echo }) )}
+= a
+= $( (echo }) )
+> {a,$(case x in x) echo y;; esac)}
+= a
+= $(case x in x) echo y;; esac)
+> $(case x in x) echo y;; esac){a,b}
+= $(case x in x) echo y;; esac)a
+= $(case x in x) echo y;; esac)b
+> {a,$(case x in (x) echo },;; esac)}
+= a
+= $(case x in (x) echo },;; esac)
+> {a,$(case x in x) case y in y) echo },;; esac;; esac)}
+= a
+= $(case x in x) case y in y) echo },;; esac;; esac)
+> {a,$(echo case })}
+= a
+= $(echo case })
+> {a,$(echo esac })}
+= a
+= $(echo esac })
+> {a,$(echo a#b })}
+= a
+= $(echo a#b })
+> {a,$(echo $# })}
+= a
+= $(echo $# })
+
+# arithmetic expansion contents are skipped
+> $((1+2)){a,b}
+= $((1+2))a
+= $((1+2))b
+> {$((1,2)),x}
+= $((1,2))
+= x
+> {$(( (1,2) )),x}
+= $(( (1,2) ))
+= x
+> {a,$((case))}
+= a
+= $((case))
+> {1..$((3))}
+= {1..$((3))}
+> $((1)){1..2}
+= $((1))1
+= $((1))2
+
+# backquotes
+> `echo a,b`{c,d}
+= `echo a,b`c
+= `echo a,b`d
+> {`echo a,b`,c}
+= `echo a,b`
+= c
+> {`echo }`,c}
+= `echo }`
+= c
+> {`echo \`echo },\``,c}
+= `echo \`echo },\``
+= c
+> {a,b}`: {c,d}; echo x`
+= a`: {c,d}; echo x`
+= b`: {c,d}; echo x`
+
+# function substitutions
+> ${ echo a,b; }{c,d}
+= ${ echo a,b; }c
+= ${ echo a,b; }d
+> {${ echo a,b; },x}
+= ${ echo a,b; }
+= x
+> ${|REPLY=a,b;}{c,d}
+= ${|REPLY=a,b;}c
+= ${|REPLY=a,b;}d
+> {${ : {a,b}; echo x; },x}
+= ${ : {a,b}; echo x; }
+= x
+> "${ echo a,b; }"{c,d}
+= "${ echo a,b; }"c
+= "${ echo a,b; }"d
+
+# process substitutions
+> {<(echo a,b),c}
+= <(echo a,b)
+= c
+> {a,>(true),b}
+= a
+= >(true)
+= b
+
+# raw sequence and character output
+> {,}
+=
+=
+> {a,}{,}
+= a
+= a
+=
+=
+> {,}x
+= x
+= x
+
+# Added in hardening: ${...} closes at the first unnested } even
+# inside a command substitution (only ${ nests), and in ${ cmd; }
+# only a reserved word { or } counts, never an argument or a case
+# pattern. Checked with t/unit/brace_rawcheck.sh.
+> {a,$(echo ${x:-{})}
+= a
+= $(echo ${x:-{})
+> {a,$(echo ${x:-{}),b}
+= a
+= $(echo ${x:-{})
+= b
+> {a,${ echo }; },b}
+= a
+= ${ echo }; }
+= b
+> {a,${ echo };},b}
+= a
+= ${ echo };}
+= b
+> {a,${ { echo q; }; },b}
+= a
+= ${ { echo q; }; }
+= b
+> {a,${ echo {; },b}
+= a
+= ${ echo {; }
+= b
+> {a,"$(echo ${x:-{})"}
+= a
+= "$(echo ${x:-{})"
+> {a,$(echo "${x:-{}"),b}
+= a
+= $(echo "${x:-{}")
+= b
+> {a,${ echo x}y; },b}
+= a
+= ${ echo x}y; }
+= b
+> {a,${ echo }x; },b}
+= a
+= ${ echo }x; }
+= b
+> {a,${ case x in x) echo y;; esac; },b}
+= a
+= ${ case x in x) echo y;; esac; }
+= b
+> {a,$((1+(2))),b}
+= a
+= $((1+(2)))
+= b
+> {a,$(( (1) + 2 )),b}
+= a
+= $(( (1) + 2 ))
+= b
+> {a,$(echo "$((1))"),b}
+= a
+= $(echo "$((1))")
+= b
+> {a,${x//\}/y},b}
+= a
+= ${x//\}/y}
+= b
+> {a,${x/\{/y},b}
+= a
+= ${x/\{/y}
+= b
+> {a,${x:-'}'},b}
+= a
+= ${x:-'}'}
+= b
+> {a,${x:-"}"},b}
+= a
+= ${x:-"}"}
+= b
+> {a,"${x:-}"},b}
+= a,b}
+= "${x:-}",b}
+> {a,${x:-{}},b}
+= a
+= ${x:-{}}
+= b
+> {a,${x:-{}}}
+= a
+= ${x:-{}}
+> {a,"${x:-{}"},b}
+= a,b}
+= "${x:-{}",b}
+> {a,$(echo ${x:-${b}}),b}
+= a
+= $(echo ${x:-${b}})
+= b
+> {a,${ echo ${x:-{}; },b}
+= a
+= ${ echo ${x:-{}; }
+= b
+> {a,$(echo ${x#\{}),b}
+= a
+= $(echo ${x#\{})
+= b
+> {a,$(echo ${#x}),b}
+= a
+= $(echo ${#x})
+= b
+> {a,$((${#x}+1)),b}
+= a
+= $((${#x}+1))
+= b
+> {a,$(echo $((1)) ),b}
+= a
+= $(echo $((1)) )
+= b
+> {a,$(echo \"),b}
+= a
+= $(echo \")
+= b
+> {a,$(echo '"'),b}
+= a
+= $(echo '"')
+= b
+> {a,$(echo "'"),b}
+= a
+= $(echo "'")
+= b
+> {a,$(echo $"x"),b}
+= a
+= $(echo $"x")
+= b
+> {a,$(echo ${x})}{1..2}
+= a1
+= a2
+= $(echo ${x})1
+= $(echo ${x})2
+> ${x}{a..c}${x}
+= ${x}a${x}
+= ${x}b${x}
+= ${x}c${x}
+> {${x}a,b}
+= ${x}a
+= b
+> {a,${x}}${x}{b,c}
+= a${x}b
+= a${x}c
+= ${x}${x}b
+= ${x}${x}c
+> {"${x}","$x"},y
+= "${x}",y
+= "$x",y
+> ${x:+{a,b}}
+= ${x:+{a,b}}
+> "${x:+{a,b}}"{c,d}
+= "${x:+{a,b}}"c
+= "${x:+{a,b}}"d
+> ${x:+"{a,b}"}{c,d}
+= ${x:+"{a,b}"}c
+= ${x:+"{a,b}"}d
+> {a,${x:-$(echo })}}
+= a
+= ${x:-$(echo })}
+> {a,$(echo ${x:-"})"}),b}
+= a
+= $(echo ${x:-"})"})
+= b
+> {a,$( ( echo ) ),b}
+= a
+= $( ( echo ) )
+= b
+> {a,$(true;echo }),b}
+= a
+= $(true;echo })
+= b
+> {a,$(true&&echo }),b}
+= a
+= $(true&&echo })
+= b
+> {a,$(true|echo }),b}
+= a
+= $(true|echo })
+= b
+> {a,${|REPLY=};},b}
+= a
+= ${|REPLY=};}
+= b
+> {a,${|REPLY=}; },b}
+= a
+= ${|REPLY=}; }
+= b
+> {a,${ echo; }${ echo; },b}
+= a
+= ${ echo; }${ echo; }
+= b
+> {a,${ echo $'}'; },b}
+= a
+= ${ echo $'}'; }
+= b
+> {a,<(echo }),b}
+= a
+= <(echo })
+= b
+> {a,>(cat >/dev/null),b}
+= a
+= >(cat >/dev/null)
+= b
+> x{a,<(:)}y
+= xay
+= x<(:)y
+> {a,${ echo q;}x},b}
+= a,b}
+= ${ echo q;}x,b}
+> {a,${ { echo q;}},b}
+= a
+= ${ { echo q;}}
+= b
+> {a,${ echo q; {x; },b}
+= a
+= ${ echo q; {x; }
+= b
+> {a,${ echo {x; },b}
+= a
+= ${ echo {x; }
+= b
+> {a,${ echo q;{ echo r;};},b}
+= a
+= ${ echo q;{ echo r;};}
+= b
+> {a,${ case }x in }x) echo y;; esac;},b}
+= a
+= ${ case }x in }x) echo y;; esac;}
+= b
+> {a,${ case x in x|}) echo y;; esac;},b}
+= a
+= ${ case x in x|}) echo y;; esac;}
+= b
+> {a,${ case x in (}) echo y;; esac;},b}
+= a
+= ${ case x in (}) echo y;; esac;}
+= b
+> {a,${ case x in x) echo y;; }) echo z;; esac;},b}
+= a
+= ${ case x in x) echo y;; }) echo z;; esac;}
+= b
+> {a,${ case x in x) echo y;& }) echo z;; esac;},b}
+= a
+= ${ case x in x) echo y;& }) echo z;; esac;}
+= b
+> {a,${ case x in x) echo y;;& }) echo z;; esac;},b}
+= a
+= ${ case x in x) echo y;;& }) echo z;; esac;}
+= b
+> {a,${ case x in case) echo y;; esac;},b}
+= a
+= ${ case x in case) echo y;; esac;}
+= b
+> {a,${ case x in x) { echo y; };; esac;},b}
+= a
+= ${ case x in x) { echo y; };; esac;}
+= b
+> {a,${ for i in }; do echo $i; done; },b}
+= a
+= ${ for i in }; do echo $i; done; }
+= b
+> {a,${ ! echo q; },b}
+= a
+= ${ ! echo q; }
+= b
+> {a,${ echo q;}}
+= a
+= ${ echo q;}
+> {a,${ :;},b}
+= a
+= ${ :;}
+= b
+> {a,${ f() { echo q; }; f; },b}
+= a
+= ${ f() { echo q; }; f; }
+= b
+> {a,${ (echo q) },b}
+= a
+= ${ (echo q) }
+= b
+> {a,${ (echo q); },b}
+= a
+= ${ (echo q); }
+= b
+> {a,${ echo q;}},b}
+= a,b}
+= ${ echo q;},b}
+> {a,${ if true; then echo q; fi },b}
+= a
+= ${ if true; then echo q; fi }
+= b
+> {a,${ { echo q; } },b}
+= a
+= ${ { echo q; } }
+= b
+> {a,${ echo q &}},b}
+= a,b}
+= ${ echo q &},b}
+> {a,${ while false; do :; done },b}
+= a
+= ${ while false; do :; done }
+= b
+> {a,${ x=}; },b}
+= a
+= ${ x=}; }
+= b
+> {a,${ echo a\}; },b}
+= a
+= ${ echo a\}; }
+= b
+> {a,${ echo '}'; },b}
+= a
+= ${ echo '}'; }
+= b
+> {a,${ echo "}"; },b}
+= a
+= ${ echo "}"; }
+= b
+> {a,${ echo ${x:-\}}; },b}
+= a
+= ${ echo ${x:-\}}; }
+= b
+> {a,${ echo ${x:-{}}; },b}
+= a
+= ${ echo ${x:-{}}; }
+= b
+> {a,$(echo ${x:-{}}),b}
+= a
+= $(echo ${x:-{}})
+= b
+> {a,${ echo }{; },b}
+= a
+= ${ echo }{; }
+= b
+> {a,${ echo {}; },b}
+= a
+= ${ echo {}; }
+= b
+> {a,${ echo $( echo } ); },b}
+= a
+= ${ echo $( echo } ); }
+= b
+> {a,${ echo "${ echo }; }"; },b}
+= a
+= ${ echo "${ echo }; }"; }
+= b
+> {a,${| REPLY=q; },b}
+= a
+= ${| REPLY=q; }
+= b
+> {a,${|REPLY=q;},b}
+= a
+= ${|REPLY=q;}
+= b
+> {${ echo a,b; },c}{d,e}
+= ${ echo a,b; }d
+= ${ echo a,b; }e
+= cd
+= ce
+> {a,$(echo ${x:+'}'}),b}
+= a
+= $(echo ${x:+'}'})
+= b
+> {a,$(echo ${x:+"}"}),b}
+= a
+= $(echo ${x:+"}"})
+= b
+> {a,$(echo ${x/\}/y}),b}
+= a
+= $(echo ${x/\}/y})
+= b
+> {a,$(echo ${x:-$(echo })}),b}
+= a
+= $(echo ${x:-$(echo })})
+= b
+
+# Reserved { and } in ${ cmd; } after function names, coproc, time,
+# ! and if; and } as a plain argument of select, [[ and redirections.
+> {a,${ function f { echo q; }; f; },b}
+= a
+= ${ function f { echo q; }; f; }
+= b
+> {a,${ function f() { echo q; }; f; },b}
+= a
+= ${ function f() { echo q; }; f; }
+= b
+> {a,${ select x in }; do break; done </dev/null; },b}
+= a
+= ${ select x in }; do break; done </dev/null; }
+= b
+> {a,${ [[ } == } ]] && echo q; },b}
+= a
+= ${ [[ } == } ]] && echo q; }
+= b
+> {a,${ echo q >}; cat }; rm -f }; },b}
+= a
+= ${ echo q >}; cat }; rm -f }; }
+= b
+> {a,${ coproc { :; }; },b}
+= a
+= ${ coproc { :; }; }
+= b
+> {a,${ time { :; }; },b}
+= a
+= ${ time { :; }; }
+= b
+> {a,${ ! { :; }; },b}
+= a
+= ${ ! { :; }; }
+= b
+> {a,${ if { :; }; then :; fi; },b}
+= a
+= ${ if { :; }; then :; fi; }
+= b

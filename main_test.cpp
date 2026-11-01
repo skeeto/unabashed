@@ -1,10 +1,13 @@
 // Tests: a virtual OS layer, so no test touches real files or processes
 // $ g++ -std=c++20 -g3 -fsanitize=undefined -fsanitize-trap -o tests main_test.cpp
+// On Windows, add -Wl,--stack,0x2000000 so that oracle runs, which nest
+// shells on one stack, have room for bash's recursion depths.
 //
 // The shell runs repeatedly in one process. Memory comes from a fixed
 // heap that is poisoned and reset between runs, and output is captured.
 //
 // This is free and unencumbered software released into the public domain.
+#include <dirent.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,21 +15,25 @@
 #include "unabashed.cpp"
 #include "fibers.cpp"
 #include "check.cpp"
+#include "fakes.cpp"
+#include "vos.cpp"
 
 struct Os {
     Fibers   fibers;
     byte    *heap;     // backs every reservation
     iz       heapcap;
     iz       heapused;
-    Str      out;      // captured standard output
-    Str      err;      // captured standard error
-    Str      merged;   // both, in write order
-    iz       outcap;
+    Vos      vos;
 };
 
 static Fibers *osfibers(Os *os)
 {
     return &os->fibers;
+}
+
+static Vos *osvos(Os *os)
+{
+    return &os->vos;
 }
 
 static jmp_buf *oomjmp;  // test-only: where os_oom lands
@@ -40,10 +47,12 @@ static jmp_buf *oomjmp;  // test-only: where os_oom lands
     __builtin_trap();
 }
 
+static iz reservelimit(Os *);
+
 static byte *os_reserve(Os *os, iz len)
 {
     iz pad = -os->heapused & 63;
-    if (len > os->heapcap - os->heapused - pad) {
+    if (len > reservelimit(os) - os->heapused - pad) {
         return 0;
     }
     byte *r = os->heap + os->heapused + pad;
@@ -58,24 +67,11 @@ static b32 os_commit(Os *os, byte *p, iz len)
     return 1;
 }
 
-static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
+// Reservations come from the lower half of the heap; the vos owns the
+// upper half.
+static iz reservelimit(Os *os)
 {
-    Str *dst = h==1 ? &os->out : h==2 ? &os->err : 0;
-    if (!dst || len > os->outcap - dst->len) {
-        return 0;
-    }
-    memcpy(dst->data+dst->len, buf, (uz)len);
-    dst->len += len;
-    if (len <= os->outcap - os->merged.len) {
-        memcpy(os->merged.data+os->merged.len, buf, (uz)len);
-        os->merged.len += len;
-    }
-    return 1;
-}
-
-static iz os_read(Os *, Handle, u8 *, iz)
-{
-    return 0;
+    return os->heapcap/2;
 }
 
 static byte *fiberstack(Os *, iz size)
@@ -144,30 +140,101 @@ static b32 expectint(Test *t, Str name, i64 got, i64 want)
     return 0;
 }
 
+// The thread's stack, for oracle runs, which give each shell what is
+// left of it rather than a fixed budget.
+static byte *stackbase;
+static b32   stackrest;
+#if _WIN32
+enum : iz { STACKSIZE = (iz)1<<25 };  // see the build command
+#else
+enum : iz { STACKSIZE = (iz)1<<23 };  // the usual main thread limit
+#endif
+
+static iz stackleft()
+{
+    byte here = 0;
+    iz used = stackbase - &here;
+    iz left = STACKSIZE - used - ((iz)1<<18);
+    return stackrest && left>((iz)1<<19) ? left : 0;
+}
+
+// The vos program for bash itself: a nested shell in the same process,
+// whose memory is released when it returns.
+static i32 fake_bash(Os *os, FakeCtx *ctx)
+{
+    iz save = os->heapused;
+    OsInfo info = {};
+    info.stack   = stackleft();
+    info.args    = ctx->argv;
+    info.nargs   = ctx->argc;
+    info.env     = ctx->env;
+    info.nenv    = ctx->nenv;
+    info.cwd     = ctx->cwd;
+    info.pid     = 100 + osvos(os)->nprocs;
+    info.ppid    = 2;
+    info.uid     = info.euid = 1000;
+    info.gid     = info.egid = 1000;
+    info.host    = "oracle";
+    for (i32 i = 0; i < 3; i++) info.std[i] = ctx->fd[i];
+    info.reserve = (iz)1<<22;
+    i32 status = sh_main(os, &info);
+    os->heapused = save;
+    return status;
+}
+
+static Fake testfakes[256];
+static iz   ntestfakes;
+
+static void initfakes()
+{
+    ntestfakes = 0;
+    testfakes[ntestfakes++] = {"bash", fake_bash};
+    for (iz i = 0; i < countof(fakes) && ntestfakes < countof(testfakes); i++) {
+        testfakes[ntestfakes++] = fakes[i];
+    }
+}
+
 // Run the shell with a fresh virtual OS state. The first argument is
 // $0, conventionally "bash".
-static Result runshell(Test *t, Str *args, iz nargs)
+static Result runshell(Test *t, Str *args, iz nargs, Str input = {})
 {
     Os *os = t->os;
     os->heapused = 0;
-    os->out.len    = 0;
-    os->err.len    = 0;
-    os->merged.len = 0;
-    os->fibers     = {};
+    os->fibers   = {};
 
+    // The vos lives in the upper half of the heap, the shell below
+    Arena va = {};
+    va.beg = os->heap + os->heapcap/2;
+    va.end = os->heap + os->heapcap;
+    vreset(&os->vos, va, testfakes, ntestfakes);
+    os->vos.in = input;
+
+    static Str env[] = {
+        "LANG=C", "TZ=UTC", "HOME=/home/oracle",
+        "PATH=/usr/local/bin:/opt/fakes/bin",
+    };
     OsInfo info = {};
     info.args    = args;
     info.nargs   = nargs;
+    info.env     = env;
+    info.nenv    = countof(env);
+    info.cwd     = "/home/oracle";
+    info.pid     = 2;
+    info.ppid    = 1;
+    info.uid     = info.euid = 1000;
+    info.gid     = info.egid = 1000;
+    info.host    = "oracle";
     info.std[0]  = 0;
     info.std[1]  = 1;
     info.std[2]  = 2;
     info.reserve = (iz)1<<22;
+    info.stack   = (iz)1<<20;
 
     Result r = {};
     r.status = sh_main(os, &info);
-    r.out    = os->out;
-    r.err    = os->err;
-    r.merged = os->merged;
+    r.out    = os->vos.out;
+    r.err    = os->vos.err;
+    r.merged = os->vos.merged;
     return r;
 }
 
@@ -232,7 +299,7 @@ static void test_arena(Test *t)
     expectint(t, "arena oom", hit, 1);
 }
 
-// Spec tests: run a script recorded by tools/record and compare all
+// SpecFile tests: run a script recorded by tools/record and compare all
 // of its outputs. The harness reads the files; the shell never does.
 
 static Str readfile(char *path)
@@ -249,7 +316,7 @@ static Str readfile(char *path)
     return r;
 }
 
-struct Spec {
+struct SpecFile {
     Str out;
     Str err;
     Str merged;
@@ -257,9 +324,9 @@ struct Spec {
     b32 ok;
 };
 
-static Spec parsespec(Str s)
+static SpecFile parsespec(Str s)
 {
-    Spec r = {};
+    SpecFile r = {};
     for (i32 n = 0; n < 4; n++) {
         Cut line = cut(s, '\n');
         if (!startswith(line.head, "== ")) return r;
@@ -299,7 +366,7 @@ static b32 test_spec(Test *t, char *path)
         fprintf(stderr, "SKIP: %s (missing script or spec)\n", path);
         return 1;
     }
-    Spec want = parsespec(spec);
+    SpecFile want = parsespec(spec);
     if (!want.ok) {
         fprintf(stderr, "SKIP: %s (bad spec)\n", path);
         return 1;
@@ -336,21 +403,182 @@ static b32 test_spec(Test *t, char *path)
     return ok;
 }
 
+// Oracle runs: bash's own test suite, run read-only on the vos. The
+// suite's directory is copied into the virtual tree for each test, so
+// nothing it does reaches the host.
+
+static void vimport(Vos *v, VNode *dir, char *host, i32 depth)
+{
+    if (depth > 8) return;
+    DIR *d = opendir(host);
+    if (!d) return;
+    for (struct dirent *e; (e = readdir(d));) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char path[4096];
+        snprintf(path, sizeof(path), "%s/%s", host, e->d_name);
+        Str name = {(u8 *)e->d_name, (iz)strlen(e->d_name)};
+        DIR *sub = opendir(path);
+        if (sub) {
+            closedir(sub);
+            VNode *n = vnew(v, dir, name, FT_DIR, 0755);
+            vimport(v, n, path, depth+1);
+            continue;
+        }
+        Str data = readfile(path);
+        if (!data.data) continue;
+        // Windows checkouts lose file modes: these are the suite's
+        // executable files in the bash 5.3 tarball
+        static char const *exec[] = {"exec1.sub", "trap1.sub", "trap2.sub", "trap2a.sub"};
+        b32 script = data.len>1 && data[0]=='#' && data[1]=='!';
+        for (i32 i = 0; i < (i32)countof(exec); i++) {
+            script |= !depth && !strcmp(e->d_name, exec[i]);
+        }
+        VNode *n = vnew(v, dir, name, FT_FILE, script ? 0755 : 0644);
+        vwritenode(v, n, 0, data.data, data.len);
+        free(data.data);
+    }
+    closedir(d);
+}
+
+// Stand-ins for files of the bash build tree that the suite reads, such
+// as heredoc5.sub's y.tab.c, config.h and version.h, which it feeds
+// through here-documents for their sizes: synthetic C-like text of at
+// least the given length, with tabs, quotes, backslashes and dollars.
+static void vbuildfile(Vos *v, VNode *dir, Str name, iz size)
+{
+    static char const *lines[] = {
+        "/* %s: generated stand-in, line %d */\n",
+        "#define NAME_%d \"value \\\"%d\\\" with $HOME and `x`\"\n",
+        "\tif (c == '\\\\' || c == '$') {\t/* %s */\n",
+        "\t\treturn yytable[%d] + '\\n';\n",
+        "\t}\n",
+        "  static char *s%d = \"${var} $(cmd) %d\";\n",
+    };
+    char buf[256];
+    VNode *n = vnew(v, dir, name, FT_FILE, 0644);
+    for (i32 i = 0; n->data.len < size; i++) {
+        char const *fmt = lines[i % countof(lines)];
+        i32 len;
+        if (strstr(fmt, "%s")) {
+            len = snprintf(buf, sizeof(buf), fmt, (char *)"x", i);
+        } else {
+            len = snprintf(buf, sizeof(buf), fmt, i, i);
+        }
+        vwritenode(v, n, n->data.len, (u8 *)buf, len);
+    }
+}
+
+// Run "bash run-NAME" in the suite's directory. Like run-all, any
+// output means a failure.
+static b32 oracle(Test *t, char *suite, char *name, b32 verbose)
+{
+    Os *os = t->os;
+    os->heapused = 0;
+    os->fibers   = {};
+    Arena va = {};
+    va.beg = os->heap + os->heapcap/2;
+    va.end = os->heap + os->heapcap;
+    vreset(&os->vos, va, testfakes, ntestfakes);
+    // The suite expects a populated /bin, as on a real system: the
+    // fakes stand in for it, and the shell for /bin/sh
+    for (iz i = 0; i < ntestfakes; i++) {
+        Str name = testfakes[i].name;
+        if (name=="recho" || name=="zecho" || name=="xcase") continue;
+        vinstall(&os->vos, "usr/bin", name, (i32)i);
+        if (name == "bash") vinstall(&os->vos, "usr/bin", "sh", (i32)i);
+    }
+    VNode *home = vmkdirs(&os->vos, "home/oracle/tests");
+    vimport(&os->vos, home, suite, 0);
+    VNode *build = home->parent;  // BUILD_DIR
+    vbuildfile(&os->vos, build, "y.tab.c",   100000);
+    vbuildfile(&os->vos, build, "config.h",  20000);
+    vbuildfile(&os->vos, build, "version.h", 2000);
+
+    static Str env[] = {
+        "LANG=C", "TZ=UTC", "HOME=/home/oracle", "TMPDIR=/tmp",
+        "PATH=.:/usr/local/bin:/opt/fakes/bin",
+        "THIS_SH=/usr/local/bin/bash", "BUILD_DIR=/home/oracle",
+        "BASH_TSTOUT=/tmp/bashtst-1",
+    };
+    char run[256];
+    snprintf(run, sizeof(run), "run-%s", name);
+    Str args[] = {"sh", {(u8 *)run, (iz)strlen(run)}};
+    OsInfo info = {};
+    info.args    = args;
+    info.nargs   = countof(args);
+    info.env     = env;
+    info.nenv    = countof(env);
+    info.cwd     = "/home/oracle/tests";
+    info.pid     = 2;
+    info.ppid    = 1;
+    info.uid     = info.euid = 1000;
+    info.gid     = info.egid = 1000;
+    info.host    = "oracle";
+    info.std[0]  = 0;
+    info.std[1]  = 1;
+    info.std[2]  = 2;
+    info.reserve = (iz)1<<22;
+    stackrest    = 1;
+    info.stack   = stackleft();
+    i32 status = sh_main(os, &info);
+    stackrest    = 0;
+    // Some run-* scripts always print advisory "warning: ..." lines,
+    // which run-all shows to a human. They are not differences.
+    b32 pass = 1;
+    for (Str rest = os->vos.merged; rest.len;) {
+        iz  nl   = find(rest, "\n");
+        Str line = nl<0 ? rest : takehead(rest, nl);
+        rest     = nl<0 ? Str{} : cuthead(rest, nl+1);
+        if (!startswith(line, "warning: ")) pass = 0;
+    }
+    printf("%-20s %s (status %d, %lld bytes)\n", name, pass ? "PASS" : "FAIL",
+           status, (long long)os->vos.merged.len);
+    if (!pass && verbose) {
+        printstr(stdout, os->vos.merged);
+        printf("\n");
+    }
+    return pass;
+}
+
 int main(int argc, char **argv)
 {
-    Os os = {};
-    os.heapcap     = (iz)1<<26;
-    os.heap        = (byte *)malloc((uz)os.heapcap);
-    os.outcap      = (iz)1<<20;
-    os.out.data    = (u8 *)malloc((uz)os.outcap);
-    os.err.data    = (u8 *)malloc((uz)os.outcap);
-    os.merged.data = (u8 *)malloc((uz)os.outcap);
+    static Os os = {};
+    byte base = 0;
+    stackbase = &base;
+    os.heapcap         = (iz)1<<28;
+    os.heap            = (byte *)malloc((uz)os.heapcap);
+    os.vos.outcap      = (iz)1<<20;
+    os.vos.out.data    = (u8 *)malloc((uz)os.vos.outcap);
+    os.vos.err.data    = (u8 *)malloc((uz)os.vos.outcap);
+    os.vos.merged.data = (u8 *)malloc((uz)os.vos.outcap);
+    initfakes();
 
     Test t = {};
     t.os = &os;
     test_m0(&t);
     test_fibers(&t);
     test_arena(&t);
+
+    if (argc>3 && (!strcmp(argv[1], "--oracle") || !strcmp(argv[1], "--oracle-v"))) {
+        // --oracle SUITEDIR NAME...: bash test suite runs on the vos
+        b32 verbose = !strcmp(argv[1], "--oracle-v");
+        i32 pass = 0;
+        for (i32 i = 3; i < argc; i++) {
+            pass += oracle(&t, argv[2], argv[i], verbose);
+        }
+        printf("%d of %d pass\n", pass, argc-3);
+        return pass != argc-3;
+    }
+
+    if (argc>2 && !strcmp(argv[1], "--run")) {
+        // Run one script on the vos and show what it printed
+        Str script = readfile(argv[2]);
+        Str args[] = {"bash", "-c", script, "bash"};
+        Result r = runshell(&t, args, countof(args));
+        printstr(stdout, r.merged);
+        printf("[status %d]\n", r.status);
+        return 0;
+    }
 
     if (argc>1 && !strcmp(argv[1], "--fixed")) {
         // Replay fuzzer inputs through the print/reparse fixed point,

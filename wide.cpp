@@ -156,3 +156,142 @@ static iz rootlen(Str16 p)
     }
     return i;
 }
+
+// Native spelling of a platform path: MSYS-style /c/x becomes C:\x and
+// forward slashes become backslashes.
+static Str nativepath(Arena *a, Str path)
+{
+    Buf b(a, path.len+2);
+    iz  i = 0;
+    if (path.len>=2 && path[0]=='/' && letter(path[1]) && (path.len==2 || path[2]=='/')) {
+        putbyte(&b, (u8)(path[1] & 0xdf));
+        putbyte(&b, ':');
+        if (path.len == 2) putbyte(&b, '\\');
+        i = 2;
+    }
+    for (; i < path.len; i++) {
+        putbyte(&b, path[i]=='/' ? '\\' : path[i]);
+    }
+    return finish(&b);
+}
+
+// Append a program name, the first argument of a command line, which
+// the parsers split without escapes: quote it if needed, and drop any
+// quotes since they cannot be represented.
+static void quoteprogram(Buf *b, Str name)
+{
+    b32 quote = !name.len;
+    for (iz i = 0; i < name.len; i++) {
+        quote |= name[i]==' ' || name[i]=='\t';
+    }
+    if (quote) putbyte(b, '"');
+    for (iz i = 0; i < name.len; i++) {
+        if (name[i] != '"') putbyte(b, name[i]);
+    }
+    if (quote) putbyte(b, '"');
+}
+
+// Append an argument quoted for CommandLineToArgvW and the MSVCRT
+// parser, the inverse of splitcmdline. Quoting glob and quote characters
+// too keeps Cygwin and MSYS children from expanding them again.
+static void quotearg(Buf *b, Str arg)
+{
+    b32 quote = !arg.len;
+    for (iz i = 0; i < arg.len; i++) {
+        switch (arg[i]) {
+        case ' ': case '\t': case '\n': case '\v': case '"':
+        case '*': case '?':  case '[':  case '{':  case '\'':
+            quote = 1;
+        }
+    }
+    if (!quote) {
+        print(b, arg);
+        return;
+    }
+
+    putbyte(b, '"');
+    iz slashes = 0;
+    for (iz i = 0; i < arg.len; i++) {
+        if (arg[i] == '\\') {
+            slashes++;
+        } else {
+            if (arg[i] == '"') {
+                for (iz k = 0; k <= slashes; k++) {
+                    putbyte(b, '\\');  // double the run, then escape
+                }
+            }
+            slashes = 0;
+        }
+        putbyte(b, arg[i]);
+    }
+    for (; slashes; slashes--) {
+        putbyte(b, '\\');  // the closing quote must not be escaped
+    }
+    putbyte(b, '"');
+}
+
+// Append an argument for a batch file run with cmd /s /c, as in Rust's
+// fix for CVE-2024-24576 ("BatBadBut"): quoted unless plainly safe,
+// quotes doubled, and % broken up with an empty substring expansion so
+// cmd cannot expand variables. Returns false for arguments cmd cannot
+// carry (NUL, CR, LF).
+static b32 quotebatarg(Buf *b, Str arg, b32 quote)
+{
+    Str safe = "#$*+-./:?@\\_";
+    quote |= !arg.len || arg[arg.len-1]=='\\';
+    for (iz i = 0; i < arg.len; i++) {
+        u8 c = arg[i];
+        if (!c || c=='\r' || c=='\n') {
+            return 0;
+        }
+        if (c<0x80 && !alnum(c) && find(safe, {&c, 1})<0) {
+            quote = 1;
+        }
+    }
+
+    if (quote) putbyte(b, '"');
+    iz slashes = 0;
+    for (iz i = 0; i < arg.len; i++) {
+        u8 c = arg[i];
+        if (c == '\\') {
+            slashes++;
+        } else {
+            if (c == '"') {
+                for (; slashes; slashes--) putbyte(b, '\\');
+                putbyte(b, '"');
+            } else if (c == '%') {
+                print(b, "%%cd:~,");
+            }
+            slashes = 0;
+        }
+        putbyte(b, c);
+    }
+    if (quote) {
+        for (; slashes; slashes--) putbyte(b, '\\');
+        putbyte(b, '"');
+    }
+    return 1;
+}
+
+// The NAME of a "NAME=value" string. A leading = belongs to the name,
+// as in the hidden =C: variables.
+static Str envname(Str s)
+{
+    iz i = 1;
+    for (; i<s.len && s[i]!='='; i++) {}
+    return takehead(s, i<s.len ? i : s.len);
+}
+
+// Order "NAME=value" strings as Windows wants an environment block:
+// by name, case-insensitively by upper case.
+static b32 winenvless(Str *a, Str *b)
+{
+    Str x = envname(*a);
+    Str y = envname(*b);
+    for (iz i = 0; i<x.len && i<y.len; i++) {
+        i32 c = x[i]>='a' && x[i]<='z' ? x[i]-32 : x[i];
+        i32 d = y[i]>='a' && y[i]<='z' ? y[i]-32 : y[i];
+        if (c != d) return c < d;
+    }
+    return x.len < y.len;
+}

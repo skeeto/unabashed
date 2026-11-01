@@ -25,7 +25,8 @@ static Fixed fixedpoint(Arena *a, Str src, b32 extglob)
 {
     Fixed r = {};
     Lexer *L = newlexer(a, src);
-    L->extglob = extglob;
+    L->extglob  = extglob;
+    L->stackmax = (iz)1<<20;
     for (i32 n = 0; n < 1000; n++) {
         Parsed p = parseunit(L);
         if (p.status == PARSE_EOF) {
@@ -39,7 +40,8 @@ static Fixed fixedpoint(Arena *a, Str src, b32 extglob)
 
         Str first = printasfunc(a, p.cmd);
         Lexer *M  = newlexer(a, first);
-        M->extglob = extglob;
+        M->extglob  = extglob;
+        M->stackmax = (iz)1<<20;
         Parsed q  = parseunit(M);
         if (q.status!=PARSE_OK || !q.cmd || q.cmd->kind!=N_FUNCDEF || M->msgs) {
             r.status = FIX_REPARSE;

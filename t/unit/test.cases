@@ -1,0 +1,1245 @@
+# Cases for t/unit/test_test.cpp, recorded into test.golden by
+# test_record.sh. One shell command per line, using only single quotes,
+# $'...' and plain words. "#posix " runs the line in POSIX mode. The
+# working directory holds the tree built by test_oracle.sh, and the
+# variables x empty arr as ref badref are set (see test_oracle.sh).
+
+# argument counts
+test
+test ''
+test x
+test -
+test --
+test !
+test '('
+test ')'
+test -a
+test -o
+test -z
+test -n
+test -t
+test -e
+test =
+test ' '
+[ ]
+[
+[ x
+[ x ]
+[ '' ]
+[ x ] ]
+[ ] ]
+[ ']' ]
+[ -n ]
+[ -z ]
+[ ! ]
+[ x y ]
+[ x = x ]
+[ x = y ]
+[ ! x = y ]
+[ '(' x ')' ]
+[ a -a b -o '' ]
+[ 1 -eq 1 ]
+[ 1 -eq a ]
+[ x x x x x ]
+[ x '[' ]
+[ x ]]
+[ x ']]'
+[ '(' x -a y ]
+[ '(' x -a '(' y ]
+[ '(' '(' x ')' -a y ]
+[ x -a '(' y -o z ]
+[ ! ! ! ! ]
+[ x -a ]
+[ '(' x ')' ')' ]
+
+# two arguments
+test ! x
+test ! ''
+test ! !
+test ! -n
+test -n x
+test -n ''
+test -z x
+test -z ''
+test x y
+test x -n
+test -q x
+test -nt x
+test -eq 1
+test = x
+test == x
+test -x- x
+test '' ''
+test '(' x
+test x ')'
+test '(' ')'
+test -- x
+test - x
+test -ab x
+test -o errexit
+test -o braceexpand
+test -o hashall
+test -o interactive-comments
+test -o nosuchoption
+test -o posix
+test -o ''
+test -o vi
+test -o emacs
+
+# three arguments
+test x = x
+test x = y
+test x == x
+test x != x
+test x != y
+test '' = ''
+test '' = x
+test a '<' b
+test b '<' a
+test a '>' b
+test b '>' a
+test a '<' a
+test a '<' ab
+test ab '<' a
+test A '<' a
+test Z '<' a
+test $'\x80' '>' a
+test $'\xff' '>' $'\x7f'
+test é '>' z
+test x -a y
+test x -a ''
+test '' -a y
+test '' -o ''
+test x -o ''
+test '' -o y
+test -e -a -e
+test -e -o -e
+test ! -z x
+test ! -z ''
+test ! -n x
+test ! ! x
+test ! ! ''
+test ! x y
+test ! -q x
+test '(' x ')'
+test '(' '' ')'
+test '(' ! ')'
+test '(' '(' ')'
+test '(' ')' ')'
+test ')' ')' ')'
+test x y z
+test x '(' z
+test = = =
+test == == ==
+test != != !=
+test '<' '<' '<'
+test -a -a -a
+test -o -o -o
+test ! ! !
+test ! = x
+test ! = =
+test -n = -n
+test -z -a -z
+test -eq -eq -eq
+test 1 -eq 1
+test 1 -eq 2
+test 1 -eq x
+test x -eq 1
+test x -eq y
+test '' -eq 0
+test 0 -eq ''
+test 1 -ne 2
+test 1 -ne 1
+test 1 -lt 2
+test 2 -lt 1
+test 1 -lt 1
+test 1 -le 1
+test 2 -le 1
+test 2 -gt 1
+test 1 -gt 2
+test 1 -ge 1
+test 0 -ge 1
+test -1 -lt 0
+test +1 -eq 1
+test ' 1' -eq 1
+test '1 ' -eq 1
+test ' 1 ' -eq ' 1 '
+test $'\t1\n' -eq 1
+test $'\v\f\r1' -eq 1
+test '1 2' -eq 1
+test '- 1' -eq -1
+test '+-1' -eq -1
+test -- -eq 0
+test - -eq 0
+test + -eq 0
+test 01 -eq 1
+test 010 -eq 10
+test 0x10 -eq 16
+test 1.0 -eq 1
+test 1e3 -eq 1000
+test 9223372036854775807 -eq 9223372036854775807
+test 9223372036854775808 -eq 0
+test -9223372036854775808 -lt 0
+test -9223372036854775809 -lt 0
+test 99999999999999999999 -gt 0
+test 00000000000000000000000001 -eq 1
+test -0 -eq 0
+test 1 -EQ 1
+test 1 -eq
+test 1 -eq 1 1
+test x -lt
+test x -nt
+test x -ef
+test x -ot
+test x =~ x
+test x !~ x
+test x === x
+test x '=' x
+test x -l x
+test x -e x
+test x -n x
+
+# four arguments
+test ! x = x
+test ! x = y
+test ! '' -a x
+test ! x -a x
+test ! ! x = x
+test ! ! ! x
+test ! ! ! ''
+test ! '(' x ')'
+test '(' x = x ')'
+test '(' x = y ')'
+test '(' ! x ')'
+test '(' ! '' ')'
+test '(' -n x ')'
+test '(' -z x ')'
+test '(' x y ')'
+test '(' -q x ')'
+test '(' -t -a ')'
+test '(' -t 1 ')'
+test '(' -t x ')'
+test x = x -a
+test x -a y -a
+test x -a y z
+test a b c d
+test -n x -a y
+test -z x -o y
+test x = y z
+test -t 1 = 1
+test -t -a -t -a
+test '(' x ')' y
+test x '(' y ')'
+test x -o '(' y
+test '(' '(' x ')'
+test '(' x ')' ')'
+
+# five or more arguments: the expression grammar
+test x -a y -a z
+test x -a '' -a z
+test x -o '' -o ''
+test '' -o '' -o ''
+test '' -o '' -o z
+test x -a y -o ''
+test '' -a y -o z
+test '' -a '' -o z
+test x -o y -a ''
+test '' -o y -a ''
+test x -a x -a x -a x -a ''
+test 1 -eq 1 -a 2 -eq 2
+test 1 -eq 1 -a 2 -eq 3
+test 1 -eq 2 -o 2 -eq 2
+test 1 -eq 2 -o 2 -eq x
+test 1 -eq x -o 2 -eq 2
+test 1 -eq 1 -o 2 -eq x
+test 1 -eq 2 -a 2 -eq x
+test x = x -a y != z
+test ! x -a y
+test ! '' -a y
+test ! '' -a ''
+test ! ! x -a y
+test ! x -o y -o z
+test x -a ! y -o z
+test x -a ! '' -a z
+test '(' x ')' -a y
+test '(' '' ')' -a y
+test '(' '' ')' -o ''
+test '(' x = y ')' -o z
+test '(' x = x ')' -a '(' y = y ')'
+test '(' x = x ')' -a '(' y = z ')'
+test '(' x -a '' ')' -o y
+test '(' x -o '' ')' -a y
+test '(' '(' x ')' ')' -a y
+test '(' '(' '' ')' ')' -a y
+test x -a '(' y ')'
+test x -a '(' '' ')'
+test x -a '(' '' -o z ')'
+test x -a '(' y = z ')'
+test y -a '(' '' ')'
+test '' -o '(' y ')'
+test '' -o '(' '' ')'
+test '(' ! x ')' -o y
+test '(' ! '' ')' -a y
+test '(' x y ')' -a z
+test '(' x ')' x ')'
+test '(' x -a y
+test '(' x -a y z
+test '(' x -a y -a z
+test '(' '(' x -a y ')'
+test '(' x -a y ')' ')'
+test ')' -a x -a y
+test x -a y -a
+test x -a y -o
+test x -o y -a
+test x -a -a -a x
+test -a -a -a -a -a
+test -o -o -o -o -o
+test ! ! ! ! !
+test ! ! ! ! x
+test ! ! ! ! ''
+test '(' '(' '(' '(' '('
+test ')' ')' ')' ')' ')'
+test '(' '(' '(' x ')' ')' ')'
+test '(' '(' '(' '' ')' ')' ')'
+test '(' '(' '(' x ')' ')'
+test x y z w v
+test x -y z w v
+test x -a y z w
+test x -a y -z w
+test x -a -y z w
+test x -a y -nt
+test -n -a -n -a -n
+test -z -a -n -a ''
+test = -a = -a =
+test = = = -a x
+test x -a = = =
+test -e x -a -e y
+test -f -a -f -a -f
+test -t -a x -o y
+test x -a -t -o y
+test -t 1 -a -t 0
+test -t x -a y
+test -t -o y -a z
+test x -a -t
+test x -a -t x
+test x -a -t 1 -a y
+test -t 1 -a -t
+test 1 2 3 4 5 6 7 8
+test x = y -o x = x -a y = y
+test x = x -o y = z -a z = w
+test x -nt y -o z -ot w
+test '' -a '' -o '' -a ''
+test a -a b -o c -a ''
+test '(' ')' -a x
+test '(' '(' ')' ')' -a x
+test '(' x ')' -a '(' ')'
+test '(' x ')' '(' y ')'
+test '(' -n ')' -a x
+test '(' -n x ')' -a x
+test '(' -z x y ')' -o z
+test '(' x = y = z ')' -o z
+test '(' a b c d e ')' -o z
+test '(' a -a b -a c ')' -o z
+test '(' ! ')' -a x
+test '(' ! ! ')' -a x
+test '(' ! -n '' ')' -a x
+test '(' '(' x ')' ')'
+test x -a '(' -t ')'
+test x -a '(' -t -a ')' y
+
+#posix test -t
+#posix test -t 1
+#posix test -t x
+#posix test -t -a x
+#posix test -t -a x -o y
+#posix test x -a -t -o y
+#posix test -t 1 -a -t 0
+#posix test x -a -t
+#posix test a '<' b
+#posix test b '<' a
+#posix test -o posix
+#posix test '(' -t -a ')'
+
+# -t
+test -t 0
+test -t 1
+test -t 2
+test -t 99
+test -t -1
+test -t ' 1 '
+test -t x
+test -t ''
+test -t 1x
+test -t 4294967297
+test -t 99999999999999999999
+test -t 1 2
+test ! -t 1
+test ! -t
+test ! -t x
+
+# unary file operators
+test -e reg
+test -a reg
+test -f reg
+test -d reg
+test -s reg
+test -r reg
+test -w reg
+test -x reg
+test -h reg
+test -L reg
+test -p reg
+test -S reg
+test -c reg
+test -b reg
+test -u reg
+test -g reg
+test -k reg
+test -O reg
+test -G reg
+test -N reg
+test -e empty
+test -f empty
+test -s empty
+test -e dir
+test -f dir
+test -d dir
+test -s dir
+test -x dir
+test -r dir
+test -w dir
+test -h dir
+test -e link
+test -f link
+test -h link
+test -L link
+test -s link
+test -d link
+test -e dlink
+test -f dlink
+test -h dlink
+test -L dlink
+test -s dlink
+test -O dlink
+test -r dlink
+test -e dirlink
+test -d dirlink
+test -h dirlink
+test -f dirlink
+test -e fifo
+test -p fifo
+test -f fifo
+test -s fifo
+test -r fifo
+test -e sock
+test -S sock
+test -f sock
+test -p sock
+test -e m000
+test -r m000
+test -w m000
+test -x m000
+test -s m000
+test -f m000
+test -r m644
+test -w m644
+test -x m644
+test -r m755
+test -w m755
+test -x m755
+test -r m444
+test -w m444
+test -x m444
+test -r m200
+test -w m200
+test -x m200
+test -r m111
+test -w m111
+test -x m111
+test -u m4755
+test -g m4755
+test -k m4755
+test -x m4755
+test -u m2755
+test -g m2755
+test -k m2755
+test -u m644
+test -g m644
+test -k m644
+test -d sticky
+test -k sticky
+test -u sticky
+test -w sticky
+test -d dir000
+test -r dir000
+test -w dir000
+test -x dir000
+test -e dir000
+test -N reg
+test -N atime
+test -N old
+test -O .
+test -G .
+test -d .
+test -e ''
+test -f ''
+test -d ''
+test -h ''
+test -L ''
+test -r ''
+test -w ''
+test -x ''
+test -O ''
+test -s ''
+test -e missing
+test -f missing
+test -h missing
+test -r missing
+test -x missing
+test -N missing
+test -O missing
+test -G missing
+test -e reg/
+test -f reg/
+test -d dir/
+test -h dirlink/
+test -d dirlink/
+test -h link/
+test -e /
+test -d /
+test -O /
+test -G /
+test -w /
+test -r /
+test -x /
+test -k /tmp
+test -d /tmp
+test -w /tmp
+test -e /dev/null
+test -c /dev/null
+test -f /dev/null
+test -s /dev/null
+test -r /dev/null
+test -w /dev/null
+test -O /dev/null
+test -b /dev/null
+test -f /etc/passwd
+test -r /etc/passwd
+test -w /etc/passwd
+test -O /etc/passwd
+test -s /etc/passwd
+test -x /usr/local/bin/bash
+test -O /usr/local/bin/bash
+test -e /nonexistent
+test ! -e reg
+test ! -e missing
+test ! -d dir
+test ! -f
+test -e reg -a -d dir
+test -e reg -a -d reg
+test -e missing -o -d dir
+test ! -e missing -a ! -e missing2
+test -e
+test -f
+test -d -a -d
+test -e -e
+test -f missing -o -f reg -a -d dir
+test '(' -f reg ')'
+test '(' -f reg -a -d dir ')' -o x
+test -d dir -a '(' -f dir -o -h link ')'
+
+# binary file operators
+test old -nt new
+test new -nt old
+test old -ot new
+test new -ot old
+test reg -nt reg
+test reg -ot reg
+test reg -ef reg
+test reg -ef hard
+test hard -ef reg
+test reg -ef link
+test link -ef reg
+test reg -ef empty
+test dir -ef dirlink
+test reg -ef missing
+test missing -ef reg
+test missing -ef missing
+test dlink -ef dlink
+test reg -nt missing
+test missing -nt reg
+test missing -nt missing2
+test reg -ot missing
+test missing -ot reg
+test missing -ot missing2
+test '' -nt reg
+test reg -nt ''
+test '' -ot reg
+test reg -ot ''
+test '' -ef ''
+test link -nt reg
+test link -ot reg
+test new -nt link
+test old -nt link
+test dlink -nt reg
+test reg -nt dlink
+test atime -nt reg
+test atime -ot new
+test old -nt new -o new -nt old
+test ! old -nt new
+test reg -ef hard -a hard -ef link
+
+# -v and -R
+test -v x
+test -v empty
+test -v arr
+test -v 'arr[0]'
+test -v 'arr[1]'
+test -v 'arr[2]'
+test -v as
+test -v 'as[k]'
+test -v 'as[z]'
+test -v ref
+test -v badref
+test -v nosuch
+test -v 0
+test -v 1
+test -v ''
+test -R ref
+test -R badref
+test -R x
+test -R nosuch
+test ! -v x
+test -v x -a -v nosuch
+test -v
+test -R
+
+# adversarial additions: grammar corners, integer and byte edge cases,
+# more file types and paths
+test ! -a x
+test ! -o ''
+test '(' -a ')'
+test '(' -o ')'
+test '(' = ')'
+test ! = !
+test ! ! = !
+test '(' = = ')'
+test '(' '(' ')' ')'
+test '(' ! ! ')'
+test '(' x ')' -a
+test '(' x ')' -o
+test x -a '(' '(' y ')' ')'
+test '' -o '(' x ')'
+test ! '' -a '(' '' ')'
+test -t 0 -a
+test -t +1
+test -t 2147483648
+test -t -2147483648
+test -t 2147483649
+test -t 00000000001
+test -n -n -n
+test -z '' -a -n
+test -n x -a ''
+test -n x -o
+test x -a -n
+test -o -o
+test -v -v
+test -R -R
+test -t -t
+test -l x
+test -= x
+test x '<'
+test '!' '='
+test '' '<' a
+test a '>' ''
+test '' '>' ''
+test 1 -eq ' '
+test '' -eq ''
+test ' ' -eq 1
+test $'1\n' -eq 1
+test $'1\r' -eq 1
+test $'1\v' -eq 1
+test $'1\f' -eq 1
+test $'\n\n1\n\n' -eq 1
+test $'1\t\t' -eq 1
+test 1 -eq $'\x01'1
+test 1 -eq 1$'\x01'
+test 1 -eq -
+test 1 -eq +
+test 1 -eq ++1
+test 1 -eq --1
+test 1 -eq ' +1'
+test 1 -eq '+ 1'
+test -0 -eq +0
+test 9223372036854775807 -gt -9223372036854775808
+test -9223372036854775808 -lt 9223372036854775807
+test -9223372036854775808 -eq -9223372036854775808
+test 18446744073709551616 -eq 0
+test 18446744073709551615 -eq -1
+test 000000000000000000000000000009223372036854775807 -eq 9223372036854775807
+test 922337203685477580 -lt 9223372036854775807
+test 9223372036854775806 -lt 9223372036854775807
+test -9223372036854775807 -gt -9223372036854775808
+test 1 -eq 1 -a 1 -eq x -a 1 -eq y
+test x -eq 1 -a 1 -eq y
+test 1 -eq x -o 1 -eq y
+test 2 -gt 1 -a 3 -lt 2 -o 1 -le 1
+test '(' 1 -eq x ')'
+test ! 1 -eq x
+test ! 1 -eq 1 -a ''
+test -eq -eq 1
+test 1 -eq -eq
+test -nt -nt -nt
+test -ef -ef -ef
+test x -ot y -ot
+test -a x -a
+test -o x -o
+test ! -o x
+test ! -o
+test x ! y
+test x = ! = y
+test x != x -o y = y
+test x != x -a y = y -o z
+test ! x != x
+test '(' ! x != x ')'
+test ! '(' x != x ')'
+test ! '(' x != x ')' -a ''
+test ! '(' x ')' -a ''
+test ! ! '(' x ')' -a ''
+test '(' x ')' -o '(' ')'
+test '(' ')' -o x
+test ')' = ')'
+test ')' -a ')'
+test ')' ')'
+test '(' '(' '(' ')' ')' ')'
+test '(' '(' x ')' ')' -a '(' '(' y ')' ')'
+test '(' x '(' ')' ')'
+test '(' x ')' -a '(' y ')' -o '(' '' ')'
+test '(' '' ')' -o '(' '' ')'
+test '' -o '(' '' ')' -o ''
+test '' -a '(' x ')'
+test x -o '(' x
+test x -o '(' '(' x
+test '(' x -o
+test '(' x -a ')'
+test '(' x -a y ')'
+test '(' x -a '' ')'
+test '(' '' -o '' ')'
+test '(' -n '' ')'
+test '(' ! -n '' ')'
+test '(' -t ')'
+test x -a '(' -t 1 ')'
+test x -a '(' -t ')' -a y
+test x -a '(' -t -o ')'
+test x -a '(' -t -o y ')'
+test x -a '(' -t x ')'
+test -t -a -t -a -t
+test -t -o -t -o -t
+test -t -a -t
+test -t -a
+test -t 1 -a
+test -t 1 -o x
+test -t 1 = 1 -a x
+test x -a -t -a
+test x -a -t 1
+test x -a -t y
+test x -a '(' '(' -t ')' ')'
+test -e -a -e -a -e
+test -z -o -z -o -z
+test -z -z -o -z
+test -z -z -a -z -z
+test -n '' -o -n '' -o -n x
+test -z x -a -z
+test -z x -a -z -a x
+test -h -h
+test -d -d -d -d
+test = -a =
+test = -o = -a = -o =
+test x = -a = x
+test x -a = -a x
+test '' -a = -o =
+test != -a !=
+test '!' -a '!'
+test '!' -o '!' -a ''
+test '<' -a '>'
+test '>' '>' '>' '>'
+test x '>' y -o y '>' x
+test x '<' y '<' z
+[ '(' ]
+[ '(' x ]
+[ ! '(' ]
+[ -t ]
+[ ! -t ]
+[ '(' x ')' -a '(' y ]
+[ '(' '(' x ]
+[ '(' x -o ]
+[ x -a '(' ]
+[ '(' -t ]
+[ '(' -n x -a ]
+[ '(' x y ]
+[ '(' x y z ]
+[ '(' x y z w ]
+[ '(' x y z w v ]
+[ ']' = ']' ]
+[ '[' = '[' ]
+[ x -a ']' ]
+[ '(' ']' ')' ]
+[ '(' x ')' ']' ]
+[ x -eq ]
+[ -t 1 -a -t ]
+[ = = = ]
+[ x ] x
+[ x ']'
+[ x '] '
+[ x ' ]'
+[ -o -o ]
+[ -o ]
+[ ')' ]
+[ '(' ')' ]
+[ '(' '(' ')' ]
+[ '(' -a ')' ]
+[ -e -a -e ]
+[ x -a y -a ]
+[ x -a y -o ]
+[ ! ! ! ]
+test ! ! ! ! ! !
+test ! ! ! ! ! ! x
+test ! ! ! ! ! ! ''
+test ! ! ! ! ! ! ! x
+test ! ! ! ! ! ! ! ! !
+test x -a ! ! ! ''
+test x -a ! ! ! ! ''
+test x -a ! ! ! !
+test x -a ! '(' '' ')'
+test x -a ! '(' x ')'
+test '' -o ! '(' '' ')'
+test x y -a z
+test x y -o z
+test -n x y
+test -n x y z
+test -n x y z w
+test x = y z w
+test x = y -a
+test x = y -o
+test x = y -a z
+test x = y -o z
+test x = x -a z -a
+test ! x = y -a z
+test ! x = y -o ''
+#posix test -t -a -t
+#posix test -t -a -t -a -t
+#posix test -t 1 -a -t
+#posix test '(' -t ')'
+#posix test ! -t
+#posix test -t +1
+#posix test x -a '(' -t ')'
+#posix test '' '<' a
+#posix test a '>' A
+#posix test $'\xff' '>' a
+#posix test ! -t 1
+#posix test -t -t
+#posix [ -t ]
+#posix [ -t -o x ]
+test -a reg -a -a dir
+test -a reg -o
+test -a missing -o -a reg
+test -e reg -a
+test -e -a reg
+test -f reg -a -d dir -a -h link -a -p fifo -a -S sock
+test -f reg -a -d dir -a -h link -a -p fifo -a -S missing
+test -s reg -a ! -s empty
+test ! -s empty -a ! -s reg
+test reg -nt old -a old -ot reg
+test new -nt reg -a reg -nt old
+test reg -nt new -o reg -ot old
+test link -ef hard
+test dirlink -ef dir
+test dirlink -ef dirlink
+test dir -ef dir/
+test dirlink/ -ef dir
+test . -ef dir
+test sticky -ef sticky
+test fifo -ef fifo
+test sock -ef sock
+test dlink -nt missing
+test missing -ot dlink
+test dlink -ot reg
+test reg -ot dlink
+test '' -nt ''
+test '' -ot ''
+test reg -ef ''
+test '' -ef reg
+test -k sticky -a -d sticky
+test -u m4755 -a -g m2755 -a ! -k m644
+test -O reg -a -G reg
+test -G dlink
+test -G dirlink
+test -N dlink
+test -N link
+test -N dirlink
+test -N dir
+test -N new
+test -N empty
+test -r link
+test -w link
+test -x link
+test -x dirlink
+test -w dirlink
+test -r dirlink/
+test -x dir/
+test -x reg/
+test -r reg/
+test -e link/
+test -e dirlink/
+test -L dirlink/
+test -L dlink -a ! -e dlink
+test -k dir
+test -g dir
+test -u dir
+test -s sock
+test -c fifo
+test -b dir
+test -p dlink
+test -S dlink
+test -d dir000/
+test -r dir000/
+test -s m200
+test -w m4755
+test -x m2755
+test -r .
+test -w .
+test -x .
+test -e /dev/null -a -c /dev/null
+test -h /dev/null
+test -e /usr/local/bin/bash -a -x /usr/local/bin/bash
+test -w /usr/local/bin/bash
+test -r /usr/local/bin/bash
+test /usr/local/bin/bash -nt /
+test / -ef /
+test /tmp -ef /
+test /dev/null -ef /dev/null
+test /etc/passwd -ot /nonexistent
+test /nonexistent -ot /etc/passwd
+test -v x -a -v empty -a -v arr
+test -v x -o -v
+test -v -a -v
+test -o hashall -a -o braceexpand
+test -o errexit -o -o noglob
+test -o -a -o
+test -o hashall -a
+test -o ' hashall'
+test -o hashall,
+test -o HASHALL
+test -v ' x'
+test -v 'x '
+test -R ref -a ! -R x
+test '(' ')' x ')'
+test x -a '(' ')' ')'
+test '(' '(' x ')' -a y ')'
+test -a -a -a -a
+test -z -z -z -z
+test '(' x '' -a y
+[ '(' x '' -a y ]
+test '(' x -a y '' ')'
+test '(' x -a ']'
+[ '(' x -a ']' ]
+[ '(' x -a ']' ')' ]
+test x -eq 1 -o 1
+test '' -o '' -eq 1
+test x -a x -o '' -eq 1
+test 1 -eq 1 -a '(' 2 -lt x ')'
+test ! '(' 1 -eq x ')'
+test '(' x ')' -x
+test x -a y ')'
+test x -a y -a ')'
+test x y -o
+test x -o y z
+test x -o y -z
+test x -a -t 1 -o -t 2
+test $'\xa0'1 -eq 1
+test $'\x85'1 -eq 1
+test 1 -eq 1$'\xa0'
+test -t $'\v'1
+test -t $'1\v'
+test -t ' '
+test é = é
+test $'\xc3\xa9' '<' $'\xc3\xa8'
+test a '<' $'\xe2\x82\xac'
+test $'\xe2\x82\xac' '>' $'\xc3\xbf'
+#posix test é '<' z
+#posix test $'\xc3\xa9' '>' $'\xc3\xa8'
+test '(' x -a y ')' -a '(' '' -o z ')' -a '(' ! '' ')'
+test '(' '(' '(' x = x ')' ')' ')'
+test '(' '(' x = x ')' -a '(' y ')' ')'
+test ! '(' ! '(' ! x ')' ')'
+test ! '(' ! '(' ! '' ')' ')'
+test ! '(' ! '(' x ')' ')'
+test ! '(' ! '(' '' ')' ')'
+test '(' ! '(' x ')' ')'
+test '(' ! '(' '' ')' ')'
+test '' -a '(' ! '(' x ')' ')'
+test x -o '(' x -eq 1 ')'
+test '' -o '(' x -eq 1 ')'
+test '(' -n ')' ')'
+test '(' -n ')' ')' ')'
+test '(' x ')' ')' -a y
+test ')' '(' x
+test '(' ')' -a '(' ')'
+test '(' ! ')' -o '(' ! ')'
+test -n '(' -a -n ')'
+test -n '(' -o '(' ')'
+test '(' -a ')' -a '(' -o ')'
+test x -a '(' -a ')'
+test -e '(' -o -e ')'
+test = -a '(' = ')'
+test '(' x = x -a y ')' -o z
+test 1 -lt 2 -a 2 -lt 3 -a 3 -lt 4 -a 4 -lt 5
+test 1 -lt 2 -a 2 -lt 3 -a 3 -lt 4 -a 5 -lt 4
+test -9223372036854775808 -le -9223372036854775808 -a 9223372036854775807 -ge 9223372036854775807
+test ' -1' -lt ' +1'
+test $'\t-1\t' -lt $'\t+1\t'
+test '1 ' -eq $'\t1'
+test 0 -eq -0 -a +0 -eq -0
+test 1 -ne 1 -o 2 -ne 2 -o 3 -ne 4
+test 99999999999999999999 -eq 99999999999999999999
+test 1 -gt 99999999999999999999
+test x -gt 99999999999999999999
+test -nt -nt
+test -ef -ef
+test -eq -eq
+test x -nt -nt
+test -nt -a -nt
+test missing -nt -a -o reg -nt -o
+test reg -nt missing -a missing -ot reg -a ! missing -ef missing
+test new -nt old -a new -nt reg -a reg -nt old -a ! old -nt old
+test -t 1 -a -t 2 -o -t 0
+test x -a -t -a -t
+test x -o -t -o -t
+test -t -o -t
+test ! -t -a x
+test ! -t -o ''
+test '(' -t -a -t ')'
+test '(' -t ')' -a '(' -t ')'
+test -o posix -o -o hashall
+test ! -o posix
+test -v -o -v
+test -v x -a -o hashall -a -R ref
+test -R ref -o -R
+test -z -n -o -n -z
+test -n -z -a -z -n
+test -s -a -s
+test -L -L -L
+test -h -o -h -o -h
+test -d . -a -d / -a -d dir/
+test -x dir000/
+test -k sticky/
+test -d sticky/
+test -e dlink/
+test -h dlink/
+test -p fifo/
+test -e fifo/
+[ -d sticky/ ]
+[ '(' -k sticky ')' ]
+[ ! -e dlink -a -h dlink ]
+
+# generated lines, mostly groups, ! and -a/-o, kept as regressions
+test ']' '-o' ')' '!' '('
+test '99999999999999999999' '(' '-a' ')' '-q' '-o' '-ef' '(' ')' '(' '('
+test '-o' '!' ')' '<' '(' '(' '-a'
+test ')' '99999999999999999999' '!' '-' ')' ')' '-o' ')' '-1' 'a=' 'x' '-ef' '!'
+[ ')' '-o' '-o' '-a' ]
+[ ')' '!' '(' ')' '-a' ']' '-' '-o' ')' '-q' '(' '!' '-'
+[ '!' 'a=' '!' '-o' '>' '-9223372036854775808' '-eq' '-q' '(' ]
+[ '-ab' ' 2 ' ')' '-o' '-a' ]
+[ '(' '-ab' '<' '--' '0' '(' '-o' ')' ]
+test '-a' '-ne' '-9223372036854775808' '1'
+#posix test '-o' '-o' '-ne' '!' '!' '-o' $'\t7' ')' ']' '-o' '-o' '-1' ')' ')' ')' '-1'
+test '>' '(' 'a=' '' '--' '-1' '0' '!'
+#posix test '-ab' '-a' '>' '(' '(' '0' '99999999999999999999' ')' ')' '!' '-o'
+test '!' ')' '(' '(' '-lt' '!'
+[ ')' ')' '-ef' '-9223372036854775808' ]
+test '+3' ')' '-ot' '-a' '-1'
+test '-o' ')' '!' ')' '!' ')'
+test '-o' '-o' ')' $'\t7' ')' '-ef' '(' '!' ')'
+test ')' '-o' '(' '(' ')' '-1'
+test '-ab' '0' ']' '-o' '99999999999999999999' '-ef' '(' '!' '(' ' 2 ' '-o'
+test ')' '-a' ')' '-a' '-' '0' '-nt'
+[ '-o' '99999999999999999999' '(' ]
+[ '-o' '(' '-q' '-a' '(' '-eq' '-1' '!' '(' ]
+[ '-o' ')' ')' '' ')' '>' ]
+test ')' '-o' '-a' '!'
+test '(' '<' ')' '-ot' ')'
+test '!=' '-9223372036854775808' ')' ')'
+test '-o' ')' '(' '+3'
+test '99999999999999999999' '!=' '-lt' '!'
+test '==' '>' '-a' '(' 'x' '-o' '(' '!'
+[ '-o' '0' '(' '-ef' '!' '--' '(' '0'
+test '<' '-a' '1' '' ')' '-a' ')' '(' '(' '(' '-o'
+#posix test '!=' '(' '!' '>' '('
+[ '-' ')' '-a' ')' '-a' '!' '(' '(' '-q' '(' $'\t7' '!' '(' '-ab' '-9223372036854775808' '-a' ]
+test '!' '+3' ']' '(' $'\t7'
+[ '!' ')' '-q' '-a' '(' ' 2 ' '(' '-a' '-' ')' '1' 'a=' '(' ]
+[ '0' '(' '+3' '-a' '-' $'\t7' '-a' '(' '-o' '!' $'\t7' '-q' '!' 'x' '!' ')' ]
+[ '-o' '!' '-o' '(' '(' '-lt' ')' ]
+test '!' '!' '!' '-o' 'x'
+test '(' '-a' '1' 'a=' '-'
+test '(' '-o' '-ot' '-' 'x' '<' '!' '(' '(' ' 2 ' ')' '-a' ')' '-a' '' '!'
+test ')' ')' '-o' '-ot' '+3' ')' ' 2 ' '-lt' ')' '-' '-o'
+test '-ab' '!' '==' '' '!' '-9223372036854775808' '1' '-a' ')' '-ot' '!' '(' '(' '=' '' '-o'
+test '-a' ')' '-ge' '-a' '-' '-9223372036854775808' '>' '('
+test '!' '!' '-o' '(' '-a' ')' 'a=' '-o' ')'
+[ '(' '==' 'x' '-9223372036854775808' '-ab' '0' ')' ' 2 ' ')' ')' '1' '-ne' ')' ]
+test ')' '-ne' '-lt' '-1' '(' '-q' '(' ')'
+[ '+3' '-a' '+3' '!' '!' '(' ' 2 ' '(' ' 2 ' ]
+test '>' ')' '-a' ')' '-ge' '1' '-q' '-lt' '(' '!' '-'
+test '1' '!' '-lt'
+test '(' '!' '-9223372036854775808' '(' '-ot'
+#posix test ' 2 ' ')' '99999999999999999999' ')' '-ef' ')' '(' '!' '-a' ']' '('
+test '' ')' '(' ')' '!'
+test '-q' $'\t7' '!' ')'
+test '-1' '-1' ')' '('
+test '!' '-9223372036854775808' '!' '!' '-' ']' '(' '!' '-1' '(' '(' ')' '!='
+test '!' '-o' '-ab' '1' '-lt' ')' '!' ')'
+test ')' '-o' ')' ' 2 ' ')' '!'
+[ ')' '-nt' '' '' ]
+test '-1' '=' ' 2 ' 'x'
+test ')' '!' '!' '-9223372036854775808' '-a' '!' '99999999999999999999' '-o' '1' '1' ')' '-ab' '(' '+3' '!' '('
+test '!' '(' '(' '!'
+test '!' '(' '-9223372036854775808' '-a' '!'
+test ')' '--' '>' '('
+#posix [ '-a' '99999999999999999999' '-q' '-1'
+test '(' '99999999999999999999' '-o' '(' ' 2 ' '-o' ')' '-o' ')' ')' '(' '!' '('
+test '99999999999999999999' '-o' 'a=' ')' '!' ')' ')'
+test '-o' '!' ')' '-a' '-o' '!' 'a=' '=='
+[ '--' '-1' '(' '--' ')' ]
+test ')' '(' '!' '(' '-a' '--' '99999999999999999999'
+[ '-ab' '+3' ')' ')' ]
+test '(' '(' '-a' '-a' '(' ')' '--' '(' '--' '-o' ')' '(' ')' '(' '-o' ']'
+test ')' '-o' ')' '-q' '!' ')' ')' ')' '!' '-o' '-o' '(' '-o' '-a' ')' '!'
+test '(' '-o' ')' '-o'
+#posix [ ')' '0' '!' $'\t7' '-a' '(' '-9223372036854775808' '-ab' ')' '-o' '-o' ]
+[ '!' '-o' 'a=' '(' '-ab' ')' ]
+test '(' '-o' '!' '-a' '-a'
+[ ')' '-o' '-' ')' ')' ')' ']' ' 2 ' $'\t7' '-1' '-o' '' ')' '!' '==' '(' ]
+test '-1' ')' '0' '-ge' '99999999999999999999' ')' '1'
+test '-o' ')' '!' ')' '(' '-'
+test '(' '!=' '(' 'a='
+test '-ge' ')' '>' '!' '-o'
+test '-ab' '(' '(' '-1'
+test '-lt' ')' '!' 'a=' ')' '(' '' '!' '-ab' 'a=' '('
+test '(' '(' '-o' '-a'
+test 'a=' ')' '(' '(' ' 2 ' '(' '-ne' '(' '-a' '(' '('
+#posix [ '-q' '!' '99999999999999999999' '(' ')' ]
+test ')' ')' '-a' '(' '(' ']'
+test '0' '-a' ']' '('
+test 'a=' ']' '-' '--' '-o'
+[ '' ')' '1' $'\t7' '-a' '-a' '(' ')' '(' '-q' '(' '-q' '-a' ]
+test '' '-nt' '' ')' '(' '-1' '(' '(' ')'
+#posix test '!' '!' '(' $'\t7' ')'
+test '0' ')' 'a=' '-o' '-' '-o' ')' '=' ' 2 ' '-a' '-nt' 'x' ']' '-ab' ')' '!'
+test ')' '=' 'a=' ')' '' '99999999999999999999'
+[ '!' ')' '99999999999999999999' '-a' '(' ]
+test '==' '-' ']' '-a'
+[ '(' '-q' '-a' '-' '0' '-a' ')'
+#posix [ '-a' ')' 'x' '-o' '-ge' '-a' '(' ]
+test '-a' '-o' '(' '-ef' '0' '+3'
+test '(' '-9223372036854775808' '(' '-1' '-o'
+test '(' '(' '-o' '-9223372036854775808' 'x' '-9223372036854775808' '-a' '-o'
+#posix [ '==' '-ab' '!' '=' ]
+#posix test '!' '-' '!' ')' '0' '(' ')' '-9223372036854775808' $'\t7' '(' '-o' '-' ' 2 '
+test ')' ']' '1' '-o' '-ab'
+test 'a=' '-ne' '-o' 'a=' '--' '-o' '-o' '-a' ')' ')' '(' '(' ')' '99999999999999999999' '!' '('
+test ')' ')' 'x' '-o' ')' ')' '-a' '!' ')' '-a' '(' '-a' ' 2 '
+test '-a' '(' '('
+[ '==' '(' '-o' ']' '-9223372036854775808' '='
+[ '(' '(' 'a=' '(' '-o' ')' ]
+[ '(' '-ab' '-ge' '(' ' 2 ' ]
+test '-o' '(' ' 2 ' ')' '!' '-a' '-9223372036854775808'
+[ '(' ')' ')' ')' '<' '(' 'a=' '-o' ')' ]
+test '(' '(' '0' ')' '!'
+[ '!' '-eq' '-a' ')' '!' ]
+test '(' '!' ')' '!' '-a'
+test 'a=' '-ab' '(' '-o' '-'
+test '-ge' '(' '-a'
+test '-a' ')' '(' '==' '(' '-a'
+[ '-nt' '-ab' '-1' '-q' '--' ')'
+test ']' '1' '-o' '-ne' '-o'
+[ '-a' ' 2 ' '(' ]
+test ' 2 ' $'\t7' '(' '-1' '-nt' '-ot'
+test '-a' ')' '-a' '(' '-a'
+[ '(' '' '(' '-o' '-o' '-1' '-ot' '(' '!' ]
+#posix test '(' '!' '-o' '!' ')' '(' ')' '-' '-nt' '-a' '-o' ')' '(' '!' ' 2 ' '>'
+[ '-a' '-a' '--' '-o' '--' ')' '99999999999999999999' ')' '1' '+3' '99999999999999999999' ' 2 ' 'x' '-' '-o' '(' ]
+test '-a' '-9223372036854775808' '!' ')'
+[ '(' '!' '!' '!' '(' ]
+test ')' '>' '(' '-ge' ')' '!'
+test '-' '!=' '-o' '-1' '!=' 'a=' '' ')' '!' '(' ')'
+[ '(' '1' '(' '(' ' 2 ' '(' ']' ]
+test '-a' '99999999999999999999' ')' '+3' '-9223372036854775808' 'a='
+test '+3' ')' ')' '-a' '(' ')'
+[ '!' '-lt' '-o' '<' '99999999999999999999' '(' '-o' '(' '-o' '-a' '--' ]
+test ')' '-o' '99999999999999999999' '' $'\t7' '-1'
+[ '-q' '-o' '(' '(' '1' '99999999999999999999' 'a=' '-1' '-a' '!' ' 2 ' ]
+[ '-a' '(' '!' '-ne' ')' '-nt' '-a' '-nt' '1' $'\t7' 'a=' 'x' ')' ]
+test '(' '(' '-ab' '+3' '(' '-o'
+[ ')' '(' '' '-ot' '(' '-' ]
+[ ')' '(' ')' '-o' '(' ]
+test ')' '(' '-9223372036854775808' ' 2 ' '-a' '(' '-ef' ')' ')' '-o' '-ef'
+test '>' ' 2 ' '!' '-ab' '-ab'
+[ 'a=' '!=' '-9223372036854775808' '(' '(' ')' '-a' '!' ]
+test '-1' '(' '-ab' '(' ')' ' 2 ' '!'
+[ '99999999999999999999' '-a' '99999999999999999999' '-ge' '<' '-ab' ]
+test '(' '99999999999999999999' '99999999999999999999'
+test '(' ')' ')' ']' '-o' ')' '--' '-a' ')' '-eq' '!' ')' ')' '-ab' '-a' '('
+test '(' '-' ')' '==' ']' '-a' ')' ']'
+test '-a' '-q' '0' '('
+test '-ab' '!' '' '-ef' '-9223372036854775808' $'\t7' ')' ')' '-1' ')' '=' '(' '!'
+[ '(' ')' '(' '-9223372036854775808' ')' '(' '-o' '(' '-a' '-lt' 'x' ')' '==' ]
+test '-ef' '!' '-a' ')'
+[ '>' '(' ')' '--' '0' $'\t7' '1' '-a' '-o' ')' '!' ]
+#posix test '-o' '' ')' ')' '-o' '-o'
+test '+3' '<' ']' '(' ']' ')' '-o' '(' '-q' ')' ')' '(' ')' '(' '-' 'a='
+test ')' '!' '!' '(' '1' $'\t7'
+[ '<' '-ne' '(' '-o' '-ab' ')' '-1' '-o' '0' ')' '=' ]
+[ ')' '0' ')' '-ne' $'\t7' '1' ]
+[ '<' '-nt' '(' '-o' '99999999999999999999' ]
+[ '-9223372036854775808' '-1' '0' ')' ]
+test '!' ')' '-ab' '0' ']' ')'
+test '-o' '-a' '(' '-a'
+test '!' 'a=' ' 2 ' '(' '!' ')' ']'
+[ '!' ']' ')' '!' ')' '-9223372036854775808' ]
+#posix [ 'a=' '-q' ')' '(' '-a' ' 2 ' '(' '1' ')' ')' ')'
+test '!' '(' ')' 'x' '(' '99999999999999999999'
+[ '-o' '-ne' ')' '!' '(' ]
+test '(' '-a' '(' '-lt' ')'
+test '+3' ')' ')' '-a' 'a='
+test '(' ')' '(' ')' '-a' ')' '!' ')' $'\t7' ')' '('
+test '(' '1' '-a' '-o' '-ab'
+test '>' '-a' '-q' '!' '-ne' '!' '('
+test ']' '-o' '(' '-o' '(' ')'
+test '(' '(' '-nt' ')' ']' '-a' '-q' ')'
+test $'\t7' '-o' ''
+test '(' '(' '=' '!' '-a' '('
+test '(' '(' ')' 'a=' ')' ')' ']' '-ab' '(' '!' ')' $'\t7' ')' '+3' '!=' ')'
+[ '-ef' '-o' '-ef' ']' ]
+test 'a=' ')' '-ot' '(' '-o' '+3'
+test '0' '!=' '-q' 'a=' '-o' '(' '-o'
+[ '-o' $'\t7' '(' 'x' '(' '!' ' 2 ' ]
+[ '-o' '-ot' '1' ]
+test '-o' '!' '-ot' '-a' ')'
+#posix test '!' '-o' '-o' '-o' 'x' 'a=' 'a=' '1' '-ab' 'a=' '-ot'
+test '-a' '-ab' ')' '-o' '99999999999999999999' '-a' '(' '-nt' ')' '(' '-a' '--' '(' ')' '-lt' '=='
+test '0' 'a=' '-1' '-a' '!' ')' '-a' ']' '--' '(' '1' '!' '-lt' ')' '--' ')'
+test '!' '-q' ')' '!'
+test $'\t7' 'a=' '1' '-o' '-o' '(' '-ef' '(' '!' ')' '(' 'a=' '-ge'
+test '1' '0' '('
+test ')' '-eq' '-o' ')' '(' '-a' ')' ')' '-' '=' '-o'
+#posix test '-a' '-1' '(' '-o' ')'
+test ')' '-9223372036854775808' '(' '(' '-o' '('
+test '!' 'a=' ')' ')' ')'
+[ '' '(' '-ab' '(' '-ot' ')' '(' '(' '0' '-o' '(' '(' '(' $'\t7' '-o' '-o'
+[ '-ab' '--' '(' '-a' '-a' ]
+[ '+3' '-ab' 'a=' '!' '-nt' ]
+test '-ot' '(' '-o' '-q'
+[ ')' '(' '-ot' '-9223372036854775808' '!' ]
+test '0' ']' '(' $'\t7' '-1'

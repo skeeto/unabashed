@@ -1,0 +1,31 @@
+# Files in /home/oracle at the start of every case in fakes.cases.
+# Used by both fakes_record.sh (in the oracle container) and
+# fakes_test.cpp (on the vos), in this order.
+#
+#   d NAME MODE           directory
+#   f NAME MODE CONTENT   file; CONTENT uses printf %b escapes \n \t \\ \xHH
+#   l NAME TARGET         symbolic link
+d dir 755
+d dir/sub 755
+d emptydir 755
+f lines 644 one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\n
+f words 644 hello world\nfoo  bar\tbaz\n\n  the end\n
+f nums 644 10\n9\n-1\n1.5\n2\nx\n10\n007\n-0\n
+f dup 644 a\na\nb\nc\nc\nc\nd\na\n
+f csv 644 a:b:c\nd:e:f\nno delim\n1:2:3:4\n:lead\n
+f tabs 644 a\tb\tc\n1\t2\n
+f bin 644 a\x00b\x01\x7f\xff\n\x80\x9f\x1b\n
+f nonl 644 no newline
+f empty 644
+f mixed 644 Apple\nbanana\nCherry\napple\nBANANA\n
+f ro 444 read only\n
+f keys 644 b 2 x\na 10 y\nc 1 z\nb 1 w\n
+f blanks 644 a\n\n\n\nb\n\nc\n
+f rep 644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab\n
+f dir/a 644 A\n
+f dir/b 644 B\n
+f dir/.hidden 644 hidden\n
+f dir/sub/c 644 C\n
+l lnk lines
+l dangle nowhere
+l dirlnk dir

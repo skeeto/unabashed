@@ -1,0 +1,12 @@
+# compound commands as && and || operands
+if false; then :; fi && echo "if ok"
+{ false; } || echo "group failed"
+( exit 2 ) || echo "subshell $?"
+while false; do :; done && echo "while ok"
+for i in 1; do (exit 3); done || echo "for $?"
+case x in x) false;; esac || echo "case $?"
+[[ a = a ]] && (( 1 )) && echo "cond and arith"
+{ echo one; false; } && echo no || echo "group or $?"
+x=0; true && x=1 || x=2; echo "x=$x"
+f() { false; } ; f || echo "func $?"
+true && { echo grp; (exit 4); } || echo "after grp $?"

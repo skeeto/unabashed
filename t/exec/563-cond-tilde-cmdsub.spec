@@ -1,0 +1,43 @@
+== stdout 468
+T: [[ ~ == /home/oracle ]]
+T: [[ /home/oracle == ~ ]]
+T: [[ ~/x == /home/oracle/x ]]
+F: [[ "~" == /home/oracle ]]
+T: [[ $(echo hi) == hi ]]
+T: [[ hi == $(echo h)* ]]
+T: [[ "h*" == "$(echo h)*" ]]
+F: [[ $(echo "*") == x ]]
+T: [[ x == $(echo "*") ]]
+F: [[ x == "$(echo "*")" ]]
+T: [[ $((2*3)) == 6 ]]
+T: [[ ${#x} -eq 5 ]]
+T: [[ ${x:-d} == hello ]]
+T: [[ ${nope:-d} == d ]]
+T: [[ ${x%llo} == he ]]
+T: [[ ${x/l/L} == heLlo ]]
+T: [[ $'a\tb' == a?b ]]
+T: [[ a == $'\x61' ]]
+
+== stderr 0
+
+== merged 468
+T: [[ ~ == /home/oracle ]]
+T: [[ /home/oracle == ~ ]]
+T: [[ ~/x == /home/oracle/x ]]
+F: [[ "~" == /home/oracle ]]
+T: [[ $(echo hi) == hi ]]
+T: [[ hi == $(echo h)* ]]
+T: [[ "h*" == "$(echo h)*" ]]
+F: [[ $(echo "*") == x ]]
+T: [[ x == $(echo "*") ]]
+F: [[ x == "$(echo "*")" ]]
+T: [[ $((2*3)) == 6 ]]
+T: [[ ${#x} -eq 5 ]]
+T: [[ ${x:-d} == hello ]]
+T: [[ ${nope:-d} == d ]]
+T: [[ ${x%llo} == he ]]
+T: [[ ${x/l/L} == heLlo ]]
+T: [[ $'a\tb' == a?b ]]
+T: [[ a == $'\x61' ]]
+
+== status 0

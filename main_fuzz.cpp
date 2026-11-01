@@ -4,7 +4,8 @@
 // $ afl-fuzz -i fuzzin -o fuzzout ./fuzz
 //
 // The fuzzed shell can never reach the real file system or start a
-// process: output is discarded and anything else traps.
+// process: everything goes through the vos (vos.cpp), whose files and
+// programs are in memory, and output is discarded.
 //
 // This is free and unencumbered software released into the public domain.
 #include <setjmp.h>
@@ -14,6 +15,8 @@
 #include "unabashed.cpp"
 #include "fibers.cpp"
 #include "check.cpp"
+#include "fakes.cpp"
+#include "vos.cpp"
 
 __AFL_FUZZ_INIT();
 
@@ -22,11 +25,17 @@ struct Os {
     byte  *heap;
     iz     heapcap;
     iz     heapused;
+    Vos    vos;
 };
 
 static Fibers *osfibers(Os *os)
 {
     return &os->fibers;
+}
+
+static Vos *osvos(Os *os)
+{
+    return &os->vos;
 }
 
 static jmp_buf oomjmp;
@@ -39,7 +48,7 @@ static jmp_buf oomjmp;
 static byte *os_reserve(Os *os, iz len)
 {
     iz pad = -os->heapused & 63;
-    if (len > os->heapcap - os->heapused - pad) {
+    if (len > os->heapcap/2 - os->heapused - pad) {
         return 0;
     }
     byte *r = os->heap + os->heapused + pad;
@@ -52,16 +61,6 @@ static b32 os_commit(Os *, byte *, iz)
     return 1;
 }
 
-static b32 os_write(Os *, Handle, u8 *, iz)
-{
-    return 1;
-}
-
-static iz os_read(Os *, Handle, u8 *, iz)
-{
-    return 0;
-}
-
 static byte *fiberstack(Os *, iz size)
 {
     return (byte *)malloc((uz)size);
@@ -72,12 +71,42 @@ static void fiberunstack(Os *, byte *p, iz)
     free(p);
 }
 
+// Nested shells run in-process with their memory released afterward.
+static i32 fake_bash(Os *os, FakeCtx *ctx)
+{
+    iz save = os->heapused;
+    OsInfo info = {};
+    info.args    = ctx->argv;
+    info.nargs   = ctx->argc;
+    info.env     = ctx->env;
+    info.nenv    = ctx->nenv;
+    info.cwd     = ctx->cwd;
+    info.pid     = 100;
+    info.ppid    = 2;
+    for (i32 i = 0; i < 3; i++) info.std[i] = ctx->fd[i];
+    info.reserve = (iz)1<<18;
+    i32 status = sh_main(os, &info);
+    os->heapused = save;
+    return status;
+}
+
+static Fake fuzzfakes[256];
+static iz   nfuzzfakes;
+
 int main()
 {
     __AFL_INIT();
-    Os os = {};
-    os.heapcap = (iz)1<<22;  // small: pathological inputs hit OOM fast
+    static Os os = {};
+    os.heapcap = (iz)1<<23;  // small: pathological inputs hit OOM fast
     os.heap    = (byte *)malloc((uz)os.heapcap);
+    os.vos.outcap      = (iz)1<<16;
+    os.vos.out.data    = (u8 *)malloc((uz)os.vos.outcap);
+    os.vos.err.data    = (u8 *)malloc((uz)os.vos.outcap);
+    os.vos.merged.data = (u8 *)malloc((uz)os.vos.outcap);
+    fuzzfakes[nfuzzfakes++] = {"bash", fake_bash};
+    for (iz i = 0; i < countof(fakes) && nfuzzfakes < countof(fuzzfakes); i++) {
+        fuzzfakes[nfuzzfakes++] = fakes[i];
+    }
 
     u8 *buf = __AFL_FUZZ_TESTCASE_BUF;
     u8 *src = 0;
@@ -99,10 +128,19 @@ int main()
             __builtin_trap();
         }
         #else
+        Arena va = {};
+        va.beg = os.heap + os.heapcap/2;
+        va.end = os.heap + os.heapcap;
+        vreset(&os.vos, va, fuzzfakes, nfuzzfakes);
+        static Str env[] = {"LANG=C", "HOME=/home/oracle", "PATH=/usr/local/bin:/opt/fakes/bin"};
         Str args[] = {"bash", "-c", {src, len}};
         OsInfo info = {};
         info.args    = args;
         info.nargs   = countof(args);
+        info.env     = env;
+        info.nenv    = countof(env);
+        info.cwd     = "/home/oracle";
+        info.pid     = 2;
         info.std[1]  = 1;
         info.std[2]  = 2;
         info.reserve = (iz)1<<20;

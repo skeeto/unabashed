@@ -1,0 +1,15 @@
+# custom IFS values when splitting read input
+IFS=: read a b c <<<"x::z"; echo "a=[$a] b=[$b] c=[$c]"
+IFS=: read a b <<<"x:y:z:"; echo "a=[$a] b=[$b]"
+IFS=: read a b <<<"x:y:"; echo "a=[$a] b=[$b]"
+IFS=: read a b <<<"x:y::"; echo "a=[$a] b=[$b]"
+IFS=: read a b <<<":lead"; echo "a=[$a] b=[$b]"
+IFS=', ' read a b c <<<"1 , 2,3"; echo "a=[$a] b=[$b] c=[$c]"
+IFS=', ' read a b <<<"1 ,  , 3"; echo "a=[$a] b=[$b]"
+IFS= read a <<<"  keep  "; echo "a=[$a]"
+IFS= read a b <<<"  no split  "; echo "a=[$a] b=[$b]"
+IFS=x read a b <<<"  axb  "; echo "a=[$a] b=[$b]"
+echo "IFS restored: [$IFS]" | while IFS= read -r l; do echo "${#l}"; done
+old=$IFS; IFS=-; read a b <<<"p-q-r"; IFS=$old; echo "a=$a b=$b"
+IFS=: read a <<<"only:"; echo "a=[$a]"
+IFS=: read a <<<"x::"; echo "a=[$a]"

@@ -340,24 +340,10 @@ static void printcond(Printer *p, Cond *c)
     }
 }
 
-static b32 isreservedword(Str s)
+// Can the name be printed without the function keyword? Only names
+// that would read as assignments need it, in POSIX mode too.
+static b32 validfuncname(Str name, b32)
 {
-    for (iz i = 0; i < countof(reserved); i++) {
-        if (reserved[i].word == s) return 1;
-    }
-    return 0;
-}
-
-static b32 validfuncname(Str name, b32 posix)
-{
-    if (posix) {
-        if (isreservedword(name)) return 0;
-        b32 alldigits = name.len > 0;
-        for (iz i = 0; i < name.len; i++) {
-            alldigits &= digit(name[i]);
-        }
-        if (alldigits || !validident(name)) return 0;
-    }
     return !assignment(name, 0);
 }
 

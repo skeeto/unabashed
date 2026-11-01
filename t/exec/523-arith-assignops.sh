@@ -1,0 +1,23 @@
+x=10
+(( x += 5 )); echo "+= $x"
+(( x -= 3 )); echo "-= $x"
+(( x *= 4 )); echo "*= $x"
+(( x /= 5 )); echo "/= $x"
+(( x %= 5 )); echo "%= $x"
+(( x <<= 4 )); echo "<<= $x"
+(( x >>= 2 )); echo ">>= $x"
+(( x &= 6 )); echo "&= $x"
+(( x |= 9 )); echo "|= $x"
+(( x ^= 3 )); echo "^= $x"
+(( a = b = c = 5 )); echo "chain $a $b $c"
+(( a += b *= c -= 3 )); echo "chain2 a=$a b=$b c=$c"
+echo "value of assign: $(( d = 7 )) d=$d"
+echo "nested: $(( (e = 2) + (f = 3) )) e=$e f=$f"
+g=1
+echo "self: $(( g = g + g )) g=$g"
+str=abc
+(( str = 4 )); echo "str=$str"
+(( q = 0x10 )); echo "q=$q"
+(( r = 010 )); echo "r=$r"
+(( t = -0 )); echo "t=$t"
+(( u=1,v=2,w=u+v )); echo "comma u=$u v=$v w=$w"

@@ -16,7 +16,7 @@
 set -eu
 
 image=${RECORD_IMAGE:-unabashed/bash53}
-path=${RECORD_PATH:-/usr/local/bin:/usr/bin:/bin}
+path=${RECORD_PATH:-/usr/local/bin:/opt/fakes/bin}
 limit=${RECORD_TIMEOUT:-60}
 
 # Git Bash would rewrite the container paths below into Windows paths

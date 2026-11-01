@@ -1,0 +1,2511 @@
+@stat atime 1 reg 644 1000 1000 1 1420070400 1104537600 242 35224543
+@stat atime 0 reg 644 1000 1000 1 1420070400 1104537600 242 35224543
+@stat dir 1 dir 755 1000 1000 4096 1262304000 1262304000 242 35224507
+@stat dir 0 dir 755 1000 1000 4096 1262304000 1262304000 242 35224507
+@stat dir000 1 dir 0 1000 1000 4096 1262304000 1262304000 242 35224548
+@stat dir000 0 dir 0 1000 1000 4096 1262304000 1262304000 242 35224548
+@stat dirlink 1 dir 755 1000 1000 4096 1262304000 1262304000 242 35224507
+@stat dirlink 0 lnk 777 1000 1000 3 1262304000 1793489071 242 35224509
+@stat dlink 1 none
+@stat dlink 0 lnk 777 1000 1000 7 1262304000 1793489071 242 35224508
+@stat empty 1 reg 644 1000 1000 0 1262304000 1262304000 242 35224506
+@stat empty 0 reg 644 1000 1000 0 1262304000 1262304000 242 35224506
+@stat fifo 1 fifo 644 1000 1000 0 1262304000 1262304000 242 35224511
+@stat fifo 0 fifo 644 1000 1000 0 1262304000 1262304000 242 35224511
+@stat hard 1 reg 644 1000 1000 6 1262304000 1262304000 242 35224505
+@stat hard 0 reg 644 1000 1000 6 1262304000 1262304000 242 35224505
+@stat link 1 reg 644 1000 1000 6 1262304000 1262304000 242 35224505
+@stat link 0 lnk 777 1000 1000 3 1262304000 1793489071 242 35224500
+@stat m000 1 reg 0 1000 1000 1 1262304000 1262304000 242 35224512
+@stat m000 0 reg 0 1000 1000 1 1262304000 1262304000 242 35224512
+@stat m111 1 reg 111 1000 1000 1 1262304000 1262304000 242 35224524
+@stat m111 0 reg 111 1000 1000 1 1262304000 1262304000 242 35224524
+@stat m200 1 reg 200 1000 1000 1 1262304000 1262304000 242 35224523
+@stat m200 0 reg 200 1000 1000 1 1262304000 1262304000 242 35224523
+@stat m2755 1 reg 2755 1000 1000 1 1262304000 1262304000 242 35224526
+@stat m2755 0 reg 2755 1000 1000 1 1262304000 1262304000 242 35224526
+@stat m444 1 reg 444 1000 1000 1 1262304000 1262304000 242 35224521
+@stat m444 0 reg 444 1000 1000 1 1262304000 1262304000 242 35224521
+@stat m4755 1 reg 4755 1000 1000 1 1262304000 1262304000 242 35224525
+@stat m4755 0 reg 4755 1000 1000 1 1262304000 1262304000 242 35224525
+@stat m644 1 reg 644 1000 1000 1 1262304000 1262304000 242 35224515
+@stat m644 0 reg 644 1000 1000 1 1262304000 1262304000 242 35224515
+@stat m755 1 reg 755 1000 1000 1 1262304000 1262304000 242 35224519
+@stat m755 0 reg 755 1000 1000 1 1262304000 1262304000 242 35224519
+@stat new 1 reg 644 1000 1000 1 1577836800 1577836800 242 35224533
+@stat new 0 reg 644 1000 1000 1 1577836800 1577836800 242 35224533
+@stat old 1 reg 644 1000 1000 1 978307200 978307200 242 35224531
+@stat old 0 reg 644 1000 1000 1 978307200 978307200 242 35224531
+@stat reg 1 reg 644 1000 1000 6 1262304000 1262304000 242 35224505
+@stat reg 0 reg 644 1000 1000 6 1262304000 1262304000 242 35224505
+@stat sock 1 sock 755 1000 1000 0 1262304000 1262304000 242 35224499
+@stat sock 0 sock 755 1000 1000 0 1262304000 1262304000 242 35224499
+@stat sticky 1 dir 1777 1000 1000 4096 1262304000 1262304000 242 35224544
+@stat sticky 0 dir 1777 1000 1000 4096 1262304000 1262304000 242 35224544
+@stat . 1 dir 700 1000 1000 4096 1793489071 1793489071 242 35224503
+@stat . 0 dir 700 1000 1000 4096 1793489071 1793489071 242 35224503
+@stat reg/ 1 none
+@stat reg/ 0 none
+@stat dir/ 1 dir 755 1000 1000 4096 1262304000 1262304000 242 35224507
+@stat dir/ 0 dir 755 1000 1000 4096 1262304000 1262304000 242 35224507
+@stat dirlink/ 1 dir 755 1000 1000 4096 1262304000 1262304000 242 35224507
+@stat dirlink/ 0 dir 755 1000 1000 4096 1262304000 1262304000 242 35224507
+@stat link/ 1 none
+@stat link/ 0 none
+@stat dir000/ 1 dir 0 1000 1000 4096 1262304000 1262304000 242 35224548
+@stat dir000/ 0 dir 0 1000 1000 4096 1262304000 1262304000 242 35224548
+@stat sticky/ 1 dir 1777 1000 1000 4096 1262304000 1262304000 242 35224544
+@stat sticky/ 0 dir 1777 1000 1000 4096 1262304000 1262304000 242 35224544
+@stat dlink/ 1 none
+@stat dlink/ 0 none
+@stat fifo/ 1 none
+@stat fifo/ 0 none
+@stat missing 1 none
+@stat missing 0 none
+@stat missing2 1 none
+@stat missing2 0 none
+@stat / 1 dir 755 0 0 4096 1793489071 1793489071 242 35224892
+@stat / 0 dir 755 0 0 4096 1793489071 1793489071 242 35224892
+@stat /tmp 1 dir 1777 0 0 4096 1793489071 1787874156 242 441966
+@stat /tmp 0 dir 1777 0 0 4096 1793489071 1787874156 242 441966
+@stat /dev/null 1 chr 666 0 0 0 1793489071 1793489071 1048585 5
+@stat /dev/null 0 chr 666 0 0 0 1793489071 1793489071 1048585 5
+@stat /etc/passwd 1 reg 644 0 0 892 1793488553 1793488553 242 35224363
+@stat /etc/passwd 0 reg 644 0 0 892 1793488553 1793488553 242 35224363
+@stat /usr/local/bin/bash 1 reg 755 0 0 4771304 1793461049 1793461055 242 35216253
+@stat /usr/local/bin/bash 0 reg 755 0 0 4771304 1793461049 1793461055 242 35216253
+@stat /nonexistent 1 none
+@stat /nonexistent 0 none
+@id 1000 1000
+test
+1
+test ''
+1
+test x
+0
+test -
+0
+test --
+0
+test !
+0
+test '('
+0
+test ')'
+0
+test -a
+0
+test -o
+0
+test -z
+0
+test -n
+0
+test -t
+0
+test -e
+0
+test =
+0
+test ' '
+0
+[ ]
+1
+[
+2 missing `]'
+[ x
+2 missing `]'
+[ x ]
+0
+[ '' ]
+1
+[ x ] ]
+2 x: unary operator expected
+[ ] ]
+0
+[ ']' ]
+0
+[ -n ]
+0
+[ -z ]
+0
+[ ! ]
+0
+[ x y ]
+2 x: unary operator expected
+[ x = x ]
+0
+[ x = y ]
+1
+[ ! x = y ]
+0
+[ '(' x ')' ]
+0
+[ a -a b -o '' ]
+0
+[ 1 -eq 1 ]
+0
+[ 1 -eq a ]
+2 a: integer expected
+[ x x x x x ]
+2 too many arguments
+[ x '[' ]
+2 x: unary operator expected
+[ x ]]
+2 missing `]'
+[ x ']]'
+2 missing `]'
+[ '(' x -a y ]
+2 `)' expected, found ]
+[ '(' x -a '(' y ]
+2 `)' expected, found ]
+[ '(' '(' x ')' -a y ]
+2 (: unary operator expected
+[ x -a '(' y -o z ]
+2 `)' expected, found ]
+[ ! ! ! ! ]
+1
+[ x -a ]
+2 x: unary operator expected
+[ '(' x ')' ')' ]
+2 x: unary operator expected
+test ! x
+1
+test ! ''
+0
+test ! !
+1
+test ! -n
+1
+test -n x
+0
+test -n ''
+1
+test -z x
+1
+test -z ''
+0
+test x y
+2 x: unary operator expected
+test x -n
+2 x: unary operator expected
+test -q x
+2 -q: unary operator expected
+test -nt x
+2 -nt: unary operator expected
+test -eq 1
+2 -eq: unary operator expected
+test = x
+2 =: unary operator expected
+test == x
+2 ==: unary operator expected
+test -x- x
+2 -x-: unary operator expected
+test '' ''
+2 : unary operator expected
+test '(' x
+2 (: unary operator expected
+test x ')'
+2 x: unary operator expected
+test '(' ')'
+2 (: unary operator expected
+test -- x
+2 --: unary operator expected
+test - x
+2 -: unary operator expected
+test -ab x
+2 -ab: unary operator expected
+test -o errexit
+1
+test -o braceexpand
+0
+test -o hashall
+0
+test -o interactive-comments
+0
+test -o nosuchoption
+1
+test -o posix
+1
+test -o ''
+1
+test -o vi
+1
+test -o emacs
+1
+test x = x
+0
+test x = y
+1
+test x == x
+0
+test x != x
+1
+test x != y
+0
+test '' = ''
+0
+test '' = x
+1
+test a '<' b
+0
+test b '<' a
+1
+test a '>' b
+1
+test b '>' a
+0
+test a '<' a
+1
+test a '<' ab
+0
+test ab '<' a
+1
+test A '<' a
+0
+test Z '<' a
+0
+test $'\x80' '>' a
+0
+test $'\xff' '>' $'\x7f'
+0
+test Ã© '>' z
+0
+test x -a y
+0
+test x -a ''
+1
+test '' -a y
+1
+test '' -o ''
+1
+test x -o ''
+0
+test '' -o y
+0
+test -e -a -e
+0
+test -e -o -e
+0
+test ! -z x
+0
+test ! -z ''
+1
+test ! -n x
+1
+test ! ! x
+0
+test ! ! ''
+1
+test ! x y
+2 x: unary operator expected
+test ! -q x
+2 -q: unary operator expected
+test '(' x ')'
+0
+test '(' '' ')'
+1
+test '(' ! ')'
+0
+test '(' '(' ')'
+0
+test '(' ')' ')'
+0
+test ')' ')' ')'
+2 ): binary operator expected
+test x y z
+2 y: binary operator expected
+test x '(' z
+2 (: binary operator expected
+test = = =
+0
+test == == ==
+0
+test != != !=
+1
+test '<' '<' '<'
+1
+test -a -a -a
+0
+test -o -o -o
+0
+test ! ! !
+0
+test ! = x
+1
+test ! = =
+1
+test -n = -n
+0
+test -z -a -z
+0
+test -eq -eq -eq
+2 -eq: integer expected
+test 1 -eq 1
+0
+test 1 -eq 2
+1
+test 1 -eq x
+2 x: integer expected
+test x -eq 1
+2 x: integer expected
+test x -eq y
+2 x: integer expected
+test '' -eq 0
+2 : integer expected
+test 0 -eq ''
+2 : integer expected
+test 1 -ne 2
+0
+test 1 -ne 1
+1
+test 1 -lt 2
+0
+test 2 -lt 1
+1
+test 1 -lt 1
+1
+test 1 -le 1
+0
+test 2 -le 1
+1
+test 2 -gt 1
+0
+test 1 -gt 2
+1
+test 1 -ge 1
+0
+test 0 -ge 1
+1
+test -1 -lt 0
+0
+test +1 -eq 1
+0
+test ' 1' -eq 1
+0
+test '1 ' -eq 1
+0
+test ' 1 ' -eq ' 1 '
+0
+test $'\t1\n' -eq 1
+0
+test $'\v\f\r1' -eq 1
+0
+test '1 2' -eq 1
+2 1 2: integer expected
+test '- 1' -eq -1
+2 - 1: integer expected
+test '+-1' -eq -1
+2 +-1: integer expected
+test -- -eq 0
+2 --: integer expected
+test - -eq 0
+2 -: integer expected
+test + -eq 0
+2 +: integer expected
+test 01 -eq 1
+0
+test 010 -eq 10
+0
+test 0x10 -eq 16
+2 0x10: integer expected
+test 1.0 -eq 1
+2 1.0: integer expected
+test 1e3 -eq 1000
+2 1e3: integer expected
+test 9223372036854775807 -eq 9223372036854775807
+0
+test 9223372036854775808 -eq 0
+2 9223372036854775808: integer expected
+test -9223372036854775808 -lt 0
+0
+test -9223372036854775809 -lt 0
+2 -9223372036854775809: integer expected
+test 99999999999999999999 -gt 0
+2 99999999999999999999: integer expected
+test 00000000000000000000000001 -eq 1
+0
+test -0 -eq 0
+0
+test 1 -EQ 1
+2 -EQ: binary operator expected
+test 1 -eq
+2 1: unary operator expected
+test 1 -eq 1 1
+2 too many arguments
+test x -lt
+2 x: unary operator expected
+test x -nt
+2 x: unary operator expected
+test x -ef
+2 x: unary operator expected
+test x -ot
+2 x: unary operator expected
+test x =~ x
+2 =~: binary operator expected
+test x !~ x
+2 !~: binary operator expected
+test x === x
+2 ===: binary operator expected
+test x '=' x
+0
+test x -l x
+2 -l: binary operator expected
+test x -e x
+2 -e: binary operator expected
+test x -n x
+2 -n: binary operator expected
+test ! x = x
+1
+test ! x = y
+0
+test ! '' -a x
+0
+test ! x -a x
+1
+test ! ! x = x
+0
+test ! ! ! x
+1
+test ! ! ! ''
+0
+test ! '(' x ')'
+1
+test '(' x = x ')'
+0
+test '(' x = y ')'
+1
+test '(' ! x ')'
+1
+test '(' ! '' ')'
+0
+test '(' -n x ')'
+0
+test '(' -z x ')'
+1
+test '(' x y ')'
+2 x: unary operator expected
+test '(' -q x ')'
+2 -q: unary operator expected
+test '(' -t -a ')'
+2 too many arguments
+test '(' -t 1 ')'
+1
+test '(' -t x ')'
+2 x: integer expected
+test x = x -a
+2 argument expected
+test x -a y -a
+2 argument expected
+test x -a y z
+2 too many arguments
+test a b c d
+2 too many arguments
+test -n x -a y
+0
+test -z x -o y
+0
+test x = y z
+2 too many arguments
+test -t 1 = 1
+2 too many arguments
+test -t -a -t -a
+2 argument expected
+test '(' x ')' y
+2 too many arguments
+test x '(' y ')'
+2 too many arguments
+test x -o '(' y
+2 `)' expected
+test '(' '(' x ')'
+2 (: unary operator expected
+test '(' x ')' ')'
+2 x: unary operator expected
+test x -a y -a z
+0
+test x -a '' -a z
+1
+test x -o '' -o ''
+0
+test '' -o '' -o ''
+1
+test '' -o '' -o z
+0
+test x -a y -o ''
+0
+test '' -a y -o z
+0
+test '' -a '' -o z
+0
+test x -o y -a ''
+0
+test '' -o y -a ''
+1
+test x -a x -a x -a x -a ''
+1
+test 1 -eq 1 -a 2 -eq 2
+0
+test 1 -eq 1 -a 2 -eq 3
+1
+test 1 -eq 2 -o 2 -eq 2
+0
+test 1 -eq 2 -o 2 -eq x
+2 x: integer expected
+test 1 -eq x -o 2 -eq 2
+2 x: integer expected
+test 1 -eq 1 -o 2 -eq x
+2 x: integer expected
+test 1 -eq 2 -a 2 -eq x
+2 x: integer expected
+test x = x -a y != z
+0
+test ! x -a y
+1
+test ! '' -a y
+0
+test ! '' -a ''
+0
+test ! ! x -a y
+0
+test ! x -o y -o z
+0
+test x -a ! y -o z
+0
+test x -a ! '' -a z
+0
+test '(' x ')' -a y
+0
+test '(' '' ')' -a y
+0
+test '(' '' ')' -o ''
+0
+test '(' x = y ')' -o z
+0
+test '(' x = x ')' -a '(' y = y ')'
+0
+test '(' x = x ')' -a '(' y = z ')'
+1
+test '(' x -a '' ')' -o y
+0
+test '(' x -o '' ')' -a y
+0
+test '(' '(' x ')' ')' -a y
+2 (: unary operator expected
+test '(' '(' '' ')' ')' -a y
+2 (: unary operator expected
+test x -a '(' y ')'
+0
+test x -a '(' '' ')'
+0
+test x -a '(' '' -o z ')'
+0
+test x -a '(' y = z ')'
+1
+test y -a '(' '' ')'
+0
+test '' -o '(' y ')'
+1
+test '' -o '(' '' ')'
+1
+test '(' ! x ')' -o y
+0
+test '(' ! '' ')' -a y
+0
+test '(' x y ')' -a z
+2 x: unary operator expected
+test '(' x ')' x ')'
+2 too many arguments
+test '(' x -a y
+2 `)' expected
+test '(' x -a y z
+2 `)' expected, found z
+test '(' x -a y -a z
+2 `)' expected
+test '(' '(' x -a y ')'
+2 `)' expected
+test '(' x -a y ')' ')'
+2 too many arguments
+test ')' -a x -a y
+0
+test x -a y -a
+2 argument expected
+test x -a y -o
+2 argument expected
+test x -o y -a
+2 argument expected
+test x -a -a -a x
+2 too many arguments
+test -a -a -a -a -a
+1
+test -o -o -o -o -o
+1
+test ! ! ! ! !
+2 argument expected
+test ! ! ! ! x
+0
+test ! ! ! ! ''
+1
+test '(' '(' '(' '(' '('
+2 argument expected
+test ')' ')' ')' ')' ')'
+2 too many arguments
+test '(' '(' '(' x ')' ')' ')'
+2 (: unary operator expected
+test '(' '(' '(' '' ')' ')' ')'
+2 (: unary operator expected
+test '(' '(' '(' x ')' ')'
+2 (: unary operator expected
+test x y z w v
+2 too many arguments
+test x -y z w v
+2 syntax error: `-y' unexpected
+test x -a y z w
+2 too many arguments
+test x -a y -z w
+2 syntax error: `-z' unexpected
+test x -a -y z w
+2 too many arguments
+test x -a y -nt
+2 syntax error: `-nt' unexpected
+test -n -a -n -a -n
+2 syntax error: `-n' unexpected
+test -z -a -n -a ''
+2 syntax error: `-n' unexpected
+test = -a = -a =
+0
+test = = = -a x
+0
+test x -a = = =
+0
+test -e x -a -e y
+1
+test -f -a -f -a -f
+2 syntax error: `-f' unexpected
+test -t -a x -o y
+0
+test x -a -t -o y
+0
+test -t 1 -a -t 0
+1
+test -t x -a y
+2 x: integer expected
+test -t -o y -a z
+0
+test x -a -t
+0
+test x -a -t x
+2 x: integer expected
+test x -a -t 1 -a y
+1
+test -t 1 -a -t
+1
+test 1 2 3 4 5 6 7 8
+2 too many arguments
+test x = y -o x = x -a y = y
+0
+test x = x -o y = z -a z = w
+0
+test x -nt y -o z -ot w
+1
+test '' -a '' -o '' -a ''
+1
+test a -a b -o c -a ''
+0
+test '(' ')' -a x
+2 `)' expected
+test '(' '(' ')' ')' -a x
+2 too many arguments
+test '(' x ')' -a '(' ')'
+2 `)' expected
+test '(' x ')' '(' y ')'
+2 too many arguments
+test '(' -n ')' -a x
+0
+test '(' -n x ')' -a x
+0
+test '(' -z x y ')' -o z
+2 x: binary operator expected
+test '(' x = y = z ')' -o z
+2 `)' expected, found =
+test '(' a b c d e ')' -o z
+2 `)' expected, found b
+test '(' a -a b -a c ')' -o z
+0
+test '(' ! ')' -a x
+0
+test '(' ! ! ')' -a x
+1
+test '(' ! -n '' ')' -a x
+0
+test '(' '(' x ')' ')'
+2 (: unary operator expected
+test x -a '(' -t ')'
+0
+test x -a '(' -t -a ')' y
+2 `)' expected, found -a
+#posix test -t
+0
+#posix test -t 1
+1
+#posix test -t x
+2 x: integer expected
+#posix test -t -a x
+0
+#posix test -t -a x -o y
+2 -a: integer expected
+#posix test x -a -t -o y
+2 -o: integer expected
+#posix test -t 1 -a -t 0
+1
+#posix test x -a -t
+0
+#posix test a '<' b
+0
+#posix test b '<' a
+1
+#posix test -o posix
+0
+#posix test '(' -t -a ')'
+2 -a: integer expected
+test -t 0
+1
+test -t 1
+1
+test -t 2
+1
+test -t 99
+1
+test -t -1
+1
+test -t ' 1 '
+1
+test -t x
+2 x: integer expected
+test -t ''
+2 : integer expected
+test -t 1x
+2 1x: integer expected
+test -t 4294967297
+1
+test -t 99999999999999999999
+2 99999999999999999999: integer expected
+test -t 1 2
+2 1: binary operator expected
+test ! -t 1
+0
+test ! -t
+1
+test ! -t x
+2 x: integer expected
+test -e reg
+0
+test -a reg
+0
+test -f reg
+0
+test -d reg
+1
+test -s reg
+0
+test -r reg
+0
+test -w reg
+0
+test -x reg
+1
+test -h reg
+1
+test -L reg
+1
+test -p reg
+1
+test -S reg
+1
+test -c reg
+1
+test -b reg
+1
+test -u reg
+1
+test -g reg
+1
+test -k reg
+1
+test -O reg
+0
+test -G reg
+0
+test -N reg
+1
+test -e empty
+0
+test -f empty
+0
+test -s empty
+1
+test -e dir
+0
+test -f dir
+1
+test -d dir
+0
+test -s dir
+0
+test -x dir
+0
+test -r dir
+0
+test -w dir
+0
+test -h dir
+1
+test -e link
+0
+test -f link
+0
+test -h link
+0
+test -L link
+0
+test -s link
+0
+test -d link
+1
+test -e dlink
+1
+test -f dlink
+1
+test -h dlink
+0
+test -L dlink
+0
+test -s dlink
+1
+test -O dlink
+1
+test -r dlink
+1
+test -e dirlink
+0
+test -d dirlink
+0
+test -h dirlink
+0
+test -f dirlink
+1
+test -e fifo
+0
+test -p fifo
+0
+test -f fifo
+1
+test -s fifo
+1
+test -r fifo
+0
+test -e sock
+0
+test -S sock
+0
+test -f sock
+1
+test -p sock
+1
+test -e m000
+0
+test -r m000
+1
+test -w m000
+1
+test -x m000
+1
+test -s m000
+0
+test -f m000
+0
+test -r m644
+0
+test -w m644
+0
+test -x m644
+1
+test -r m755
+0
+test -w m755
+0
+test -x m755
+0
+test -r m444
+0
+test -w m444
+1
+test -x m444
+1
+test -r m200
+1
+test -w m200
+0
+test -x m200
+1
+test -r m111
+1
+test -w m111
+1
+test -x m111
+0
+test -u m4755
+0
+test -g m4755
+1
+test -k m4755
+1
+test -x m4755
+0
+test -u m2755
+1
+test -g m2755
+0
+test -k m2755
+1
+test -u m644
+1
+test -g m644
+1
+test -k m644
+1
+test -d sticky
+0
+test -k sticky
+0
+test -u sticky
+1
+test -w sticky
+0
+test -d dir000
+0
+test -r dir000
+1
+test -w dir000
+1
+test -x dir000
+1
+test -e dir000
+0
+test -N reg
+1
+test -N atime
+0
+test -N old
+1
+test -O .
+0
+test -G .
+0
+test -d .
+0
+test -e ''
+1
+test -f ''
+1
+test -d ''
+1
+test -h ''
+1
+test -L ''
+1
+test -r ''
+1
+test -w ''
+1
+test -x ''
+1
+test -O ''
+1
+test -s ''
+1
+test -e missing
+1
+test -f missing
+1
+test -h missing
+1
+test -r missing
+1
+test -x missing
+1
+test -N missing
+1
+test -O missing
+1
+test -G missing
+1
+test -e reg/
+1
+test -f reg/
+1
+test -d dir/
+0
+test -h dirlink/
+1
+test -d dirlink/
+0
+test -h link/
+1
+test -e /
+0
+test -d /
+0
+test -O /
+1
+test -G /
+1
+test -w /
+1
+test -r /
+0
+test -x /
+0
+test -k /tmp
+0
+test -d /tmp
+0
+test -w /tmp
+0
+test -e /dev/null
+0
+test -c /dev/null
+0
+test -f /dev/null
+1
+test -s /dev/null
+1
+test -r /dev/null
+0
+test -w /dev/null
+0
+test -O /dev/null
+1
+test -b /dev/null
+1
+test -f /etc/passwd
+0
+test -r /etc/passwd
+0
+test -w /etc/passwd
+1
+test -O /etc/passwd
+1
+test -s /etc/passwd
+0
+test -x /usr/local/bin/bash
+0
+test -O /usr/local/bin/bash
+1
+test -e /nonexistent
+1
+test ! -e reg
+1
+test ! -e missing
+0
+test ! -d dir
+1
+test ! -f
+1
+test -e reg -a -d dir
+0
+test -e reg -a -d reg
+1
+test -e missing -o -d dir
+0
+test ! -e missing -a ! -e missing2
+0
+test -e
+0
+test -f
+0
+test -d -a -d
+0
+test -e -e
+1
+test -f missing -o -f reg -a -d dir
+0
+test '(' -f reg ')'
+0
+test '(' -f reg -a -d dir ')' -o x
+0
+test -d dir -a '(' -f dir -o -h link ')'
+0
+test old -nt new
+1
+test new -nt old
+0
+test old -ot new
+0
+test new -ot old
+1
+test reg -nt reg
+1
+test reg -ot reg
+1
+test reg -ef reg
+0
+test reg -ef hard
+0
+test hard -ef reg
+0
+test reg -ef link
+0
+test link -ef reg
+0
+test reg -ef empty
+1
+test dir -ef dirlink
+0
+test reg -ef missing
+1
+test missing -ef reg
+1
+test missing -ef missing
+1
+test dlink -ef dlink
+1
+test reg -nt missing
+0
+test missing -nt reg
+1
+test missing -nt missing2
+1
+test reg -ot missing
+1
+test missing -ot reg
+0
+test missing -ot missing2
+1
+test '' -nt reg
+1
+test reg -nt ''
+0
+test '' -ot reg
+0
+test reg -ot ''
+1
+test '' -ef ''
+1
+test link -nt reg
+1
+test link -ot reg
+1
+test new -nt link
+0
+test old -nt link
+1
+test dlink -nt reg
+1
+test reg -nt dlink
+0
+test atime -nt reg
+0
+test atime -ot new
+0
+test old -nt new -o new -nt old
+0
+test ! old -nt new
+0
+test reg -ef hard -a hard -ef link
+0
+test -v x
+0
+test -v empty
+0
+test -v arr
+0
+test -v 'arr[0]'
+0
+test -v 'arr[1]'
+0
+test -v 'arr[2]'
+1
+test -v as
+1
+test -v 'as[k]'
+0
+test -v 'as[z]'
+1
+test -v ref
+0
+test -v badref
+1
+test -v nosuch
+1
+test -v 0
+0
+test -v 1
+1
+test -v ''
+1
+test -R ref
+0
+test -R badref
+0
+test -R x
+1
+test -R nosuch
+1
+test ! -v x
+1
+test -v x -a -v nosuch
+1
+test -v
+0
+test -R
+0
+test ! -a x
+0
+test ! -o ''
+0
+test '(' -a ')'
+0
+test '(' -o ')'
+0
+test '(' = ')'
+1
+test ! = !
+0
+test ! ! = !
+1
+test '(' = = ')'
+2 =: unary operator expected
+test '(' '(' ')' ')'
+2 (: unary operator expected
+test '(' ! ! ')'
+1
+test '(' x ')' -a
+2 argument expected
+test '(' x ')' -o
+2 argument expected
+test x -a '(' '(' y ')' ')'
+2 (: unary operator expected
+test '' -o '(' x ')'
+1
+test ! '' -a '(' '' ')'
+0
+test -t 0 -a
+2 0: binary operator expected
+test -t +1
+1
+test -t 2147483648
+1
+test -t -2147483648
+1
+test -t 2147483649
+1
+test -t 00000000001
+1
+test -n -n -n
+2 -n: binary operator expected
+test -z '' -a -n
+0
+test -n x -a ''
+1
+test -n x -o
+2 x: binary operator expected
+test x -a -n
+0
+test -o -o
+1
+test -v -v
+1
+test -R -R
+1
+test -t -t
+2 -t: integer expected
+test -l x
+2 -l: unary operator expected
+test -= x
+2 -=: unary operator expected
+test x '<'
+2 x: unary operator expected
+test '!' '='
+1
+test '' '<' a
+0
+test a '>' ''
+0
+test '' '>' ''
+1
+test 1 -eq ' '
+2  : integer expected
+test '' -eq ''
+2 : integer expected
+test ' ' -eq 1
+2  : integer expected
+test $'1\n' -eq 1
+0
+test $'1\r' -eq 1
+0
+test $'1\v' -eq 1
+0
+test $'1\f' -eq 1
+0
+test $'\n\n1\n\n' -eq 1
+0
+test $'1\t\t' -eq 1
+0
+test 1 -eq $'\x01'1
+2 1: integer expected
+test 1 -eq 1$'\x01'
+2 1: integer expected
+test 1 -eq -
+2 -: integer expected
+test 1 -eq +
+2 +: integer expected
+test 1 -eq ++1
+2 ++1: integer expected
+test 1 -eq --1
+2 --1: integer expected
+test 1 -eq ' +1'
+0
+test 1 -eq '+ 1'
+2 + 1: integer expected
+test -0 -eq +0
+0
+test 9223372036854775807 -gt -9223372036854775808
+0
+test -9223372036854775808 -lt 9223372036854775807
+0
+test -9223372036854775808 -eq -9223372036854775808
+0
+test 18446744073709551616 -eq 0
+2 18446744073709551616: integer expected
+test 18446744073709551615 -eq -1
+2 18446744073709551615: integer expected
+test 000000000000000000000000000009223372036854775807 -eq 9223372036854775807
+0
+test 922337203685477580 -lt 9223372036854775807
+0
+test 9223372036854775806 -lt 9223372036854775807
+0
+test -9223372036854775807 -gt -9223372036854775808
+0
+test 1 -eq 1 -a 1 -eq x -a 1 -eq y
+2 x: integer expected
+test x -eq 1 -a 1 -eq y
+2 x: integer expected
+test 1 -eq x -o 1 -eq y
+2 x: integer expected
+test 2 -gt 1 -a 3 -lt 2 -o 1 -le 1
+0
+test '(' 1 -eq x ')'
+2 x: integer expected
+test ! 1 -eq x
+2 x: integer expected
+test ! 1 -eq 1 -a ''
+1
+test -eq -eq 1
+2 -eq: integer expected
+test 1 -eq -eq
+2 -eq: integer expected
+test -nt -nt -nt
+1
+test -ef -ef -ef
+1
+test x -ot y -ot
+2 syntax error: `-ot' unexpected
+test -a x -a
+2 x: binary operator expected
+test -o x -o
+2 x: binary operator expected
+test ! -o x
+0
+test ! -o
+1
+test x ! y
+2 !: binary operator expected
+test x = ! = y
+2 too many arguments
+test x != x -o y = y
+0
+test x != x -a y = y -o z
+0
+test ! x != x
+0
+test '(' ! x != x ')'
+0
+test ! '(' x != x ')'
+0
+test ! '(' x != x ')' -a ''
+1
+test ! '(' x ')' -a ''
+1
+test ! ! '(' x ')' -a ''
+1
+test '(' x ')' -o '(' ')'
+2 `)' expected
+test '(' ')' -o x
+2 `)' expected
+test ')' = ')'
+0
+test ')' -a ')'
+0
+test ')' ')'
+2 ): unary operator expected
+test '(' '(' '(' ')' ')' ')'
+2 too many arguments
+test '(' '(' x ')' ')' -a '(' '(' y ')' ')'
+2 (: unary operator expected
+test '(' x '(' ')' ')'
+2 (: binary operator expected
+test '(' x ')' -a '(' y ')' -o '(' '' ')'
+0
+test '(' '' ')' -o '(' '' ')'
+0
+test '' -o '(' '' ')' -o ''
+1
+test '' -a '(' x ')'
+1
+test x -o '(' x
+2 `)' expected
+test x -o '(' '(' x
+2 `)' expected
+test '(' x -o
+2 x: binary operator expected
+test '(' x -a ')'
+2 x: unary operator expected
+test '(' x -a y ')'
+0
+test '(' x -a '' ')'
+1
+test '(' '' -o '' ')'
+1
+test '(' -n '' ')'
+1
+test '(' ! -n '' ')'
+0
+test '(' -t ')'
+0
+test x -a '(' -t 1 ')'
+1
+test x -a '(' -t ')' -a y
+0
+test x -a '(' -t -o ')'
+2 `)' expected, found -o
+test x -a '(' -t -o y ')'
+0
+test x -a '(' -t x ')'
+2 x: integer expected
+test -t -a -t -a -t
+1
+test -t -o -t -o -t
+0
+test -t -a -t
+0
+test -t -a
+2 -a: integer expected
+test -t 1 -a
+2 1: binary operator expected
+test -t 1 -o x
+0
+test -t 1 = 1 -a x
+2 too many arguments
+test x -a -t -a
+2 argument expected
+test x -a -t 1
+1
+test x -a -t y
+2 y: integer expected
+test x -a '(' '(' -t ')' ')'
+2 (: unary operator expected
+test -e -a -e -a -e
+2 syntax error: `-e' unexpected
+test -z -o -z -o -z
+2 syntax error: `-z' unexpected
+test -z -z -o -z
+0
+test -z -z -a -z -z
+1
+test -n '' -o -n '' -o -n x
+0
+test -z x -a -z
+1
+test -z x -a -z -a x
+2 too many arguments
+test -h -h
+1
+test -d -d -d -d
+2 syntax error: `-d' unexpected
+test = -a =
+0
+test = -o = -a = -o =
+0
+test x = -a = x
+2 too many arguments
+test x -a = -a x
+0
+test '' -a = -o =
+0
+test != -a !=
+0
+test '!' -a '!'
+0
+test '!' -o '!' -a ''
+1
+test '<' -a '>'
+0
+test '>' '>' '>' '>'
+2 too many arguments
+test x '>' y -o y '>' x
+0
+test x '<' y '<' z
+2 too many arguments
+[ '(' ]
+0
+[ '(' x ]
+2 (: unary operator expected
+[ ! '(' ]
+1
+[ -t ]
+0
+[ ! -t ]
+1
+[ '(' x ')' -a '(' y ]
+2 `)' expected, found ]
+[ '(' '(' x ]
+2 (: binary operator expected
+[ '(' x -o ]
+2 x: binary operator expected
+[ x -a '(' ]
+0
+[ '(' -t ]
+2 (: unary operator expected
+[ '(' -n x -a ]
+2 argument expected
+[ '(' x y ]
+2 x: binary operator expected
+[ '(' x y z ]
+2 `)' expected, found y
+[ '(' x y z w ]
+2 `)' expected, found y
+[ '(' x y z w v ]
+2 `)' expected, found y
+[ ']' = ']' ]
+0
+[ '[' = '[' ]
+0
+[ x -a ']' ]
+0
+[ '(' ']' ')' ]
+0
+[ '(' x ')' ']' ]
+2 too many arguments
+[ x -eq ]
+2 x: unary operator expected
+[ -t 1 -a -t ]
+1
+[ = = = ]
+0
+[ x ] x
+2 missing `]'
+[ x ']'
+0
+[ x '] '
+2 missing `]'
+[ x ' ]'
+2 missing `]'
+[ -o -o ]
+1
+[ -o ]
+0
+[ ')' ]
+0
+[ '(' ')' ]
+2 (: unary operator expected
+[ '(' '(' ')' ]
+0
+[ '(' -a ')' ]
+0
+[ -e -a -e ]
+0
+[ x -a y -a ]
+2 argument expected
+[ x -a y -o ]
+2 argument expected
+[ ! ! ! ]
+0
+test ! ! ! ! ! !
+2 argument expected
+test ! ! ! ! ! ! x
+0
+test ! ! ! ! ! ! ''
+1
+test ! ! ! ! ! ! ! x
+1
+test ! ! ! ! ! ! ! ! !
+2 argument expected
+test x -a ! ! ! ''
+0
+test x -a ! ! ! ! ''
+1
+test x -a ! ! ! !
+2 argument expected
+test x -a ! '(' '' ')'
+1
+test x -a ! '(' x ')'
+1
+test '' -o ! '(' '' ')'
+0
+test x y -a z
+2 too many arguments
+test x y -o z
+2 too many arguments
+test -n x y
+2 x: binary operator expected
+test -n x y z
+2 too many arguments
+test -n x y z w
+2 too many arguments
+test x = y z w
+2 too many arguments
+test x = y -a
+2 argument expected
+test x = y -o
+2 argument expected
+test x = y -a z
+1
+test x = y -o z
+0
+test x = x -a z -a
+2 argument expected
+test ! x = y -a z
+0
+test ! x = y -o ''
+0
+#posix test -t -a -t
+0
+#posix test -t -a -t -a -t
+2 -a: integer expected
+#posix test -t 1 -a -t
+1
+#posix test '(' -t ')'
+0
+#posix test ! -t
+1
+#posix test -t +1
+1
+#posix test x -a '(' -t ')'
+0
+#posix test '' '<' a
+0
+#posix test a '>' A
+0
+#posix test $'\xff' '>' a
+0
+#posix test ! -t 1
+0
+#posix test -t -t
+2 -t: integer expected
+#posix [ -t ]
+0
+#posix [ -t -o x ]
+0
+test -a reg -a -a dir
+0
+test -a reg -o
+2 reg: binary operator expected
+test -a missing -o -a reg
+0
+test -e reg -a
+2 reg: binary operator expected
+test -e -a reg
+0
+test -f reg -a -d dir -a -h link -a -p fifo -a -S sock
+0
+test -f reg -a -d dir -a -h link -a -p fifo -a -S missing
+1
+test -s reg -a ! -s empty
+0
+test ! -s empty -a ! -s reg
+1
+test reg -nt old -a old -ot reg
+0
+test new -nt reg -a reg -nt old
+0
+test reg -nt new -o reg -ot old
+1
+test link -ef hard
+0
+test dirlink -ef dir
+0
+test dirlink -ef dirlink
+0
+test dir -ef dir/
+0
+test dirlink/ -ef dir
+0
+test . -ef dir
+1
+test sticky -ef sticky
+0
+test fifo -ef fifo
+0
+test sock -ef sock
+0
+test dlink -nt missing
+1
+test missing -ot dlink
+1
+test dlink -ot reg
+0
+test reg -ot dlink
+1
+test '' -nt ''
+1
+test '' -ot ''
+1
+test reg -ef ''
+1
+test '' -ef reg
+1
+test -k sticky -a -d sticky
+0
+test -u m4755 -a -g m2755 -a ! -k m644
+0
+test -O reg -a -G reg
+0
+test -G dlink
+1
+test -G dirlink
+0
+test -N dlink
+1
+test -N link
+1
+test -N dirlink
+1
+test -N dir
+1
+test -N new
+1
+test -N empty
+1
+test -r link
+0
+test -w link
+0
+test -x link
+1
+test -x dirlink
+0
+test -w dirlink
+0
+test -r dirlink/
+0
+test -x dir/
+0
+test -x reg/
+1
+test -r reg/
+1
+test -e link/
+1
+test -e dirlink/
+0
+test -L dirlink/
+1
+test -L dlink -a ! -e dlink
+0
+test -k dir
+1
+test -g dir
+1
+test -u dir
+1
+test -s sock
+1
+test -c fifo
+1
+test -b dir
+1
+test -p dlink
+1
+test -S dlink
+1
+test -d dir000/
+0
+test -r dir000/
+1
+test -s m200
+0
+test -w m4755
+0
+test -x m2755
+0
+test -r .
+0
+test -w .
+0
+test -x .
+0
+test -e /dev/null -a -c /dev/null
+0
+test -h /dev/null
+1
+test -e /usr/local/bin/bash -a -x /usr/local/bin/bash
+0
+test -w /usr/local/bin/bash
+1
+test -r /usr/local/bin/bash
+0
+test /usr/local/bin/bash -nt /
+1
+test / -ef /
+0
+test /tmp -ef /
+1
+test /dev/null -ef /dev/null
+0
+test /etc/passwd -ot /nonexistent
+1
+test /nonexistent -ot /etc/passwd
+0
+test -v x -a -v empty -a -v arr
+0
+test -v x -o -v
+0
+test -v -a -v
+0
+test -o hashall -a -o braceexpand
+0
+test -o errexit -o -o noglob
+1
+test -o -a -o
+0
+test -o hashall -a
+2 hashall: binary operator expected
+test -o ' hashall'
+1
+test -o hashall,
+1
+test -o HASHALL
+1
+test -v ' x'
+1
+test -v 'x '
+1
+test -R ref -a ! -R x
+0
+test '(' ')' x ')'
+2 ): unary operator expected
+test x -a '(' ')' ')'
+0
+test '(' '(' x ')' -a y ')'
+2 (: unary operator expected
+test -a -a -a -a
+1
+test -z -z -z -z
+2 syntax error: `-z' unexpected
+test '(' x '' -a y
+2 `)' expected, found 
+[ '(' x '' -a y ]
+2 `)' expected, found 
+test '(' x -a y '' ')'
+2 `)' expected, found 
+test '(' x -a ']'
+2 `)' expected
+[ '(' x -a ']' ]
+2 `)' expected, found ]
+[ '(' x -a ']' ')' ]
+0
+test x -eq 1 -o 1
+2 x: integer expected
+test '' -o '' -eq 1
+2 : integer expected
+test x -a x -o '' -eq 1
+2 : integer expected
+test 1 -eq 1 -a '(' 2 -lt x ')'
+2 x: integer expected
+test ! '(' 1 -eq x ')'
+2 x: integer expected
+test '(' x ')' -x
+2 syntax error: `-x' unexpected
+test x -a y ')'
+2 too many arguments
+test x -a y -a ')'
+0
+test x y -o
+2 y: binary operator expected
+test x -o y z
+2 too many arguments
+test x -o y -z
+2 syntax error: `-z' unexpected
+test x -a -t 1 -o -t 2
+1
+test $'\xa0'1 -eq 1
+2  1: integer expected
+test $'\x85'1 -eq 1
+2 …1: integer expected
+test 1 -eq 1$'\xa0'
+2 1 : integer expected
+test -t $'\v'1
+1
+test -t $'1\v'
+1
+test -t ' '
+2  : integer expected
+test Ã© = Ã©
+0
+test $'\xc3\xa9' '<' $'\xc3\xa8'
+1
+test a '<' $'\xe2\x82\xac'
+0
+test $'\xe2\x82\xac' '>' $'\xc3\xbf'
+0
+#posix test Ã© '<' z
+1
+#posix test $'\xc3\xa9' '>' $'\xc3\xa8'
+0
+test '(' x -a y ')' -a '(' '' -o z ')' -a '(' ! '' ')'
+0
+test '(' '(' '(' x = x ')' ')' ')'
+0
+test '(' '(' x = x ')' -a '(' y ')' ')'
+0
+test ! '(' ! '(' ! x ')' ')'
+1
+test ! '(' ! '(' ! '' ')' ')'
+0
+test ! '(' ! '(' x ')' ')'
+0
+test ! '(' ! '(' '' ')' ')'
+1
+test '(' ! '(' x ')' ')'
+1
+test '(' ! '(' '' ')' ')'
+0
+test '' -a '(' ! '(' x ')' ')'
+1
+test x -o '(' x -eq 1 ')'
+2 x: integer expected
+test '' -o '(' x -eq 1 ')'
+2 x: integer expected
+test '(' -n ')' ')'
+0
+test '(' -n ')' ')' ')'
+2 too many arguments
+test '(' x ')' ')' -a y
+2 too many arguments
+test ')' '(' x
+2 (: binary operator expected
+test '(' ')' -a '(' ')'
+2 `)' expected
+test '(' ! ')' -o '(' ! ')'
+0
+test -n '(' -a -n ')'
+0
+test -n '(' -o '(' ')'
+2 `)' expected
+test '(' -a ')' -a '(' -o ')'
+0
+test x -a '(' -a ')'
+0
+test -e '(' -o -e ')'
+1
+test = -a '(' = ')'
+0
+test '(' x = x -a y ')' -o z
+0
+test 1 -lt 2 -a 2 -lt 3 -a 3 -lt 4 -a 4 -lt 5
+0
+test 1 -lt 2 -a 2 -lt 3 -a 3 -lt 4 -a 5 -lt 4
+1
+test -9223372036854775808 -le -9223372036854775808 -a 9223372036854775807 -ge 9223372036854775807
+0
+test ' -1' -lt ' +1'
+0
+test $'\t-1\t' -lt $'\t+1\t'
+0
+test '1 ' -eq $'\t1'
+0
+test 0 -eq -0 -a +0 -eq -0
+0
+test 1 -ne 1 -o 2 -ne 2 -o 3 -ne 4
+0
+test 99999999999999999999 -eq 99999999999999999999
+2 99999999999999999999: integer expected
+test 1 -gt 99999999999999999999
+2 99999999999999999999: integer expected
+test x -gt 99999999999999999999
+2 x: integer expected
+test -nt -nt
+2 -nt: unary operator expected
+test -ef -ef
+2 -ef: unary operator expected
+test -eq -eq
+2 -eq: unary operator expected
+test x -nt -nt
+1
+test -nt -a -nt
+0
+test missing -nt -a -o reg -nt -o
+0
+test reg -nt missing -a missing -ot reg -a ! missing -ef missing
+0
+test new -nt old -a new -nt reg -a reg -nt old -a ! old -nt old
+0
+test -t 1 -a -t 2 -o -t 0
+1
+test x -a -t -a -t
+1
+test x -o -t -o -t
+0
+test -t -o -t
+0
+test ! -t -a x
+1
+test ! -t -o ''
+1
+test '(' -t -a -t ')'
+0
+test '(' -t ')' -a '(' -t ')'
+0
+test -o posix -o -o hashall
+0
+test ! -o posix
+0
+test -v -o -v
+0
+test -v x -a -o hashall -a -R ref
+0
+test -R ref -o -R
+0
+test -z -n -o -n -z
+0
+test -n -z -a -z -n
+1
+test -s -a -s
+0
+test -L -L -L
+2 -L: binary operator expected
+test -h -o -h -o -h
+2 syntax error: `-h' unexpected
+test -d . -a -d / -a -d dir/
+0
+test -x dir000/
+1
+test -k sticky/
+0
+test -d sticky/
+0
+test -e dlink/
+1
+test -h dlink/
+1
+test -p fifo/
+1
+test -e fifo/
+1
+[ -d sticky/ ]
+0
+[ '(' -k sticky ')' ]
+0
+[ ! -e dlink -a -h dlink ]
+0
+test ']' '-o' ')' '!' '('
+2 too many arguments
+test '99999999999999999999' '(' '-a' ')' '-q' '-o' '-ef' '(' ')' '(' '('
+2 too many arguments
+test '-o' '!' ')' '<' '(' '(' '-a'
+2 too many arguments
+test ')' '99999999999999999999' '!' '-' ')' ')' '-o' ')' '-1' 'a=' 'x' '-ef' '!'
+2 too many arguments
+[ ')' '-o' '-o' '-a' ]
+0
+[ ')' '!' '(' ')' '-a' ']' '-' '-o' ')' '-q' '(' '!' '-'
+2 missing `]'
+[ '!' 'a=' '!' '-o' '>' '-9223372036854775808' '-eq' '-q' '(' ]
+2 too many arguments
+[ '-ab' ' 2 ' ')' '-o' '-a' ]
+2 too many arguments
+[ '(' '-ab' '<' '--' '0' '(' '-o' ')' ]
+2 `)' expected, found 0
+test '-a' '-ne' '-9223372036854775808' '1'
+2 -a: integer expected
+#posix test '-o' '-o' '-ne' '!' '!' '-o' $'\t7' ')' ']' '-o' '-o' '-1' ')' ')' ')' '-1'
+2 syntax error: `-ne' unexpected
+test '>' '(' 'a=' '' '--' '-1' '0' '!'
+2 too many arguments
+#posix test '-ab' '-a' '>' '(' '(' '0' '99999999999999999999' ')' ')' '!' '-o'
+2 too many arguments
+test '!' ')' '(' '(' '-lt' '!'
+2 too many arguments
+[ ')' ')' '-ef' '-9223372036854775808' ]
+2 too many arguments
+test '+3' ')' '-ot' '-a' '-1'
+2 too many arguments
+test '-o' ')' '!' ')' '!' ')'
+2 too many arguments
+test '-o' '-o' ')' $'\t7' ')' '-ef' '(' '!' ')'
+2 too many arguments
+test ')' '-o' '(' '(' ')' '-1'
+2 syntax error: `-1' unexpected
+test '-ab' '0' ']' '-o' '99999999999999999999' '-ef' '(' '!' '(' ' 2 ' '-o'
+2 too many arguments
+test ')' '-a' ')' '-a' '-' '0' '-nt'
+2 too many arguments
+[ '-o' '99999999999999999999' '(' ]
+2 99999999999999999999: binary operator expected
+[ '-o' '(' '-q' '-a' '(' '-eq' '-1' '!' '(' ]
+2 syntax error: `-q' unexpected
+[ '-o' ')' ')' '' ')' '>' ]
+2 too many arguments
+test ')' '-o' '-a' '!'
+0
+test '(' '<' ')' '-ot' ')'
+2 syntax error: `-ot' unexpected
+test '!=' '-9223372036854775808' ')' ')'
+2 syntax error: `-9223372036854775808' unexpected
+test '-o' ')' '(' '+3'
+2 too many arguments
+test '99999999999999999999' '!=' '-lt' '!'
+2 too many arguments
+test '==' '>' '-a' '(' 'x' '-o' '(' '!'
+2 too many arguments
+[ '-o' '0' '(' '-ef' '!' '--' '(' '0'
+2 missing `]'
+test '<' '-a' '1' '' ')' '-a' ')' '(' '(' '(' '-o'
+2 too many arguments
+#posix test '!=' '(' '!' '>' '('
+2 too many arguments
+[ '-' ')' '-a' ')' '-a' '!' '(' '(' '-q' '(' $'\t7' '!' '(' '-ab' '-9223372036854775808' '-a' ]
+2 too many arguments
+test '!' '+3' ']' '(' $'\t7'
+2 too many arguments
+[ '!' ')' '-q' '-a' '(' ' 2 ' '(' '-a' '-' ')' '1' 'a=' '(' ]
+2 syntax error: `-q' unexpected
+[ '0' '(' '+3' '-a' '-' $'\t7' '-a' '(' '-o' '!' $'\t7' '-q' '!' 'x' '!' ')' ]
+2 too many arguments
+[ '-o' '!' '-o' '(' '(' '-lt' ')' ]
+2 (: unary operator expected
+test '!' '!' '!' '-o' 'x'
+0
+test '(' '-a' '1' 'a=' '-'
+2 `)' expected, found a=
+test '(' '-o' '-ot' '-' 'x' '<' '!' '(' '(' ' 2 ' ')' '-a' ')' '-a' '' '!'
+2 `)' expected, found x
+test ')' ')' '-o' '-ot' '+3' ')' ' 2 ' '-lt' ')' '-' '-o'
+2 too many arguments
+test '-ab' '!' '==' '' '!' '-9223372036854775808' '1' '-a' ')' '-ot' '!' '(' '(' '=' '' '-o'
+2 too many arguments
+test '-a' ')' '-ge' '-a' '-' '-9223372036854775808' '>' '('
+2 syntax error: `-ge' unexpected
+test '!' '!' '-o' '(' '-a' ')' 'a=' '-o' ')'
+2 too many arguments
+[ '(' '==' 'x' '-9223372036854775808' '-ab' '0' ')' ' 2 ' ')' ')' '1' '-ne' ')' ]
+2 `)' expected, found x
+test ')' '-ne' '-lt' '-1' '(' '-q' '(' ')'
+2 ): integer expected
+[ '+3' '-a' '+3' '!' '!' '(' ' 2 ' '(' ' 2 ' ]
+2 too many arguments
+test '>' ')' '-a' ')' '-ge' '1' '-q' '-lt' '(' '!' '-'
+2 too many arguments
+test '1' '!' '-lt'
+2 !: binary operator expected
+test '(' '!' '-9223372036854775808' '(' '-ot'
+2 `)' expected, found (
+#posix test ' 2 ' ')' '99999999999999999999' ')' '-ef' ')' '(' '!' '-a' ']' '('
+2 too many arguments
+test '' ')' '(' ')' '!'
+2 too many arguments
+test '-q' $'\t7' '!' ')'
+2 too many arguments
+test '-1' '-1' ')' '('
+2 syntax error: `-1' unexpected
+test '!' '-9223372036854775808' '!' '!' '-' ']' '(' '!' '-1' '(' '(' ')' '!='
+2 too many arguments
+test '!' '-o' '-ab' '1' '-lt' ')' '!' ')'
+2 too many arguments
+test ')' '-o' ')' ' 2 ' ')' '!'
+2 too many arguments
+[ ')' '-nt' '' '' ]
+2 too many arguments
+test '-1' '=' ' 2 ' 'x'
+2 too many arguments
+test ')' '!' '!' '-9223372036854775808' '-a' '!' '99999999999999999999' '-o' '1' '1' ')' '-ab' '(' '+3' '!' '('
+2 too many arguments
+test '!' '(' '(' '!'
+2 (: binary operator expected
+test '!' '(' '-9223372036854775808' '-a' '!'
+2 argument expected
+test ')' '--' '>' '('
+2 syntax error: `--' unexpected
+#posix [ '-a' '99999999999999999999' '-q' '-1'
+2 missing `]'
+test '(' '99999999999999999999' '-o' '(' ' 2 ' '-o' ')' '-o' ')' ')' '(' '!' '('
+2  2 : unary operator expected
+test '99999999999999999999' '-o' 'a=' ')' '!' ')' ')'
+2 too many arguments
+test '-o' '!' ')' '-a' '-o' '!' 'a=' '=='
+2 too many arguments
+[ '--' '-1' '(' '--' ')' ]
+2 syntax error: `-1' unexpected
+test ')' '(' '!' '(' '-a' '--' '99999999999999999999'
+2 too many arguments
+[ '-ab' '+3' ')' ')' ]
+2 too many arguments
+test '(' '(' '-a' '-a' '(' ')' '--' '(' '--' '-o' ')' '(' ')' '(' '-o' ']'
+2 `)' expected, found (
+test ')' '-o' ')' '-q' '!' ')' ')' ')' '!' '-o' '-o' '(' '-o' '-a' ')' '!'
+2 syntax error: `-q' unexpected
+test '(' '-o' ')' '-o'
+2 argument expected
+#posix [ ')' '0' '!' $'\t7' '-a' '(' '-9223372036854775808' '-ab' ')' '-o' '-o' ]
+2 too many arguments
+[ '!' '-o' 'a=' '(' '-ab' ')' ]
+2 too many arguments
+test '(' '-o' '!' '-a' '-a'
+2 `)' expected
+[ ')' '-o' '-' ')' ')' ')' ']' ' 2 ' $'\t7' '-1' '-o' '' ')' '!' '==' '(' ]
+2 too many arguments
+test '-1' ')' '0' '-ge' '99999999999999999999' ')' '1'
+2 too many arguments
+test '-o' ')' '!' ')' '(' '-'
+2 too many arguments
+test '(' '!=' '(' 'a='
+2 `)' expected, found (
+test '-ge' ')' '>' '!' '-o'
+2 too many arguments
+test '-ab' '(' '(' '-1'
+2 too many arguments
+test '-lt' ')' '!' 'a=' ')' '(' '' '!' '-ab' 'a=' '('
+2 too many arguments
+test '(' '(' '-o' '-a'
+2 `)' expected
+test 'a=' ')' '(' '(' ' 2 ' '(' '-ne' '(' '-a' '(' '('
+2 too many arguments
+#posix [ '-q' '!' '99999999999999999999' '(' ')' ]
+2 too many arguments
+test ')' ')' '-a' '(' '(' ']'
+2 too many arguments
+test '0' '-a' ']' '('
+2 too many arguments
+test 'a=' ']' '-' '--' '-o'
+2 too many arguments
+[ '' ')' '1' $'\t7' '-a' '-a' '(' ')' '(' '-q' '(' '-q' '-a' ]
+2 too many arguments
+test '' '-nt' '' ')' '(' '-1' '(' '(' ')'
+2 too many arguments
+#posix test '!' '!' '(' $'\t7' ')'
+0
+test '0' ')' 'a=' '-o' '-' '-o' ')' '=' ' 2 ' '-a' '-nt' 'x' ']' '-ab' ')' '!'
+2 too many arguments
+test ')' '=' 'a=' ')' '' '99999999999999999999'
+2 too many arguments
+[ '!' ')' '99999999999999999999' '-a' '(' ]
+2 too many arguments
+test '==' '-' ']' '-a'
+2 syntax error: `-' unexpected
+[ '(' '-q' '-a' '-' '0' '-a' ')'
+2 missing `]'
+#posix [ '-a' ')' 'x' '-o' '-ge' '-a' '(' ]
+2 too many arguments
+test '-a' '-o' '(' '-ef' '0' '+3'
+2 too many arguments
+test '(' '-9223372036854775808' '(' '-1' '-o'
+2 `)' expected, found (
+test '(' '(' '-o' '-9223372036854775808' 'x' '-9223372036854775808' '-a' '-o'
+2 `)' expected, found x
+#posix [ '==' '-ab' '!' '=' ]
+2 syntax error: `-ab' unexpected
+#posix test '!' '-' '!' ')' '0' '(' ')' '-9223372036854775808' $'\t7' '(' '-o' '-' ' 2 '
+2 too many arguments
+test ')' ']' '1' '-o' '-ab'
+2 too many arguments
+test 'a=' '-ne' '-o' 'a=' '--' '-o' '-o' '-a' ')' ')' '(' '(' ')' '99999999999999999999' '!' '('
+2 a=: integer expected
+test ')' ')' 'x' '-o' ')' ')' '-a' '!' ')' '-a' '(' '-a' ' 2 '
+2 too many arguments
+test '-a' '(' '('
+2 (: binary operator expected
+[ '==' '(' '-o' ']' '-9223372036854775808' '='
+2 missing `]'
+[ '(' '(' 'a=' '(' '-o' ')' ]
+2 `)' expected, found (
+[ '(' '-ab' '-ge' '(' ' 2 ' ]
+2 -ab: integer expected
+test '-o' '(' ' 2 ' ')' '!' '-a' '-9223372036854775808'
+2 too many arguments
+[ '(' ')' ')' ')' '<' '(' 'a=' '-o' ')' ]
+2 too many arguments
+test '(' '(' '0' ')' '!'
+2 (: unary operator expected
+[ '!' '-eq' '-a' ')' '!' ]
+2 too many arguments
+test '(' '!' ')' '!' '-a'
+2 too many arguments
+test 'a=' '-ab' '(' '-o' '-'
+2 syntax error: `-ab' unexpected
+test '-ge' '(' '-a'
+2 (: binary operator expected
+test '-a' ')' '(' '==' '(' '-a'
+2 too many arguments
+[ '-nt' '-ab' '-1' '-q' '--' ')'
+2 missing `]'
+test ']' '1' '-o' '-ne' '-o'
+2 too many arguments
+[ '-a' ' 2 ' '(' ]
+2  2 : binary operator expected
+test ' 2 ' $'\t7' '(' '-1' '-nt' '-ot'
+2 too many arguments
+test '-a' ')' '-a' '(' '-a'
+2 `)' expected
+[ '(' '' '(' '-o' '-o' '-1' '-ot' '(' '!' ]
+2 `)' expected, found (
+#posix test '(' '!' '-o' '!' ')' '(' ')' '-' '-nt' '-a' '-o' ')' '(' '!' ' 2 ' '>'
+2 too many arguments
+[ '-a' '-a' '--' '-o' '--' ')' '99999999999999999999' ')' '1' '+3' '99999999999999999999' ' 2 ' 'x' '-' '-o' '(' ]
+2 syntax error: `--' unexpected
+test '-a' '-9223372036854775808' '!' ')'
+2 too many arguments
+[ '(' '!' '!' '!' '(' ]
+2 argument expected
+test ')' '>' '(' '-ge' ')' '!'
+2 syntax error: `-ge' unexpected
+test '-' '!=' '-o' '-1' '!=' 'a=' '' ')' '!' '(' ')'
+2 syntax error: `-1' unexpected
+[ '(' '1' '(' '(' ' 2 ' '(' ']' ]
+2 `)' expected, found (
+test '-a' '99999999999999999999' ')' '+3' '-9223372036854775808' 'a='
+2 too many arguments
+test '+3' ')' ')' '-a' '(' ')'
+2 too many arguments
+[ '!' '-lt' '-o' '<' '99999999999999999999' '(' '-o' '(' '-o' '-a' '--' ]
+2 too many arguments
+test ')' '-o' '99999999999999999999' '' $'\t7' '-1'
+2 too many arguments
+[ '-q' '-o' '(' '(' '1' '99999999999999999999' 'a=' '-1' '-a' '!' ' 2 ' ]
+2 `)' expected, found 99999999999999999999
+[ '-a' '(' '!' '-ne' ')' '-nt' '-a' '-nt' '1' $'\t7' 'a=' 'x' ')' ]
+2 too many arguments
+test '(' '(' '-ab' '+3' '(' '-o'
+2 `)' expected, found +3
+[ ')' '(' '' '-ot' '(' '-' ]
+2 too many arguments
+[ ')' '(' ')' '-o' '(' ]
+2 too many arguments
+test ')' '(' '-9223372036854775808' ' 2 ' '-a' '(' '-ef' ')' ')' '-o' '-ef'
+2 too many arguments
+test '>' ' 2 ' '!' '-ab' '-ab'
+2 too many arguments
+[ 'a=' '!=' '-9223372036854775808' '(' '(' ')' '-a' '!' ]
+2 too many arguments
+test '-1' '(' '-ab' '(' ')' ' 2 ' '!'
+2 too many arguments
+[ '99999999999999999999' '-a' '99999999999999999999' '-ge' '<' '-ab' ]
+2 99999999999999999999: integer expected
+test '(' '99999999999999999999' '99999999999999999999'
+2 99999999999999999999: binary operator expected
+test '(' ')' ')' ']' '-o' ')' '--' '-a' ')' '-eq' '!' ')' ')' '-ab' '-a' '('
+2 too many arguments
+test '(' '-' ')' '==' ']' '-a' ')' ']'
+2 too many arguments
+test '-a' '-q' '0' '('
+2 too many arguments
+test '-ab' '!' '' '-ef' '-9223372036854775808' $'\t7' ')' ')' '-1' ')' '=' '(' '!'
+2 too many arguments
+[ '(' ')' '(' '-9223372036854775808' ')' '(' '-o' '(' '-a' '-lt' 'x' ')' '==' ]
+2 `)' expected, found (
+test '-ef' '!' '-a' ')'
+2 too many arguments
+[ '>' '(' ')' '--' '0' $'\t7' '1' '-a' '-o' ')' '!' ]
+2 too many arguments
+#posix test '-o' '' ')' ')' '-o' '-o'
+2 too many arguments
+test '+3' '<' ']' '(' ']' ')' '-o' '(' '-q' ')' ')' '(' ')' '(' '-' 'a='
+2 too many arguments
+test ')' '!' '!' '(' '1' $'\t7'
+2 too many arguments
+[ '<' '-ne' '(' '-o' '-ab' ')' '-1' '-o' '0' ')' '=' ]
+2 <: integer expected
+[ ')' '0' ')' '-ne' $'\t7' '1' ]
+2 too many arguments
+[ '<' '-nt' '(' '-o' '99999999999999999999' ]
+0
+[ '-9223372036854775808' '-1' '0' ')' ]
+2 syntax error: `-1' unexpected
+test '!' ')' '-ab' '0' ']' ')'
+2 syntax error: `-ab' unexpected
+test '-o' '-a' '(' '-a'
+2 too many arguments
+test '!' 'a=' ' 2 ' '(' '!' ')' ']'
+2 too many arguments
+[ '!' ']' ')' '!' ')' '-9223372036854775808' ]
+2 too many arguments
+#posix [ 'a=' '-q' ')' '(' '-a' ' 2 ' '(' '1' ')' ')' ')'
+2 missing `]'
+test '!' '(' ')' 'x' '(' '99999999999999999999'
+2 `)' expected, found x
+[ '-o' '-ne' ')' '!' '(' ]
+2 -o: integer expected
+test '(' '-a' '(' '-lt' ')'
+2 `)' expected, found -lt
+test '+3' ')' ')' '-a' 'a='
+2 too many arguments
+test '(' ')' '(' ')' '-a' ')' '!' ')' $'\t7' ')' '('
+2 `)' expected, found (
+test '(' '1' '-a' '-o' '-ab'
+2 `)' expected
+test '>' '-a' '-q' '!' '-ne' '!' '('
+2 too many arguments
+test ']' '-o' '(' '-o' '(' ')'
+0
+test '(' '(' '-nt' ')' ']' '-a' '-q' ')'
+2 (: unary operator expected
+test $'\t7' '-o' ''
+0
+test '(' '(' '=' '!' '-a' '('
+2 `)' expected, found !
+test '(' '(' ')' 'a=' ')' ')' ']' '-ab' '(' '!' ')' $'\t7' ')' '+3' '!=' ')'
+2 too many arguments
+[ '-ef' '-o' '-ef' ']' ]
+2 too many arguments
+test 'a=' ')' '-ot' '(' '-o' '+3'
+2 too many arguments
+test '0' '!=' '-q' 'a=' '-o' '(' '-o'
+2 too many arguments
+[ '-o' $'\t7' '(' 'x' '(' '!' ' 2 ' ]
+2 too many arguments
+[ '-o' '-ot' '1' ]
+1
+test '-o' '!' '-ot' '-a' ')'
+2 syntax error: `-ot' unexpected
+#posix test '!' '-o' '-o' '-o' 'x' 'a=' 'a=' '1' '-ab' 'a=' '-ot'
+2 too many arguments
+test '-a' '-ab' ')' '-o' '99999999999999999999' '-a' '(' '-nt' ')' '(' '-a' '--' '(' ')' '-lt' '=='
+2 too many arguments
+test '0' 'a=' '-1' '-a' '!' ')' '-a' ']' '--' '(' '1' '!' '-lt' ')' '--' ')'
+2 too many arguments
+test '!' '-q' ')' '!'
+2 ): binary operator expected
+test $'\t7' 'a=' '1' '-o' '-o' '(' '-ef' '(' '!' ')' '(' 'a=' '-ge'
+2 too many arguments
+test '1' '0' '('
+2 0: binary operator expected
+test ')' '-eq' '-o' ')' '(' '-a' ')' ')' '-' '=' '-o'
+2 ): integer expected
+#posix test '-a' '-1' '(' '-o' ')'
+2 too many arguments
+test ')' '-9223372036854775808' '(' '(' '-o' '('
+2 syntax error: `-9223372036854775808' unexpected
+test '!' 'a=' ')' ')' ')'
+2 too many arguments
+[ '' '(' '-ab' '(' '-ot' ')' '(' '(' '0' '-o' '(' '(' '(' $'\t7' '-o' '-o'
+2 missing `]'
+[ '-ab' '--' '(' '-a' '-a' ]
+2 syntax error: `--' unexpected
+[ '+3' '-ab' 'a=' '!' '-nt' ]
+2 syntax error: `-ab' unexpected
+test '-ot' '(' '-o' '-q'
+2 too many arguments
+[ ')' '(' '-ot' '-9223372036854775808' '!' ]
+2 too many arguments
+test '0' ']' '(' $'\t7' '-1'
+2 too many arguments

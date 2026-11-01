@@ -1,0 +1,41 @@
+== stdout 251
+T: [[ -v a ]]
+T: [[ -v b ]]
+F: [[ -v c ]]
+T: [[ -v $n ]]
+T: [[ -v "n" ]]
+F: [[ -v l ]]
+T: [[ -v m ]]
+F: [[ -v l ]]
+T: [[ -v 1 ]]
+F: [[ -v 2 ]]
+T: [[ -v HOME ]]
+T: [[ -v PWD ]]
+F: [[ -v i ]]
+T: [[ -v i ]]
+F: [[ -v ex ]]
+F: [[ -v "" ]]
+F: [[ -v 1abc ]]
+
+== stderr 0
+
+== merged 251
+T: [[ -v a ]]
+T: [[ -v b ]]
+F: [[ -v c ]]
+T: [[ -v $n ]]
+T: [[ -v "n" ]]
+F: [[ -v l ]]
+T: [[ -v m ]]
+F: [[ -v l ]]
+T: [[ -v 1 ]]
+F: [[ -v 2 ]]
+T: [[ -v HOME ]]
+T: [[ -v PWD ]]
+F: [[ -v i ]]
+T: [[ -v i ]]
+F: [[ -v ex ]]
+F: [[ -v "" ]]
+F: [[ -v 1abc ]]
+
+== status 0

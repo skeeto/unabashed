@@ -15,7 +15,10 @@ WARN    = -Wall -Wextra -Wconversion -Wno-sign-conversion \
 DEBUG   = -g3 -fsanitize=undefined -fsanitize-trap
 RELEASE = -O2 -s
 WIN32   = -nostartfiles -static-libgcc
-SOURCES = base.cpp unabashed.cpp parse.cpp print.cpp wide.cpp fibers.cpp check.cpp
+SOURCES = base.cpp api.cpp unabashed.cpp parse.cpp print.cpp wide.cpp \
+          fibers.cpp check.cpp shell.cpp array.cpp vars.cpp expand.cpp exec.cpp \
+          builtins.cpp arith.cpp pattern.cpp brace.cpp \
+          b_test.cpp b_printf.cpp vos.cpp fakes.cpp
 
 default:
 	@echo "pick a target, e.g. make debug.exe or make tests" && false
@@ -24,13 +27,15 @@ unabashed.exe: main_win32.cpp $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) $(RELEASE) $(WIN32) -o $@ main_win32.cpp
 
 unabashed32.exe: main_win32.cpp $(SOURCES)
-	$(CXX32) $(FLAGS) $(WARN) $(RELEASE) $(WIN32) -o $@ main_win32.cpp
+	$(CXX32) $(FLAGS) $(WARN) $(RELEASE) $(WIN32) \
+	    -Wl,--major-subsystem-version=5,--minor-subsystem-version=1 \
+	    -o $@ main_win32.cpp
 
 debug.exe: main_win32.cpp $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) $(DEBUG) $(WIN32) -o $@ main_win32.cpp
 
 tests.exe: main_test.cpp $(SOURCES)
-	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -o $@ main_test.cpp
+	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -Wl,--stack,0x2000000 -o $@ main_test.cpp
 
 unabashed: main_posix.cpp $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) $(RELEASE) -o $@ main_posix.cpp

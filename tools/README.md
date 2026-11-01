@@ -17,8 +17,23 @@ Build or rebuild from the repository root. This works from Windows
 The build checks the tarball's SHA-256. The image holds bash in
 `/usr/local/bin/bash` (default `./configure`), the test helpers `recho`,
 `zecho`, `printenv` and `xcase` from bash's `support/` beside it, and a
-user `oracle` (uid 1000). `/opt/fakes/bin` is empty for now; it is
-reserved for the fakes multi-call binary.
+user `oracle` (uid 1000).
+
+`/opt/fakes/bin` holds the fakes: `fakes.cpp` built with
+`main_fakes.cpp` as one multi-call binary, `/opt/fakes/bin/fakes`, plus a
+symbolic link to it for each program (`cat`, `sed`, `od`, ...; `fakes
+--list` prints them). The vos runs the same code in process, so specs
+recorded with the fakes on the PATH agree with vos runs by construction.
+They build in a stage of their own, so editing `fakes.cpp` leaves the
+cached bash build alone; rebuild the image after changing the fakes.
+Debian's coreutils remain in `/usr/bin` for comparison, but are not on
+the recording PATH. `t/unit/fakes_record.sh compare` runs the fakes'
+unit cases against them. `FAKES_CASES` and `FAKES_GOLDEN` point that
+script at another case list and golden file, and
+`FAKES_PATH=/usr/local/bin:/usr/bin:/bin` records the real coreutils
+instead, so that `fakes_test DIR` checks the fakes' fidelity on the vos
+directly. Each case gets 30 seconds (status 124 after that), since real
+tools can block (`sleep inf`) or run on forever (`seq -inf 1`).
 
 ### Recording
 
@@ -32,7 +47,8 @@ looks like this:
 - `bash --norc --noprofile -c SCRIPT bash`, so `$0` is `bash` and
   diagnostics read `bash: line N: ...`
 - stdin is `/dev/null`
-- `env -i LANG=C TZ=UTC HOME=/home/oracle PATH=/usr/local/bin:/usr/bin:/bin`
+- `env -i LANG=C TZ=UTC HOME=/home/oracle PATH=/usr/local/bin:/opt/fakes/bin`,
+  so external commands are bash's helpers or the fakes, never coreutils
 - uid 1000, hostname `oracle`, umask 022, `ulimit -n` 1024
 - `--network none`, `--read-only`, all capabilities dropped
 - `/tmp` and the workdir `/home/oracle` (also `$HOME`) are empty tmpfs

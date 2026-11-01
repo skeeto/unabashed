@@ -322,6 +322,10 @@ struct Lexer {
     b32      heredocstring;  // reading a here-document from alias text
     u8       dstack[64]; // open quoting delimiters, innermost last
     i32      ddepth;
+    // Input read on demand: fill appends at least a line to src, and
+    // returns false at the end of input
+    b32    (*fill)(void *ctx, Lexer *);
+    void    *fillctx;
 
     // Token history and state
     i32      current;
@@ -362,6 +366,11 @@ struct Lexer {
     Message *msgs;
     Message **msgtail;
     void    *jmp[5];     // where syntax errors escape to
+
+    // Recursion limit: bash has none and crashes on absurd nesting
+    byte    *stacktop;   // stack position at entry to the parse
+    iz       stackmax;   // bytes of stack the parse may use, 0 for any
+    b32      overflow;   // the limit was hit
 };
 
 static void   synerror(Lexer *);
@@ -383,6 +392,17 @@ static void message(Lexer *L, i32 line, Str text, i32 kind = MSG_ERROR)
 [[noreturn]] static void parsefail(Lexer *L)
 {
     __builtin_longjmp(L->jmp, 1);
+}
+
+// Give up on nesting deep enough to exhaust the stack, where bash would
+// crash. The whole parse fails.
+static void checkstack(Lexer *L)
+{
+    byte here = 0;
+    if (L->stackmax && L->stacktop-&here > L->stackmax) {
+        L->overflow = 1;
+        parsefail(L);
+    }
 }
 
 
@@ -490,6 +510,15 @@ static iz assignment(Str s, b32 compound)
 
 // Character input (bash's shell_getc)
 
+// Whether all input has been consumed, reading more if there is any.
+static b32 srcend(Lexer *L)
+{
+    while (L->srcpos==L->src.len && L->fill) {
+        if (!L->fill(L->fillctx, L)) L->fill = 0;
+    }
+    return L->srcpos == L->src.len;
+}
+
 // Load the next line of the input into L->line, appending a newline to
 // an unterminated last line. With remove set, a final backslash is
 // doubled instead so that it is not taken as a line continuation.
@@ -497,7 +526,7 @@ static void nextline(Lexer *L, b32 remove)
 {
     L->lineno++;
     L->idx  = 0;
-    if (L->srcpos == L->src.len) {
+    if (srcend(L)) {
         L->line    = {};
         L->lineeof = 1;
         return;
@@ -760,13 +789,14 @@ static Str internalform(Arena *a, Str s)
     return finish(&b);
 }
 
-// Undo the internal form: drop each CTLESC and keep the byte after it
-// (bash's remove_quoted_escapes).
+// Undo the internal form: drop a CTLESC before another CTLESC or a
+// CTLNUL (bash's dequote_escapes). Other 0x01 bytes, as in raw
+// here-document bodies, are kept.
 static Str removeescapes(Arena *a, Str s)
 {
     Buf b(a, s.len);
     for (iz i = 0; i < s.len; i++) {
-        if (s[i]==1 && i+1<s.len) i++;
+        if (s[i]==1 && i+1<s.len && (s[i+1]==1 || s[i+1]==0x7f)) i++;
         putbyte(&b, s[i]);
     }
     return finish(&b);
@@ -818,12 +848,12 @@ static Str ansicquote(Arena *a, Str s)
     return finish(&b);
 }
 
-static i32 hexval(u8 c)
+static i32 xdigitval(u8 c)
 {
     return digit(c) ? c-'0' : (lowercase(c)-'a') + 10;
 }
 
-static b32 hexdigit(u8 c)
+static b32 ishexdigit(u8 c)
 {
     return digit(c) || (lowercase(c)>='a' && lowercase(c)<='f');
 }
@@ -863,15 +893,15 @@ static Str ansiexpand(Arena *a, Str s, b32 utf8, b32 keepnul = 0)
             if (i<s.len && s[i]=='{') {
                 iz  j = i + 1;
                 u32 x = 0;  // wraps like bash's int
-                for (; j<s.len && hexdigit(s[j]); j++) {
-                    x = x*16 + (u32)hexval(s[j]);
+                for (; j<s.len && ishexdigit(s[j]); j++) {
+                    x = x*16 + (u32)xdigitval(s[j]);
                 }
                 i = j<s.len && s[j]=='}' ? j+1 : j;
                 v = (i32)(x & 0xff);
                 break;
             }
-            for (; n<2 && i<s.len && hexdigit(s[i]); n++) {
-                v = v*16 + hexval(s[i++]);
+            for (; n<2 && i<s.len && ishexdigit(s[i]); n++) {
+                v = v*16 + xdigitval(s[i++]);
             }
             if (!n) {
                 putbyte(&b, '\\');
@@ -884,8 +914,8 @@ static Str ansiexpand(Arena *a, Str s, b32 utf8, b32 keepnul = 0)
             i32 max = c=='u' ? 4 : 8;
             i32 n   = 0;
             u32 u   = 0;
-            for (; n<max && i<s.len && hexdigit(s[i]); n++) {
-                u = u*16 + (u32)hexval(s[i++]);
+            for (; n<max && i<s.len && ishexdigit(s[i]); n++) {
+                u = u*16 + (u32)xdigitval(s[i++]);
             }
             if (!n) {
                 putbyte(&b, '\\');
@@ -1157,6 +1187,7 @@ static void eofmatching(Lexer *L, i32 line, i32 close)
 
 static Str parsematched(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
 {
+    checkstack(L);
     i32 count  = 1;
     b32 ckcomment = (flags & P_COMMAND) && qc!='`' && qc!='\'' && qc!='"' &&
                     !(flags & P_DQUOTE);
@@ -1233,6 +1264,13 @@ static Str parsematched(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
         }
 
         if (open != close) {
+            if (ch=='\'' && L->posix && !wasdol && (rflags & P_DQUOTE) &&
+                    (flags & P_DOLBRACE) && dolstate!=DB_QUOTE && dolstate!=DB_QUOTE2) {
+                // POSIX: a single quote in a double-quoted ${...} is
+                // literal, except in a pattern
+                wasdol = gtlt = 0;
+                continue;
+            }
             if (shellquote(ch)) {
                 Str nest;
                 pushdelim(L, ch);
@@ -1368,12 +1406,12 @@ static Str quoteremoval(Arena *a, Str s)
 // document. Returns a null string at end of input.
 static Str readrawline(Lexer *L, b32 remove)
 {
-    if (L->srcpos == L->src.len) {
+    if (srcend(L)) {
         return {};
     }
     Buf b(L->a, 64);
     for (b32 passnext = 0;;) {
-        if (L->srcpos == L->src.len) {
+        if (srcend(L)) {
             putbyte(&b, '\n');
             break;
         }
@@ -1385,7 +1423,7 @@ static Str readrawline(Lexer *L, b32 remove)
             putbyte(&b, c);
             passnext = 0;
         } else if (c=='\\' && remove) {
-            if (L->srcpos == L->src.len) {
+            if (srcend(L)) {
                 putbyte(&b, '\\');
                 putbyte(&b, '\\');
                 putbyte(&b, '\n');
@@ -1960,15 +1998,20 @@ static i32 parsearithcmd(Lexer *L, Str *text)
     if (!t.data) {
         return -1;
     }
+    // bash copies the text as a C string, so a NUL from $'\0' ends it
+    Str body = cuttail(t, 1);
+    for (iz i = 0; i < body.len; i++) {
+        if (!body[i]) body = takehead(body, i);
+    }
     i32 c = shellgetc(L, 0);
     if (c == ')') {
-        *text = cuttail(t, 1);
+        *text = body;
         return 1;
     }
     shellungetc(L, c);
     Tokbuf b = {};
     tokput(L, &b, '(');
-    tokputs(L, &b, cuttail(t, 1));
+    tokputs(L, &b, body);
     tokput(L, &b, ')');
     *text = tokstr(&b);
     return 0;
@@ -2113,6 +2156,7 @@ static i32 yacctoken(i32 t)
 
 static Cond *condterm(CondParser *p)
 {
+    checkstack(p->L);
     Lexer *L = p->L;
     i32 tok  = condskip(p);
     i32 line = L->lineno;
@@ -2757,6 +2801,7 @@ static b32 startsshell(i32 t)
 
 static Node *parsecommand(Parser *p)
 {
+    checkstack(p->L);
     Lexer *L = p->L;
     i32    t = peek(p);
 
@@ -2810,7 +2855,8 @@ static Node *parsecommand(Parser *p)
             return c;
         }
         if (t == T_WORD) {
-            Word *w = L->val.word;
+            Word *w    = L->val.word;
+            i32   line = L->lineno;  // a command's line is its first word's
             advance(p);
             if (startsshell(peek(p))) {
                 c->name = w;
@@ -2823,6 +2869,7 @@ static Node *parsecommand(Parser *p)
             if (!s) {
                 s = newnode(L, N_SIMPLE);
             }
+            s->line  = line;
             w->next  = s->words;
             s->words = w;
             c->a = s;
@@ -2839,7 +2886,8 @@ static Node *parsecommand(Parser *p)
     }
 
     if (t == T_WORD) {
-        Word *w = L->val.word;
+        Word *w    = L->val.word;
+        i32   line = L->lineno;  // a command's line is its first word's
         advance(p);
         if (peek(p) == '(') {
             advance(p);
@@ -2860,6 +2908,7 @@ static Node *parsecommand(Parser *p)
         if (!s) {
             s = newnode(L, N_SIMPLE);
         }
+        s->line  = line;
         w->next  = s->words;
         s->words = w;
         L->pst &= ~PST_REDIRLIST;
@@ -3023,13 +3072,24 @@ static Node *parseloopbody(Parser *p)
 }
 
 // Index just past the $(...) or ${...} at s[i], found by lexing it as
-// the parser would, or s.len if it does not end.
-static iz skipexpansion(Lexer *outer, Str s, iz i)
+// the parser would, or s.len if it does not end (and then ended, if
+// given, is cleared).
+static iz skipexpansion(Lexer *outer, Str s, iz i, b32 dquote, b32 *ended = 0)
 {
+    b32 dummy;
+    ended  = ended ? ended : &dummy;
+    *ended = 0;
     Lexer *L = newlexer(outer->a, cuthead(s, i+2));
-    L->extglob = outer->extglob;
-    L->utf8    = outer->utf8;
+    L->extglob  = outer->extglob;
+    L->posix    = outer->posix;
+    L->utf8     = outer->utf8;
+    L->stacktop = outer->stacktop;
+    L->stackmax = outer->stackmax;
     if (__builtin_setjmp(L->jmp)) {
+        if (L->overflow) {
+            outer->overflow = 1;
+            parsefail(outer);
+        }
         return s.len;
     }
     b32 ok = 1;
@@ -3041,12 +3101,14 @@ static iz skipexpansion(Lexer *outer, Str s, iz i)
         if (funsubchar(c)) {
             ok = parsecomsub(L, 0, '{', '}', P_COMMAND).ok;
         } else {
-            ok = !!parsematched(L, 0, '{', '}', P_FIRSTCLOSE|P_DOLBRACE).data;
+            i32 dq = dquote ? P_DQUOTE : 0;
+            ok = !!parsematched(L, 0, '{', '}', P_FIRSTCLOSE|P_DOLBRACE|dq).data;
         }
     }
     if (!ok) {
         return s.len;
     }
+    *ended = 1;
     // Bytes consumed: everything read minus what remains in the line,
     // which may carry a newline that the source lacked.
     iz unread = L->line.len - L->idx + (L->ungot != 0);
@@ -3080,12 +3142,12 @@ static iz skipdelim(Lexer *L, Str s, u8 delim)
                 if (s[i] == '\\') {
                     i++;
                 } else if (s[i]=='$' && i+1<s.len && (s[i+1]=='(' || s[i+1]=='{')) {
-                    i = skipexpansion(L, s, i) - 1;
+                    i = skipexpansion(L, s, i, 1) - 1;
                 }
             }
             i++;
         } else if (c=='$' && i+1<s.len && (s[i+1]=='(' || s[i+1]=='{')) {
-            i = skipexpansion(L, s, i);
+            i = skipexpansion(L, s, i, 0);
         } else {
             i++;
         }
@@ -3376,6 +3438,7 @@ static void restorelex(Lexer *L, LexState *s)
 
 static Matched parsecomsub(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
 {
+    checkstack(L);
     Matched r = {};
     i32 spec  = 0;
     if (open == '(') {
@@ -3536,6 +3599,8 @@ static Parsed parseunit(Lexer *L)
     }
 
     L->reported = 0;
+    byte top = 0;
+    L->stacktop = &top;
     Parser p = {};
     p.L = L;
     i32 t = peek(&p);

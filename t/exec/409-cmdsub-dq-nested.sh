@@ -1,0 +1,13 @@
+# Nested $( ) inside double quotes with quotes inside
+echo "a $(echo "b $(echo "c") d") e"
+echo "$(echo "it's")"
+echo "$(echo 'single "dq" inside')"
+echo "$(printf '%s|' "x y" z)"
+echo "pre$(echo)post"
+echo "$(echo \"esc\")"
+echo "$(echo "\$notvar")"
+v="with space"
+echo "$(echo "$v")"
+echo "$(echo $v)"
+echo "${v:+"$(echo "nested in plus")"}"
+echo "`echo "bq in dq"`"

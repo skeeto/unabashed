@@ -1,9 +1,11 @@
-# Oracle image: GNU bash 5.3 built from the repository's bash-5.3.tar.gz.
+# Oracle image: GNU bash 5.3 built from the repository's bash-5.3.tar.gz,
+# plus the fakes multi-call binary (fakes.cpp, main_fakes.cpp).
 #
 #   docker build -f tools/Dockerfile.bash53 -t unabashed/bash53 .
 #
 # Run from the repository root. BuildKit only sends the files named by
-# COPY, so the repository as build context costs just the tarball.
+# COPY, so the repository as build context costs just the tarball and
+# the few sources the fakes need.
 
 FROM debian:trixie-slim AS build
 RUN apt-get update \
@@ -20,14 +22,29 @@ RUN ./configure \
  && make install DESTDIR=/out \
  && install -m 755 recho zecho printenv xcase /out/usr/local/bin/
 
+# The fakes build in a stage of their own, so that changing them leaves
+# the cached bash build alone.
+FROM debian:trixie-slim AS fakes
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends g++ libc6-dev \
+ && rm -rf /var/lib/apt/lists/*
+COPY base.cpp api.cpp fakes.cpp main_fakes.cpp /src/fakes/
+WORKDIR /src/fakes
+RUN install -d /out/opt/fakes/bin \
+ && g++ -std=c++20 -O2 -fno-exceptions -fno-rtti -s \
+        -o /out/opt/fakes/bin/fakes main_fakes.cpp \
+ && cd /out/opt/fakes/bin \
+ && for name in $(./fakes --list); do ln -s fakes "$name"; done
+
 FROM debian:trixie-slim
 COPY --from=build /out/usr/local/ /usr/local/
-# /opt/fakes/bin is reserved for the multi-call fakes binary (fakes.cpp),
-# which will replace coreutils on the PATH that tools/record passes in.
+COPY --from=fakes /out/opt/fakes/ /opt/fakes/
+# /opt/fakes/bin holds the fakes, one symbolic link per program, which
+# replace coreutils on the PATH that tools/record passes in. bash's own
+# helpers in /usr/local/bin come first on that PATH.
 RUN useradd --uid 1000 --user-group --no-create-home \
       --home-dir /home/oracle --shell /usr/local/bin/bash oracle \
- && install -d -o oracle -g oracle /home/oracle \
- && install -d /opt/fakes/bin
+ && install -d -o oracle -g oracle /home/oracle
 USER oracle
 WORKDIR /home/oracle
 CMD ["/usr/local/bin/bash", "--norc", "--noprofile"]

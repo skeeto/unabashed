@@ -1,0 +1,4879 @@
+T C
+F hello
+O hello
+E 
+S 0
+.
+T C
+F hello\\n
+O hello\x0a
+E 
+S 0
+.
+T C
+F a\\tb\\\\c
+O a\x09b\\c
+E 
+S 0
+.
+T C
+F \\a\\b\\e\\E\\f\\n\\r\\t\\v|
+O \x07\x08\x1b\x1b\x0c\x0a\x0d\x09\x0b|
+E 
+S 0
+.
+T C
+F \\\\
+O \\
+E 
+S 0
+.
+T C
+F x\\
+O x\\
+E 
+S 0
+.
+T C
+F \\"\\'\\?
+O "'?
+E 
+S 0
+.
+T C
+F \\q\\z\\8\\9|
+O \\q\\z\\8\\9|
+E 
+S 0
+.
+T C
+F a\\%sb
+A x
+O a\\xb
+E 
+S 0
+.
+T C
+F \\c stays|
+O \\c stays|
+E 
+S 0
+.
+T C
+F \\0|\\01|\\012|\\0123|\\0777|
+O \x00|\x01|\x0a|\x0a3|?7|
+E 
+S 0
+.
+T C
+F \\1|\\12|\\123|\\1234|\\400|\\777|
+O \x01|\x0a|S|S4|\x00|\xff|
+E 
+S 0
+.
+T C
+F \\x41\\x4a\\x4G\\x414\\xff|
+O AJ\x04GA4\xff|
+E 
+S 0
+.
+T C
+F \\x|
+O \\x|
+E printf: missing hex digit for \\x\x0a
+S 0
+.
+T C
+F a\\xgb
+O a\\xgb
+E printf: missing hex digit for \\x\x0a
+S 0
+.
+T C
+F \\u0041\\u00e9\\U0001F600|
+O A\\u00E9\\U0001F600|
+E 
+S 0
+.
+T C
+F \\u12345|\\U001100000|
+O \\u12345|\\U001100000|
+E 
+S 0
+.
+T C
+F \\u|\\U|\\ug|
+O \\u|\\U|\\ug|
+E printf: missing unicode digit for \\u\x0aprintf: missing unicode digit for \\U\x0aprintf: missing unicode digit for \\u\x0a
+S 0
+.
+T C
+F \\u0000|\\U00000041|
+O \x00|A|
+E 
+S 0
+.
+T C
+F %%
+O %
+E 
+S 0
+.
+T C
+F %%%%|a%%b|
+O %%|a%b|
+E 
+S 0
+.
+T C
+F 100%%\\n
+O 100%\x0a
+E 
+S 0
+.
+T C
+F no conversions\\n
+A a
+A b
+A c
+O no conversions\x0a
+E 
+S 0
+.
+T C
+F \xe9%s\xff
+A x
+O \xe9x\xff
+E 
+S 0
+.
+T C
+F %s
+A hello
+O hello
+E 
+S 0
+.
+T C
+F %s\\n
+A a
+A b
+A c
+O a\x0ab\x0ac\x0a
+E 
+S 0
+.
+T C
+F %s %s\\n
+A a
+A b
+A c
+O a b\x0ac \x0a
+E 
+S 0
+.
+T C
+F [%5s]
+A ab
+O [   ab]
+E 
+S 0
+.
+T C
+F [%-5s]
+A ab
+O [ab   ]
+E 
+S 0
+.
+T C
+F [%.1s]
+A abc
+O [a]
+E 
+S 0
+.
+T C
+F [%5.1s]
+A abc
+O [    a]
+E 
+S 0
+.
+T C
+F [%-5.2s]
+A abc
+O [ab   ]
+E 
+S 0
+.
+T C
+F [%.0s]
+A abc
+O []
+E 
+S 0
+.
+T C
+F [%.s]
+A abc
+O []
+E 
+S 0
+.
+T C
+F [%.10s]
+A abc
+O [abc]
+E 
+S 0
+.
+T C
+F [%*s]
+A 5
+A ab
+O [   ab]
+E 
+S 0
+.
+T C
+F [%-*s]
+A 5
+A ab
+O [ab   ]
+E 
+S 0
+.
+T C
+F [%*s]
+A -5
+A ab
+O [ab   ]
+E 
+S 0
+.
+T C
+F [%-*s]
+A -5
+A ab
+O [ab   ]
+E 
+S 0
+.
+T C
+F [%.*s]
+A 2
+A abc
+O [ab]
+E 
+S 0
+.
+T C
+F [%.*s]
+A -2
+A abc
+O [abc]
+E 
+S 0
+.
+T C
+F [%*.*s]
+A 6
+A 2
+A abcd
+O [    ab]
+E 
+S 0
+.
+T C
+F [%05s]
+A ab
+O [   ab]
+E 
+S 0
+.
+T C
+F [%+s]
+A ab
+O [ab]
+E 
+S 0
+.
+T C
+F [% s]
+A ab
+O [ab]
+E 
+S 0
+.
+T C
+F [%#s]
+A ab
+O [ab]
+E 
+S 0
+.
+T C
+F [%'s]
+A ab
+O [ab]
+E 
+S 0
+.
+T C
+F [%ls]
+A ab
+O [ab]
+E 
+S 0
+.
+T C
+F [%hs]
+A ab
+O [ab]
+E 
+S 0
+.
+T C
+F [%Ls]
+A ab
+O [ab]
+E 
+S 0
+.
+T C
+F [%zjts]
+A ab
+O [ab]
+E 
+S 0
+.
+T C
+F %s
+O 
+E 
+S 0
+.
+T C
+F [%s][%s]
+A one
+O [one][]
+E 
+S 0
+.
+T C
+F [%s]
+A 
+O []
+E 
+S 0
+.
+T C
+F [%*s]
+A abc
+A x
+O [x]
+E printf: abc: invalid number\x0a
+S 1
+.
+T C
+F [%*s]
+A 3x
+A x
+O [  x]
+E printf: 3x: invalid number\x0a
+S 1
+.
+T C
+F [%*s]
+A 99999999999
+A x
+O [x]
+E printf: 99999999999: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%.*s]
+A 99999999999
+A xyz
+O [xyz]
+E printf: 99999999999: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%*s]
+A -99999999999
+A x
+O [x]
+E printf: -99999999999: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%*s]
+A 'A
+A x
+O [                                                                x]
+E 
+S 0
+.
+T C
+F [%*s]
+A  3
+A x
+O [  x]
+E 
+S 0
+.
+T C
+F [%*s]
+A 3 
+A x
+O [  x]
+E printf: 3 : invalid number\x0a
+S 1
+.
+T C
+F [%s
+A a
+O [a
+E 
+S 0
+.
+T C
+F %s %s %s\\n
+A 1
+A 2
+A 3
+A 4
+A 5
+A 6
+A 7
+O 1 2 3\x0a4 5 6\x0a7  \x0a
+E 
+S 0
+.
+T C
+F %s
+A a%sb\\n
+O a%sb\\n
+E 
+S 0
+.
+T C
+F [%c]
+A abc
+O [a]
+E 
+S 0
+.
+T C
+F [%c]
+A 
+O [\x00]
+E 
+S 0
+.
+T C
+F [%c]
+O [\x00]
+E 
+S 0
+.
+T C
+F [%3c]
+A x
+O [  x]
+E 
+S 0
+.
+T C
+F [%-3c]
+A x
+O [x  ]
+E 
+S 0
+.
+T C
+F [%.0c]
+A x
+O [x]
+E 
+S 0
+.
+T C
+F [%03c]
+A x
+O [  x]
+E 
+S 0
+.
+T C
+F [%c%c]
+A a
+O [a\x00]
+E 
+S 0
+.
+T C
+F [%c]
+A \xc3\xa9
+O [\xc3]
+E 
+S 0
+.
+T C
+F [%c]
+A \xff
+O [\xff]
+E 
+S 0
+.
+T C
+F [%lc]
+A ab
+O [a]
+E 
+S 0
+.
+T C
+F [%C]
+A a
+O [a]
+E 
+S 0
+.
+T C
+F [%5C]
+A a
+O [    a]
+E 
+S 0
+.
+T C
+F [%C]
+A \xc3\xa9
+O [
+E printf: Invalid or incomplete multibyte or wide character\x0a
+S 1
+.
+T C
+F %d
+A 42
+O 42
+E 
+S 0
+.
+T C
+F %d
+A -42
+O -42
+E 
+S 0
+.
+T C
+F %d
+A +42
+O 42
+E 
+S 0
+.
+T C
+F %i
+A 42
+O 42
+E 
+S 0
+.
+T C
+F %d\\n
+A 1
+A 2
+A 3
+O 1\x0a2\x0a3\x0a
+E 
+S 0
+.
+T C
+F %d,
+A 0x1F
+A 0X1f
+A 017
+A 0
+A 00
+A -0
+A -0x10
+A +0x10
+A 0x00
+O 31,31,15,0,0,0,-16,16,0,
+E 
+S 0
+.
+T C
+F %i,
+A 0x10
+A 010
+O 16,8,
+E 
+S 0
+.
+T C
+F [%d]
+A  42
+O [42]
+E 
+S 0
+.
+T C
+F [%d]
+A \x09\x0a42
+O [42]
+E 
+S 0
+.
+T C
+F [%d]
+A 42 
+O [42]
+E printf: 42 : invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 4 2
+O [4]
+E printf: 4 2: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 42a
+O [42]
+E printf: 42a: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A a42
+O [0]
+E printf: a42: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 
+O [0]
+E printf: : invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A  
+O [0]
+E printf:  : invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A -
+O [0]
+E printf: -: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A +
+O [0]
+E printf: +: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 0x
+O [0]
+E printf: 0x: invalid hex number\x0a
+S 1
+.
+T C
+F [%d]
+A 0X
+O [0]
+E printf: 0X: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 0xg
+O [0]
+E printf: 0xg: invalid hex number\x0a
+S 1
+.
+T C
+F [%d]
+A  0x
+O [0]
+E printf:  0x: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 08
+O [0]
+E printf: 08: invalid octal number\x0a
+S 1
+.
+T C
+F [%d]
+A 019
+O [1]
+E printf: 019: invalid octal number\x0a
+S 1
+.
+T C
+F [%d]
+A  08
+O [0]
+E printf:  08: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 1e3
+O [1]
+E printf: 1e3: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 1.5
+O [1]
+E printf: 1.5: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A --1
+O [0]
+E printf: --1: invalid number\x0a
+S 1
+.
+T C
+F %d\\n
+A 9223372036854775807
+A -9223372036854775808
+O 9223372036854775807\x0a-9223372036854775808\x0a
+E 
+S 0
+.
+T C
+F [%d]
+A 9223372036854775808
+O [9223372036854775807]
+E printf: 9223372036854775808: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%d]
+A -9223372036854775809
+O [-9223372036854775808]
+E printf: -9223372036854775809: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%d]
+A 99999999999999999999999
+O [9223372036854775807]
+E printf: 99999999999999999999999: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%d]
+A 99999999999999999999999x
+O [9223372036854775807]
+E printf: 99999999999999999999999x: invalid number\x0a
+S 1
+.
+T C
+F %d\\n
+A 0x7fffffffffffffff
+A 0x8000000000000000
+A 0xffffffffffffffff
+O 9223372036854775807\x0a9223372036854775807\x0a9223372036854775807\x0a
+E printf: 0x8000000000000000: Numerical result out of range\x0aprintf: 0xffffffffffffffff: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%d]
+A 0x10000000000000000
+O [9223372036854775807]
+E printf: 0x10000000000000000: Numerical result out of range\x0a
+S 1
+.
+T C
+F %d\\n
+A 0777777777777777777777
+A 01000000000000000000000
+O 9223372036854775807\x0a9223372036854775807\x0a
+E printf: 01000000000000000000000: Numerical result out of range\x0a
+S 1
+.
+T C
+F %d,
+A 'A
+A '
+A "B
+A 'ab
+A "
+A '\xc3\xa9
+O 65,0,66,97,0,195,
+E 
+S 0
+.
+T C
+F %d %d %d|
+A 1
+A 2
+O 1 2 0|
+E 
+S 0
+.
+T C
+F %d %d|
+A x
+A 2
+O 0 2|
+E printf: x: invalid number\x0a
+S 1
+.
+T C
+F [%5d]
+A 42
+O [   42]
+E 
+S 0
+.
+T C
+F [%-5d]
+A 42
+O [42   ]
+E 
+S 0
+.
+T C
+F [%05d]
+A 42
+O [00042]
+E 
+S 0
+.
+T C
+F [%05d]
+A -42
+O [-0042]
+E 
+S 0
+.
+T C
+F [%+d]
+A 42
+O [+42]
+E 
+S 0
+.
+T C
+F [%+d]
+A -42
+O [-42]
+E 
+S 0
+.
+T C
+F [% d]
+A 42
+O [ 42]
+E 
+S 0
+.
+T C
+F [% d]
+A -42
+O [-42]
+E 
+S 0
+.
+T C
+F [%+ d]
+A 42
+O [+42]
+E 
+S 0
+.
+T C
+F [% +d]
+A 42
+O [+42]
+E 
+S 0
+.
+T C
+F [%+05d]
+A 42
+O [+0042]
+E 
+S 0
+.
+T C
+F [% 05d]
+A 42
+O [ 0042]
+E 
+S 0
+.
+T C
+F [%.3d]
+A 7
+O [007]
+E 
+S 0
+.
+T C
+F [%.3d]
+A -7
+O [-007]
+E 
+S 0
+.
+T C
+F [%5.3d]
+A 7
+O [  007]
+E 
+S 0
+.
+T C
+F [%-5.3d]
+A -7
+O [-007 ]
+E 
+S 0
+.
+T C
+F [%05.3d]
+A 7
+O [  007]
+E 
+S 0
+.
+T C
+F [%.0d]
+A 0
+O []
+E 
+S 0
+.
+T C
+F [%.d]
+A 0
+O []
+E 
+S 0
+.
+T C
+F [%5.0d]
+A 0
+O [     ]
+E 
+S 0
+.
+T C
+F [%+.0d]
+A 0
+O [+]
+E 
+S 0
+.
+T C
+F [% .0d]
+A 0
+O [ ]
+E 
+S 0
+.
+T C
+F [%.0d]
+A 1
+O [1]
+E 
+S 0
+.
+T C
+F [%#d]
+A 5
+O [5]
+E 
+S 0
+.
+T C
+F [%'d]
+A 1234567
+O [1234567]
+E 
+S 0
+.
+T C
+F [%-05d]
+A 3
+O [3    ]
+E 
+S 0
+.
+T C
+F [%0-5d]
+A 3
+O [3    ]
+E 
+S 0
+.
+T C
+F [%*d]
+A 6
+A 42
+O [    42]
+E 
+S 0
+.
+T C
+F [%-*d]
+A 6
+A 42
+O [42    ]
+E 
+S 0
+.
+T C
+F [%*d]
+A -6
+A 42
+O [42    ]
+E 
+S 0
+.
+T C
+F [%0*d]
+A 6
+A 42
+O [000042]
+E 
+S 0
+.
+T C
+F [%0*d]
+A -6
+A 42
+O [42    ]
+E 
+S 0
+.
+T C
+F [%.*d]
+A 4
+A 42
+O [0042]
+E 
+S 0
+.
+T C
+F [%.*d]
+A -4
+A 42
+O [42]
+E 
+S 0
+.
+T C
+F [%08.*d]
+A -1
+A 42
+O [00000042]
+E 
+S 0
+.
+T C
+F [%08.*d]
+A 3
+A 42
+O [     042]
+E 
+S 0
+.
+T C
+F [%*.*d]
+A 8
+A 4
+A 42
+O [    0042]
+E 
+S 0
+.
+T C
+F [%*d]
+A 0
+A 42
+O [42]
+E 
+S 0
+.
+T C
+F [%hd]
+A 70000
+O [70000]
+E 
+S 0
+.
+T C
+F [%hhd]
+A 300
+O [300]
+E 
+S 0
+.
+T C
+F [%ld|%lld|%jd|%zd|%td|%Ld]
+A 1
+A 2
+A 3
+A 4
+A 5
+A 6
+O [1|2|3|4|5|6]
+E 
+S 0
+.
+T C
+F [%qd]
+A 8
+O [8d]
+E 
+S 0
+.
+T C
+F %d
+O 0
+E 
+S 0
+.
+T C
+F %5d|%-5d|
+A 1
+O     1|0    |
+E 
+S 0
+.
+T C
+F %o\\n
+A 8
+A -1
+A 0
+O 10\x0a1777777777777777777777\x0a0\x0a
+E 
+S 0
+.
+T C
+F %u\\n
+A -1
+A 18446744073709551615
+A -18446744073709551615
+O 18446744073709551615\x0a18446744073709551615\x0a1\x0a
+E 
+S 0
+.
+T C
+F [%u]
+A 18446744073709551616
+O [18446744073709551615]
+E printf: 18446744073709551616: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%u]
+A -18446744073709551616
+O [18446744073709551615]
+E printf: -18446744073709551616: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%x]
+A 99999999999999999999
+O [ffffffffffffffff]
+E printf: 99999999999999999999: Numerical result out of range\x0a
+S 1
+.
+T C
+F %x %X\\n
+A 255
+A 255
+O ff FF\x0a
+E 
+S 0
+.
+T C
+F [%x]
+A -1
+O [ffffffffffffffff]
+E 
+S 0
+.
+T C
+F %#x|%#x|%#X|%#o|%#o|
+A 0
+A 255
+A 255
+A 0
+A 8
+O 0|0xff|0XFF|0|010|
+E 
+S 0
+.
+T C
+F [%#5o]
+A 8
+O [  010]
+E 
+S 0
+.
+T C
+F [%#.3o]
+A 8
+O [010]
+E 
+S 0
+.
+T C
+F [%#.0o]
+A 0
+O [0]
+E 
+S 0
+.
+T C
+F [%.0o]
+A 0
+O []
+E 
+S 0
+.
+T C
+F [%#.0x]
+A 0
+O []
+E 
+S 0
+.
+T C
+F [%.0x]
+A 0
+O []
+E 
+S 0
+.
+T C
+F [%#08x]
+A 255
+O [0x0000ff]
+E 
+S 0
+.
+T C
+F [%#-8x]
+A 255
+O [0xff    ]
+E 
+S 0
+.
+T C
+F [%08.3x]
+A 255
+O [     0ff]
+E 
+S 0
+.
+T C
+F [%#8.3x]
+A 255
+O [   0x0ff]
+E 
+S 0
+.
+T C
+F [%#o]
+A 01
+O [01]
+E 
+S 0
+.
+T C
+F [%#.2o]
+A 01
+O [01]
+E 
+S 0
+.
+T C
+F [%+u|% u|%+x|% X|%+o]
+A 5
+A 5
+A 5
+A 5
+A 5
+O [5|5|5|5|5]
+E 
+S 0
+.
+T C
+F [%u]
+A 'A
+O [65]
+E 
+S 0
+.
+T C
+F %x\\n
+A 9223372036854775808
+A 0x7fffffffffffffff
+O 8000000000000000\x0a7fffffffffffffff\x0a
+E 
+S 0
+.
+T C
+F [%x]
+A 1x
+O [1]
+E printf: 1x: invalid number\x0a
+S 1
+.
+T C
+F [%X]
+A 0xabcdef
+O [ABCDEF]
+E 
+S 0
+.
+T C
+F [%o]
+A 0x
+O [0]
+E printf: 0x: invalid hex number\x0a
+S 1
+.
+T C
+F [%u]
+A  -1
+O [18446744073709551615]
+E 
+S 0
+.
+T C
+F %b
+A a\\nb
+O a\x0ab
+E 
+S 0
+.
+T C
+F %b
+A a\\tb\\\\c
+O a\x09b\\c
+E 
+S 0
+.
+T C
+F %b
+A \\0101\\101\\01010
+O AAA0
+E 
+S 0
+.
+T C
+F %b
+A \\0
+O \x00
+E 
+S 0
+.
+T C
+F %b|
+A \\00
+A \\000
+A \\0000
+A \\00000
+O \x00|\x00|\x00|\x000|
+E 
+S 0
+.
+T C
+F %b|
+A \\1
+A \\12
+A \\123
+A \\1234
+A \\400
+O \x01|\x0a|S|S4|\x00|
+E 
+S 0
+.
+T C
+F %b
+A \\8\\9
+O \\8\\9
+E 
+S 0
+.
+T C
+F %b
+A \\x41\\x4\\xg\\x
+O A\x04\\xg\\x
+E printf: missing hex digit for \\x\x0aprintf: missing hex digit for \\x\x0a
+S 0
+.
+T C
+F %b
+A \\u00e9\\U0001F600\\u\\Ug|
+O \\u00E9\\U0001F600\\u\\Ug|
+E printf: missing unicode digit for \\u\x0aprintf: missing unicode digit for \\U\x0a
+S 0
+.
+T C
+F %b
+A \\'\\"\\?
+O \\'\\"\\?
+E 
+S 0
+.
+T C
+F %b
+A a\\
+O a\\
+E 
+S 0
+.
+T C
+F %b
+A \\
+O \\
+E 
+S 0
+.
+T C
+F %b
+A a\\cb
+A c
+O a
+E 
+S 0
+.
+T C
+F %b|%s
+A x
+A y
+O x|y
+E 
+S 0
+.
+T C
+F %s%b%s
+A 1
+A a\\cb
+A 2
+O 1a
+E 
+S 0
+.
+T C
+F %b\\n
+A one\\c
+A two
+O one
+E 
+S 0
+.
+T C
+F %b%b
+A x
+A \\cy
+O x
+E 
+S 0
+.
+T C
+F %b
+A \\c
+O 
+E 
+S 0
+.
+T C
+F [%5b]
+A a\\tb
+O [  a\x09b]
+E 
+S 0
+.
+T C
+F [%-5b]
+A x
+O [x    ]
+E 
+S 0
+.
+T C
+F [%.2b]
+A xyz
+O [xy]
+E 
+S 0
+.
+T C
+F [%.2b]
+A \\t\\tx
+O [\x09\x09]
+E 
+S 0
+.
+T C
+F [%*b]
+A 4
+A x
+O [   x]
+E 
+S 0
+.
+T C
+F [%*b]
+A -4
+A x
+O [x   ]
+E 
+S 0
+.
+T C
+F [%.*b]
+A 1
+A xyz
+O [x]
+E 
+S 0
+.
+T C
+F [%.*b]
+A -1
+A xyz
+O [xyz]
+E 
+S 0
+.
+T C
+F [%05b]
+A x
+O [    x]
+E 
+S 0
+.
+T C
+F [%.-2b]
+A xyz
+O []
+E 
+S 0
+.
+T C
+F [%.b]
+A xyz
+O []
+E 
+S 0
+.
+T C
+F [%99999999999b]
+A x
+O [x]
+E printf: 99999999999: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%.99999999999b]
+A x
+O []
+E printf: 99999999999: Numerical result out of range\x0a
+S 1
+.
+T C
+F %b
+A \\e\\E\\a\\b\\f\\v\\r|
+O \x1b\x1b\x07\x08\x0c\x0b\x0d|
+E 
+S 0
+.
+T C
+F %b
+A \\q\\%
+O \\q\\%
+E 
+S 0
+.
+T C
+F [%b]
+A 
+O []
+E 
+S 0
+.
+T C
+F [%b]
+O []
+E 
+S 0
+.
+T C
+F %d%b
+A x
+A a\\c
+O 0a
+E printf: x: invalid number\x0a
+S 0
+.
+T C
+F %b%d
+A \\c
+A x
+O 
+E 
+S 0
+.
+T C
+F %b
+A %s%d
+O %s%d
+E 
+S 0
+.
+T C
+F %q\\n
+A 
+A a
+A a b
+A a'b
+A a"b
+A $x
+A `x`
+A a\\b
+O ''\x0aa\x0aa\\ b\x0aa\\'b\x0aa\\"b\x0a\\$x\x0a\\`x\\`\x0aa\\\\b\x0a
+E 
+S 0
+.
+T C
+F %q\\n
+A a\x0ab
+A \x09
+A \x01
+A \x7f
+A \x1b
+A \x07\x08\x0c\x0b\x0d
+A x\x1fy
+O $'a\\nb'\x0a$'\\t'\x0a$'\\001'\x0a$'\\177'\x0a$'\\E'\x0a$'\\a\\b\\f\\v\\r'\x0a$'x\\037y'\x0a
+E 
+S 0
+.
+T C
+F %q\\n
+A ~
+A ~a
+A a~
+A a:~
+A a=~
+A a~b
+A ~/x
+A x:~:~
+O \\~\x0a\\~a\x0aa~\x0aa:\\~\x0aa=\\~\x0aa~b\x0a\\~/x\x0ax:\\~:\\~\x0a
+E 
+S 0
+.
+T C
+F %q\\n
+A #
+A #a
+A a#
+A !
+A *
+A ?
+A [a]
+A {a}
+A (a)
+A |
+A &
+A ;
+A <>
+O \\#\x0a\\#a\x0aa#\x0a\\!\x0a\\*\x0a\\?\x0a\\[a\\]\x0a\\{a\\}\x0a\\(a\\)\x0a\\|\x0a\\&\x0a\\;\x0a\\<\\>\x0a
+E 
+S 0
+.
+T C
+F %q\\n
+A ^
+A ,
+A %
+A @
+A +
+A -
+A .
+A /
+A =
+A :
+A _
+A a b c
+O \\^\x0a\\,\x0a%\x0a@\x0a+\x0a-\x0a.\x0a/\x0a=\x0a:\x0a_\x0aa\\ b\\ c\x0a
+E 
+S 0
+.
+T C
+F %q\\n
+A '
+A ''
+A a'b'c
+A \\
+A \\\\
+A '\x0a
+O \\'\x0a\\'\\'\x0aa\\'b\\'c\x0a\\\\\x0a\\\\\\\\\x0a$'\\'\\n'\x0a
+E 
+S 0
+.
+T C
+F %q\\n
+A \xc3\xa9
+A \xe9
+A a\xe9b
+O $'\\303\\251'\x0a$'\\351'\x0a$'a\\351b'\x0a
+E 
+S 0
+.
+T C
+F %q
+O ''
+E 
+S 0
+.
+T C
+F %#q\\n
+A 
+A a
+A a b
+A '
+A a'b
+A ''
+A a\x0ab
+A ~x
+A a\\b
+O ''\x0a'a'\x0a'a b'\x0a\\'\x0a'a'\\''b'\x0a''\\'''\\'''\x0a$'a\\nb'\x0a'~x'\x0a'a\\b'\x0a
+E 
+S 0
+.
+T C
+F [%10q]
+A a b
+O [      a\\ b]
+E 
+S 0
+.
+T C
+F [%-10q]
+A a b
+O [a\\ b      ]
+E 
+S 0
+.
+T C
+F [%.3q]
+A a b c
+O [a\\ ]
+E 
+S 0
+.
+T C
+F [%.3Q]
+A a b c
+O [a\\ b]
+E 
+S 0
+.
+T C
+F [%Q]
+A a b
+O [a\\ b]
+E 
+S 0
+.
+T C
+F [%.Q]
+A a b
+O []
+E 
+S 0
+.
+T C
+F [%.-3Q]
+A abc
+O []
+E 
+S 0
+.
+T C
+F [%.*Q]
+A 2
+A a b c
+O [a\\ ]
+E 
+S 0
+.
+T C
+F [%.*q]
+A 2
+A a b c
+O [a\\]
+E 
+S 0
+.
+T C
+F [%10.2Q]
+A a b c
+O [       a\\ ]
+E 
+S 0
+.
+T C
+F [%#Q]
+A a b
+O ['a b']
+E 
+S 0
+.
+T C
+F [%Q]
+A \x0a
+O [$'\\n']
+E 
+S 0
+.
+T C
+F [%.0Q]
+A abc
+O ['']
+E 
+S 0
+.
+T C
+F [%.99999999999Q]
+A a b
+O [a\\ b]
+E printf: 99999999999: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%.99999999999q]
+A a b
+O []
+E printf: 99999999999: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%5q]
+A 
+O [   '']
+E 
+S 0
+.
+T C
+F [%qd]
+A a b
+O [a\\ bd]
+E 
+S 0
+.
+T C
+F %s%n|%s
+A abc
+A n
+A x
+O abc|x
+E 
+S 0
+V n=3
+.
+T C
+F ab%n
+A n
+O ab
+E 
+S 0
+V n=2
+.
+T C
+F %n
+A 
+O 
+E 
+S 0
+V n=
+.
+T C
+F %5s%n
+A a
+A n
+O     a
+E 
+S 0
+V n=5
+.
+T C
+F %s%n\\n
+A a
+A n
+A bb
+A n
+O a\x0abb\x0a
+E 
+S 0
+V n=2
+.
+T C
+F \\t%b%n
+A x\\ny
+A n
+O \x09x\x0ay
+E 
+S 0
+V n=4
+.
+T C
+F %n
+A 1x
+O 
+E printf: `1x': not a valid identifier\x0a
+S 1
+.
+T C
+F %s%n%s
+A a
+A 1x
+A b
+O a
+E printf: `1x': not a valid identifier\x0a
+S 1
+.
+T C
+F %
+O 
+E printf: `%': missing format character\x0a
+S 1
+.
+T C
+F ab%
+O ab
+E printf: `%': missing format character\x0a
+S 1
+.
+T C
+F %5
+O 
+E printf: `%5': missing format character\x0a
+S 1
+.
+T C
+F %-
+O 
+E printf: `%-': missing format character\x0a
+S 1
+.
+T C
+F %.
+O 
+E printf: `%.': missing format character\x0a
+S 1
+.
+T C
+F %.*
+O 
+E printf: `%.*': missing format character\x0a
+S 1
+.
+T C
+F %l
+O 
+E printf: `%l': missing format character\x0a
+S 1
+.
+T C
+F %hl
+O 
+E printf: `%hl': missing format character\x0a
+S 1
+.
+T C
+F %y
+A x
+O 
+E printf: `y': invalid format character\x0a
+S 1
+.
+T C
+F a%yb
+A x
+O a
+E printf: `y': invalid format character\x0a
+S 1
+.
+T C
+F %5%
+O 
+E printf: `%': invalid format character\x0a
+S 1
+.
+T C
+F %-%
+O 
+E printf: `%': invalid format character\x0a
+S 1
+.
+T C
+F % %
+O 
+E printf: `%': invalid format character\x0a
+S 1
+.
+T C
+F %k
+O 
+E printf: `k': invalid format character\x0a
+S 1
+.
+T C
+F %!
+O 
+E printf: `!': invalid format character\x0a
+S 1
+.
+T C
+F %1$s
+A a
+O 
+E printf: `$': invalid format character\x0a
+S 1
+.
+T C
+F %*5d
+A 1
+A 2
+O 
+E printf: `5': invalid format character\x0a
+S 1
+.
+T C
+F %5*d
+A 1
+O 
+E printf: `*': invalid format character\x0a
+S 1
+.
+T C
+F %.5.3d
+A 1
+O 
+E printf: `.': invalid format character\x0a
+S 1
+.
+T C
+F %%%
+O %
+E printf: `%': missing format character\x0a
+S 1
+.
+T C
+F %\xc3\xa9
+O 
+E printf: `\xc3': invalid format character\x0a
+S 1
+.
+T C
+F %\\n
+O 
+E printf: `\\': invalid format character\x0a
+S 1
+.
+T C
+F %s %y %s
+A a
+A b
+A c
+O a 
+E printf: `y': invalid format character\x0a
+S 1
+.
+T C
+F %(
+O %(
+E printf: warning: `\x00': invalid time format specification\x0a
+S 0
+.
+T C
+F %(abc
+O %(abc
+E printf: warning: `\x00': invalid time format specification\x0a
+S 0
+.
+T C
+F %(x)
+O %(x)
+E printf: warning: `\x00': invalid time format specification\x0a
+S 0
+.
+T C
+F %(x)Y
+O %(x)Y
+E printf: warning: `Y': invalid time format specification\x0a
+S 0
+.
+T C
+F %(%H
+O %(
+E printf: warning: `\x00': invalid time format specification\x0aprintf: `H': invalid format character\x0a
+S 1
+.
+T C
+F %(%d
+A 5
+O %(5
+E printf: warning: `\x00': invalid time format specification\x0a
+S 0
+.
+T C
+F %(x)T|
+O x|
+E 
+S 0
+.
+T C
+F [%.-3d]
+A 1
+O [%.0-3ld]
+E 
+S 0
+.
+T C
+F [%#+ -0'5.-3d]
+A 1
+O [%#'+-5.0-3ld]
+E 
+S 0
+.
+T C
+F [% 0#5.-3d]
+A 1
+O [%# 05.0-3ld]
+E 
+S 0
+.
+T C
+F [%0+5.-3d]
+A 1
+O [%+05.0-3ld]
+E 
+S 0
+.
+T C
+F [%*.-3d]
+A 7
+A 1
+O [%7.0-3ld]
+E 
+S 0
+.
+T C
+F [%*.-3d]
+A -7
+A 1
+O [%-7.0-3ld]
+E 
+S 0
+.
+T C
+F [%.-3s]
+A a
+O [%.0-3s]
+E 
+S 0
+.
+T C
+F [%.-c]
+A a
+O [%.0-c]
+E 
+S 0
+.
+T C
+F [%5.-3x]
+A 1
+O [%5.0-3lx]
+E 
+S 0
+.
+T C
+F [%.-o]
+A 1
+O [%.0-lo]
+E 
+S 0
+.
+T C
+F [%.-99999999999u]
+A 1
+O [%.0-99999999999lu]
+E 
+S 0
+.
+T C
+F [%0.-1i]
+A 1
+O [%0.0-1li]
+E 
+S 0
+.
+T C
+F [%.-1X]
+A 1
+O [%.0-1lX]
+E 
+S 0
+.
+T C
+F [%.-1C]
+A a
+O [%.0-1C]
+E 
+S 0
+.
+T C
+F a%99999999999db
+A 1
+O a
+E printf: Value too large for defined data type\x0a
+S 1
+.
+T C
+F [%.99999999999d]
+A 1
+O [
+E printf: Value too large for defined data type\x0a
+S 1
+.
+T C
+F [%99999999999s]
+A x
+O [
+E printf: Value too large for defined data type\x0a
+S 1
+.
+T C
+F [%99999999999c]
+A x
+O [
+E printf: Value too large for defined data type\x0a
+S 1
+.
+T C
+F [%.99999999999x]
+A 1
+O [
+E printf: Value too large for defined data type\x0a
+S 1
+.
+T C
+F [%2147483648d]
+A 1
+O [
+E printf: Value too large for defined data type\x0a
+S 1
+.
+T C
+F [%.2147483648s]
+A x
+O [
+E printf: Value too large for defined data type\x0a
+S 1
+.
+T C
+F [%99999999999.-1d]
+A 1
+O [
+E printf: Value too large for defined data type\x0a
+S 1
+.
+T C
+F %s-%s\\n
+A a
+A b
+A c
+O a-b\x0ac-\x0a
+E 
+S 0
+.
+T C
+F %d,
+A 1
+A 2
+A 3
+O 1,2,3,
+E 
+S 0
+.
+T C
+F %s\\n
+O \x0a
+E 
+S 0
+.
+T C
+F %s %d %c|
+O  0 \x00|
+E 
+S 0
+.
+T C
+F [%5s]
+O [     ]
+E 
+S 0
+.
+T C
+F x%sy
+O xy
+E 
+S 0
+.
+T C
+F %*d|
+O 0|
+E 
+S 0
+.
+T C
+F %.*d|
+O |
+E 
+S 0
+.
+T C
+F %s%%
+A a
+A b
+O a%b%
+E 
+S 0
+.
+T C
+F %(%Y-%m-%d %H:%M:%S)T\\n
+A 0
+A 1
+A 86399
+A 86400
+A 951782400
+A 1234567890
+O 1970-01-01 00:00:00\x0a1970-01-01 00:00:01\x0a1970-01-01 23:59:59\x0a1970-01-02 00:00:00\x0a2000-02-29 00:00:00\x0a2009-02-13 23:31:30\x0a
+E 
+S 0
+.
+T C
+F %(%Y-%m-%d %H:%M:%S)T\\n
+A 2147483647
+A 2147483648
+A -1234567890
+A -86400
+O 2038-01-19 03:14:07\x0a2038-01-19 03:14:08\x0a1930-11-18 00:28:30\x0a1969-12-31 00:00:00\x0a
+E 
+S 0
+.
+T C
+F %(%Y-%m-%d %H:%M:%S)T\\n
+A -2208988800
+A -62135596800
+A -62167219200
+A -62167219201
+O 1900-01-01 00:00:00\x0a1-01-01 00:00:00\x0a0-01-01 00:00:00\x0a-1-12-31 23:59:59\x0a
+E 
+S 0
+.
+T C
+F %(%Y-%m-%d %H:%M:%S)T\\n
+A 253402300799
+A 253402300800
+A -61000000000
+A -63000000000
+O 9999-12-31 23:59:59\x0a10000-01-01 00:00:00\x0a36-12-26 11:33:20\x0a-27-08-11 08:00:00\x0a
+E 
+S 0
+.
+T C
+F %(%Y|%C|%y|%G|%g)T\\n
+A 67768036191676799
+A 67768036191676800
+A -67768040609740800
+O -2147481749|-21474818|47|-2147481748|52\x0a1970|19|70|1970|70\x0a-2147481748|-21474818|52|-2147481748|52\x0a
+E 
+S 0
+.
+T C
+F %(%Y|%C|%y|%G|%g)T\\n
+A -67768040609740801
+A 99999999999999999
+A -99999999999999999
+O 1970|19|70|1970|70\x0a1970|19|70|1970|70\x0a1970|19|70|1970|70\x0a
+E 
+S 0
+.
+T C
+F %(%Y|%C|%y|%G|%g)T\\n
+A -61000000000
+A -62000000000
+A -63000000000
+A -62200000000
+O 36|0|36|36|36\x0a5|0|05|5|05\x0a-27|-1|73|-27|73\x0a-2|-1|98|-2|98\x0a
+E 
+S 0
+.
+T C
+F %(%Y|%C|%y|%G|%g)T\\n
+A -64000000000
+A -65000000000
+A -100000000000
+A -3000000000000
+O -59|-1|41|-59|41\x0a-90|-1|10|-90|10\x0a-1199|-12|01|-1199|01\x0a-93097|-931|03|-93097|03\x0a
+E 
+S 0
+.
+T C
+F %(%a %A %b %B %h)T\\n
+A 0
+A 86400
+A 172800
+A 259200
+A 345600
+A 432000
+A 518400
+O Thu Thursday Jan January Jan\x0aFri Friday Jan January Jan\x0aSat Saturday Jan January Jan\x0aSun Sunday Jan January Jan\x0aMon Monday Jan January Jan\x0aTue Tuesday Jan January Jan\x0aWed Wednesday Jan January Jan\x0a
+E 
+S 0
+.
+T C
+F %(%b %B)T\\n
+A 2678400
+A 5097600
+A 7776000
+A 10368000
+A 13046400
+A 15638400
+O Feb February\x0aMar March\x0aApr April\x0aMay May\x0aJun June\x0aJul July\x0a
+E 
+S 0
+.
+T C
+F %(%b %B)T\\n
+A 18316800
+A 20995200
+A 23587200
+A 26265600
+A 28857600
+O Aug August\x0aSep September\x0aOct October\x0aNov November\x0aDec December\x0a
+E 
+S 0
+.
+T C
+F %(%c|%x|%X|%D)T\\n
+A 1234567890
+A 0
+O Fri Feb 13 23:31:30 2009|02/13/09|23:31:30|02/13/09\x0aThu Jan  1 00:00:00 1970|01/01/70|00:00:00|01/01/70\x0a
+E 
+S 0
+.
+T C
+F %(%F|%T|%R|%r)T\\n
+A 1234567890
+A 0
+O 2009-02-13|23:31:30|23:31|11:31:30 PM\x0a1970-01-01|00:00:00|00:00|12:00:00 AM\x0a
+E 
+S 0
+.
+T C
+F %(%e|%k|%l|%I|%p|%P)T\\n
+A 0
+A 3600
+A 39600
+A 43200
+A 46800
+A 82800
+O  1| 0|12|12|AM|am\x0a 1| 1| 1|01|AM|am\x0a 1|11|11|11|AM|am\x0a 1|12|12|12|PM|pm\x0a 1|13| 1|01|PM|pm\x0a 1|23|11|11|PM|pm\x0a
+E 
+S 0
+.
+T C
+F %(%s)T\\n
+A 0
+A 1234567890
+A -1234567890
+A 67768036191676799
+O 0\x0a1234567890\x0a-1234567890\x0a67768036191676799\x0a
+E 
+S 0
+.
+T C
+F %(%z|%Z|%n|%t|%%)T
+A 0
+O +0000|UTC|\x0a|\x09|%
+E 
+S 0
+.
+T C
+F %(%G-%V-%u|%g|%U|%W|%j|%w)T\\n
+A 1104451200
+A 1104537600
+A 1104624000
+A 1230508800
+O 2004-53-5|04|52|52|366|5\x0a2004-53-6|04|00|00|001|6\x0a2004-53-7|04|01|00|002|0\x0a2009-01-1|09|52|52|364|1\x0a
+E 
+S 0
+.
+T C
+F %(%G-%V-%u|%g|%U|%W|%j|%w)T\\n
+A 1262217600
+A 1262476800
+A 1325376000
+A 1451779200
+O 2009-53-4|09|52|52|365|4\x0a2009-53-7|09|01|00|003|0\x0a2011-52-7|11|01|00|001|0\x0a2015-53-7|15|01|00|003|0\x0a
+E 
+S 0
+.
+T C
+F %(%G-%V-%u|%g|%U|%W|%j|%w)T\\n
+A 1609372800
+A 1609632000
+A 1609459200
+A 978220800
+O 2020-53-4|20|52|52|366|4\x0a2020-53-7|20|01|00|003|0\x0a2020-53-5|20|00|00|001|5\x0a2000-52-7|00|53|52|366|0\x0a
+E 
+S 0
+.
+T C
+F %(%G-%V-%u|%g|%U|%W|%j|%w)T\\n
+A -62167219200
+A -62135596800
+A -62198755200
+O -1-52-6|99|00|00|001|6\x0a1-01-1|01|00|01|001|1\x0a-2-53-5|98|00|00|001|5\x0a
+E 
+S 0
+.
+T C
+F %(%_d|%-d|%0e|%-e|%_H|%5d|%-5d|%_5d|%05d)T\\n
+A 1234567890
+O 13|13|13|13|23|00013|   13|   13|00013\x0a
+E 
+S 0
+.
+T C
+F %(%^a|%^B|%#a|%#B|%#p|%^p|%#P|%^P|%#Z|%^Z)T\\n
+A 1234567890
+O FRI|FEBRUARY|FRI|FEBRUARY|pm|PM|pm|pm|utc|UTC\x0a
+E 
+S 0
+.
+T C
+F %(%10A|%-10A|%010A|%_10A|%^10b)T\\n
+A 1234567890
+O     Friday|    Friday|0000Friday|    Friday|       FEB\x0a
+E 
+S 0
+.
+T C
+F %(%Ec|%EC|%Ex|%EX|%Ey|%EY)T\\n
+A 1234567890
+O Fri Feb 13 23:31:30 2009|20|02/13/09|23:31:30|09|2009\x0a
+E 
+S 0
+.
+T C
+F %(%Od|%Oe|%OH|%OI|%Om|%OM|%OS|%Ou|%OU|%OV|%Ow|%OW|%Oy)T\\n
+A 1234567890
+O 13|13|23|11|02|31|30|5|06|07|5|06|09\x0a
+E 
+S 0
+.
+T C
+F %(%Ea|%Oa|%Eb|%Ob|%OB|%EB|%Ed|%OY|%Oc|%Ox|%OX|%OC)T\\n
+A 1234567890
+O %Ea|%Oa|%Eb|Feb|February|%EB|%Ed|%OY|%Oc|%Ox|%OX|20\x0a
+E 
+S 0
+.
+T C
+F %(%Ej|%Oj|%Ez|%Oz|%EZ|%Es|%Os|%Ep|%Op|%En|%Ot|%E%|%O%)T\\n
+A 1234567890
+O %Ej|044|+0000|+0000|UTC|1234567890|1234567890|PM|PM|\x0a|\x09|%|%\x0a
+E 
+S 0
+.
+T C
+F %(%Ek|%Ok|%El|%Ol|%Ee|%EG|%OG|%Eg|%Og|%EF|%OF|%ED|%OD)T\\n
+A 1234567890
+O %Ek|23|%El|11|%Ee|%EG|2009|%Eg|09|%EF|%OF|%ED|%OD\x0a
+E 
+S 0
+.
+T C
+F %(%ER|%OR|%Er|%Or|%ET|%OT|%Eh|%Oh|%EP|%OP|%EV|%EU|%EW|%Ew|%Eu)T\\n
+A 1234567890
+O 23:31|23:31|11:31:30 PM|11:31:30 PM|23:31:30|23:31:30|%Eh|Feb|pm|pm|%EV|%EU|%EW|%Ew|5\x0a
+E 
+S 0
+.
+T C
+F %(%q|%J|%+|%:z|%5q|%-5q|%_5q|%05q|%Ef|%#q)T|\\n
+A 0
+O %q|%J|%+|%:z|  %5q| %-5q| %_5q|0%05q|%Ef|%#q|\x0a
+E 
+S 0
+.
+T C
+F %(%E)T|%(%O)T|%(%5)T|%(%-)T|%(%^)T|%(%E5)T|\\n
+A 0
+A 0
+A 0
+A 0
+A 0
+A 0
+O %E|%O|   %5|%-|%^|%E5|\x0a
+E 
+S 0
+.
+T C
+F %(%)T|%(%%)T|%(%5%)T|%(a%)T|
+A 0
+A 0
+A 0
+A 0
+O %|%|    %|a%|
+E 
+S 0
+.
+T C
+F %()T|%((x))T|%(%((%H)))T|
+A 0
+A 0
+A 0
+O 00:00:00|(x)|%((00))|
+E 
+S 0
+.
+T C
+F [%20(%H:%M)T][%-20(%H:%M)T][%.2(%H:%M)T]
+A 0
+A 0
+A 0
+O [               00:00][00:00               ][00]
+E 
+S 0
+.
+T C
+F [%*(%H)T][%.*(%H)T][%-*(%H)T][%.(%H)T][%.-1(%H)T]
+A 5
+A 0
+A 1
+A 0
+A 4
+A 0
+A 0
+A 0
+O [   00][0][00  ][][]
+E 
+S 0
+.
+T C
+F [%05(%H)T][%#(%H)T][%l(%H)T]
+A 0
+A 0
+A 0
+O [   00][00][00]
+E 
+S 0
+.
+T C
+F %(%Y)T|
+A abc
+A 'A
+A 1e9
+A  86400000
+A 0x7fffffff
+A 1x
+O 1970|1970|1970|1972|2038|1970|
+E printf: abc: invalid number\x0aprintf: 1e9: invalid number\x0aprintf: 1x: invalid number\x0a
+S 1
+.
+T C
+F %(%10Y|%-10Y|%_10Y|%010Y|%3Y|%_Y|%-Y|%5C|%_5y|%-y)T\\n
+A 0
+O 0000001970|      1970|      1970|0000001970|1970|1970|1970|00019|   70|70\x0a
+E 
+S 0
+.
+T C
+F %(%10z|%_10z|%-z|%010z|%5Z|%-5Z|%5n|%5t|%5%)T|
+A 0
+O          +0000000000|         +         0|+0|000000000+0000000000|  UTC|  UTC|    \x0a|    \x09|    %|
+E 
+S 0
+.
+T C
+F %(%^c|%#c)T|%(%10D|%010D|%-12F|%^r)T|
+A 0
+A 0
+O THU JAN  1 00:00:00 1970|Thu Jan  1 00:00:00 1970|  01/01/70|0001/01/70|  1970-01-01|12:00:00 AM|
+E 
+S 0
+.
+T C
+F %(%^x|%^X|%^D|%^T|%^R|%^F|%_12T|%-12T)T|
+A 1234567890
+O 02/13/09|23:31:30|02/13/09|23:31:30|23:31|2009-02-13|    23:31:30|    23:31:30|
+E 
+S 0
+.
+T C
+F %(%5s|%-5s|%_5s|%05s|%^s)T|
+A 42
+O    42|   42|   42|00042|42|
+E 
+S 0
+.
+T C
+F %(%5s|%-5s|%_5s|%05s)T|
+A -42
+O   -42|  -42|  -42|00-42|
+E 
+S 0
+.
+T C
+F %(%_10j|%-j|%_3m|%-m|%-M|%_S|%-U|%_W|%-V|%_g|%-G|%_C)T|
+A 1234567890
+O         44|44|  2|2|31|30|6| 6|7| 9|2009|20|
+E 
+S 0
+.
+T C
+F %(%_5d|%-5e|%_5e|%5e|%05e|%-_d|%_-d|%0_d|%_0d)T|
+A 1234567890
+O    13|   13|   13|   13|00013|13|13|13|13|
+E 
+S 0
+.
+T C
+F %(%3d|%3e|%1d|%1e|%04j|%_4j|%04u|%_4u)T|
+A 1234567890
+O 013| 13|13|13|0044|  44|0005|   5|
+E 
+S 0
+.
+T C
+F %(%10e|%-10e|%_10e|%010e)T|
+A -62167219200
+O          1|         1|         1|0000000001|
+E 
+S 0
+.
+T C
+F %(%_5Y|%-5Y|%05Y|%_5G|%5C|%_5C|%-5C|%05C)T|
+A -62200000000
+O    -2|   -2|-0002|   -2|-0001|   -1|   -1|-0001|
+E 
+S 0
+.
+T C
+F %(%5y|%_5y|%-5y|%05y|%5g|%_5g)T|
+A -62200000000
+O 00098|   98|   98|00098|00098|   98|
+E 
+S 0
+.
+T C
+F %(%c %c %c %c %c %c)T|
+A 0
+O |
+E 
+S 0
+.
+T C
+F %(%126Y)T|%(%127Y)T|%(%128Y)T|
+A 0
+A 0
+A 0
+O 000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001970|0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001970||
+E 
+S 0
+.
+T C
+F %(x%126Y)T|%(xx%126Y)T|%(%99999999999Y)T|
+A 0
+A 0
+A 0
+O x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001970|||
+E 
+S 0
+.
+T C
+F %(%_126d)T|%(%_127d)T|%(%0126d)T|%(%0127d)T|
+A 0
+A 0
+A 0
+A 0
+O                                                                                                                              1|                                                                                                                              1|000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001|0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001|
+E 
+S 0
+.
+T U
+F \\u0041\\u00e9\\U0001F600\\U00110000\\U7fffffff|\\U80000000|\\ud800|\\u0000|
+O A\xc3\xa9\xf0\x9f\x98\x80\xf4\x90\x80\x80\xfd\xbf\xbf\xbf\xbf\xbf||\xed\xa0\x80|\x00|
+E 
+S 0
+.
+T U
+F %b
+A \\u00e9\\U7fffffff\\U80000000|\\u0080
+O \xc3\xa9\xfd\xbf\xbf\xbf\xbf\xbf|\xc2\x80
+E 
+S 0
+.
+T U
+F [%s]
+A \xc3\xa9
+O [\xc3\xa9]
+E 
+S 0
+.
+T U
+F [%.1s]
+A \xc3\xa9
+O [\xc3]
+E 
+S 0
+.
+T U
+F [%5s]
+A \xc3\xa9
+O [   \xc3\xa9]
+E 
+S 0
+.
+T U
+F [%c]
+A \xc3\xa9
+O [\xc3]
+E 
+S 0
+.
+T U
+F %d,
+A '\xc3\xa9
+A '\xff
+A '\xe9
+A '\xf0\x9f\x98\x80
+A '\xf0\x9f\x98
+A '\xf4\x90\x80\x80
+A '\xed\xa0\x80
+O 233,255,233,128512,240,1114112,237,
+E 
+S 0
+.
+T U
+F [%'d]
+A 1234567
+O [1234567]
+E 
+S 0
+.
+T U
+F [%ls]
+A \xc3\xa9a
+O [\xc3\xa9a]
+E 
+S 0
+.
+T U
+F [%5ls]
+A \xc3\xa9
+O [    \xc3\xa9]
+E 
+S 0
+.
+T U
+F [%.1ls]
+A \xc3\xa9a
+O [\xc3\xa9]
+E 
+S 0
+.
+T U
+F [%-4S]
+A \xc3\xa9
+O [\xc3\xa9   ]
+E 
+S 0
+.
+T U
+F [%S]
+A a\xc3\xa9
+O [a\xc3\xa9]
+E 
+S 0
+.
+T U
+F [%lc]
+A \xc3\xa9
+O [\xc3\xa9]
+E 
+S 0
+.
+T U
+F [%5lc]
+A \xc3\xa9
+O [    \xc3\xa9]
+E 
+S 0
+.
+T U
+F [%-3C]
+A \xc3\xa9
+O [\xc3\xa9  ]
+E 
+S 0
+.
+T U
+F [%lc]
+A 
+O [\x00]
+E 
+S 0
+.
+T U
+F [%3lc]
+A 
+O [  \x00]
+E 
+S 0
+.
+T U
+F [%.0lc]
+A 
+O []
+E 
+S 0
+.
+T U
+F [%lc]
+O [\x00]
+E 
+S 0
+.
+T U
+F [%lc]
+A \xff
+O []
+E 
+S 0
+.
+T U
+F [%3lc]
+A \xff
+O [  ]
+E 
+S 0
+.
+T U
+F [%5ls]
+A \xffa
+O [   ]
+E 
+S 0
+.
+T U
+F [%.2ls]
+A ab\xff
+O [ab]
+E 
+S 0
+.
+T U
+F [%.3ls]
+A ab\xff
+O []
+E 
+S 0
+.
+T U
+F [%ls]
+A ab\xff
+O []
+E 
+S 0
+.
+T U
+F [%.0lc]
+A \xc3\xa9
+O []
+E 
+S 0
+.
+T U
+F [%*ls]
+A 4
+A \xc3\xa9
+O [   \xc3\xa9]
+E 
+S 0
+.
+T U
+F [%.*ls]
+A 1
+A \xc3\xa9\xc3\xa9
+O [\xc3\xa9]
+E 
+S 0
+.
+T U
+F [%99999999999ls]
+A x
+O [x]
+E printf: 99999999999: Numerical result out of range\x0a
+S 1
+.
+T U
+F [%lc]
+A \xc3\xa9a
+O [\xc3\xa9]
+E 
+S 0
+.
+T U
+F [%ls]
+O []
+E 
+S 0
+.
+T U
+F [%.-1ls]
+A \xc3\xa9\xc3\xa9
+O []
+E 
+S 0
+.
+T U
+F [%C]
+A a
+O [a]
+E 
+S 0
+.
+T U
+F %q\\n
+A \xc3\xa9
+A \xc3\xa9 b
+A \xe9
+A \xc2\x85
+A \xe2\x80\xa8
+A \xe2\x80\xa9
+A \xe2\x80\x8b
+O \xc3\xa9\x0a\xc3\xa9\\ b\x0a$'\\351'\x0a$'\\302\\205'\x0a$'\\342\\200\\250'\x0a$'\\342\\200\\251'\x0a\xe2\x80\x8b\x0a
+E 
+S 0
+.
+T U
+F %q\\n
+A \xef\xbb\xbf
+A \xc2\xa0
+A \xcc\x81
+A \xf0\x9f\x98\x80
+A \xf4\x8f\xbf\xbf
+O \xef\xbb\xbf\x0a\xc2\xa0\x0a\xcc\x81\x0a\xf0\x9f\x98\x80\x0a$'\\364\\217\\277\\277'\x0a
+E 
+S 0
+.
+T U
+F %q\\n
+A \xf4\x90\x80\x80
+A \xed\xa0\x80
+A \xc0\x80
+A \xe0\x80\x80
+A \xf8\x88\x80\x80\x80
+O $'\\364\\220\\200\\200'\x0a$'\\355\\240\\200'\x0a$'\\300\\200'\x0a$'\\340\\200\\200'\x0a$'\\370\\210\\200\\200\\200'\x0a
+E 
+S 0
+.
+T U
+F %q\\n
+A a\xe9b
+A \xe9\x01
+A \xf0\x9f\x98
+A \xef\xbf\xbe
+A \xe2\x80\xae
+A \xcd\xb8
+A \xc2\xad
+O $'a\\351b'\x0a$'\\351\\001'\x0a$'\\360\\237\\230'\x0a$'\\357\\277\\276'\x0a\xe2\x80\xae\x0a$'\\315\\270'\x0a\xc2\xad\x0a
+E 
+S 0
+.
+T U
+F %q\\n
+A \xe2\x80\xa8x
+A x\xc2\x9fy
+A \xc2\x80
+A \xc2\xa1
+A \xf3\xa0\x80\x81
+A \xf3\xa0\x80\x82
+O $'\\342\\200\\250x'\x0a$'x\\302\\237y'\x0a$'\\302\\200'\x0a\xc2\xa1\x0a\xf3\xa0\x80\x81\x0a$'\\363\\240\\200\\202'\x0a
+E 
+S 0
+.
+T U
+F %q\\n
+A \xef\xbf\xbd
+A \xf3\xb0\x80\x80
+A \xf4\x8f\xbf\xbe
+A \xe3\x80\x80
+A \xea\xb0\x80
+A \xe1\x85\x9f
+O \xef\xbf\xbd\x0a\xf3\xb0\x80\x80\x0a$'\\364\\217\\277\\276'\x0a\xe3\x80\x80\x0a\xea\xb0\x80\x0a\xe1\x85\x9f\x0a
+E 
+S 0
+.
+T U
+F %#q\\n
+A \xc3\xa9 b
+A \xe9
+O '\xc3\xa9 b'\x0a$'\\351'\x0a
+E 
+S 0
+.
+T U
+F [%.1Q]
+A \xc3\xa9
+O [$'\\303']
+E 
+S 0
+.
+T U
+F [%.2Q]
+A \xc3\xa9
+O [\xc3\xa9]
+E 
+S 0
+.
+T U
+F [%5Q]
+A \xc3\xa9
+O [   \xc3\xa9]
+E 
+S 0
+.
+T U
+F \xc3\xa9%n
+A n
+O \xc3\xa9
+E 
+S 0
+V n=2
+.
+T U
+F \xc3\xa9%s|%%\xc3\xa9
+A x
+O \xc3\xa9x|%\xc3\xa9
+E 
+S 0
+.
+T U
+F %(%c|%a|%B|%p)T
+A 0
+O Thu Jan  1 00:00:00 1970|Thu|January|AM
+E 
+S 0
+.
+X C
+A plain
+O plain X\x0a
+.
+X C
+A a\\nb
+O a\x0ab X\x0a
+.
+X C
+A \\t\\\\
+O \x09\\ X\x0a
+.
+X C
+A \\0101
+O A X\x0a
+.
+X C
+A \\101
+O \\101 X\x0a
+.
+X C
+A \\01
+O \x01 X\x0a
+.
+X C
+A \\0
+O \x00 X\x0a
+.
+X C
+A \\0000
+O \x00 X\x0a
+.
+X C
+A \\00000
+O \x000 X\x0a
+.
+X C
+A \\x41
+O A X\x0a
+.
+X C
+A \\x
+O \\x X\x0a
+.
+X C
+A \\xg
+O \\xg X\x0a
+.
+X C
+A \\x4
+O \x04 X\x0a
+.
+X C
+A \\x414
+O A4 X\x0a
+.
+X C
+A \\u00e9
+O \\u00E9 X\x0a
+.
+X C
+A \\U0001F600
+O \\U0001F600 X\x0a
+.
+X C
+A \\U80000000
+O  X\x0a
+.
+X C
+A \\u
+O \\u X\x0a
+.
+X C
+A \\U
+O \\U X\x0a
+.
+X C
+A \\ug
+O \\ug X\x0a
+.
+X C
+A a\\cb
+O a
+.
+X C
+A \\c
+O 
+.
+X C
+A \\'\\"\\?
+O \\'\\"\\? X\x0a
+.
+X C
+A \\q
+O \\q X\x0a
+.
+X C
+A a\\
+O a\\ X\x0a
+.
+X C
+A \\
+O \\ X\x0a
+.
+X C
+A \\e\\E\\a\\b\\f\\v\\r
+O \x1b\x1b\x07\x08\x0c\x0b\x0d X\x0a
+.
+X C
+A \\8\\9
+O \\8\\9 X\x0a
+.
+X C
+A \\\\\\\\
+O \\\\ X\x0a
+.
+X C
+A 
+O  X\x0a
+.
+X C
+A \\1\\2\\3\\4\\5\\6\\7
+O \\1\\2\\3\\4\\5\\6\\7 X\x0a
+.
+X C
+A %s\\%
+O %s\\% X\x0a
+.
+X C
+A \xc3\xa9\\n
+O \xc3\xa9\x0a X\x0a
+.
+X U
+A \\u00e9
+O \xc3\xa9 X\x0a
+.
+X U
+A \\U0001F600
+O \xf0\x9f\x98\x80 X\x0a
+.
+X U
+A \\U7fffffff
+O \xfd\xbf\xbf\xbf\xbf\xbf X\x0a
+.
+X U
+A \\U80000000
+O  X\x0a
+.
+X U
+A \\ud800
+O \xed\xa0\x80 X\x0a
+.
+X U
+A \\u0080
+O \xc2\x80 X\x0a
+.
+X U
+A \xc3\xa9\\t
+O \xc3\xa9\x09 X\x0a
+.
+T C
+F %+0*.-1i|
+A -99
+A 1
+O %+-099.0-1li|
+E 
+S 0
+.
+T C
+F %000*.-0s|
+A -99
+A x
+O %-099.0-0s|
+E 
+S 0
+.
+T C
+F [%0*.-1d][%-0*.-1d][%0-*.-1d]
+A 9
+A 1
+A 9
+A 1
+A -9
+A 1
+O [%09.0-1ld][%-9.0-1ld][%-9.0-1ld]
+E 
+S 0
+.
+T C
+F %(%#Eb|%^q|%^Ey|%^0f|%^Ex|%#Ea|%^Oz)T|
+A 1234567890
+O %#EB|%^Q|09|%^0F|02/13/09|%#Ea|+0000|
+E 
+S 0
+.
+T C
+F %(%_2z|%1d|%#1H|%1Ez|%-1d|%-3d|%_1j|%01j)T|
+A 1234567890
+O  +   0|13|23|+0000|13| 13| 44|044|
+E 
+S 0
+.
+T C
+F %(%-^3i|%^_Eg|%^12i)T|
+A 0
+O %-^3I|%^_EG|       %^12I|
+E 
+S 0
+.
+T C
+F %(%_-C|%-_C|%0_y|%_0y)T|
+A 94911422592
+O 49|49|77|77|
+E 
+S 0
+.
+T C
+F %(%Ey|%EY|%EC|%Eg|%EG)T|
+A -62200000000
+A 67768036191676799
+O 98|-2|-1|%Eg|%EG|47|-2147481749|-21474818|%Eg|%EG|
+E 
+S 0
+.
+T C
+F %(%U|%W|%V|%G)T\\n
+A -3
+A -86401
+A -259200
+A 951782400
+A 978307199
+O 52|52|01|1970\x0a52|52|01|1970\x0a52|52|01|1970\x0a09|09|09|2000\x0a53|52|52|2000\x0a
+E 
+S 0
+.
+T C
+F %(%k|%l|%I|%p)T\\n
+A 43199
+A 43200
+A 86399
+O 11|11|11|AM\x0a12|12|12|PM\x0a23|11|11|PM\x0a
+E 
+S 0
+.
+T C
+F %s%n|%s%n\\n
+A ab
+A n
+A cde
+A n
+A f
+O ab|cde\x0af|\x0a
+E 
+S 0
+.
+T C
+F %b%n%b
+A a\\tb
+A n
+A x\\c
+O a\x09bx
+E 
+S 0
+.
+T C
+F %c%c%c
+A a
+A 
+A b
+O a\x00b
+E 
+S 0
+.
+T C
+F %.*s|%.*s
+A 99999999999
+A abc
+A -1
+A abc
+O abc|abc
+E printf: 99999999999: Numerical result out of range\x0a
+S 1
+.
+T C
+F %0*s|%-0*d|
+A 5
+A x
+A 5
+A 3
+O     x|3    |
+E 
+S 0
+.
+T U
+F [%-5lc][%-5ls][%.1lc]
+A \xc3\xa9
+A \xc3\xa9\xc3\xa9
+A \xc3\xa9
+O [\xc3\xa9    ][\xc3\xa9\xc3\xa9   ][\xc3\xa9]
+E 
+S 0
+.
+T U
+F %q\\n
+A \xe2\x80\xaa
+A \xd8\x9c
+A \xe2\x81\xa6
+A \xf0\x9f\x8f\xbb
+A \xe2\x80\x8d
+A \xcd\xbf
+O \xe2\x80\xaa\x0a\xd8\x9c\x0a\xe2\x81\xa6\x0a\xf0\x9f\x8f\xbb\x0a\xe2\x80\x8d\x0a\xcd\xbf\x0a
+E 
+S 0
+.
+T U
+F %q\\n
+A \xe1\x9e\xb4
+A \xf3\xa0\x81\x81
+A \xef\xbf\xbf
+A \xf0\x90\x80\x80
+A \xf2\x80\x80\x80
+O \xe1\x9e\xb4\x0a\xf3\xa0\x81\x81\x0a$'\\357\\277\\277'\x0a\xf0\x90\x80\x80\x0a$'\\362\\200\\200\\200'\x0a
+E 
+S 0
+.
+T U
+F %(%a %b)T|%Q|
+A 0
+A \xc3\xa9 x
+O Thu Jan|\xc3\xa9\\ x|
+E 
+S 0
+.
+T C
+F %d,
+A 0b101
+A 0B11
+A -0b1
+A +0b1
+A  0b10
+A 0b0
+A 0b00000000000000000000000000000000000000000000000000000000000000000001
+O 5,3,-1,1,2,0,1,
+E 
+S 0
+.
+T C
+F [%d]
+A 0b
+O [0]
+E printf: 0b: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 0b2
+O [0]
+E printf: 0b2: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 0b1x
+O [1]
+E printf: 0b1x: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 0b12
+O [1]
+E printf: 0b12: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A -0b
+O [0]
+E printf: -0b: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 0B
+O [0]
+E printf: 0B: invalid number\x0a
+S 1
+.
+T C
+F %u,%x,%o,%X,%i
+A 0b1111
+A 0b1111
+A 0b1111
+A 0b11111111
+A 0b11
+O 15,f,17,FF,3
+E 
+S 0
+.
+T C
+F [%d]
+A 0b111111111111111111111111111111111111111111111111111111111111111
+O [9223372036854775807]
+E 
+S 0
+.
+T C
+F [%d]
+A 0b1000000000000000000000000000000000000000000000000000000000000000
+O [9223372036854775807]
+E printf: 0b1000000000000000000000000000000000000000000000000000000000000000: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%d]
+A -0b1000000000000000000000000000000000000000000000000000000000000000
+O [-9223372036854775808]
+E 
+S 0
+.
+T C
+F [%u]
+A 0b1111111111111111111111111111111111111111111111111111111111111111
+O [18446744073709551615]
+E 
+S 0
+.
+T C
+F [%u]
+A 0b11111111111111111111111111111111111111111111111111111111111111111
+O [18446744073709551615]
+E printf: 0b11111111111111111111111111111111111111111111111111111111111111111: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%u]
+A -0b11111111111111111111111111111111111111111111111111111111111111111
+O [18446744073709551615]
+E printf: -0b11111111111111111111111111111111111111111111111111111111111111111: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%*d][%.*d]
+A 0b101
+A 1
+A 0b11
+A 2
+O [    1][002]
+E 
+S 0
+.
+T C
+F %(%Y)T
+A 0b1
+O 1970
+E 
+S 0
+.
+T C
+F [%d]
+A 0b1111111111111111111111111111111111111111111111111111111111111111111x
+O [9223372036854775807]
+E printf: 0b1111111111111111111111111111111111111111111111111111111111111111111x: invalid number\x0a
+S 1
+.
+T C
+F %d,
+A 00000000000000000000000000000000000000017
+A 0x00000000000000000000000000000000001
+A -0x8000000000000000
+O 15,1,-9223372036854775808,
+E 
+S 0
+.
+T C
+F [%d]
+A -0x8000000000000001
+O [-9223372036854775808]
+E printf: -0x8000000000000001: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%d]
+A 18446744073709551615
+O [9223372036854775807]
+E printf: 18446744073709551615: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%d]
+A 0x8000000000000000
+O [9223372036854775807]
+E printf: 0x8000000000000000: Numerical result out of range\x0a
+S 1
+.
+T C
+F %u,
+A -9223372036854775808
+A -0
+A -0x1
+A 0x10000000000000000
+O 9223372036854775808,0,18446744073709551615,18446744073709551615,
+E printf: 0x10000000000000000: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%d]
+A  - 5
+O [0]
+E printf:  - 5: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A +-5
+O [0]
+E printf: +-5: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 5\x0a
+O [5]
+E printf: 5\x0a: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A \x0b\x0c\x0d 5
+O [5]
+E 
+S 0
+.
+T C
+F [%d]
+A 0X1g
+O [1]
+E printf: 0X1g: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 0x1g
+O [1]
+E printf: 0x1g: invalid hex number\x0a
+S 1
+.
+T C
+F [%d]
+A 00x1
+O [0]
+E printf: 00x1: invalid octal number\x0a
+S 1
+.
+T C
+F [%d]
+A 0999999999999999999999999
+O [0]
+E printf: 0999999999999999999999999: invalid octal number\x0a
+S 1
+.
+T C
+F [%d]
+A -099
+O [0]
+E printf: -099: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A  099
+O [0]
+E printf:  099: invalid number\x0a
+S 1
+.
+T C
+F [%d]
+A 0x\x0a
+O [0]
+E printf: 0x\x0a: invalid hex number\x0a
+S 1
+.
+T C
+F [%x]
+A 0xffffffffffffffffff
+O [ffffffffffffffff]
+E printf: 0xffffffffffffffffff: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%x]
+A -0xffffffffffffffffff
+O [ffffffffffffffff]
+E printf: -0xffffffffffffffffff: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%o]
+A 01777777777777777777777
+O [1777777777777777777777]
+E 
+S 0
+.
+T C
+F [%o]
+A 02000000000000000000000
+O [1777777777777777777777]
+E printf: 02000000000000000000000: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%d]
+A 1234567890123456789012345678901234567890
+O [9223372036854775807]
+E printf: 1234567890123456789012345678901234567890: Numerical result out of range\x0a
+S 1
+.
+T C
+F %d|%d|%d
+A 1x
+A 2y
+A 3z
+O 1|2|3
+E printf: 1x: invalid number\x0aprintf: 2y: invalid number\x0aprintf: 3z: invalid number\x0a
+S 1
+.
+T C
+F [%c]
+A 'A
+O [']
+E 
+S 0
+.
+T C
+F [%s]
+A 'A
+O ['A]
+E 
+S 0
+.
+T C
+F %d,
+A "
+A "A
+A ' 
+A " 
+A ''
+O 0,65,32,32,39,
+E 
+S 0
+.
+T C
+F [%5.3d]
+A 'A
+O [  065]
+E 
+S 0
+.
+T C
+F [%i]
+A -
+O [0]
+E printf: -: invalid number\x0a
+S 1
+.
+T C
+F %d %s
+A 9223372036854775808
+A x
+O 9223372036854775807 x
+E printf: 9223372036854775808: Numerical result out of range\x0a
+S 1
+.
+T C
+F %d%d
+A 99999999999999999999
+A 0x1x
+O 92233720368547758071
+E printf: 99999999999999999999: Numerical result out of range\x0aprintf: 0x1x: invalid hex number\x0a
+S 1
+.
+T C
+F [%*d]
+A 12x
+A 1
+O [           1]
+E printf: 12x: invalid number\x0a
+S 1
+.
+T C
+F [%*d]
+A -2147483649
+A 1
+O [1]
+E printf: -2147483649: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%*d]
+A 2147483648
+A 1
+O [1]
+E printf: 2147483648: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%.*d]
+A 2147483648
+A 1
+O [1]
+E printf: 2147483648: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%.*d]
+A -2147483649
+A 1
+O [1]
+E printf: -2147483649: Numerical result out of range\x0a
+S 1
+.
+T C
+F [%*.*s]
+A x
+A y
+A abc
+O []
+E printf: x: invalid number\x0aprintf: y: invalid number\x0a
+S 1
+.
+T C
+F [%*.*s]
+A 
+A 
+A abc
+O []
+E printf: : invalid number\x0aprintf: : invalid number\x0a
+S 1
+.
+T C
+F [%*s][%*s]
+A 3
+A a
+O [  a][]
+E 
+S 0
+.
+T C
+F [%-*.*s]
+A 3
+A 1
+A abc
+O [a  ]
+E 
+S 0
+.
+T C
+F [%0*.*d]
+A 6
+A 3
+A 7
+O [   007]
+E 
+S 0
+.
+T C
+F [%0*.*d]
+A 6
+A -3
+A 7
+O [000007]
+E 
+S 0
+.
+T C
+F [%.*x]
+A 0
+A 0
+O []
+E 
+S 0
+.
+T C
+F [%#.*o]
+A 0
+A 0
+O [0]
+E 
+S 0
+.
+T C
+F [%*c]
+A -3
+A a
+O [a  ]
+E 
+S 0
+.
+T C
+F [%.*c]
+A 0
+A a
+O [a]
+E 
+S 0
+.
+T C
+F [%*b]
+A 3
+A \\x41
+O [  A]
+E 
+S 0
+.
+T C
+F [%.*b]
+A 0
+A x\\cy
+O [
+E 
+S 0
+.
+T C
+F [%*q]
+A 6
+A a b
+O [  a\\ b]
+E 
+S 0
+.
+T C
+F [%-*Q]
+A 8
+A a b
+O [a\\ b    ]
+E 
+S 0
+.
+T C
+F \\0101|\\08|\\0
+O \x081|\x008|\x00
+E 
+S 0
+.
+T C
+F \\x0|\\x00|\\x1|\\xF|\\xfF|
+O \x00|\x00|\x01|\x0f|\xff|
+E 
+S 0
+.
+T C
+F \\u0080|\\U00000080|\\U0000FFFF|\\U00010000|\\U0010FFFF|\\Uffffffff|\\U0000007f|
+O \\u0080|\\u0080|\\uFFFF|\\U00010000|\\U0010FFFF||\x7f|
+E 
+S 0
+.
+T C
+F A1\\U000000412\xef\xbf\xbf0
+O A1A2\xef\xbf\xbf0
+E 
+S 0
+.
+T C
+F \\777\\400\\378
+O \xff\x00\x1f8
+E 
+S 0
+.
+T C
+F \\\\\\\\x41
+O \\\\x41
+E 
+S 0
+.
+T C
+F \\%d
+A 5
+O \\5
+E 
+S 0
+.
+T C
+F %d\\
+A 5
+O 5\\
+E 
+S 0
+.
+T C
+F \\%%
+O \\%
+E 
+S 0
+.
+T C
+F \\c%s
+A x
+O \\cx
+E 
+S 0
+.
+T C
+F \\-\\n
+O \\-\x0a
+E 
+S 0
+.
+T C
+F [%5b]
+A ab\\c
+O [   ab
+E 
+S 0
+.
+T C
+F %s[%b]%s
+A 1
+A a\\0
+A 2
+O 1[a\x00]2
+E 
+S 0
+.
+T C
+F %b
+A \\0377\\03777\\0400
+O \xff\xff7\x00
+E 
+S 0
+.
+T C
+F %b
+A \\1\\01\\001\\0001
+O \x01\x01\x01\x01
+E 
+S 0
+.
+T C
+F %b
+A \\u0080|\\U00000080|\\Uffffffff|\\U0010FFFF|
+O \\u0080|\\u0080||\\U0010FFFF|
+E 
+S 0
+.
+T C
+F %b
+A \\x\\c
+O \\x
+E printf: missing hex digit for \\x\x0a
+S 0
+.
+T C
+F %b|
+A \\\\c
+A x
+O \\c|x|
+E 
+S 0
+.
+T C
+F %b
+A \\\\\\c
+O \\
+E 
+S 0
+.
+T C
+F %b
+A a\\\\
+O a\\
+E 
+S 0
+.
+T C
+F %b
+A \\e\\E\\q\\'
+O \x1b\x1b\\q\\'
+E 
+S 0
+.
+T C
+F %b
+A \\cfoo
+A bar
+O 
+E 
+S 0
+.
+T C
+F %b%n%s
+A ab\\cd
+A n
+A x
+O ab
+E 
+S 0
+.
+T C
+F %b %d
+A ok
+A x
+A \\c
+A y
+O ok 0
+E printf: x: invalid number\x0a
+S 0
+.
+T C
+F %d%b%d
+A 1x
+A x\\c
+A 2y
+O 1x
+E printf: 1x: invalid number\x0a
+S 0
+.
+T C
+F %d%b
+A 99999999999999999999
+A \\c
+O 9223372036854775807
+E printf: 99999999999999999999: Numerical result out of range\x0a
+S 0
+.
+T C
+F [%99999999999b]
+A \\c
+O [
+E printf: 99999999999: Numerical result out of range\x0a
+S 0
+.
+T C
+F %q\\n
+A -
+A --
+A =
+A a=b
+A :
+A @
+A %
+A +x
+A a,b
+A x]
+A !x
+A x!
+O -\x0a--\x0a=\x0aa=b\x0a:\x0a@\x0a%\x0a+x\x0aa\\,b\x0ax\\]\x0a\\!x\x0ax\\!\x0a
+E 
+S 0
+.
+T C
+F %q\\n
+A ~:~
+A =~
+A :~
+A ~~
+A a:b:~c
+A a=b=~
+A #~
+A ~#
+O \\~:\\~\x0a=\\~\x0a:\\~\x0a\\~~\x0aa:b:\\~c\x0aa=b=\\~\x0a\\#~\x0a\\~#\x0a
+E 
+S 0
+.
+T C
+F %q\\n
+A \x7f
+A \xff'
+A a\x01'b
+A \x1b[0m
+A \x09\x0a
+O $'\\177'\x0a$'\\377\\''\x0a$'a\\001\\'b'\x0a$'\\E[0m'\x0a$'\\t\\n'\x0a
+E 
+S 0
+.
+T C
+F %q\\n
+A  
+A   
+A \x09
+A \x01 
+O \\ \x0a\\ \\ \x0a$'\\t'\x0a$'\\001 '\x0a
+E 
+S 0
+.
+T C
+F %#q|
+A 
+A '
+A "
+A $x
+A #x
+A ~x
+A \x0a
+O ''|\\'|'"'|'$x'|'#x'|'~x'|$'\\n'|
+E 
+S 0
+.
+T C
+F [%.2Q]
+A ab cd
+O [ab]
+E 
+S 0
+.
+T C
+F [%.-2Q]
+A abcdef
+O []
+E 
+S 0
+.
+T C
+F [%#.2Q]
+A a b
+O ['a ']
+E 
+S 0
+.
+T C
+F [%.*Q]
+A -1
+A a b
+O [a\\ b]
+E 
+S 0
+.
+T C
+F [%5.0Q]
+A x
+O [   '']
+E 
+S 0
+.
+T C
+F [%-6.3Q]
+A a'b'c
+O [a\\'b  ]
+E 
+S 0
+.
+T C
+F %Q|
+A 
+A a b
+A '
+O ''|a\\ b|\\'|
+E 
+S 0
+.
+T C
+F [%#5q]
+A a b
+O ['a b']
+E 
+S 0
+.
+T C
+F [%#Q]
+A 
+O ['']
+E 
+S 0
+.
+T C
+F %q
+A x
+A y
+A z
+O xyz
+E 
+S 0
+.
+T C
+F [%l(x)Y]
+O [%((x)Y]
+E printf: warning: `Y': invalid time format specification\x0a
+S 0
+.
+T C
+F [%hh(x)Y]
+O [%(h(x)Y]
+E printf: warning: `Y': invalid time format specification\x0a
+S 0
+.
+T C
+F %l(x)Y%s|
+A a
+A b
+O %((x)Ya|%((x)Yb|
+E printf: warning: `Y': invalid time format specification\x0aprintf: warning: `\x00': invalid time format specification\x0a
+S 0
+.
+T C
+F %L(%H
+O %((
+E printf: warning: `\x00': invalid time format specification\x0aprintf: `H': invalid format character\x0a
+S 1
+.
+T C
+F %(%H(x)T
+O %(
+E printf: warning: `\x00': invalid time format specification\x0aprintf: `H': invalid format character\x0a
+S 1
+.
+T C
+F %(%H)T%(x
+A 0
+O 00%(x
+E printf: warning: `\x00': invalid time format specification\x0a
+S 0
+.
+T C
+F %5(x)Y|
+O %5(x)Y|
+E printf: warning: `Y': invalid time format specification\x0a
+S 0
+.
+T C
+F %(x)%s|
+A a
+O %(x)a|
+E printf: warning: `%': invalid time format specification\x0a
+S 0
+.
+T C
+F %(()T|
+A 0
+O %(()T|
+E printf: warning: `\x00': invalid time format specification\x0a
+S 0
+.
+T C
+F %((%H))T|
+A 0
+O (00)|
+E 
+S 0
+.
+T C
+F %((%H)T)T|
+A 0
+O (00)T|
+E 
+S 0
+.
+T C
+F [%.0S]
+A ab
+O []
+E 
+S 0
+.
+T C
+F [%5.0S]
+A ab
+O [     ]
+E 
+S 0
+.
+T C
+F [%-4.0S]
+A ab
+O [    ]
+E 
+S 0
+.
+T C
+F [%C]
+A 
+O [\x00]
+E 
+S 0
+.
+T C
+F [%3C]
+A 
+O [  \x00]
+E 
+S 0
+.
+T C
+F [%lC]
+A a
+O [a]
+E 
+S 0
+.
+T C
+F \xc3\xa9%n
+A n
+O \xc3\xa9
+E 
+S 0
+V n=2
+.
+T C
+F %5b%n
+A a
+A n
+O     a
+E 
+S 0
+V n=5
+.
+T C
+F %q%n
+A a b
+A n
+O a\\ b
+E 
+S 0
+V n=4
+.
+T C
+F %(%Y)T%n
+A 0
+A n
+O 1970
+E 
+S 0
+V n=4
+.
+T C
+F %n
+A a-b
+O 
+E printf: `a-b': not a valid identifier\x0a
+S 1
+.
+T C
+F %s%n
+A x
+A \xc3\xa9
+O x
+E printf: `\xc3\xa9': not a valid identifier\x0a
+S 1
+.
+T C
+F %s%n%d
+A x
+A _
+A 5
+O x5
+E 
+S 0
+.
+T C
+F %n%s
+A a[1]
+A x
+O 
+E printf: `a[1]': not a valid identifier\x0a
+S 1
+.
+T C
+F %z
+A x
+O 
+E printf: `%z': missing format character\x0a
+S 1
+.
+T C
+F %hs|%Lc|%zd
+A a
+A b
+A 3
+O a|b|3
+E 
+S 0
+.
+T C
+F %m %s
+A x
+O 
+E printf: `m': invalid format character\x0a
+S 1
+.
+T C
+F %p
+A x
+O 
+E printf: `p': invalid format character\x0a
+S 1
+.
+T C
+F %B
+A x
+O 
+E printf: `B': invalid format character\x0a
+S 1
+.
+T C
+F %I
+A x
+O 
+E printf: `I': invalid format character\x0a
+S 1
+.
+T C
+F %Id
+A 5
+O 
+E printf: `I': invalid format character\x0a
+S 1
+.
+T U
+F %d,
+A '\xf8\x88\x80\x80\x80
+A '\xfc\x84\x80\x80\x80\x80
+A '\xfe
+A '\xc0\x80
+A "\xc3\xa9
+A '\xc3\xa9x
+O 2097152,67108864,254,192,233,233,
+E 
+S 0
+.
+T U
+F [%*s]
+A '\xc3\xa9
+A x
+O [                                                                                                                                                                                                                                        x]
+E 
+S 0
+.
+T U
+F [%lc]
+A \xf8\x88\x80\x80\x80
+O [\xf8\x88\x80\x80\x80]
+E 
+S 0
+.
+T U
+F [%ls]
+A a\xf8\x88\x80\x80\x80b
+O [a\xf8\x88\x80\x80\x80b]
+E 
+S 0
+.
+T U
+F [%.2ls]
+A \xf0\x9f\x98\x80\xf0\x9f\x98\x80\xf0\x9f\x98\x80
+O [\xf0\x9f\x98\x80\xf0\x9f\x98\x80]
+E 
+S 0
+.
+T U
+F [%5.1ls]
+A \xc3\xa9\xc3\xa9
+O [    \xc3\xa9]
+E 
+S 0
+.
+T U
+F [%-5lc]
+A \xff
+O [    ]
+E 
+S 0
+.
+T U
+F [%ls]
+A 
+O []
+E 
+S 0
+.
+T U
+F [%.0ls]
+A \xc3\xa9
+O []
+E 
+S 0
+.
+T U
+F %q\\n
+A \xc3\xa9~
+A ~\xc3\xa9
+A #\xc3\xa9
+A \xc3\xa9#
+A \xc3\xa9 b
+A \xc3\xa9\x01
+A \xc3
+A \xc3a
+O \xc3\xa9~\x0a\\~\xc3\xa9\x0a\\#\xc3\xa9\x0a\xc3\xa9#\x0a\xc3\xa9\\ b\x0a$'\xc3\xa9\\001'\x0a$'\\303'\x0a$'\\303a'\x0a
+E 
+S 0
+.
+T U
+F %q\\n
+A \xe2\x80
+A \xe2\x80\x8b\xe2\x80\x8b
+A a\xcc\x81
+O $'\\342\\200'\x0a\xe2\x80\x8b\xe2\x80\x8b\x0aa\xcc\x81\x0a
+E 
+S 0
+.
+T U
+F \xc3\xa9|\xed\x9f\xbf|\xee\x80\x80|\xef\xbf\xbf|\\U0001F600|\\U7FFFFFFF|
+O \xc3\xa9|\xed\x9f\xbf|\xee\x80\x80|\xef\xbf\xbf|\xf0\x9f\x98\x80|\xfd\xbf\xbf\xbf\xbf\xbf|
+E 
+S 0
+.
+T U
+F %b
+A \xc3\xa9\xf0\x90\x8f\xbf|
+O \xc3\xa9\xf0\x90\x8f\xbf|
+E 
+S 0
+.
+T U
+F \\U0001F600%n
+A n
+O \xf0\x9f\x98\x80
+E 
+S 0
+V n=4
+.
+T U
+F %\xc3\xa9
+A x
+O 
+E printf: `\xc3': invalid format character\x0a
+S 1
+.
+T U
+F %d
+A \xc3\xa9
+O 0
+E printf: \xc3\xa9: invalid number\x0a
+S 1
+.
+T U
+F [%.1s]
+A \xc3\xa9
+O [\xc3]
+E 
+S 0
+.
+X C
+A \\0123\\0400
+O S\x00 X\x0a
+.
+X C
+A \\c
+O 
+.
+X C
+A a\\c
+O a
+.
+X C
+A \\x\\c
+O \\x
+.
+X C
+A \\0
+O \x00 X\x0a
+.
+X C
+A \\08
+O \x008 X\x0a
+.
+X C
+A \\x0g
+O \x00g X\x0a
+.
+X C
+A \\u0080\\U00000080\\U0010FFFF
+O \\u0080\\u0080\\U0010FFFF X\x0a
+.
+X C
+A \\Uffffffff|
+O | X\x0a
+.
+X C
+A \xef\xbf\xbfF
+O \xef\xbf\xbfF X\x0a
+.
+X C
+A \\\\c
+O \\c X\x0a
+.
+X C
+A \\\\\\c
+O \\
+.
+X C
+A \\e[0m
+O \x1b[0m X\x0a
+.
+X C
+A \\-\\ \\"
+O \\-\\ \\" X\x0a
+.
+X U
+A \\u0080\\U0010FFFF\\U7FFFFFFF\\Uffffffff|
+O \xc2\x80\xf4\x8f\xbf\xbf\xfd\xbf\xbf\xbf\xbf\xbf| X\x0a
+.
+X U
+A \xc3\\n\xa9
+O \xc3\x0a\xa9 X\x0a
+.
+X U
+A \xe2\x80\\t
+O \xe2\x80\x09 X\x0a
+.
+X U
+A \xf0\x90\x8f\xbf
+O \xf0\x90\x8f\xbf X\x0a
+.
+T C
+F %l(x)%(%Y)T|
+A 0
+A 31536000
+O %((x)1970|%((x)1971|
+E printf: warning: `%': invalid time format specification\x0aprintf: warning: `\x00': invalid time format specification\x0a
+S 0
+.
+T C
+F %*l(x)Y%s|
+A 3
+A a
+A 4
+A b
+O %*((x)Ya|%*((x)Yb|
+E printf: warning: `Y': invalid time format specification\x0aprintf: warning: `\x00': invalid time format specification\x0a
+S 0
+.
+T C
+F %hl(x)T%s|
+A a
+A b
+O xb|
+E printf: a: invalid number\x0a
+S 1
+.
+T C
+F %.3l(%H)T|%s
+A 0
+A a
+A 1
+A b
+O 00|a00|b
+E 
+S 0
+.
+T C
+F %l(%H)T|%l(x)Y|%s
+A 0
+A a
+O 00|%((x)Y|a
+E printf: warning: `Y': invalid time format specification\x0a
+S 0
+.
+T C
+F %(%((%H)T
+A 0
+O %(%((
+E printf: warning: `\x00': invalid time format specification\x0aprintf: warning: `\x00': invalid time format specification\x0aprintf: `H': invalid format character\x0a
+S 1
+.
+T C
+F %(a)T(%H)T|
+A 0
+A 0
+O a(
+E printf: `H': invalid format character\x0a
+S 1
+.
