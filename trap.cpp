@@ -243,6 +243,13 @@ static void copytraps(Shell *c, Shell *sh)
 // from a function), the current line and the command being run.
 static void runtrap(Shell *sh, i32 idx)
 {
+    if (sh->intrap>=10 || sh->capdepth+2>=NPOOL) {
+        // Actions nested this deep (a trap sending its own signal):
+        // bash recurses until it crashes. Each level holds an arena.
+        sh->status  = 139;
+        sh->exiting = 1;
+        escape(sh, ESC_EXIT);
+    }
     i32   depth = ++sh->capdepth;
     Arena a     = *scratchat(sh, depth);
     Str   cmd   = clone(&a, sh->traps[idx]);  // it may change itself
