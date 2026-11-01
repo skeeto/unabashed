@@ -770,6 +770,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             if (!f) {
                 if (name=="export" || name=="readonly") {
                     builtinerror(sh, scratch, name, concat(&scratch, args[i], ": not a function"));
+                } else if (print && !funcnames) {
+                    builtinerror(sh, scratch, name, concat(&scratch, args[i], ": not found"));
                 }
                 status = 1;
                 continue;
@@ -1218,14 +1220,7 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
     }
     X *x = newx(sh, &scratch);
     if (cur->dyn==DYN_BASH_ALIASES || cur->dyn==DYN_BASH_CMDS) {
-        // the alias or command table itself
-        Str key = raw ? sub : subkey(x, sub);
-        if (cur->dyn == DYN_BASH_CMDS) {
-            hashremove(sh, key);
-        } else if (Alias *a = findalias(sh->aliases, key)) {
-            if (a->value.data) undefalias(sh, a);
-        }
-        return 0;
+        return 0;  // as bash, the tables stay as they are
     }
     if (cur->arr && cur->arr->bucket) {
         Str key = raw ? sub : subkey(x, sub);

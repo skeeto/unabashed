@@ -397,11 +397,12 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
         // listing shows them valueless until then
         if (sh->listing && !(sh->dynread & (u64)1<<v->dyn)) return {};
         if (sh->listing && v->dyn==DYN_RANDOM) return fmti64(a, sh->lastrandom);
+        if (sh->listing && v->dyn==DYN_LINENO) return fmti64(a, sh->lastlineno);
         sh->dynread |= (u64)1<<v->dyn;
         break;
     }
     switch (v->dyn) {
-    case DYN_LINENO:        return fmti64(a, sh->line);
+    case DYN_LINENO:        return fmti64(a, sh->lastlineno = sh->line);
     case DYN_RANDOM:        return fmti64(a, sh->lastrandom = nextrandom(sh));
     case DYN_SRANDOM: {
         u64 x = (u64)dynnow(sh) * 0x9e3779b97f4a7c15u;

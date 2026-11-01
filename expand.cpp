@@ -994,8 +994,11 @@ static b32 splitrefassoc(Shell *sh, Str s, Str *name, Str *sub)
 static b32 splitrefflat(Shell *sh, Str s, Str *name, Str *sub)
 {
     Cut c = cut(s, '[');
-    if (!c.ok || cut(c.tail, ']').head.len != c.tail.len-1) return 0;
-    return splitrefassoc(sh, s, name, sub);
+    if (!sh->shopt[S_ASSOC_EXPAND_ONCE] || !c.ok || !validvarname(c.head)) return 0;
+    if (cut(c.tail, ']').head.len != c.tail.len-1) return 0;
+    *name = c.head;
+    *sub  = cuttail(c.tail, 1);
+    return 1;
 }
 
 // Is s an unquoted name[sub] argument of the running builtin, which
@@ -2622,7 +2625,9 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
             Str key = f[k];
             Str v   = k+1<f.len ? f[k+1] : Str("");
             if (!key.len) {
-                badarraysub(sh, scratch, words[k]);
+                // declare shows the word requoted, and goes on
+                badarraysub(sh, scratch, decl ? singlequote(a, key) : words[k]);
+                if (decl) continue;
                 failed = 1;
                 break;
             }
