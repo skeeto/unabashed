@@ -165,7 +165,7 @@ static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
         var = args[i+1];
         i += 2;
         Str rn, rs;
-        if (!validvarname(var) && !splitref(var, &rn, &rs)) {
+        if (!validvarname(var) && !splitrefonce(sh, var, &rn, &rs)) {
             notident(sh, scratch, "printf", var);  // before any output
             return 2;
         }
@@ -1085,8 +1085,20 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         // export and readonly without -a or -A assign a quoted
         // 'name=(...)' as a string, to element 0 of an existing array
         b32 plain    = (name=="export" || name=="readonly") && !(on & (V_ARRAY|V_ASSOC));
-        b32 compound = val.len>1 && val[0]=='(' && val[val.len-1]==')' &&
-                       (wordcomp || (!plain && (isarr || isassoc || (on & (V_ARRAY|V_ASSOC)))));
+        b32 parens   = val.len>1 && val[0]=='(' && val[val.len-1]==')';
+        b32 creating = !!(on & (V_ARRAY|V_ASSOC));
+        b32 exists   = isarr || isassoc;
+        b32 compound = parens && wordcomp;
+        if (parens && !wordcomp && !plain && !(hassub && exists && !creating) &&
+                (hassub || creating || exists)) {
+            // a quoted name='(...)' is a list only for an array, and
+            // name[sub]='(...)' for a new one is an element, as bash
+            if (!exists && !creating) {
+                shellerror(sh, scratch, concat3(&scratch, "warning: ", a, ": quoted compound array assignment deprecated"));
+            }
+            compound = exists || creating;
+            if (compound) hassub = 0;
+        }
         if (eq < a.len) {
             // set the attributes first so that -i and -l apply
             if (aon || off) setattrs(sh, vname, aon, off);
@@ -1807,7 +1819,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     i64 deadline = timeout ? os_now(sh->os) + timeout : 0;
     // The first name is checked now, the rest as they are assigned
     Str rn, rs;
-    if (i<nargs && !validvarname(args[i]) && !splitref(args[i], &rn, &rs)) {
+    if (i<nargs && !validvarname(args[i]) && !splitrefonce(sh, args[i], &rn, &rs)) {
         notident(sh, scratch, "read", args[i]);
         return 1;
     }
@@ -2004,7 +2016,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (!inifs) break;
             pos++;
         }
-        if (!validvarname(args[i+v]) && !splitref(args[i+v], &rn, &rs)) {
+        if (!validvarname(args[i+v]) && !splitrefonce(sh, args[i+v], &rn, &rs)) {
             notident(sh, scratch, "read", args[i+v]);
             return 1;
         }

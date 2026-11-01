@@ -315,12 +315,13 @@ struct Param {
     b32  list;      // $@, $*, ${a[@]}, ${a[*]}: a list of values
     b32  star;      // * rather than @
     b32  array;     // the list is an array's elements
+    b32  bad;       // a bad subscript, already reported
     Str *lv;        // the list
     i64 *li;        // array: element indices (positions if associative)
     iz   ln;
 };
 
-static Param getelems(X *, Str name, Str sub);
+static Param getelems(X *, Str name, Str sub, b32 length = 0);
 
 static Param getparam(X *x, Str name)
 {
@@ -828,7 +829,17 @@ static Str *onevalue(Arena *a, Str v)
 
 // ${name[sub]}: one element, or for @ and * all of them. A scalar acts
 // as an array of one element.
-static Param getelems(X *x, Str name, Str sub)
+// A bad subscript: reported, and for ${#name[sub]} the command ends.
+static void badelem(X *x, Str name, Str sub, b32 length)
+{
+    Arena a = *x->a;
+    if (length) {
+        expansionerror(x->sh, a, concat3(&a, "[", sub, "]: bad array subscript"));
+    }
+    shellerror(x->sh, a, concat(&a, name, ": bad array subscript"));
+}
+
+static Param getelems(X *x, Str name, Str sub, b32 length)
 {
     Shell *sh = x->sh;
     Param  r  = {};
@@ -854,7 +865,13 @@ static Param getelems(X *x, Str name, Str sub)
         return r;
     }
     if (arr && arr->bucket) {
-        HItem *t = hfind(arr, subkey(x, sub));
+        Str key = subkey(x, sub);
+        if (!key.len) {
+            badelem(x, name, sub, length);
+            r.bad = 1;
+            return r;
+        }
+        HItem *t = hfind(arr, key);
         if (t) {
             r.value = t->val;
             r.set   = 1;
@@ -866,8 +883,8 @@ static Param getelems(X *x, Str name, Str sub)
         Got g = arr ? Got{} : getvar(sh, x->a, name);
         idx += arr ? amax(arr)+1 : g.set;
         if (idx < 0) {
-            Arena a = *x->a;
-            shellerror(sh, a, concat(&a, name, ": bad array subscript"));
+            badelem(x, name, sub, length);
+            r.bad = 1;
             return r;
         }
     }
@@ -955,6 +972,26 @@ static b32 splitref(Str s, Str *name, Str *sub)
     if (e != s.len-1) return 0;
     *name = c.head;
     *sub  = span(s.data+c.head.len+1, s.data+e);
+    return 1;
+}
+
+// splitref, and under assoc_expand_once, name[key] for an associative
+// array whose key holds brackets: the key then runs to the last ].
+static b32 splitrefonce(Shell *sh, Str s, Str *name, Str *sub)
+{
+    if (splitref(s, name, sub)) return 1;
+    if (!sh->shopt[S_ASSOC_EXPAND_ONCE]) return 0;
+    b32 oneword = 0;  // an unquoted name[sub] argument of the builtin
+    for (iz i = 0; i < sh->nbltargs; i++) {
+        oneword |= sh->bltargs[i].data==s.data && i<sh->compargs.len && sh->compargs[i]==3;
+    }
+    if (!oneword) return 0;
+    Cut c = cut(s, '[');
+    if (!c.ok || !validvarname(c.head) || s[s.len-1]!=']') return 0;
+    Value *v = lookup(sh, c.head);
+    if (!v || !v->arr || !v->arr->bucket) return 0;
+    *name = c.head;
+    *sub  = span(s.data+c.head.len+1, s.data+s.len-1);
     return 1;
 }
 
@@ -1063,6 +1100,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             badsubst(x, whole);  // checked before the indirection
         }
         Param q = hassub ? getelems(x, name, sub) : getparam(x, name);
+        if (q.bad) return;
         if (!q.set && !q.list) {
             Arena a = *x->a;
             expansionerror(sh, a, concat(&a, uname, ": invalid indirect expansion"));
@@ -1098,7 +1136,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     }
 
     if (!got) {
-        p = hassub ? getelems(x, name, sub) : getparam(x, name);
+        p = hassub ? getelems(x, name, sub, length) : getparam(x, name);
     }
     b32 elem = hassub && !allsub(sub);  // a single array element
 
@@ -1108,7 +1146,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         if (hassub && !p.set && sh->opt[O_NOUNSET] && !varvisible(sh, name)) {
             // not fatal, unlike other unbound variables
             Arena a = *x->a;
-            expansionerror(sh, a, concat(&a, name, ": unbound variable"));
+            expansionerror(sh, a, concat(&a, allsub(sub) ? name : uname, ": unbound variable"));
         }
         if (p.list) {
             n = p.ln;
@@ -2307,7 +2345,7 @@ static b32 assignelem(Shell *sh, Arena scratch, Str name, Str sub, Str word, Str
 static b32 assignto(Shell *sh, Arena scratch, Str lhs, Str value, i32 flags = 0)
 {
     Str name, sub;
-    if (splitref(lhs, &name, &sub)) {
+    if (splitrefonce(sh, lhs, &name, &sub)) {
         return assignelem(sh, scratch, name, sub, lhs, value, flags);
     }
     return setvar(sh, scratch, lhs, value, flags);
@@ -2498,13 +2536,11 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
     u32    at  = val->attrs;
     b32    failed = 0;
     if (words.len && !assignment(words[0], 1)) {
-        // key value key value ...
+        // key value key value ..., each word expanded as an assignment
+        // value is: no splitting, no globbing
         Slice<Str> f = {};
         for (iz k = 0; k < words.len; k++) {
-            Word one = {};
-            one.text = words[k];
-            Slice<Str> g = expandwords(sh, a, &one, 0);
-            for (iz j = 0; j < g.len; j++) f = push(a, f, g[j]);
+            f = push(a, f, expandstring(sh, a, words[k], XC_ASSIGN));
         }
         for (iz k = 0; k < f.len; k += 2) {
             Str key = f[k];

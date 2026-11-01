@@ -1857,6 +1857,12 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
                 for (iz i = 0; i < more.len; i++) compargs = push(a, compargs, (u8)2);
             } else {
                 more = expandwords(sh, a, &one2, 0);
+                if (more.len==1 && b && !decl && arrayrefword(sh, *a, w->text)) {
+                    // compargs 3: an unquoted name[sub] word, which
+                    // assoc_expand_once takes whole
+                    while (compargs.len < argv.len) compargs = push(a, compargs, (u8)0);
+                    compargs = push(a, compargs, (u8)3);
+                }
             }
             for (iz i = 0; i < more.len; i++) argv = push(a, argv, more[i]);
         }
@@ -1985,10 +1991,16 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             sh->bout = &b;
             Slice<u8> savedcomp = sh->compargs;
             sh->compargs = compargs;
-            Str savedname = sh->bltname;
-            sh->bltname = name;
+            Str  savedname  = sh->bltname;
+            Str *savedargs  = sh->bltargs;
+            iz   savednargs = sh->nbltargs;
+            sh->bltname  = name;
+            sh->bltargs  = argv.data;
+            sh->nbltargs = argv.len;
             sh->status = bi->fn(sh, argv.data, argv.len, scratch);
-            sh->bltname = savedname;
+            sh->bltname  = savedname;
+            sh->bltargs  = savedargs;
+            sh->nbltargs = savednargs;
             sh->compargs = savedcomp;
             sh->bout = saved;
             if ((b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed) {
