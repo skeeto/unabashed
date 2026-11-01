@@ -73,16 +73,30 @@ enum : i32 {
     RX_MAXNEST = 500,     // group nesting, for the stack
 };
 
-// Anchors, by what the characters on either side must be
+// Anchors are glibc's constraints on the characters either side of a
+// position, which accumulate along a run of epsilon moves
 enum : i32 {
-    RA_BEGBUF,       // ^ and \`
-    RA_ENDBUF,       // $ and \'
-    RA_WORDFIRST,    // \<
-    RA_WORDLAST,     // \>
-    RA_INWORD,       // \B, between two word characters
-    RA_INNOTWORD,    // \B, between two others
-    RA_WORDDELIM,    // \b: parsed into WORDFIRST or WORDLAST
-    RA_NOTWORDDELIM, // \B: INWORD or INNOTWORD
+    RC_PREVWORD    = 1<<0,
+    RC_PREVNOTWORD = 1<<1,
+    RC_NEXTWORD    = 1<<2,
+    RC_NEXTNOTWORD = 1<<3,
+    RC_PREVNEWLINE = 1<<4,
+    RC_NEXTNEWLINE = 1<<5,
+    RC_PREVBEGBUF  = 1<<6,
+    RC_NEXTENDBUF  = 1<<7,
+};
+
+enum : i32 {
+    RA_LINEFIRST    = RC_PREVNEWLINE,               // ^
+    RA_LINELAST     = RC_NEXTNEWLINE,               // $
+    RA_BUFFIRST     = RC_PREVBEGBUF,                // \`
+    RA_BUFLAST      = RC_NEXTENDBUF,                // \'
+    RA_WORDFIRST    = RC_PREVNOTWORD|RC_NEXTWORD,   // \<
+    RA_WORDLAST     = RC_PREVWORD|RC_NEXTNOTWORD,   // \>
+    RA_INWORD       = RC_PREVWORD|RC_NEXTWORD,      // \B, in a word
+    RA_INNOTWORD    = RC_PREVNOTWORD|RC_NEXTNOTWORD, // \B, outside words
+    RA_WORDDELIM    = 1<<8,  // \b: parsed into WORDFIRST or WORDLAST
+    RA_NOTWORDDELIM = 1<<9,  // \B: INWORD or INNOTWORD
 };
 
 // Parse tree nodes; the first ten are also automaton nodes
@@ -120,9 +134,11 @@ struct Rt {
     b32    opt;    // a group inside an optional repetition
 };
 
-// An automaton node: consuming nodes go on to next; anchors, group
-// marks and back-references (when empty) too; forks to e1 or e2, the
-// lower-numbered first (e2 is -1 when both are the same node).
+// An automaton node. A consuming node goes on to next, an epsilon node
+// to e1 or e2 (glibc's edests, the lower-numbered first, e2 -1 when
+// there is one), a back-reference to next when it consumes and to e1
+// when it matches empty. cons holds glibc's constraints: an anchor's
+// own, and those a copy made after anchors carries (dup).
 struct RxNode {
     RxSet *set;
     i32    type;
@@ -130,7 +146,10 @@ struct RxNode {
     i32    next;
     i32    e1;
     i32    e2;
+    i32    cons;
+    i32    org;   // the node a copy was made from
     b32    opt;
+    b32    dup;
 };
 
 struct Regex {
@@ -139,14 +158,16 @@ struct Regex {
     i32    *predbeg;
     i32    *consume;   // the consuming nodes
     i32    *map;       // group i reports group map[i] (merged groups)
+    u32    *init;      // epsilon closure of the start, ignoring constraints
     i32     nnodes;
     i32     nconsume;
     i32     start;
-    i32     end;
     i32     nsub;
     i32     flags;
     b32     backrefs;
     b32     plural;    // any fork
+    b32     initcons;  // any constrained node in init
+    b32     copies;    // a group with back-references has several closes
 };
 
 struct RxComp {
@@ -225,8 +246,8 @@ static RxTok rxpeek(RxParse *p)
         case '>':  t.type = TK_ANCHOR; t.c = RA_WORDLAST;     break;
         case 'b':  t.type = TK_ANCHOR; t.c = RA_WORDDELIM;    break;
         case 'B':  t.type = TK_ANCHOR; t.c = RA_NOTWORDDELIM; break;
-        case '`':  t.type = TK_ANCHOR; t.c = RA_BEGBUF;       break;
-        case '\'': t.type = TK_ANCHOR; t.c = RA_ENDBUF;       break;
+        case '`':  t.type = TK_ANCHOR; t.c = RA_BUFFIRST;     break;
+        case '\'': t.type = TK_ANCHOR; t.c = RA_BUFLAST;      break;
         case 'w':  t.type = TK_WORD;     break;
         case 'W':  t.type = TK_NOTWORD;  break;
         case 's':  t.type = TK_SPACE;    break;
@@ -243,8 +264,8 @@ static RxTok rxpeek(RxParse *p)
     case ')': t.type = TK_CLOSE;    break;
     case '[': t.type = TK_BRACKET;  break;
     case '.': t.type = TK_PERIOD;   break;
-    case '^': t.type = TK_ANCHOR; t.c = RA_BEGBUF; break;
-    case '$': t.type = TK_ANCHOR; t.c = RA_ENDBUF; break;
+    case '^': t.type = TK_ANCHOR; t.c = RA_LINEFIRST; break;
+    case '$': t.type = TK_ANCHOR; t.c = RA_LINELAST;  break;
     }
     return t;
 }
@@ -293,6 +314,7 @@ static Rt *rtdup(RxParse *p, Rt *t)
     for (iz i = 0; i < nodes.len; i++) {
         Rt *c = alloc<Rt>(p->a);
         *c = *nodes[i];
+        c->opt = 0;  // as glibc's duplicate_tree
         nodes[i]->copy = c;
     }
     for (iz i = 0; i < nodes.len; i++) {
@@ -843,6 +865,210 @@ static b32 rxeps(i32 type)
     return type>=RT_ANCHOR && type<=RT_STAR;
 }
 
+// The epsilon moves out of a node: an epsilon node's edests, or a
+// back-reference's move when it matches empty. Returns how many.
+static i32 rxedests(RxNode *x, i32 *d)
+{
+    if (!rxeps(x->type) && x->type!=RT_BACKREF) return 0;
+    d[0] = x->e1;
+    d[1] = x->e2;
+    return x->e2<0 ? 1 : 2;
+}
+
+struct RxBuild {
+    Slice<RxNode> nodes;
+    Arena        *a;
+    i32           err;
+};
+
+// glibc's duplicate_node: a copy of node org under constraints cons
+static i32 rxdupnode(RxBuild *b, i32 org, i32 cons)
+{
+    if (b->nodes.len >= RX_MAXTREE) {
+        b->err = RXE_ESPACE;
+        return org;
+    }
+    RxNode n = b->nodes.data[org];
+    n.cons |= cons;
+    n.dup   = 1;
+    n.org   = org;
+    n.next  = n.e1 = n.e2 = -1;
+    b->nodes = push(b->a, b->nodes, n);
+    return (i32)b->nodes.len - 1;
+}
+
+// glibc's search_duplicated_node: among the copies made last
+static i32 rxfinddup(RxBuild *b, i32 org, i32 cons)
+{
+    for (i32 i = (i32)b->nodes.len-1; i>0 && b->nodes.data[i].dup; i--) {
+        RxNode *n = b->nodes.data + i;
+        if (n->org==org && n->cons==cons) return i;
+    }
+    return -1;
+}
+
+static void rxaddedest(RxNode *x, i32 d)
+{
+    if (x->e1 < 0) {
+        x->e1 = d;
+    } else if (d != x->e1) {
+        x->e2 = x->e1<d ? d : x->e1;
+        x->e1 = x->e1<d ? x->e1 : d;
+    }
+}
+
+struct RxDupTodo {
+    i32 org;
+    i32 clone;
+    i32 cons;
+};
+
+// glibc's duplicate_node_closure: copy the epsilon closure after an
+// anchor so that its nodes carry the anchor's constraints, in glibc's
+// order, so that copies are numbered alike. Its recursion into a fork's
+// first way is a stack of the second ways left to copy.
+static void rxdupclosure(RxBuild *b, i32 root, i32 cons)
+{
+    Slice<RxDupTodo> todo = {};
+    i32 org   = root;
+    i32 clone = root;
+    for (;;) {
+        RxNode *on = b->nodes.data + org;
+        b32     second = 0;
+        if (on->type == RT_BACKREF) {
+            i32 od = on->next;
+            i32 cd = rxdupnode(b, od, cons);
+            b->nodes.data[clone].next = b->nodes.data[org].next;
+            b->nodes.data[clone].e1   = cd;
+            b->nodes.data[clone].e2   = -1;
+            org   = od;
+            clone = cd;
+        } else if (!rxeps(on->type)) {
+            b->nodes.data[clone].next = on->next;
+            if (!todo.len) break;
+            RxDupTodo t = todo.data[--todo.len];
+            org    = t.org;
+            clone  = t.clone;
+            cons   = t.cons;
+            second = 1;
+        } else if (on->e2 < 0) {
+            i32 od = on->e1;
+            b->nodes.data[clone].e1 = b->nodes.data[clone].e2 = -1;
+            if (org==root && clone!=org) {
+                // a loop back to the anchor: tie it to the anchor's copy
+                b->nodes.data[clone].e1 = od;
+                if (!todo.len) break;
+                RxDupTodo t = todo.data[--todo.len];
+                org    = t.org;
+                clone  = t.clone;
+                cons   = t.cons;
+                second = 1;
+            } else {
+                cons |= on->cons;
+                i32 cd = rxdupnode(b, od, cons);
+                b->nodes.data[clone].e1 = cd;
+                org   = od;
+                clone = cd;
+            }
+        } else {
+            i32 od = on->e1;
+            b->nodes.data[clone].e1 = b->nodes.data[clone].e2 = -1;
+            i32 cd = rxfinddup(b, od, cons);
+            if (cd < 0) {
+                cd = rxdupnode(b, od, cons);
+                rxaddedest(b->nodes.data+clone, cd);
+                RxDupTodo t = {org, clone, cons};
+                todo  = push(b->a, todo, t);
+                org   = od;
+                clone = cd;
+            } else {
+                rxaddedest(b->nodes.data+clone, cd);
+                second = 1;
+            }
+        }
+        if (b->err) return;
+        if (second) {
+            i32 od = b->nodes.data[org].e2;
+            i32 cd = rxdupnode(b, od, cons);
+            rxaddedest(b->nodes.data+clone, cd);
+            org   = od;
+            clone = cd;
+        }
+        if (b->err) return;
+    }
+}
+
+// glibc's calc_eclosure, for its side effect: anchors get their copies
+// in the order glibc makes them, the first time its depth-first walk
+// reaches each. The walk's bookkeeping of unfinished closures decides
+// which nodes it enters again, so it is kept.
+static void rxeclosures(RxBuild *b)
+{
+    struct Frame {
+        i32 node;
+        i32 k;
+        b32 root;
+        b32 incomplete;
+    };
+    Slice<u8> status = {};  // 0 to do, 2 in progress, 1 done
+    for (iz i = 0; i < b->nodes.len; i++) status = push(b->a, status, (u8)0);
+    Slice<Frame> stack = {};
+    for (i32 i = 0; i < b->nodes.len; i++) {
+        if (status.data[i]) continue;
+        Frame f = {i, 0, 1, 0};
+        stack = push(b->a, stack, f);
+        for (b32 enter = 1; stack.len;) {
+            Frame *t = stack.data + stack.len - 1;
+            if (enter) {
+                enter = 0;
+                status.data[t->node] = 2;
+                RxNode *x = b->nodes.data + t->node;
+                if (x->cons && x->e1>=0 && !b->nodes.data[x->e1].dup) {
+                    rxdupclosure(b, t->node, x->cons);
+                    if (b->err) return;
+                    while (status.len < b->nodes.len) status = push(b->a, status, (u8)0);
+                    t = stack.data + stack.len - 1;
+                }
+            }
+            RxNode *x = b->nodes.data + t->node;
+            if (rxeps(x->type) && t->k<2 && (t->k ? x->e2 : x->e1)>=0) {
+                i32 d = t->k++ ? x->e2 : x->e1;
+                if (status.data[d] == 2) {
+                    t->incomplete = 1;
+                } else if (!status.data[d]) {
+                    Frame g = {d, 0, 0, 0};
+                    stack = push(b->a, stack, g);
+                    enter = 1;
+                }
+                continue;
+            }
+            status.data[t->node] = t->incomplete && !t->root ? 0 : 1;
+            b32 undone = !status.data[t->node];
+            stack.len--;
+            if (stack.len && undone) stack.data[stack.len-1].incomplete = 1;
+        }
+    }
+}
+
+// All nodes reachable from x by epsilon moves, constraints ignored:
+// glibc's static closures, without back-references
+static void rxstatic(Regex *re, i32 x, u32 *set, i32 *stack)
+{
+    i32 top = 0;
+    set[x>>5] |= 1u << (x&31);
+    stack[top++] = x;
+    while (top) {
+        RxNode *n = re->nodes + stack[--top];
+        if (!rxeps(n->type)) continue;
+        i32 d[2] = {n->e1, n->e2};
+        for (i32 k = 0; k < 2; k++) {
+            if (d[k]<0 || set[d[k]>>5]>>(d[k]&31) & 1) continue;
+            set[d[k]>>5] |= 1u << (d[k]&31);
+            stack[top++] = d[k];
+        }
+    }
+}
+
 // Compile pat. The result lives in a.
 static RxComp rxcompile(Str pat, i32 flags, Arena *a)
 {
@@ -947,46 +1173,72 @@ static RxComp rxcompile(Str pat, i32 flags, Arena *a)
         if (n->left)  stack = push(a, stack, n->left);
     }
 
+    RxBuild b = {};
+    b.a = a;
+    b.nodes.data = alloc<RxNode>(a, count);
+    b.nodes.len  = b.nodes.cap = count;
+    for (iz i = 0; i < nodes.len; i++) {
+        Rt *n = nodes[i];
+        if (n->type == RT_CONCAT) continue;
+        RxNode *x = b.nodes.data + n->idx;
+        x->type = n->type;
+        x->arg  = n->arg;
+        x->set  = n->set;
+        x->opt  = n->opt;
+        x->org  = n->idx;
+        x->next = x->e1 = x->e2 = -1;
+        switch (n->type) {
+        case RT_ALT:
+        case RT_STAR: {
+            i32 l = n->left  ? n->left->first->idx  : n->next->idx;
+            i32 r = n->right ? n->right->first->idx : n->next->idx;
+            x->e1 = l<r ? l : r;
+            x->e2 = l==r ? -1 : l<r ? r : l;
+        } break;
+        case RT_ANCHOR:
+            x->cons = n->arg;
+            x->e1   = n->next->idx;
+            break;
+        case RT_OPEN:
+        case RT_CLOSE:
+            x->e1 = n->next->idx;
+            break;
+        case RT_BACKREF:
+            x->next = x->e1 = n->next->idx;
+            break;
+        case RT_END:
+            break;
+        default:
+            x->next = n->next->idx;
+        }
+    }
+    rxeclosures(&b);
+    if (b.err) {
+        r.err = b.err;
+        return r;
+    }
+
     Regex *re = alloc<Regex>(a);
-    re->nodes    = alloc<RxNode>(a, count);
+    count        = (i32)b.nodes.len;
+    re->nodes    = b.nodes.data;
     re->nnodes   = count;
     re->start    = root->first->idx;
-    re->end      = end->idx;
     re->nsub     = p.nsub;
     re->map      = map;
     re->flags    = flags;
     re->backrefs = p.nbackref > 0;
     re->predbeg  = alloc<i32>(a, count+1);
     re->consume  = alloc<i32>(a, count);
-    for (iz i = 0; i < nodes.len; i++) {
-        Rt *n = nodes[i];
-        if (n->type == RT_CONCAT) continue;
-        RxNode *x = re->nodes + n->idx;
-        x->type = n->type;
-        x->arg  = n->arg;
-        x->set  = n->set;
-        x->opt  = n->opt;
-        x->next = n->next ? n->next->idx : -1;
-        x->e1   = x->e2 = -1;
-        if (n->type==RT_ALT || n->type==RT_STAR) {
-            i32 l = n->left  ? n->left->first->idx  : n->next->idx;
-            i32 r = n->right ? n->right->first->idx : n->next->idx;
-            x->e1 = l<r ? l : r;
-            x->e2 = l==r ? -1 : l<r ? r : l;
-            re->plural = 1;
-        }
+    for (i32 i = 0; i < count; i++) {
+        RxNode *x = re->nodes + i;
+        re->plural |= x->type==RT_ALT || x->type==RT_STAR;
+        if (x->type <= RT_BACKREF) re->consume[re->nconsume++] = i;
     }
 
     // Epsilon predecessors, for sifting
     for (i32 i = 0; i < count; i++) {
-        RxNode *x = re->nodes + i;
-        if (x->type==RT_ALT || x->type==RT_STAR) {
-            re->predbeg[x->e1]++;
-            if (x->e2 >= 0) re->predbeg[x->e2]++;
-        } else if (rxeps(x->type) || x->type==RT_BACKREF) {
-            re->predbeg[x->next]++;
-        }
-        if (x->type <= RT_BACKREF) re->consume[re->nconsume++] = i;
+        i32 d[2];
+        for (i32 k = rxedests(re->nodes+i, d)-1; k >= 0; k--) re->predbeg[d[k]]++;
     }
     i32 sum = 0;
     for (i32 i = 0; i <= count; i++) {
@@ -997,17 +1249,27 @@ static RxComp rxcompile(Str pat, i32 flags, Arena *a)
     re->preds = alloc<i32>(a, sum);
     i32 *fill = alloc<i32>(a, count);
     for (i32 i = 0; i < count; i++) {
+        i32 d[2];
+        for (i32 k = rxedests(re->nodes+i, d)-1; k >= 0; k--) {
+            re->preds[re->predbeg[d[k]] + fill[d[k]]++] = i;
+        }
+    }
+
+    for (i32 i = 0; i < count; i++) {
         RxNode *x = re->nodes + i;
-        i32 d[2] = {-1, -1};
-        if (x->type==RT_ALT || x->type==RT_STAR) {
-            d[0] = x->e1;
-            d[1] = x->e2;
-        } else if (rxeps(x->type) || x->type==RT_BACKREF) {
-            d[0] = x->next;
+        if (x->type != RT_BACKREF) continue;
+        i32 closes = 0;
+        for (i32 j = 0; j < count; j++) {
+            closes += re->nodes[j].type==RT_CLOSE && re->nodes[j].arg==x->arg;
         }
-        for (i32 k = 0; k < 2; k++) {
-            if (d[k] >= 0) re->preds[re->predbeg[d[k]] + fill[d[k]]++] = i;
-        }
+        re->copies |= closes > 1;
+    }
+
+    // The initial state's nodes, for the search's skipping (see rxstall)
+    re->init = alloc<u32>(a, (count+31)/32);
+    rxstatic(re, re->start, re->init, alloc<i32>(a, count));
+    for (i32 i = 0; i < count; i++) {
+        if (re->init[i>>5]>>(i&31) & 1) re->initcons |= re->nodes[i].cons != 0;
     }
     r.re = re;
     return r;
@@ -1036,20 +1298,36 @@ static b32 rxwordbyte(u8 b)
     return (b>='0' && b<='9') || (b>='a' && b<='z') || (b>='A' && b<='Z') || b=='_';
 }
 
-static b32 rxanchor(RxCtx *c, i32 kind, iz p)
+// Whether the constraints k on what precedes p hold, in a match from
+// st: the start of the subject or a character, but a newline counts as
+// one only when the match itself consumed it, as glibc's automaton
+// sees it without REG_NEWLINE.
+static b32 rxprev(RxCtx *c, i32 k, iz p, iz st)
 {
-    iz  n  = c->s.len;
-    b32 pw = p>0 && rxwordbyte(c->s[p-1]);
-    b32 nw = p<n && rxwordbyte(c->s[p]);
-    switch (kind) {
-    case RA_BEGBUF:    return p == 0;
-    case RA_ENDBUF:    return p == n;
-    case RA_WORDFIRST: return !pw && nw;
-    case RA_WORDLAST:  return pw && !nw;
-    case RA_INWORD:    return pw && nw;
-    case RA_INNOTWORD: return !pw && !nw;
-    }
-    return 0;
+    Str s  = c->s;
+    b32 pw = p>0 && rxwordbyte(s[p-1]);
+    if ((k & RC_PREVWORD)    && !pw) return 0;
+    if ((k & RC_PREVNOTWORD) &&  pw) return 0;
+    if ((k & RC_PREVNEWLINE) && p>0 && !(p>st && s[p-1]=='\n')) return 0;
+    if ((k & RC_PREVBEGBUF)  && p>0) return 0;
+    return 1;
+}
+
+// Whether the constraints k on what follows p hold: the end of the
+// subject or a character. A newline counts as one only when the
+// automaton consumes it (consume), not when the match ends before it
+// or when sifting checks the node that consumes it.
+static b32 rxnext(RxCtx *c, i32 k, iz p, b32 consume)
+{
+    Str s  = c->s;
+    iz  n  = s.len;
+    b32 w  = p<n && rxwordbyte(s[p]);
+    b32 nl = p==n || (consume && s[p]=='\n');
+    if ((k & RC_NEXTWORD)    && !w)  return 0;
+    if ((k & RC_NEXTNOTWORD) &&  w)  return 0;
+    if ((k & RC_NEXTNEWLINE) && !nl) return 0;
+    if ((k & RC_NEXTENDBUF)  && p<n) return 0;
+    return 1;
 }
 
 // How many bytes a consuming node takes at p, or 0 if it cannot.
@@ -1091,12 +1369,26 @@ static void rxset(u32 *set, i32 i)
     set[i>>5] |= 1u << (i&31);
 }
 
+static b32 rxboundary(RxCtx *c, iz p)
+{
+    return !c->ulen || p==c->s.len || c->ulen[p];
+}
+
 struct RxList {
     i32 *dense;
     i32 *sparse;
-    iz  *start;
+    iz  *start;  // the earliest start reaching each node
     i32  len;
 };
+
+static RxList newlist(Arena *a, i32 nn)
+{
+    RxList l = {};
+    l.dense  = alloc<i32>(a, nn);
+    l.sparse = alloc<i32>(a, nn);
+    l.start  = alloc<iz>(a, nn);
+    return l;
+}
 
 static b32 rxhas(RxList *l, i32 x)
 {
@@ -1104,8 +1396,10 @@ static b32 rxhas(RxList *l, i32 x)
     return i<l->len && l->dense[i]==x;
 }
 
-// Add node x at p, reached from start st, with its epsilon closure. A
-// node already there from a later start takes this one.
+// Add node x at p, reached from start st, with its epsilon closure, as
+// glibc's states hold them: without nodes whose constraints on the
+// preceding character fail. A node there from a later start takes this
+// one.
 static void rxthread(RxCtx *c, RxList *l, i32 x, iz st, iz p, i32 *stack)
 {
     RxNode *nodes = c->re->nodes;
@@ -1113,73 +1407,66 @@ static void rxthread(RxCtx *c, RxList *l, i32 x, iz st, iz p, i32 *stack)
     stack[top++] = x;
     while (top) {
         x = stack[--top];
-        if (rxhas(l, x)) {
-            if (l->start[x] <= st) continue;
-        } else {
+        RxNode *n = nodes + x;
+        if (n->cons && !rxprev(c, n->cons, p, st)) continue;
+        if (!rxhas(l, x)) {
             l->sparse[x] = l->len;
             l->dense[l->len++] = x;
+        } else if (l->start[x] <= st) {
+            continue;
         }
         l->start[x] = st;
-        RxNode *n = nodes + x;
-        switch (n->type) {
-        case RT_ANCHOR:
-            if (rxanchor(c, n->arg, p)) stack[top++] = n->next;
-            break;
-        case RT_OPEN:
-        case RT_CLOSE:
-            stack[top++] = n->next;
-            break;
-        case RT_ALT:
-        case RT_STAR:
+        if (rxeps(n->type)) {
             stack[top++] = n->e1;
             if (n->e2 >= 0) stack[top++] = n->e2;
-            break;
         }
     }
 }
 
-static b32 rxboundary(RxCtx *c, iz p)
+// Take the characters at p from the threads of list l into the lists
+// ahead, those from starts after limit left out.
+static void rxstep(RxCtx *c, RxList *lists, i32 nl, iz p, iz limit, iz last, i32 *stack)
 {
-    return !c->ulen || p==c->s.len || c->ulen[p];
+    Regex  *re = c->re;
+    RxList *l  = lists + p%nl;
+    for (i32 i = 0; i < l->len; i++) {
+        i32     x  = l->dense[i];
+        iz      st = l->start[x];
+        RxNode *nd = re->nodes + x;
+        if (nd->type>RT_ANY || st>limit) continue;
+        iz k = rxaccept(c, nd, p);
+        if (!k || p+k>last || !rxnext(c, nd->cons, p, 1)) continue;
+        rxthread(c, lists+(p+k)%nl, nd->next, st, p+k, stack);
+    }
 }
 
-// The leftmost-longest match, without back-references.
-static RxMatch rxpike(RxCtx *c, Arena scratch)
+// The leftmost-longest match starting at from or later, without
+// back-references.
+static RxMatch rxpike(RxCtx *c, iz from, Arena scratch)
 {
     Regex  *re = c->re;
     i32     nn = re->nnodes;
     i32     nl = c->ulen ? 8 : 2;  // positions ahead: up to 6 bytes
     RxList  lists[8] = {};
-    for (i32 i = 0; i < nl; i++) {
-        lists[i].dense  = alloc<i32>(&scratch, nn);
-        lists[i].sparse = alloc<i32>(&scratch, nn);
-        lists[i].start  = alloc<iz>(&scratch, nn);
-    }
+    for (i32 i = 0; i < nl; i++) lists[i] = newlist(&scratch, nn);
     i32    *stack = alloc<i32>(&scratch, 2*nn+2);
     RxMatch best  = {-1, -1};
     iz      n     = c->s.len;
-    for (iz p = 0; p <= n; p++) {
+    for (iz p = from; p <= n; p++) {
         RxList *l = lists + p%nl;
         if (best.so<0 && rxboundary(c, p)) {
             rxthread(c, l, re->start, p, p, stack);
         }
-        if (rxhas(l, re->end)) {
-            iz st = l->start[re->end];
+        for (i32 i = 0; i < l->len; i++) {
+            RxNode *nd = re->nodes + l->dense[i];
+            iz      st = l->start[l->dense[i]];
+            if (nd->type!=RT_END || !rxnext(c, nd->cons, p, 0)) continue;
             if (best.so<0 || st<=best.so) {
                 best.so = st;
                 best.eo = p;
             }
         }
-        if (p < n) {
-            for (i32 i = 0; i < l->len; i++) {
-                i32     x  = l->dense[i];
-                iz      st = l->start[x];
-                RxNode *nd = re->nodes + x;
-                if (nd->type>RT_ANY || (best.so>=0 && st>best.so)) continue;
-                iz k = rxaccept(c, nd, p);
-                if (k) rxthread(c, lists+(p+k)%nl, nd->next, st, p+k, stack);
-            }
-        }
+        rxstep(c, lists, nl, p, best.so<0 ? n : best.so, n, stack);
         l->len = 0;
         if (best.so >= 0) {
             b32 live = 0;
@@ -1190,32 +1477,111 @@ static RxMatch rxpike(RxCtx *c, Arena scratch)
     return best;
 }
 
+// glibc's last_node for the match [s, e]: the lowest-numbered end node
+// (there are copies, after anchors) in its state at e that may end it.
+// Sifting and the walk must arrive at that one.
+static i32 rxlastnode(RxCtx *c, iz s, iz e, Arena scratch)
+{
+    Regex  *re = c->re;
+    i32     nn = re->nnodes;
+    i32     nl = c->ulen ? 8 : 2;
+    RxList  lists[8] = {};
+    for (i32 i = 0; i < nl; i++) lists[i] = newlist(&scratch, nn);
+    i32    *stack = alloc<i32>(&scratch, 2*nn+2);
+    rxthread(c, lists + s%nl, re->start, s, s, stack);
+    for (iz p = s; p < e; p++) {
+        rxstep(c, lists, nl, p, s, e, stack);
+        lists[p%nl].len = 0;
+    }
+    RxList *l    = lists + e%nl;
+    i32     last = -1;
+    for (i32 i = 0; i < l->len; i++) {
+        i32     x  = l->dense[i];
+        RxNode *nd = re->nodes + x;
+        if (nd->type==RT_END && rxnext(c, nd->cons, e, 0) && (last<0 || x<last)) {
+            last = x;
+        }
+    }
+    return last;
+}
+
+// glibc's search skips ahead while its automaton stays in its initial
+// state, and an empty match at the start does not stop that: the match
+// is then reported as many characters later (a*\B on "ca." reports
+// (2,2) for the empty match at 1). The number of characters it skips
+// after an empty match at p, the only one from p.
+static iz rxstall(RxCtx *c, iz p, Arena scratch)
+{
+    Regex *re = c->re;
+    Str    s  = c->s;
+    i32    nn = re->nnodes;
+    i32    w  = c->words;
+    i32    c0 = p==0 ? 3 : rxwordbyte(s[p-1]) ? 1 : 0;  // the state's context
+    i32   *stack = alloc<i32>(&scratch, nn);
+    u32   *next  = alloc<u32>(&scratch, w);
+    iz     k     = 0;
+    for (; p+k < s.len; k++) {
+        iz q  = p + k;
+        u8 ch = s[q];
+        if (ch >= 0x80) break;
+        i32 c1 = rxwordbyte(ch) ? 1 : ch=='\n' ? 2 : 0;
+        if (re->initcons && c1!=c0) break;
+        for (i32 i = 0; i < w; i++) next[i] = 0;
+        for (i32 x = 0; x < nn; x++) {
+            RxNode *nd = re->nodes + x;
+            if (!rxbit(re->init, x) || nd->type>RT_ANY) continue;
+            if (nd->cons && !rxprev(c, nd->cons, p, p)) continue;
+            if (!rxaccept(c, nd, q) || !rxnext(c, nd->cons, q, 1)) continue;
+            rxstatic(re, nd->next, next, stack);
+        }
+        for (i32 i = 0; i < w; i++) {
+            if (next[i] != re->init[i]) return k;
+        }
+    }
+    return k;
+}
+
+static b32 rxsame(RxCtx *, iz, iz, iz);
+
 // For each position in [s, e], the nodes from which the match can still
-// end at e: glibc's sifted states. A back-reference is taken to match
-// any length, which is enough: the walk checks it.
-static u32 *rxsift(RxCtx *c, iz s, iz e, Arena *a)
+// arrive at the end node last at e: glibc's sifted states. A node that
+// consumes is checked as glibc's check_node_accept does, where a
+// newline does not satisfy a $ before it. A back-reference is taken to
+// match any text found earlier, which is enough: the walk checks it.
+static u32 *rxsift(RxCtx *c, i32 last, iz s, iz e, Arena *a)
 {
     Regex *re   = c->re;
     i32    w    = c->words;
     u32   *v    = alloc<u32>(a, (e-s+1)*w);
     u32   *any  = re->backrefs ? alloc<u32>(a, w) : 0;  // union of later sets
     i32   *work = alloc<i32>(a, re->nnodes);
+    b32    near = e - s <= 1000;  // look for back-references' text
     for (iz p = e; p >= s; p--) {
         u32 *cur = v + (p-s)*w;
         i32  top = 0;
         if (p == e) {
-            rxset(cur, re->end);
-            work[top++] = re->end;
+            rxset(cur, last);
+            work[top++] = last;
         }
-        for (i32 i = 0; i < re->nconsume; i++) {
+        for (i32 i = 0; i<re->nconsume && p<e; i++) {
             i32     x  = re->consume[i];
             RxNode *nd = re->nodes + x;
             b32     ok = 0;
+            if (nd->cons && !rxprev(c, nd->cons, p, s)) continue;
             if (nd->type == RT_BACKREF) {
-                ok = any && rxbit(any, nd->next);
+                ok = rxbit(any, nd->next);
+                for (iz k = 1; ok && near && k <= e-p; k++) {
+                    if (!rxbit(v+(p+k-s)*w, nd->next)) continue;
+                    for (iz q = 0; q+k <= p; q++) {
+                        if (rxsame(c, q, p, k)) goto found;
+                    }
+                }
+                ok = ok && !near;
+                found:;
             } else {
                 iz k = rxaccept(c, nd, p);
-                ok = k && p+k<=e && rxbit(v+(p+k-s)*w, nd->next);
+                ok = k && p+k<=e && rxnext(c, nd->cons, p, 0) &&
+                     rxbit(v+(p+k-s)*w, nd->next);
             }
             if (ok && !rxbit(cur, x)) {
                 rxset(cur, x);
@@ -1228,7 +1594,7 @@ static u32 *rxsift(RxCtx *c, iz s, iz e, Arena *a)
                 i32     q  = re->preds[j];
                 RxNode *nq = re->nodes + q;
                 if (rxbit(cur, q)) continue;
-                if (nq->type==RT_ANCHOR && !rxanchor(c, nq->arg, p)) continue;
+                if (nq->cons && !rxprev(c, nq->cons, p, s)) continue;
                 rxset(cur, q);
                 work[top++] = q;
             }
@@ -1347,11 +1713,6 @@ static i32 rxpop(RxWalk *w)
     return f->node;
 }
 
-static void rxclear(RxWalk *w)
-{
-    for (i32 i = 0; i < w->c->words; i++) w->eps[i] = 0;
-}
-
 // glibc's proceed_next_node: the node after x, or -1.
 static i32 rxproceed(RxWalk *w, i32 x)
 {
@@ -1360,12 +1721,8 @@ static i32 rxproceed(RxWalk *w, i32 x)
     RxNode *n  = re->nodes + x;
     if (rxeps(n->type)) {
         rxset(w->eps, x);
-        i32 d[2] = {n->next, -1};
-        if (n->type==RT_ALT || n->type==RT_STAR) {
-            d[0] = n->e1;
-            d[1] = n->e2;
-        }
-        i32 dest = -1;
+        i32 d[2]  = {n->e1, n->e2};
+        i32 dest  = -1;
         for (i32 k = 0; k < 2; k++) {
             i32 cand = d[k];
             if (cand<0 || !rxviable(w, w->idx, cand)) continue;
@@ -1389,24 +1746,26 @@ static i32 rxproceed(RxWalk *w, i32 x)
             if (r.so==-1 || r.eo==-1) return -1;
             if (k && !rxsame(c, r.so, w->idx, k)) return -1;
         }
+        if (k < 0) return -1;
         if (!k) {
             rxset(w->eps, x);
-            if (rxviable(w, w->idx, n->next)) return n->next;
+            if (rxviable(w, w->idx, n->e1)) return n->e1;
             return -1;
         }
     } else {
         k = rxaccept(c, n, w->idx);
-        if (!k) return -1;
+        if (!k || !rxnext(c, n->cons, w->idx, 0)) return -1;
     }
     iz idx = w->idx + k;
     if (w->fs && (idx>w->e || !rxviable(w, idx, n->next))) return -1;
-    rxclear(w);
+    for (i32 i = 0; i < c->words; i++) w->eps[i] = 0;
     w->idx = idx;
     return n->next;
 }
 
-// glibc's set_regs: fill the registers for the match [s, e].
-static b32 rxwalk(RxCtx *c, u32 *v, iz s, iz e, RxMatch *regs, Arena scratch)
+// glibc's set_regs: fill the registers for the match [s, e], arriving
+// at end node last.
+static b32 rxwalk(RxCtx *c, u32 *v, i32 last, iz s, iz e, RxMatch *regs, Arena scratch)
 {
     Regex *re = c->re;
     i32    ng = re->nsub + 1;
@@ -1430,7 +1789,7 @@ static b32 rxwalk(RxCtx *c, u32 *v, iz s, iz e, RxMatch *regs, Arena scratch)
     while (w.idx <= e) {
         if (!rxspend(c)) return 0;
         rxupdate(re, regs, w.prev, cur, w.idx);
-        if ((w.idx==e && cur==re->end) || (w.fs && rxbit(w.eps, cur))) {
+        if ((w.idx==e && cur==last) || (w.fs && rxbit(w.eps, cur))) {
             i32 next = -1;
             if (w.fs) {
                 for (i32 i = 0; i < ng; i++) {
@@ -1454,73 +1813,107 @@ static b32 rxwalk(RxCtx *c, u32 *v, iz s, iz e, RxMatch *regs, Arena scratch)
 
 struct RxFrame {
     RxFrame *next;
-    RxMatch *regs;  // registers, then the previous registers
+    RxMatch *regs;
+    u8      *usable;    // whether each group's span may be referred to
     u32     *eps;
     iz       idx;
     i32      node;
+    i32      steps;     // epsilon moves since the last character
+    b32      afterref;  // the last character came from a back-reference
 };
 
-// With back-references: the longest end of a match from s, or -1,
-// searching every path, back-references compared against the registers
-// set along it.
-static iz rxlongest(RxCtx *c, iz s, Arena scratch)
+// With back-references: the longest end of a match from s, or -1, and
+// the lowest-numbered end node reaching it. Every path is searched, as
+// glibc's automaton does: a back-reference matches what its group last
+// spanned, with no undoing of empty optional groups, and a fork passed
+// again at the same position goes its other way.
+//
+// When a group has copies (from intervals), glibc only finds spans that
+// a copy closes at a position where no lower-numbered close node of the
+// group is in its state, so (a?){2}\1 never matches. With closes, a
+// first search records the close nodes reached at each position from s
+// (record), and a second one refers only to spans glibc finds.
+static iz rxlongest(RxCtx *c, iz s, i32 *last, u32 *closes, b32 record, Arena scratch)
 {
     Regex   *re    = c->re;
     i32      ng    = re->nsub + 1;
     i32      nw    = c->words;
-    iz       n     = c->s.len;
     iz       best  = -1;
     RxFrame *stack = 0;
     RxFrame *free  = 0;
 
     RxFrame *f = alloc<RxFrame>(&scratch);
-    f->regs = alloc<RxMatch>(&scratch, 2*ng);
-    f->eps  = alloc<u32>(&scratch, nw);
-    for (i32 i = 0; i < 2*ng; i++) f->regs[i].so = f->regs[i].eo = -1;
+    f->regs   = alloc<RxMatch>(&scratch, ng);
+    f->usable = alloc<u8>(&scratch, ng);
+    f->eps    = alloc<u32>(&scratch, nw);
+    for (i32 i = 0; i < ng; i++) f->regs[i].so = f->regs[i].eo = -1;
     f->idx  = s;
     f->node = re->start;
     stack   = f;
 
-    while (stack && best<n) {
+    while (stack) {
         f = stack;
         stack = f->next;
-        RxMatch *regs = f->regs;
-        RxMatch *prev = f->regs + ng;
-        u32     *eps  = f->eps;
-        iz       idx  = f->idx;
-        i32      cur  = f->node;
+        RxMatch *regs  = f->regs;
+        u8      *ok    = f->usable;
+        u32     *eps   = f->eps;
+        iz       idx   = f->idx;
+        i32      cur   = f->node;
+        i32      steps = f->steps;
+        b32      ref   = f->afterref;
         for (;;) {
             if (!rxspend(c)) return best;
-            rxupdate(re, regs, prev, cur, idx);
-            if (cur == re->end) {
-                best = idx>best ? idx : best;
+            RxNode *x = re->nodes + cur;
+            if (x->cons && !rxprev(c, x->cons, idx, ref ? idx : s)) break;
+            if (x->type == RT_OPEN) {
+                regs[x->arg+1].so = idx;
+                regs[x->arg+1].eo = -1;
+            } else if (x->type == RT_CLOSE) {
+                regs[x->arg+1].eo = idx;
+                u32 *at = closes ? closes + (idx-s)*nw : 0;
+                if (at && record) {
+                    rxset(at, cur);
+                } else if (at) {
+                    i32 low = 0;
+                    while (!rxbit(at, low) || re->nodes[low].type!=RT_CLOSE ||
+                           re->nodes[low].arg!=x->arg) low++;
+                    ok[x->arg+1] = low == cur;
+                }
+            }
+            if (x->type == RT_END) {
+                if (rxnext(c, x->cons, idx, 0) && idx>=best) {
+                    *last = idx>best || cur<*last ? cur : *last;
+                    best  = idx;
+                }
                 break;
             }
-            RxNode *x = re->nodes + cur;
             if (rxeps(x->type)) {
-                if (rxbit(eps, cur)) break;  // an empty loop
+                if (++steps > 4*re->nnodes) break;
                 rxset(eps, cur);
-                if (x->type==RT_ANCHOR && !rxanchor(c, x->arg, idx)) break;
-                if (x->type==RT_ALT || x->type==RT_STAR) {
-                    if (x->e2 >= 0) {
-                        RxFrame *g = free;
-                        if (g) {
-                            free = g->next;
-                        } else {
-                            g = alloc<RxFrame>(&scratch);
-                            g->regs = alloc<RxMatch>(&scratch, 2*ng);
-                            g->eps  = alloc<u32>(&scratch, nw);
-                        }
-                        copybytes(g->regs, regs, 2*ng*(iz)sizeof(RxMatch));
-                        copybytes(g->eps, eps, nw*(iz)sizeof(u32));
-                        g->idx  = idx;
-                        g->node = x->e2;
-                        g->next = stack;
-                        stack   = g;
-                    }
+                if (x->e2 < 0) {
                     cur = x->e1;
+                } else if (rxbit(eps, x->e1)) {
+                    cur = x->e2;
                 } else {
-                    cur = x->next;
+                    RxFrame *g = free;
+                    if (g) {
+                        free = g->next;
+                    } else {
+                        g = alloc<RxFrame>(&scratch);
+                        g->regs   = alloc<RxMatch>(&scratch, ng);
+                        g->usable = alloc<u8>(&scratch, ng);
+                        g->eps    = alloc<u32>(&scratch, nw);
+                    }
+                    copybytes(g->regs, regs, ng*(iz)sizeof(RxMatch));
+                    copybytes(g->usable, ok, ng);
+                    copybytes(g->eps, eps, nw*(iz)sizeof(u32));
+                    g->idx      = idx;
+                    g->node     = x->e2;
+                    g->steps    = steps;
+                    g->afterref = ref;
+                    g->next     = stack;
+                    stack       = g;
+                    cur = x->e1;
                 }
                 continue;
             }
@@ -1528,19 +1921,23 @@ static iz rxlongest(RxCtx *c, iz s, Arena scratch)
             if (x->type == RT_BACKREF) {
                 RxMatch r = regs[x->arg+1];
                 if (r.so<0 || r.eo<0) break;
+                if (closes && !record && !ok[x->arg+1]) break;
                 k = r.eo - r.so;
                 if (!k) {
                     if (rxbit(eps, cur)) break;
                     rxset(eps, cur);
-                    cur = x->next;
+                    cur = x->e1;
                     continue;
                 }
-                if (!rxsame(c, r.so, idx, k)) break;
+                if (!rxsame(c, r.so, idx, k) || !rxnext(c, x->cons, idx, 0)) break;
+                ref = 1;
             } else {
                 k = rxaccept(c, x, idx);
-                if (!k) break;
+                if (!k || !rxnext(c, x->cons, idx, 1)) break;
+                ref = 0;
             }
-            idx += k;
+            idx  += k;
+            steps = 0;
             for (i32 i = 0; i < nw; i++) eps[i] = 0;
             cur = x->next;
         }
@@ -1569,38 +1966,67 @@ static i32 rxexec(Regex *re, Str s, RxMatch *m, Arena scratch, i64 budget = -1)
         }
     }
 
-    iz b = -1;
-    iz e = -1;
-    if (!re->backrefs) {
-        RxMatch r = rxpike(&c, scratch);
-        b = r.so;
-        e = r.eo;
-    } else {
-        for (iz p = 0; p <= s.len && b<0; p++) {
-            if (!rxboundary(&c, p)) continue;
-            e = rxlongest(&c, p, scratch);
-            if (c.gaveup) return -1;
-            if (e >= 0) b = p;
+    for (iz from = 0; from <= s.len;) {
+        iz  b    = -1;
+        iz  e    = -1;
+        i32 last = -1;
+        if (!re->backrefs) {
+            RxMatch r = rxpike(&c, from, scratch);
+            b = r.so;
+            e = r.eo;
+        } else {
+            for (iz p = from; p <= s.len && b<0; p++) {
+                if (!rxboundary(&c, p)) continue;
+                u32  *closes = 0;
+                Arena t      = scratch;
+                if (re->copies) {
+                    closes = alloc<u32>(&t, (s.len-p+1)*c.words);
+                    rxlongest(&c, p, &last, closes, 1, t);
+                    last = -1;
+                }
+                e = rxlongest(&c, p, &last, closes, 0, t);
+                if (c.gaveup) return -1;
+                if (e >= 0) b = p;
+            }
         }
-    }
-    if (b < 0) return 0;
+        if (b < 0) return 0;
+        iz shift = e==b ? rxstall(&c, b, scratch) : 0;
 
-    for (i32 i = 0; i <= re->nsub; i++) m[i].so = m[i].eo = -1;
-    m[0].so = b;
-    m[0].eo = e;
-    if (re->nsub) {
-        u32 *v = 0;
-        if (re->plural || re->backrefs) v = rxsift(&c, b, e, &scratch);
-        b32 ok = rxwalk(&c, v, b, e, m, scratch);
-        if (c.gaveup) return -1;
-        if (!ok) return 0;
-        for (i32 i = 1; i <= re->nsub; i++) {
-            // glibc offsets an unclosed group's -1 by the match start
-            if (m[i].so!=-1 && m[i].eo==-1) m[i].eo = b - 1;
+        for (i32 i = 0; i <= re->nsub; i++) m[i].so = m[i].eo = -1;
+        m[0].so = b;
+        m[0].eo = e;
+        if (re->nsub) {
+            // Like glibc, give up a start whose match sifting rejects,
+            // and look for a later one
+            Arena t = scratch;
+            if (!re->backrefs) last = rxlastnode(&c, b, e, t);
+            u32 *v = 0;
+            if (re->plural || re->backrefs) {
+                v = rxsift(&c, last, b, e, &t);
+                if (!rxbit(v, re->start)) {
+                    from = b + shift + 1;
+                    while (from<=s.len && !rxboundary(&c, from)) from++;
+                    continue;
+                }
+            }
+            b32 ok = rxwalk(&c, v, last, b, e, m, t);
+            if (c.gaveup) return -1;
+            if (!ok) return 0;
+            for (i32 i = 1; i <= re->nsub; i++) {
+                // glibc offsets an unclosed group's -1 by the match start
+                if (m[i].so!=-1 && m[i].eo==-1) m[i].eo = b - 1;
+            }
+            for (i32 i = 0; i < re->nsub; i++) {
+                if (re->map[i] != i) m[i+1] = m[re->map[i]+1];
+            }
         }
-        for (i32 i = 0; i < re->nsub; i++) {
-            if (re->map[i] != i) m[i+1] = m[re->map[i]+1];
+        for (i32 i = 0; i <= re->nsub; i++) {
+            if (m[i].so != -1) {
+                m[i].so += shift;
+                m[i].eo += shift;
+            }
         }
+        return 1;
     }
-    return 1;
+    return 0;
 }
