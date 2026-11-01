@@ -2596,6 +2596,7 @@ static b32 debugheader(Shell *sh, Str head, i32 line)
     return skip;
 }
 
+[[gnu::noinline]]
 static void execcase(Shell *sh, Node *n, Arena scratch)
 {
     sh->line = n->line;
