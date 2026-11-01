@@ -1,0 +1,104 @@
+#!/bin/sh
+# t/win32/run: the Windows integration tests. Curated scripts only, on
+# the real file system and processes, each confined by tools/sandbox
+# to a directory of its own under WORKDIR (keep it out of the repo).
+#
+# usage: t/win32/run [-s SHELL] [-x] [-k] WORKDIR [TEST.sh...]
+#   -s SHELL  the shell under test (default: unabashed.exe beside this
+#             repository's Makefile)
+#   -x        run each test once more with UNABASHED_XPIO=1, which takes
+#             the XP code paths (no CancelSynchronousIo) on any Windows
+#   -k        keep going after a failure (the default)
+#   -u        update: write each test's output as its expected output
+#
+# Runs under w64devkit's sh (busybox) or the shell under test. Each
+# NAME.sh runs as `SHELL test.sh` in WORKDIR/NAME with its output and
+# errors merged, and must match NAME.out, whose last line is "status N".
+# Directives in a test's comments:
+#   # conrun: ACTION...   run it with tools/conrun and these actions,
+#                         its standard input a hidden console; words
+#                         are split as by the shell, quotes included
+#   # shell: ARGS         run `SHELL ARGS` instead of `SHELL test.sh`
+# U holds the shell's path, for tests that run it as a program.
+set -u
+here=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$here/../.." && pwd)
+shell=$root/unabashed.exe
+xp=0
+update=0
+while [ $# -gt 0 ]; do
+    case $1 in
+    -s) shell=$2; shift 2 ;;
+    -x) xp=1; shift ;;
+    -k) shift ;;
+    -u) update=1; shift ;;
+    *)  break ;;
+    esac
+done
+[ $# -ge 1 ] || { echo "usage: t/win32/run [-s SHELL] [-x] [-u] WORKDIR [TEST.sh...]" >&2; exit 2; }
+work=$1
+shift
+[ $# -gt 0 ] || set -- "$here"/[0-9]*.sh
+mkdir -p "$work/bin" || exit 2
+work=$(cd "$work" && pwd)
+case $work in
+"$root"|"$root"/*) echo "t/win32/run: WORKDIR must be outside the repository" >&2; exit 2 ;;
+esac
+
+bin=$work/bin
+for tool in sandbox conrun; do
+    if [ ! -e "$bin/$tool.exe" ] || [ "$root/tools/$tool.cpp" -nt "$bin/$tool.exe" ]; then
+        lib=
+        [ $tool = sandbox ] && lib=-ladvapi32
+        cc -nostartfiles -o "$bin/$tool.exe" "$root/tools/$tool.cpp" $lib || exit 2
+    fi
+done
+cp "$shell" "$bin/unabashed.exe" || exit 2
+U=$bin/unabashed.exe
+export U
+
+pass=0
+fail=0
+for t; do
+    name=$(basename "$t" .sh)
+    modes=normal
+    [ $xp = 1 ] && modes="normal xpio"
+    actions=$(sed -n 's/^# conrun: //p' "$t")
+    args=$(sed -n 's/^# shell: //p' "$t")
+    for mode in $modes; do
+        dir=$work/$name
+        rm -rf "$dir"
+        mkdir -p "$dir"
+        cp "$t" "$dir/test.sh"
+        if [ $mode = xpio ]; then
+            UNABASHED_XPIO=1
+            export UNABASHED_XPIO
+        else
+            unset UNABASHED_XPIO
+        fi
+        eval "set -- $actions"
+        [ -n "$actions" ] && set -- "$bin/conrun.exe" -t 60 "$@" --
+        if [ -n "$args" ]; then
+            set -- "$@" "$U" $args
+        else
+            set -- "$@" "$U" test.sh
+        fi
+        # XP has no integrity levels, which the sandbox reports
+        "$bin/sandbox.exe" -t 120 "$dir" -- "$@" >"$dir/raw" 2>&1 </dev/null
+        echo "status $?" >>"$dir/raw"
+        grep -v '^sandbox: warning: no integrity levels' "$dir/raw" >"$dir/got"
+        if [ $update = 1 ]; then
+            cp "$dir/got" "$here/$name.out"
+        fi
+        if cmp -s "$dir/got" "$here/$name.out"; then
+            pass=$((pass+1))
+        else
+            fail=$((fail+1))
+            echo "FAIL $name ($mode)"
+            diff "$here/$name.out" "$dir/got" | head -20
+        fi
+    done
+done
+unset UNABASHED_XPIO
+echo "$pass passed, $fail failed"
+[ $fail = 0 ]

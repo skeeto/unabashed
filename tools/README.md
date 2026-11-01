@@ -127,3 +127,48 @@ the job object and the restricted token alone, which does not stop
 writes to the user's own files. DIR must be on NTFS (Vista and later).
 Low integrity also blocks some unrelated things, such as ICMP, so the
 Windows `ping` fails inside the sandbox.
+
+## conrun (Windows)
+
+`conrun.cpp` runs a program on a console of its own, so that tests can
+type at it and send it Ctrl-C without a visible window. It is CRT-free
+and XP-capable:
+
+    cc -nostartfiles -o conrun.exe tools/conrun.cpp
+    conrun [-t SECS] [ACTION...] -- PROGRAM [ARGS...]
+
+It starts itself again with `CREATE_NO_WINDOW` (a new console without
+a window), opens that console's input for PROGRAM's standard input,
+passes its own standard output and error through, and performs the
+actions in order: `sleep:MS`, `await:PATH` (until the program creates
+PATH, the reliable way to synchronize), `type:TEXT` (key events through
+`WriteConsoleInputW`; `\n` Enter, `\z` Ctrl-Z, `\uXXXX` a UTF-16 unit,
+`\` a backslash), `ctrl-c` and `ctrl-break` (`GenerateConsoleCtrlEvent`
+to the whole console). The status is PROGRAM's, 124 if it outlives the
+actions by SECS (default 30) and is killed, 125 on an error.
+
+An event from `GenerateConsoleCtrlEvent` is not a key typed at the
+console: it does not end a console read in progress, which a typed
+Ctrl-C does. Tests send Ctrl-C while the shell runs commands, and the
+keyboard case is checked with winctl (notes/m3b.md).
+
+## Windows integration tests (t/win32)
+
+    t/win32/run [-s SHELL] [-x] [-u] WORKDIR [TEST.sh...]
+
+Curated scripts only, never generated ones, on the real file system and
+processes, each run by the shell under test (default `unabashed.exe`)
+inside `sandbox` in `WORKDIR/NAME`, which must be outside the
+repository (use the scratchpad). `sandbox.exe` and `conrun.exe` are
+built into `WORKDIR/bin` from `tools/`. Output and errors are merged,
+`status N` appended, and compared with `NAME.out` (`-u` rewrites the
+expected outputs; check them by hand). `-x` runs every test a second
+time with `UNABASHED_XPIO=1`, which makes the Win32 layer take its XP
+code paths (no `CancelSynchronousIo`). A test's comments may hold
+`# conrun: ACTION...` (run it under conrun, its input a hidden
+console; words split as by the shell) and `# shell: ARGS` (run
+`SHELL ARGS` instead of `SHELL test.sh`). `$U` is the shell's own path,
+for tests that run it as a program. The suite runs under w64devkit's
+`sh` on Windows 11 and on the XP laptop (`~/src/scratch`); there the
+sandbox warns that XP has no integrity levels, which the runner
+filters out.

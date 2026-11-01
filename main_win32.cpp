@@ -911,10 +911,11 @@ static b32 issue(Os *os, Wobj *w, uz h, i32 op, Io *io, uz iw = 0)
 // Try for a while to end a helper's blocking call, where the system
 // can (Vista and later). A cancel can come before the call starts, so
 // it is repeated while the operation lasts, for at most about 20 ms;
-// otherwise the operation simply runs on, abandoned.
+// otherwise the operation simply runs on, abandoned. Never a console
+// read: the console would throw away the next line typed.
 static void cancelhelper(Os *os, Helper *hp)
 {
-    if (!os->cancelsync) return;
+    if (!os->cancelsync || hp->obj->kind==K_CONIN) return;
     for (i32 i = 0; i<20 && __atomic_load_n(&hp->live, __ATOMIC_SEQ_CST); i++) {
         if (__atomic_load_n(&hp->inio, __ATOMIC_SEQ_CST) && os->cancelsync(hp->thread)) {
             return;
@@ -1153,7 +1154,7 @@ static b32 waitidle(Os *os, Wobj *w)
 }
 
 // Read a pipe on the main thread, blocking, where Ctrl-C can cancel it
-// (onctrl): -1 then, or on error.
+// (onctrl, CancelSynchronousIo): -1 then, or on error.
 static iz mainread(Os *os, uz h, u8 *buf, iz len)
 {
     __atomic_add_fetch(&os->mainio, 1, __ATOMIC_SEQ_CST);  // odd
@@ -1170,7 +1171,11 @@ static iz mainread(Os *os, uz h, u8 *buf, iz len)
 }
 
 // Read a console line into the read-ahead on the main thread: its
-// length, 0 at end of file, -1 for Ctrl-C or an error.
+// length, 0 at end of file, -1 for Ctrl-C or an error. Ctrl-C typed at
+// the console ends the read. A Ctrl-C event sent another way does not
+// (GenerateConsoleCtrlEvent): the shell takes it once a line arrives.
+// CancelSynchronousIo would end the read, but the console then throws
+// away the next line typed.
 static iz conread(Os *os, Wobj *w, uz h)
 {
     reserveahead(w, 3*CONUNITS);
@@ -1233,7 +1238,7 @@ static uz lend(Os *os, uz h, Wobj **out, b32 *viaip)
     if (!w || (w->kind!=K_PIPE && w->kind!=K_CONIN)) return h;
     drainwake(os);
     *out = w;
-    if (!w->ip && w->helper && w->helper->op!=H_WRITE && !w->active && os->cancelsync) {
+    if (!w->ip && w->helper && w->helper->op==H_READ && !w->active && os->cancelsync) {
         // An abandoned read: end it if possible, so that the child can
         // have the object itself
         Helper *hp = w->helper;

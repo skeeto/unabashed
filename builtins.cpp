@@ -1681,11 +1681,12 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     // A pipe the platform can look into is read a line at a time:
     // exactly through the delimiter, so nothing past it is consumed
     b32 peekable = in && in->kind==F_OS && (in->flags & OF_READ);
-    u8 *ahead = peekable ? alloc<u8>(&scratch, 1<<12) : 0;
+    u8 *ahead = 0;
     iz  alen = 0, aoff = 0;
     for (; !done;) {
         if (nchars>=0 && count>=nchars) break;
         if (aoff==alen && peekable) {
+            ahead = ahead ? ahead : allocbytes(&scratch, 1<<12);
             iz n = os_peek(sh->os, in->h, ahead, 1<<12);
             peekable = n >= 0;
             iz want = n;

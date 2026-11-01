@@ -8,7 +8,8 @@
 // order and waits for PROGRAM to exit:
 //   sleep:MS     wait MS milliseconds
 //   await:PATH   wait until PATH exists (the program created it)
-//   type:TEXT    type TEXT into the console; \n is Enter, \\ a backslash
+//   type:TEXT    type TEXT into the console: \n is Enter, \z Ctrl-Z,
+//                \uXXXX a UTF-16 unit, \\ a backslash
 //   ctrl-c       send Ctrl-C to every process on the console
 //   ctrl-break   send Ctrl-Break likewise
 // The exit status is PROGRAM's, or 124 if it is still running SECS
@@ -223,6 +224,19 @@ static void type(uz conin, c16 *text)
             c  = '\r';
             vk = 0x0d;  // VK_RETURN
             text++;
+        } else if (c=='\\' && text[1]=='z') {
+            c = 0x1a;
+            text++;
+        } else if (c=='\\' && text[1]=='u') {
+            c = 0;
+            for (i32 k = 2; k < 6; k++) {
+                c16 d = text[k];
+                i32 v = d>='0'&&d<='9' ? d-'0' : d>='a'&&d<='f' ? d-'a'+10 :
+                        d>='A'&&d<='F' ? d-'A'+10 : -1;
+                if (v < 0) fail("bad \\u escape");
+                c = (c16)(c<<4 | v);
+            }
+            text += 5;
         } else if (c=='\\' && text[1]=='\\') {
             text++;
         }
