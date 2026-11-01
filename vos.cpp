@@ -1303,8 +1303,12 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
             if (p->len-p->pos == VPIPECAP) return 0;
             if (perform) io->n = vpipewrite(v, p, io->buf, io->len);
         } else if (perform) {
-            io->n   = io->len;
-            io->err = os_write(os, io->h, io->buf, io->len) ? 0 : E_BADF;
+            // a failure as taskwrite reports it with no other tasks
+            io->n = io->len;
+            if (!os_write(os, io->h, io->buf, io->len)) {
+                Stat st = os_fstat(os, io->h);
+                io->err = st.type==FT_PIPE || st.type==FT_FIFO ? E_PIPE : E_IO;
+            }
         }
         return 1;
     case IO_PROC:

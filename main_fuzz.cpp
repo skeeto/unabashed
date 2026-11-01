@@ -281,6 +281,12 @@ struct ChaosRun {
     VWriter writers[256];
 };
 
+static b32 writerless(VWriter *a, VWriter *b)
+{
+    if (a->hash[0] != b->hash[0]) return a->hash[0] < b->hash[0];
+    return a->hash[1] < b->hash[1];
+}
+
 static void chaoscapture(Os *os, ChaosRun *r, i32 status)
 {
     Vos *v = &os->vos;
@@ -288,12 +294,14 @@ static void chaoscapture(Os *os, ChaosRun *r, i32 status)
     r->racy     = v->racy;
     r->deadlock = find(v->err, "deadlock")>=0;
     r->nwriters = v->nwriters;
-    // Sorted by key, so that the order writers first wrote in is not
-    // compared
+    // Sorted by what they wrote, compared as a multiset: neither the
+    // order writers first wrote in nor their keys are compared, since a
+    // key includes a pid, which depends on the order of spawns made
+    // by concurrent tasks
     for (i32 i = 0; i < v->nwriters; i++) {
         VWriter w = v->writers[i];
         i32 j = i;
-        for (; j>0 && r->writers[j-1].key>w.key; j--) {
+        for (; j>0 && writerless(&w, &r->writers[j-1]); j--) {
             r->writers[j] = r->writers[j-1];
         }
         r->writers[j] = w;
@@ -307,7 +315,7 @@ static b32 chaossame(ChaosRun *a, ChaosRun *b)
     for (i32 i = 0; i < a->nwriters; i++) {
         VWriter *x = a->writers + i;
         VWriter *y = b->writers + i;
-        if (x->key!=y->key || x->hash[0]!=y->hash[0] || x->hash[1]!=y->hash[1]) {
+        if (x->hash[0]!=y->hash[0] || x->hash[1]!=y->hash[1]) {
             return 0;
         }
     }
