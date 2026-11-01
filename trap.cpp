@@ -691,9 +691,9 @@ static i32 killlist(Shell *sh, Arena scratch, Str *args, iz nargs)
         if (a.len && digit(a[0])) {
             i64 n = 0;
             b32 ok = 1;
-            for (iz k = 0; k < a.len; k++) {
-                ok &= digit(a[k]);
-                if (n < 100000) n = n*10 + (a[k] - '0');
+            for (iz k = 0; ok && k<a.len; k++) {
+                ok = digit(a[k]);
+                if (ok && n<100000) n = n*10 + (a[k] - '0');
             }
             if (ok && n>128) n -= 128;
             if (!ok || n>=NSIGNAL) {
