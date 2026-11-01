@@ -184,6 +184,9 @@ W32(b32,    ReadFile(uz, u8 *, i32, i32 *, uz));
 W32(b32,    SetEndOfFile(uz));
 W32(b32,    SetFilePointerEx(uz, i64, i64 *, i32));
 W32(b32,    SetHandleInformation(uz, i32, i32));
+W32(uz,     OpenProcess(i32, b32, i32));
+W32(b32,    TerminateProcess(uz, u32));
+W32(b32,    SetConsoleCtrlHandler(void *, b32));
 W32(byte *, VirtualAlloc(byte *, iz, i32, i32));
 W32(b32,    VirtualFree(byte *, iz, i32));
 W32(b32,    SetEvent(uz));
@@ -950,6 +953,11 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
     si.output = std[1];
     si.error  = std[2];
     ProcessInfo pi = {};
+    // trap '' INT in the spawning subshell: the child inherits the
+    // ignoring of Ctrl-C, which is set only around its creation so
+    // that the shell itself is unaffected
+    b32 noint = s->sigign>>1 & 1;
+    if (noint) SetConsoleCtrlHandler(0, 1);
     b32 ok = CreateProcessW(app.data, line.data, 0, 0, 1,
                             CREATE_UNICODE_ENVIRONMENT, wenv.data,
                             cwd.data, &si, &pi);
@@ -961,6 +969,7 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
                             0, &si, &pi);
         code = ok ? 0 : GetLastError();
     }
+    if (noint) SetConsoleCtrlHandler(0, 0);
     for (i32 i = 0; i < 3; i++) {
         if (std[i]) CloseHandle(std[i]);
     }
@@ -970,6 +979,7 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
     }
     CloseHandle(pi.thread);
     r.proc = pi.process;
+    r.pid  = (i64)pi.pid;
     return r;
 }
 
@@ -977,14 +987,47 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
 static i32 exitstatus(u32 code)
 {
     switch (code) {
-    case 0xc0000005u: return 128 + 11;  // access violation: SIGSEGV
-    case 0xc00000fdu: return 128 + 11;  // stack overflow
-    case 0xc000001du: return 128 + 4;   // illegal instruction: SIGILL
-    case 0xc0000094u: return 128 + 8;   // divide by zero: SIGFPE
-    case 0xc000013au: return 128 + 2;   // Ctrl-C: SIGINT
-    case 0xc0000409u: return 128 + 6;   // fast fail: SIGABRT
+    case 0xc0000005u: return WSIGNALED | (128 + 11);  // access violation: SIGSEGV
+    case 0xc00000fdu: return WSIGNALED | (128 + 11);  // stack overflow
+    case 0xc000001du: return WSIGNALED | (128 + 4);   // illegal instruction: SIGILL
+    case 0xc0000094u: return WSIGNALED | (128 + 8);   // divide by zero: SIGFPE
+    case 0xc000013au: return WSIGNALED | (128 + 2);   // Ctrl-C: SIGINT
+    case 0xc0000409u: return WSIGNALED | (128 + 6);   // fast fail: SIGABRT
     }
     return (i32)(code & 0xff);
+}
+
+// Signals (M3a's minimum; the signal channel to our own shells is
+// M5b): a signal ends another process outright, with exit code 128+N.
+// Nothing arrives through os_sigpending yet.
+static i32 os_kill(Os *, i64 pid, i32 sig)
+{
+    if (pid<=0 || pid>(i64)0x7fffffff) return E_SRCH;
+    if (sig<0 || sig>=NSIGNAL) return E_INVAL;
+    i32 access = sig ? 0x0001 : 0x100000;  // PROCESS_TERMINATE, SYNCHRONIZE
+    uz  h = OpenProcess(access, 0, (i32)pid);
+    if (!h) {
+        i32 code = GetLastError();
+        return code==5 ? E_PERM : E_SRCH;  // ERROR_ACCESS_DENIED
+    }
+    b32 ok = 1;
+    switch (sig) {
+    case 0: case 17: case 18: case 19: case 20: case 21: case 22: case 23: case 28:
+        break;  // existence check, or ignored by default
+    default:
+        ok = TerminateProcess(h, (u32)(128 + sig));
+    }
+    CloseHandle(h);
+    return ok ? 0 : E_PERM;
+}
+
+static u64 os_sigpending(Os *)
+{
+    return 0;
+}
+
+static void os_sigmode(Os *, i32, i32)
+{
 }
 
 static i32 os_waitproc(Os *, Handle proc)
@@ -1315,5 +1358,5 @@ void mainCRTStartup()
         info.std[i] = h;
     }
     info.stack = stackreserve();
-    ExitProcess(sh_main(&os, &info));
+    ExitProcess(sh_main(&os, &info) & 255);
 }

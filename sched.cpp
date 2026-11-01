@@ -31,6 +31,9 @@ struct Task {
     i32     status;    // the task's result, once done
     b32     failed;    // woken by deadlock recovery
     b32     cancel;    // asked to stop at its next wait (pumps)
+    b32     intr;      // its wait was failed by a signal (taskinterrupt)
+    b32     introk;    // in a read or wait builtin: any signal with an
+                       // action interrupts its wait
     Task   *joiner;    // a task waiting for this one to finish
     Task   *sib;       // its creator's list of procsubs to join later
     i64     pid;       // a procsub's BASHPID, for $! and wait
@@ -64,6 +67,17 @@ enum : iz {
 
 struct Vproc;
 struct Pump;
+struct Shell;
+
+// A virtual process that signals can be sent to: the shell, each
+// synchronous subshell level, each fiber vproc (see trap.cpp).
+struct Sigproc {
+    Sigproc *next;     // the Sched's list
+    i64      pid;      // its BASHPID
+    u64      pending;  // bit n-1 for signal n
+    Task    *task;     // the task running it, or null if not started
+    Shell   *sh;       // the Shell that runs it
+};
 
 struct Sched {
     Os     *os;
@@ -82,6 +96,8 @@ struct Sched {
     iz      ntasks;      // live tasks, including the main task
     iz      npending;    // tasks blocked on an Io
     i32     budget;      // safe points until the next yield check
+    Sigproc *sigprocs;   // every live virtual process
+    Sigproc *top;        // the outermost shell's, for the process's signals
     u64     chaos;       // random state for chaos mode, 0 if off
     Handle  err;         // where to report a deadlock
 };
@@ -158,6 +174,7 @@ static void wake(Sched *s, Task *t)
 }
 
 static void deadlock(Sched *s);
+static void taskinterrupt(Sched *s, Task *t, b32 all);
 
 // Run other tasks until the current one is runnable again. The caller
 // has already queued it (yield), blocked it, or finished it.
@@ -180,6 +197,16 @@ static void schedule(Sched *s)
             if (io) {
                 s->npending--;
                 wake(s, (Task *)io->ctx);
+                continue;
+            }
+            u64 m = os_sigpending(s->os);
+            if (m) {
+                // A signal for the process: its outermost level takes
+                // it, interrupting a wait builtin or ending a read
+                if (s->top) {
+                    s->top->pending |= m;
+                    if (s->top->task) taskinterrupt(s, s->top->task, 0);
+                }
                 continue;
             }
         }
@@ -223,6 +250,39 @@ static void deadlock(Sched *s)
     if (!woke) {
         os_oom();  // nothing left to try
     }
+}
+
+// Fail the wait of a blocked task, as a signal interrupts a system
+// call: its pipe or OS wait returns an error with intr set. With all
+// set, for a signal that will end the task, any pipe or OS wait; else
+// only the waits of a read or wait builtin (introk).
+static void taskinterrupt(Sched *s, Task *t, b32 all)
+{
+    if (t->state != TS_BLOCKED || (!all && !t->introk)) return;
+    switch (t->wait) {
+    case W_PIPE:
+        for (Task **p = t->waitlist; *p; p = &(*p)->next) {
+            if (*p == t) {
+                *p = t->next;
+                break;
+            }
+        }
+        t->waitlist = 0;
+        t->failed   = 1;
+        break;
+    case W_IO:
+        if (!os_cancel(s->os, &t->io)) return;
+        s->npending--;
+        t->io.err  = E_INTR;
+        t->io.done = 1;
+        break;
+    case W_JOIN:
+        break;
+    default:
+        return;
+    }
+    t->intr = 1;
+    wake(s, t);
 }
 
 static void block(Sched *s, i32 why)
@@ -305,6 +365,8 @@ static Task *taskspawn(Sched *s, void (*fn)(Task *), void *arg, iz stack)
     t->status = 0;
     t->failed = 0;
     t->cancel = 0;
+    t->intr   = 0;
+    t->introk = 0;
     t->joiner = 0;
     t->sib    = 0;
     t->pid    = 0;
@@ -327,6 +389,26 @@ static i32 taskjoin(Sched *s, Task *t)
     t->next  = *pool;
     *pool    = t;
     return status;
+}
+
+// As taskjoin, but in the wait builtin: false, with the task left to
+// join later, if a signal interrupts the wait.
+static b32 taskjoinintr(Sched *s, Task *t, i32 *status)
+{
+    Task *self = s->cur;
+    self->introk = 1;
+    while (t->state != TS_DONE) {
+        t->joiner = self;
+        block(s, W_JOIN);
+        if (self->intr) {
+            t->joiner    = 0;
+            self->introk = 0;
+            return 0;
+        }
+    }
+    self->introk = 0;
+    *status = taskjoin(s, t);
+    return 1;
 }
 
 // Ask a task to stop at its next wait on a Pipe, waking it if blocked

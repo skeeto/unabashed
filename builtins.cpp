@@ -25,6 +25,7 @@ static Str usage(Str name)
         {"getopts",  "getopts optstring name [arg ...]"},
         {"hash",     "hash [-lr] [-p pathname] [-dt] [name ...]"},
         {"trap",     "trap [-Plp] [[action] signal_spec ...]"},
+        {"kill",     "kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]"},
         {"return",   "return [n]"},
         {"exit",     "exit [n]"},
         {"source",   "source [-p path] filename [arguments]"},
@@ -210,7 +211,8 @@ static i32 b_test(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
-    i32 status = sh->status;
+    // In a trap action, the status from before the action (POSIX)
+    i32 status = sh->intrap ? sh->trapstatus : sh->status;
     iz  i = skipdashdash(args, nargs, 1);
     if (i < nargs) {
         i64 v;
@@ -417,6 +419,10 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     Str srcname = sh->srcname;
     sh->srcname = file;
     i32 status = runsource(sh, src, file, scratch);
+    if (sh->traps) {
+        runreturntrap(sh, scratch);
+        status = sh->status;
+    }
     sh->srcname = srcname;
     if (sh->flow == FLOW_RETURN) {
         // Functions have taken their own returns: this one is the file's
@@ -1434,8 +1440,15 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     i64 count = 0;
     for (;;) {
         if (nchars>=0 && count>=nchars) break;
+        sh->intrread = sh->sched->cur->introk = 1;
         i32 c = readbyte(sh, fd);
-        if (c == -2) {
+        sh->intrread = sh->sched->cur->introk = 0;
+        if (c==-2 && sh->intrsig) {
+            // A signal with a trap ends the read
+            i32 sig = sh->intrsig;
+            sh->intrsig = 0;
+            return 128 + sig;
+        } else if (c == -2) {
             Str msg = concat(&scratch, fmti64(&scratch, fd), ": read error: Bad file descriptor");
             builtinerror(sh, scratch, "read", msg);
             return 1;
@@ -1867,6 +1880,12 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     sh->status  = status;
     sh->exiting = 1;
+    sh->execed  = !failed;  // replaced: no EXIT trap
+    if (sh->childsig) {
+        // the program died by a signal: so does the replaced shell
+        sh->killsig  = sh->childsig;
+        sh->childsig = 0;
+    }
     escape(sh, ESC_EXIT);
 }
 
@@ -2187,13 +2206,6 @@ static i32 b_umask(Shell *sh, Str *args, iz nargs, Arena scratch)
     return 0;
 }
 
-static i32 b_trap(Shell *sh, Str *args, iz nargs, Arena scratch)
-{
-    // Traps arrive in M3a; accept the common forms
-    (void)sh; (void)args; (void)nargs; (void)scratch;
-    return 0;
-}
-
 static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     b32 reset = 0, del = 0, show = 0, list = 0;
@@ -2478,6 +2490,9 @@ static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 // The table
 
+static i32 b_trap(Shell *, Str *, iz, Arena);  // trap.cpp
+static i32 b_kill(Shell *, Str *, iz, Arena);
+
 static Builtin builtins[] = {
     {".",        b_source,   B_SPECIAL},
     {":",        b_colon,    B_SPECIAL},
@@ -2499,6 +2514,7 @@ static Builtin builtins[] = {
     {"false",    b_false,    0},
     {"getopts",  b_getopts,  0},
     {"hash",     b_hash,     0},
+    {"kill",     b_kill,     0},
     {"let",      b_let,      0},
     {"local",    b_local,    B_DECL},
     {"printf",   b_printf,   0},

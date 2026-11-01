@@ -88,7 +88,8 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.env     = ctx->env;
     info.nenv    = ctx->nenv;
     info.cwd     = ctx->cwd;
-    info.pid     = 100;
+    info.pid     = os->vos.procs[os->vos.cur].pid;
+    info.sigign  = os->vos.procs[os->vos.cur].sigign;
     info.ppid    = 2;
     for (i32 i = 0; i < 3; i++) info.std[i] = ctx->fd[i];
     info.reserve = (iz)1<<18;

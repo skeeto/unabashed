@@ -63,7 +63,7 @@ struct VFile {      // open file description
 enum { VOS_HANDLES = 1024 };
 
 enum : i32 { VP_FREE, VP_RUN, VP_BLOCK, VP_EXIT };
-enum : i32 { VW_NONE, VW_READ, VW_WRITE, VW_PROC, VW_IO, VW_YIELD };
+enum : i32 { VW_NONE, VW_READ, VW_WRITE, VW_PROC, VW_IO, VW_YIELD, VW_SLEEP };
 
 // A process: slot 0 is the outermost shell, the rest are spawned.
 struct VProc {
@@ -72,6 +72,11 @@ struct VProc {
     i32     prog;
     b32     shell;    // a shell: a broken pipe is an error, not a kill
     b32     failed;   // resumed to fail its blocked call (deadlock)
+    b32     intr;     // resumed by a signal (shells): fail a read or os_wait
+    i64     pid;
+    u64     sigpend;  // shells: signals not yet taken by os_sigpending
+    u64     sigign;   // fakes: signals they ignore (Spawn.sigign)
+    i64     until;    // VW_SLEEP: virtual time to wake at
     Fiber  *fiber;    // where to resume it
     Fiber  *own;      // its own fiber, freed once reaped
     iz      stack;
@@ -96,6 +101,7 @@ struct Vos {
     i64     nextino;
     i32     user;        // owner of new nodes
     i64     clock;       // virtual realtime, ns; advances on each query
+    i64     nextpid;     // for the next spawned process
     Fake   *fakes;
     iz      nfakes;
     // Captured standard streams of the outermost shell
@@ -330,17 +336,35 @@ static b32 vready(Vos *v, VProc *p)
     if (p->state != VP_BLOCK) return 0;
     VPipe *q = p->wpipe;
     switch (p->wait) {
-    case VW_READ:  return q->len>q->pos || !q->writers;
+    case VW_READ:  return q->len>q->pos || !q->writers || p->intr;
     case VW_WRITE: return q->len-q->pos<VPIPECAP || !q->readers;
     case VW_PROC:  return v->procs[p->wproc].state == VP_EXIT;
     case VW_YIELD: return 1;
+    case VW_SLEEP: return v->clock >= p->until;
     case VW_IO:
+        if (p->intr) return 1;
         for (Io *io = p->ios; io; io = io->next) {
             if (vioready(v, io)) return 1;
         }
         return 0;
     }
     return 0;
+}
+
+// When nothing else can run, virtual time jumps to the earliest
+// sleeper's deadline. False if there is none.
+static b32 vadvance(Vos *v)
+{
+    i64 when = -1;
+    for (i32 i = 0; i < v->nprocs; i++) {
+        VProc *p = v->procs + i;
+        if (p->state==VP_BLOCK && p->wait==VW_SLEEP && (when<0 || p->until<when)) {
+            when = p->until;
+        }
+    }
+    if (when < 0) return 0;
+    v->clock = v->clock>when ? v->clock : when;
+    return 1;
 }
 
 // The next process to run after the current one, which may be itself
@@ -355,13 +379,14 @@ static i32 vpick(Vos *v, b32 selfok)
         for (i32 i = 0; i < n; i++) {
             if ((i!=self || selfok) && vready(v, v->procs+i)) ready[nready++] = i;
         }
-        return nready ? ready[vrand(v) % (u32)nready] : -1;
+        if (nready) return ready[vrand(v) % (u32)nready];
+        return vadvance(v) ? vpick(v, selfok) : -1;
     }
     for (i32 i = 1; i <= n; i++) {
         i32 j = (self + i) % n;
         if ((j!=self || selfok) && vready(v, v->procs+j)) return j;
     }
-    return -1;
+    return vadvance(v) ? vpick(v, selfok) : -1;
 }
 
 static void vrun(Os *os, Vos *v, i32 next)
@@ -451,6 +476,7 @@ static void vcloseall(Os *os, VProc *p)
 static void vkill(Os *os, Vos *v, VProc *p, i32 status)
 {
     if (p->state==VP_EXIT || p->state==VP_FREE) return;
+    if (p == v->procs+v->cur) vexit(os, v, status);
     vcloseall(os, p);
     p->status = status;
     p->state  = VP_EXIT;
@@ -707,7 +733,9 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
         if (v->chaos && vrand(v)%4==0) vyield(os, v);
         while (len > 0) {
             if (!p->readers) {
-                if (!me->shell) vexit(os, v, 128+13);  // SIGPIPE
+                if (!me->shell && !(me->sigign>>12 & 1)) {
+                    vexit(os, v, WSIGNALED|(128+13));  // SIGPIPE
+                }
                 return 0;
             }
             if (p->len-p->pos == VPIPECAP) {
@@ -758,6 +786,10 @@ static iz os_read(Os *os, Handle h, u8 *buf, iz len)
         VProc *me = v->procs + v->cur;
         if (v->chaos && vrand(v)%4==0) vyield(os, v);
         while (p->len==p->pos && p->writers) {
+            if (me->intr) {
+                me->intr = 0;  // a signal arrived: the shell takes it
+                return -1;
+            }
             me->wait  = VW_READ;
             me->wpipe = p;
             if (!vschedule(os, v)) {
@@ -878,6 +910,50 @@ static i64 os_now(Os *os)
     return v->clock += 1000;
 }
 
+// Signals. A shell receives every signal as a pending bit, and its core
+// decides what it does: run a trap, ignore it, or die. A fake does what
+// a program with default dispositions does, except for the signals its
+// spawner made it ignore. Stopping is not modelled: stop signals, like
+// the ones ignored by default, do nothing to a fake.
+static i32 os_kill(Os *os, i64 pid, i32 sig)
+{
+    Vos *v = osvos(os);
+    if (sig<0 || sig>=NSIGNAL) return E_INVAL;
+    VProc *p = 0;
+    for (i32 i = 0; i < v->nprocs; i++) {
+        VProc *q = v->procs + i;
+        if (q->pid==pid && (q->state==VP_RUN || q->state==VP_BLOCK)) p = q;
+    }
+    if (!p || pid<=0) return E_SRCH;
+    if (!sig) return 0;
+    if (p->shell) {
+        p->sigpend |= (u64)1 << (sig-1);
+        p->intr = p != v->procs+v->cur;  // fail its blocked read or wait
+        return 0;
+    }
+    switch (sig) {
+    case 17: case 18: case 19: case 20: case 21: case 22: case 23: case 28:
+        return 0;  // CHLD CONT STOP TSTP TTIN TTOU URG WINCH
+    }
+    if (sig!=9 && (p->sigign>>(sig-1) & 1)) return 0;
+    vkill(os, v, p, WSIGNALED|(128+sig));
+    return 0;
+}
+
+static u64 os_sigpending(Os *os)
+{
+    Vos   *v  = osvos(os);
+    VProc *me = v->procs + v->cur;
+    u64    r  = me->sigpend;
+    me->sigpend = 0;
+    return r;
+}
+
+static void os_sigmode(Os *, i32, i32)
+{
+    // shells take every signal through os_sigpending
+}
+
 enum { VIMAGE = 1024 };  // size of a fake program's file, mostly NULs
 static u8 const vmagic[12] = {0x7f, 'E', 'L', 'F', 2, 1, 1, 0, 'f', 'a', 'k', 'e'};
 
@@ -969,6 +1045,10 @@ static Spawned os_spawn(Os *os, Arena, Spawn *s)
     p->prog   = prog;
     p->shell  = v->fakes[prog].name == "bash";
     p->failed = 0;
+    p->intr   = 0;
+    p->pid    = v->nextpid++;
+    p->sigpend = 0;
+    p->sigign = s->sigign;
     p->wait   = VW_NONE;
     p->ios    = 0;
     p->ctx    = ctx;
@@ -976,6 +1056,7 @@ static Spawned os_spawn(Os *os, Arena, Spawn *s)
     p->own    = p->fiber = os_fiber(os, &v->a, p->stack, vprocentry, p);
     v->live++;
     r.proc = (Handle)id;
+    r.pid  = p->pid;
     return r;
 }
 
@@ -1067,6 +1148,10 @@ static Io *os_wait(Os *os, i64 deadline)
     VProc *me = v->procs + v->cur;
     b32 yielded = 0;
     for (;;) {
+        if (me->intr) {
+            me->intr = 0;  // a signal arrived: the shell takes it
+            return 0;
+        }
         for (Io **p = &me->ios; *p; p = &(*p)->next) {
             Io *io = *p;
             if (vio(os, v, io, 1)) {
@@ -1145,8 +1230,10 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes)
     v->fakes   = fakes;
     v->nfakes  = nfakes;
     v->nprocs  = 1;  // the outermost shell
+    v->nextpid = 10000;
     v->procs[0].state = VP_RUN;
     v->procs[0].shell = 1;
+    v->procs[0].pid   = 2;  // as the harnesses' OsInfo
 
     v->root = vnew(v, 0, "", FT_DIR, 0755);
     vmkdirs(v, "home/oracle")->uid = 1000;
@@ -1357,10 +1444,19 @@ static OsIds os_ids(Os *)
     return r;
 }
 
-// Virtual time passes instantly.
+// Virtual time passes instantly once nothing else can run, so that a
+// sleeping program can be killed meanwhile.
 static void os_sleep(Os *os, i64 ns)
 {
-    osvos(os)->clock += ns;
+    Vos   *v  = osvos(os);
+    VProc *me = v->procs + v->cur;
+    me->until = v->clock + ns;
+    while (v->clock < me->until) {
+        me->wait = VW_SLEEP;
+        if (!vschedule(os, v)) {
+            v->clock = me->until;
+        }
+    }
 }
 
 static Str os_uname(Os *, Arena *, i32 field)

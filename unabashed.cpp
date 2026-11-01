@@ -164,6 +164,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "exec.cpp"
 #include "proc.cpp"
 #include "builtins.cpp"
+#include "trap.cpp"
 
 
 // Startup
@@ -430,6 +431,10 @@ static i32 sh_main(Os *os, OsInfo *info)
 
     Escape top = {};
     sh->esc = &top;
+    Sigproc *sig = alloc<Sigproc>(&perm);
+    sigenter(sh, sig, sh->pid, sh->sched->cur);
+    sh->sched->top = sig;
+    sh->hardign = info->sigign;
     byte stackmark = 0;
     sh->stacktop = &stackmark;
     sh->stackmax = info->stack ? info->stack - ((iz)1<<16) : (iz)1<<19;
@@ -579,6 +584,16 @@ static i32 sh_main(Os *os, OsInfo *info)
     } else if (top.why==ESC_FATAL && sh->cflag) {
         sh->status = 127;  // as bash's -c reports a fatal error
     }
+    if (!sh->execed && !sh->killsig) {
+        // Signals still pending, then the EXIT trap
+        if (!__builtin_setjmp(top.jmp)) {
+            sh->exiting = 0;
+            checksigs(sh, scratch);
+            sh->exiting = 1;
+            if (sh->errexited) unwindtemp(sh, 0);
+            runexittrap(sh, scratch);
+        }
+    }
     if (sh->psubs) {
         // Procsubs still running end on EOF once the shell's ends of
         // their pipes close, as at a process exit. The platform's own
@@ -596,5 +611,6 @@ static i32 sh_main(Os *os, OsInfo *info)
         joinpsubs(sh);
     }
     freesched(sh->sched);
+    if (sh->killsig) return WSIGNALED | (128 + sh->killsig);
     return sh->status & 255;
 }

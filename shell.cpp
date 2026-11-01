@@ -257,6 +257,7 @@ struct Undo {        // a redirection to reverse
     i32   fd;
     File *old;       // the descriptor's previous file, or null
     b32   psub;      // a procsub's /dev/fd/N: in the store, freed on unwind
+    b32   keep;      // exec's in a subshell: lasts until the subshell ends
 };
 
 
@@ -327,7 +328,16 @@ struct HashCmd {
 // pipeline stage spawned directly (runpipeline).
 struct Spawnto {
     Handle proc;   // BADHANDLE if it did not start
+    i64    pid;
     b32    retry;  // not a program after all: run the stage as a vproc
+};
+
+enum : i32 {  // the trap table: EXIT, signals 1-64, then the others
+    TRAP_EXIT   = 0,
+    TRAP_DEBUG  = NSIGNAL,
+    TRAP_ERR,
+    TRAP_RETURN,
+    NTRAP
 };
 
 struct Shell {
@@ -414,6 +424,27 @@ struct Shell {
     Task    *psubs;        // procsubs started at this subshell level, to join
     i64      psubpid;      // the last procsub joined, and its status,
     i32      psubstatus;   // for a repeated wait
+
+    // Signals and traps (trap.cpp)
+    Str     *traps;        // NTRAP actions in the store, or null
+    Str     *shown;        // what trap lists in a subshell until it sets one
+    Sigproc *sig;          // this level's pending signals
+    u64      hardign;      // ignored on entry: cannot be trapped
+    i32      intrap;       // running trap actions
+    i32      trapbusy;     // DEBUG, ERR, RETURN actions running: not again
+    i32      trapstatus;   // $? before the running trap, for its exit
+    i32      killsig;      // this level is dying by this signal
+    i32      childsig;     // the last foreground child died by this signal
+    i64      childpid;     // and had this pid
+    i32      taillevel;    // subshell level + 1 where tailnode is the last
+    Node    *tailnode;     // command, which bash would exec: its death by a
+                           // signal is the subshell's (reported by its parent)
+    b32      noreport;     // in command and process substitutions: no reports
+    b32      intrread;     // in the read builtin: trapped signals interrupt
+    i32      intrsig;      // the signal that interrupted it
+    b32      execed;       // replaced by exec: no EXIT trap
+    b32      errexited;    // set -e is ending this level
+    i32      writeerr;     // why the last fdwrite failed
 };
 
 
@@ -442,18 +473,30 @@ static void capturedrain(Sched *s, Capture *c)
     }
 }
 
+static b32  sigtaken(Shell *);
+static void runexittrap(Shell *, Arena);
+
 // A write to a pipe without readers: as a process killed by SIGPIPE,
-// the vproc ends silently with status 141.
+// the vproc ends silently with status 141. With a trap the write fails
+// (EPIPE) and the trap runs at the next safe point; ignored, it fails.
 static void sigpipe(Shell *sh)
 {
+    Str *t = sh->traps;
+    if (t && t[13].data) {
+        if (t[13].len) sh->sig->pending |= (u64)1 << 12;
+        return;
+    }
+    if (sh->hardign & ((u64)1 << 12)) return;
     sh->status  = 128 + 13;
     sh->exiting = 1;
+    sh->killsig = 13;
     escape(sh, ESC_EXIT);
 }
 
 // Write to one of the shell's descriptors, through its current file.
 static b32 fdwrite(Shell *sh, i32 fd, Str s)
 {
+    sh->writeerr = E_BADF;
     if (fd<0 || fd>=FDMAX) return 0;
     File *f = sh->fds->fd[fd];
     if (!f || !(f->flags & OF_WRITE)) return 0;
@@ -477,7 +520,10 @@ static b32 fdwrite(Shell *sh, i32 fd, Str s)
     }
     if (err == E_PIPE) {
         sigpipe(sh);
+    } else if (err && sh->sched->cur->intr) {
+        sigtaken(sh);  // a signal that kills this level does so now
     }
+    sh->writeerr = err;
     return !err;
 }
 
@@ -635,6 +681,7 @@ static void fdset(Shell *sh, i32 fd, File *f, b32 keep, Arena *scratch)
         u->fd   = fd;
         u->old  = t->fd[fd];
         u->psub = 0;
+        u->keep = keep;
         u->next = sh->undo;
         sh->undo = u;
     }
@@ -669,6 +716,7 @@ static void fdsetpsub(Shell *sh, i32 fd, File *f)
     u->fd   = fd;
     u->old  = t->fd[fd];
     u->psub = 1;
+    u->keep = 0;
     u->next = sh->undo;
     sh->undo = u;
     t->fd[fd] = f;
@@ -696,6 +744,28 @@ static void closepsubs(Shell *sh, Undo *to)
     }
 }
 
+// Undo the redirections of the commands being abandoned, back to a
+// saved point, keeping those exec made in a subshell: set -e leaves
+// the commands it abandons before the EXIT trap runs.
+static void unwindtemp(Shell *sh, Undo *to)
+{
+    Fdtab *t = sh->fds;
+    for (Undo **p = &sh->undo; *p && *p != to;) {
+        Undo *u = *p;
+        if (u->keep) {
+            p = &u->next;
+            continue;
+        }
+        *p = u->next;
+        fileunref(sh, t->fd[u->fd]);
+        t->fd[u->fd] = u->old;
+        if (u->psub) sfree(sh->store, u, sizeof(Undo));
+    }
+    while (t->top && !t->fd[t->top-1]) {
+        t->top--;
+    }
+}
+
 // Make the redirections recorded since a saved point permanent, as if
 // made with keep set outside a subshell.
 static void commitredirs(Shell *sh, Undo *to)
@@ -714,9 +784,15 @@ static iz fileread(Shell *sh, File *f, u8 *buf, iz len)
     if (!f || !(f->flags & OF_READ)) return -1;
     switch (f->kind) {
     case F_OS:
-        return taskread(sh->sched, f->h, buf, len);
     case F_PIPE:
-        return piperead(sh->sched, f->pipe, buf, len);
+        for (;;) {
+            iz n = f->kind==F_OS ? taskread(sh->sched, f->h, buf, len)
+                                 : piperead(sh->sched, f->pipe, buf, len);
+            // A signal may have failed the read: one that kills this
+            // level does so, one for the read builtin ends it, and
+            // otherwise the read resumes
+            if (n>=0 || !sigtaken(sh) || sh->intrread) return n;
+        }
     case F_MEM: {
         iz n = f->mem.len - f->pos;
         n = n<len ? n : len;

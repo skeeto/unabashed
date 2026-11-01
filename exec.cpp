@@ -26,6 +26,57 @@ static Str      runfunsub(Shell *, Arena *, Str src, b32 valsub, Arena);
 static void     joinpsubs(Shell *);
 static void     closeall(Shell *);
 
+// Signals and traps (trap.cpp)
+static void     checksigs(Shell *, Arena);
+static void     runerrtrap(Shell *);
+static void     rundebugtrap(Shell *, Arena);
+static void     runreturntrap(Shell *, Arena);
+static void     subshelltraps(Shell *);
+static void     sigenter(Shell *, Sigproc *, i64 pid, Task *);
+static void     sigleave(Shell *, Sigproc *);
+static void     reportsig(Shell *, Arena, i32 sig, i64 pid, Str text);
+static b32      trapignored(Shell *, i32 sig);
+
+// Signals the current level ignores, for the programs it starts.
+static u64 ignoredsigs(Shell *sh)
+{
+    u64 m = sh->hardign;
+    for (i32 sig = 1; sh->traps && sig < NSIGNAL; sig++) {
+        if (trapignored(sh, sig)) m |= (u64)1 << (sig-1);
+    }
+    return m;
+}
+
+// The command a subshell running n would exec as its last instead of
+// waiting for it, as bash does: the last of a list, a simple command.
+static Node *tailcommand(Node *n)
+{
+    while (n && !n->redirs && !(n->flags & (CMD_INVERT|CMD_TIME))) {
+        if (n->kind==N_CONNECT && (n->connector==';' || n->connector=='\n')) {
+            n = n->b;
+        } else if (n->kind == N_GROUP) {
+            n = n->a;
+        } else {
+            return n->kind==N_SIMPLE ? n : 0;
+        }
+    }
+    return 0;
+}
+
+// Report the last foreground child's death by a signal, if it was one.
+static void reportchild(Shell *sh, Arena scratch, Node *n)
+{
+    i32 sig = sh->childsig;
+    if (!sig || (n==sh->tailnode && sh->taillevel==sh->subshell+1)) return;  // the parent reports
+    sh->childsig = 0;
+    if (sh->noreport) return;
+    Node c = *n;
+    c.flags &= ~(CMD_INVERT|CMD_TIME|CMD_TIMEPOSIX);
+    Printer *p = newprinter(&scratch);
+    printcmd(p, &c);
+    reportsig(sh, scratch, sig, sh->childpid, finish(&p->b));
+}
+
 // Builtin output, written to fd 1 when the builtin returns, or when
 // the buffer fills: growing it would overrun the builtin's scratch.
 static void bprint(Shell *sh, Str s)
@@ -265,6 +316,11 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sh->subshell++;
     sh->bashpid = ++sh->lastpid;
     sh->psubs   = 0;
+    sh->killsig   = 0;
+    sh->errexited = 0;
+    subshelltraps(sh);
+    Sigproc sig;
+    sigenter(sh, &sig, sh->bashpid, sh->sched->cur);
     // The frame is not in the store, so local's changes to its list of
     // locals are not journaled: restore it by hand
     Frame frame = sh->frame ? *sh->frame : Frame{};
@@ -277,7 +333,18 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     if (!__builtin_setjmp(e.jmp)) {
         runjob(sh, j, scratch);
     }
+    if (!sh->execed && !sh->killsig && sh->traps) {
+        if (sh->errexited) unwindtemp(sh, saved.undo);
+        runexittrap(sh, scratch);
+    }
     i32 status = sh->status;
+    i32 killed = sh->killsig;
+    i64 pid    = sh->bashpid;
+    if (!killed && sh->childsig && sh->taillevel==sh->subshell+1) {
+        killed = sh->childsig;  // the program it ran last, as bash would exec it
+        pid    = sh->childpid;
+    }
+    sigleave(sh, &sig);
     unwind(sh, saved.undo);
     if (sh->psubs) {
         // Its procsubs end with it, once their descriptors are closed
@@ -290,7 +357,9 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     saved.lastpid = sh->lastpid;  // pids are not reused
     *sh = saved;
     if (sh->frame) *sh->frame = frame;
-    sh->status = status;
+    sh->status   = status;
+    sh->childsig = killed;
+    sh->childpid = pid;
     return status;
 }
 
@@ -387,7 +456,10 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
             sh->opt[O_ERREXIT] = 0;
         }
         sh->opt[O_VERBOSE] = 0;  // as bash, which turns off -v there
+        b32 noreport = sh->noreport;
+        sh->noreport = 1;        // nor does it report signal deaths there
         subshell(sh, &j, child, cap);
+        sh->noreport = noreport;
         sh->opt[O_ERREXIT] = errexit;
         sh->opt[O_VERBOSE] = verbose;
     }
@@ -1089,6 +1161,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     sp.cwd   = sh->cwd;
     sp.fds   = fds;
     sp.nfds  = nfds;
+    sp.sigign = ignoredsigs(sh);
     Spawned r = os_spawn(sh->os, a, &sp);
     for (i32 i = 0; i < nclose; i++) {
         os_close(sh->os, closeafter[i]);
@@ -1097,6 +1170,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         // A pipeline stage started directly: its waiter is runpipeline
         assert(!npumps && !capfile);
         sh->spawnto->proc = r.err ? BADHANDLE : r.proc;
+        sh->spawnto->pid  = r.pid;
         return r.err ? -r.err : 0;
     }
     if (capfile) {
@@ -1109,6 +1183,15 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         os_close(sh->os, capread);
     }
     i32 status = r.err ? -r.err : taskwaitproc(s, r.proc);
+    sh->childsig = 0;
+    if (s->cur->intr) {
+        sigtaken(sh);  // killed while waiting: the program runs on
+    }
+    if (status>=0 && (status & WSIGNALED)) {
+        sh->childsig = (status & 255) - 128;
+        sh->childpid = r.pid;
+        status &= 255;
+    }
     // What the program wrote is passed on before anything the shell
     // writes next
     for (i32 i = 0; i < npumps; i++) {
@@ -1275,8 +1358,12 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
 
 static void checkerrexit(Shell *sh)
 {
+    if (sh->status && !sh->noerrexit && !sh->exiting && sh->traps) {
+        runerrtrap(sh);
+    }
     if (sh->status && sh->opt[O_ERREXIT] && !sh->noerrexit && !sh->exiting) {
-        sh->exiting = 1;
+        sh->exiting   = 1;
+        sh->errexited = 1;
         escape(sh, ESC_EXIT);
     }
 }
@@ -1354,6 +1441,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     if (!escaped) {
         if (code->body->redirs) sh->line = code->body->line;
         execute(sh, code->body, scratch);
+        if (sh->traps) runreturntrap(sh, scratch);
     }
     sh->esc = e.up;
 
@@ -1482,12 +1570,25 @@ static b32 doassignments(Shell *sh, Arena *a, Word *w, iz n)
 }
 
 [[gnu::noinline]]
+static void runsimple1(Shell *sh, Node *n, Arena scratch);
+
 static void runsimple(Shell *sh, Node *n, Arena scratch)
+{
+    runsimple1(sh, n, scratch);
+    checksigs(sh, scratch);
+}
+
+static void runsimple1(Shell *sh, Node *n, Arena scratch)
 {
     safepoint(sh->sched);
     sh->line    = n->line;
     sh->current = n;
-    sh->cmdnode = n;
+    if (!sh->intrap) sh->cmdnode = n;  // in trap actions, what ran them
+    if (sh->traps) {
+        rundebugtrap(sh, scratch);
+        sh->line    = n->line;
+        sh->current = n;
+    }
     Arena *a = &scratch;
 
     // Leading assignments, then the rest
@@ -1627,6 +1728,7 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
         }
         if (fn) {
             callfunction(sh, fn, argv.data, argv.len, scratch);
+            sh->line = n->line;
         } else {
             BOut  b     = {};
             BOut *saved = sh->bout;
@@ -1638,7 +1740,8 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
             sh->compargs = savedcomp;
             sh->bout = saved;
             if ((b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed) {
-                builtinerror(sh, scratch, name, "write error: Bad file descriptor");
+                Str why = sh->writeerr==E_PIPE ? errtext(E_PIPE) : errtext(E_BADF);
+                builtinerror(sh, scratch, name, concat(&scratch, "write error: ", why));
                 sh->status = 1;
             }
         }
@@ -1662,7 +1765,9 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
             }
             if (!replaced) env = push(a, env, entry);
         }
+        sh->childsig = 0;
         sh->status = runexternal(sh, scratch, argv.data, argv.len, env);
+        reportchild(sh, scratch, n);
     }
     unwind(sh, mark);
     if (sh->flow != FLOW_RETURN) {
@@ -2080,9 +2185,16 @@ static void execsubshell(Shell *sh, Node *n, Arena scratch)
     j.kind = SUB_NODE;
     j.node = n->a;
     j.newloops = 1;
+    sh->childsig  = 0;
+    sh->tailnode  = tailcommand(n->a);
+    sh->taillevel = sh->subshell + 2;
     sh->status = subshell(sh, &j, scratch, 0);
+    sh->tailnode  = 0;
+    sh->taillevel = 0;
+    if (!n->redirs) reportchild(sh, scratch, n);  // else once they are undone
     setpstat1(sh);
     checkerrexit(sh);
+    checksigs(sh, scratch);
 }
 
 [[gnu::noinline]]
@@ -2095,7 +2207,8 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
     }
     // As bash, the header is traced as source text, every iteration
     Str head = {};
-    if (sh->opt[O_XTRACE] && n->kind==N_FOR) {
+    b32 debug = n->kind==N_FOR && sh->traps && sh->traps[TRAP_DEBUG].len;
+    if ((sh->opt[O_XTRACE] || debug) && n->kind==N_FOR) {
         Buf b(&scratch, 64);
         print(&b, "for ");
         print(&b, n->name->text);
@@ -2119,6 +2232,17 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
         Arena it = scratch;
         safepoint(sh->sched);
         if (head.data && sh->opt[O_XTRACE]) traceline(sh, it, head);
+        if (debug) {
+            // DEBUG before each iteration, BASH_COMMAND the header
+            if (!sh->intrap) {
+                Store *st = sh->store;
+                if ((byte *)sh->cmdtext.data >= st->mark) sfreestr(st, sh->cmdtext);
+                sh->cmdtext = sclone(st, head);
+                sh->cmdnode = 0;
+            }
+            rundebugtrap(sh, it);
+            sh->line = n->line;
+        }
         if (!setvar(sh, it, var, list[i])) {
             sh->status = 1;
             break;
@@ -2189,10 +2313,19 @@ static void execcase(Shell *sh, Node *n, Arena scratch)
     if (!ran) sh->status = 0;
 }
 
+// The DEBUG trap before (( )) and [[ ]], which BASH_COMMAND names.
+static void debugcompound(Shell *sh, Node *n, Arena scratch)
+{
+    if (!sh->intrap) sh->cmdnode = n;
+    rundebugtrap(sh, scratch);
+    sh->line = n->line;
+}
+
 [[gnu::noinline]]
 static void execarith(Shell *sh, Node *n, Arena scratch)
 {
     sh->line = n->line;
+    if (sh->traps) debugcompound(sh, n, scratch);
     Str text = expandstring(sh, &scratch, n->arith->text, XC_ARITH|XC_DQUOTE);
     if (sh->opt[O_XTRACE]) {
         traceline(sh, scratch, concat3(&scratch, "(( ", text, " ))"));
@@ -2207,6 +2340,7 @@ static void execarith(Shell *sh, Node *n, Arena scratch)
 static void execcond(Shell *sh, Node *n, Arena scratch)
 {
     sh->line = n->line;
+    if (sh->traps) debugcompound(sh, n, scratch);
     sh->status = condeval(sh, &scratch, n->cond) ? 0 : 1;
     setpstat1(sh);
     checkerrexit(sh);
@@ -2424,6 +2558,9 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
 
     if (n->kind!=N_SIMPLE && n->kind!=N_CONNECT) {
         unwind(sh, mark);
+    }
+    if (n->kind==N_SUBSHELL && n->redirs) {
+        reportchild(sh, scratch, n);
     }
     if (invert) {
         sh->noerrexit--;

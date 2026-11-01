@@ -27,7 +27,12 @@ struct Vproc {
     Shell *sh;
     Node  *node;          // what it runs, or else
     Str    src;           // source text to parse and run (procsubs)
+    Sigproc sig;          // its pending signals, from creation to exit
 };
+
+static void copytraps(Shell *c, Shell *sh);
+static void reportpipeline(Shell *, Arena, Node **stages, i32 n, i32 *statuses,
+                           i64 *pids, Node *job);
 
 static Vproc *newvproc(Sched *s)
 {
@@ -273,6 +278,14 @@ static Shell *vproccopy(Shell *sh, Vproc *m)
     c->subshell++;
     c->bashpid  = ++sh->lastpid;
     c->lastpid  = sh->lastpid;
+    c->killsig  = 0;
+    c->childsig = 0;
+    c->errexited = 0;
+    c->intrap   = 0;
+    c->trapbusy = 0;
+    c->intrread = 0;
+    copytraps(c, sh);
+    sigenter(c, &m->sig, c->bashpid, 0);
     return c;
 }
 
@@ -287,6 +300,7 @@ static void vprocmain(Task *t)
     sh->stacktop = &stackmark;
     iz room = t->stack - ((iz)1<<16);  // the parent's limit, if smaller
     sh->stackmax = sh->stackmax<room ? sh->stackmax : room;
+    m->sig.task = t;
     if (__builtin_setjmp(top.jmp)) {
         // escaped
     } else if (m->node) {
@@ -297,7 +311,17 @@ static void vprocmain(Task *t)
         sh->opt[O_VERBOSE] = 0;
         runsource(sh, m->src, "process substitution", *scratchat(sh, 0), 0, sh->line);
     }
-    t->status = sh->status;
+    if (!sh->execed && !sh->killsig) {
+        // Its own EXIT trap, set in the vproc
+        sh->esc = &top;
+        if (sh->errexited) unwindtemp(sh, 0);
+        if (!__builtin_setjmp(top.jmp)) {
+            runexittrap(sh, *scratchat(sh, 0));
+        }
+    }
+    b32 tail = sh->childsig && sh->taillevel==sh->subshell+1;  // its last program's
+    t->status = (sh->status & 255) | (sh->killsig || tail ? WSIGNALED : 0);
+    sigleave(sh, &m->sig);
 
     unwind(sh, 0);
     closeall(sh);
@@ -342,10 +366,15 @@ static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops
     if (newloops) c->loopdepth = 0;
     c->simplestages += node->kind == N_SIMPLE;
     m->node = copynode(&m->perm, node);
+    // A simple command, or the last of a ( list ), is what bash would
+    // exec in the forked stage: not a { list }'s
+    c->tailnode  = node->kind==N_SIMPLE ? m->node : 0;
     if (m->node && m->node->kind==N_SUBSHELL) {
         // ( list ) runs in the vproc's own subshell, not a nested one
         m->node->kind = N_GROUP;
+        c->tailnode = tailcommand(m->node->a);
     }
+    c->taillevel = c->subshell + 1;
     return taskspawn(sh->sched, vprocmain, m, BIGSTACK);
 }
 
@@ -389,7 +418,7 @@ static void reappsubs(Shell *sh)
         if (t->state == TS_DONE) {
             *p = t->sib;
             sh->psubpid    = t->pid;
-            sh->psubstatus = taskjoin(sh->sched, t);
+            sh->psubstatus = taskjoin(sh->sched, t) & 255;
         } else {
             p = &t->sib;
         }
@@ -407,16 +436,23 @@ static void joinpsubs(Shell *sh)
     }
 }
 
-// wait for a procsub by its pid. Sets *found if pid was one.
+// wait for a procsub by its pid. Sets *found if pid was one. A signal
+// with a trap interrupts the wait: then 128 plus its number.
 static i32 waitpsub(Shell *sh, i64 pid, b32 *found)
 {
     *found = 1;
     for (Task **p = &sh->psubs; *p; p = &(*p)->sib) {
         Task *t = *p;
         if (t->pid == pid) {
+            i32 st;
+            if (!taskjoinintr(sh->sched, t, &st)) {
+                sh->sched->cur->intr = 0;
+                u64 pend = sh->sig->pending;
+                return pend ? 128 + __builtin_ctzll(pend) + 1 : 128;
+            }
             *p = t->sib;
             sh->psubpid    = pid;
-            sh->psubstatus = taskjoin(sh->sched, t);
+            sh->psubstatus = st & 255;
             return sh->psubstatus;
         }
     }
@@ -474,6 +510,7 @@ static Str procsubst(Shell *sh, Arena *a, Str body, b32 output)
     Vproc *m = vprocwith(sh, output ? theirs : 0, output ? 0 : theirs);
     fileunref(sh, theirs);
     m->src = clone(&m->perm, body);
+    m->sh->noreport = 1;  // nothing it runs is reported, as in bash
     Task *task = taskspawn(sh->sched, vprocmain, m, BIGSTACK);
     task->pid  = m->sh->bashpid;
     task->sib  = sh->psubs;
@@ -543,7 +580,7 @@ static Handle spawndirect(Shell *sh, Node *stage, File *in, File *out,
     }
     out->refs++;
     fdset(sh, 1, out, 0, &scratch);
-    Spawnto sp = {BADHANDLE, 0};
+    Spawnto sp = {BADHANDLE, 0, 0};
     SubJob  j  = {};
     j.kind = SUB_NODE;
     j.node = stage;
@@ -557,6 +594,7 @@ static Handle spawndirect(Shell *sh, Node *stage, File *in, File *out,
     sh->capdepth = depth - 1;
     unwind(sh, mark);
     *retry = sp.retry;
+    sh->childpid = sp.pid;  // for a report
     return sp.proc;
 }
 
@@ -611,6 +649,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     Task  *tasks[256] = {};
     Handle procs[256];
     i32    statuses[256];
+    i64    pids[256] = {};
     for (i32 k = 0; k+1 < nstages; k++) {
         sh->status = before;
         procs[k] = BADHANDLE;
@@ -618,11 +657,13 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         if (ext[k] && directstage(sh, scratch, stages[k], !k)) {
             procs[k] = spawndirect(sh, stages[k], in[k], out[k], scratch,
                                    statuses+k, &retry);
+            pids[k]  = sh->childpid;
             sh->status = before;
         }
         if (retry) {
             b32 newloops = stages[k]->kind != N_SIMPLE;  // as bash: break | x is silent
             tasks[k] = spawnvproc(sh, stages[k], in[k], out[k], newloops);
+            pids[k]  = ((Vproc *)tasks[k]->arg)->sh->bashpid;
             yield(s);
         }
     }
@@ -671,14 +712,24 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             j.node = &group;
         }
         sh->simplestages += stage->kind == N_SIMPLE;
+        // A program as the last stage is reported with the pipeline
+        sh->tailnode  = stage->kind==N_SIMPLE ? stage
+                      : stage->kind==N_SUBSHELL ? tailcommand(stage->a) : 0;
+        sh->taillevel = sh->subshell + 2;
+        sh->childsig  = 0;
         status = subshell(sh, &j, child, 0);
+        sh->tailnode  = 0;
+        sh->taillevel = 0;
         sh->simplestages -= stage->kind == N_SIMPLE;
     }
     sh->capdepth = depth - 1;
     unwind(sh, mark);
+    i32 lastsig = escaped ? 0 : sh->childsig;
+    pids[last]  = sh->childpid;
+    sh->childsig = 0;
 
     i32 failed = status;
-    statuses[last] = status;
+    statuses[last] = status | (lastsig ? WSIGNALED : 0);
     for (i32 k = last-1; k >= 0; k--) {
         i32 st = statuses[k];
         if (tasks[k]) {
@@ -687,8 +738,10 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             st = taskwaitproc(s, procs[k]);
         }
         statuses[k] = st;
-        if (!failed) failed = st;
+        if (!failed) failed = st & 255;
     }
+    if (lastsig) reportpipeline(sh, scratch, stages, nstages, statuses, pids, n);
+    for (i32 k = 0; k < nstages; k++) statuses[k] &= 255;
     sh->status = status;
     setpstat(sh, statuses, nstages);
     if (escaped) {
@@ -699,4 +752,5 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         sh->status = failed;
     }
     checkerrexit(sh);
+    checksigs(sh, scratch);
 }

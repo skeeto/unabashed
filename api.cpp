@@ -24,6 +24,7 @@ struct OsInfo {
     iz     reserve;  // address space for each large arena
     iz     stack;    // usable bytes of the calling thread's stack, 0 if unknown
     u64    chaos;    // test layers: seed for random yields, 0 for none
+    u64    sigign;   // signals ignored on entry (bit n-1 for signal n)
 };
 
 // Errors are Linux errno numbers on every platform.
@@ -97,11 +98,23 @@ struct Spawn {
     Str      cwd;
     SpawnFd *fds;
     iz       nfds;
+    u64      sigign; // signals the child starts out ignoring (bit n-1
+                     // for signal n); others it starts at their default
 };
 
 struct Spawned {
     i32    err;
     Handle proc;
+    i64    pid;      // for kill and $!
+};
+
+// Signal numbers are Linux's on every platform. A process killed by a
+// signal has status 128+N with WSIGNALED set (os_waitproc, and sh_main
+// when the shell itself dies by one); the core masks it off for $?.
+enum : i32 { NSIGNAL = 65, WSIGNALED = 0x100 };
+
+enum : i32 {  // os_sigmode
+    SIGM_DEFAULT, SIGM_IGNORE, SIGM_CATCH,
 };
 
 // An operation submitted for asynchronous completion, so that a task
@@ -156,7 +169,7 @@ static Stat    os_fstat(Os *, Handle);
 static Dirent *os_list(Os *, Arena *, Str dir, i32 *err);
 // Start a program. The child's descriptors are exactly those listed.
 static Spawned os_spawn(Os *, Arena scratch, Spawn *);
-// Wait for a spawned program: 0-255 on exit, 128+N on signal N.
+// Wait for a spawned program: 0-255 on exit, 128+N|WSIGNALED on signal N.
 static i32     os_waitproc(Os *, Handle proc);
 // Begin an operation without blocking. It may complete at once (done
 // set), else a later os_wait returns it. A pending IO_PROC releases
@@ -169,6 +182,17 @@ static Io     *os_wait(Os *, i64 deadline);
 // Withdraw a pending operation. False if it cannot be withdrawn (it
 // may still complete) or already completed.
 static b32     os_cancel(Os *, Io *);
+// Send signal sig to process pid, or with 0 check that it exists.
+// Returns 0 or an E_* error (E_SRCH, E_PERM, E_INVAL).
+static i32     os_kill(Os *, i64 pid, i32 sig);
+// Signals sent to this process since the last call, as a mask (bit n-1
+// for signal n), and cleared. os_wait returns null early when one
+// arrives. The core decides what each does (traps, default actions).
+static u64     os_sigpending(Os *);
+// How the process itself handles a real signal (SIGM_*): the main
+// shell's trap table. Signals ignored on entry stay ignored. Layers
+// that deliver every signal through os_sigpending ignore it.
+static void    os_sigmode(Os *, i32 sig, i32 mode);
 // Realtime clock, in ns since the epoch.
 static i64     os_now(Os *);
 // The currently running fiber, converting the thread on first use.

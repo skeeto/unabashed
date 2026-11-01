@@ -192,7 +192,8 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.env     = ctx->env;
     info.nenv    = ctx->nenv;
     info.cwd     = ctx->cwd;
-    info.pid     = 100 + osvos(os)->nprocs;
+    info.pid     = osvos(os)->procs[osvos(os)->cur].pid;
+    info.sigign  = osvos(os)->procs[osvos(os)->cur].sigign;
     info.ppid    = 2;
     info.uid     = info.euid = 1000;
     info.gid     = info.egid = 1000;
@@ -260,7 +261,7 @@ static Result runshell(Test *t, Str *args, iz nargs, Str input = {})
     info.chaos   = os->chaos;
 
     Result r = {};
-    r.status = sh_main(os, &info);
+    r.status = sh_main(os, &info) & 255;
     vfinish(os);
     r.out    = os->vos.out;
     r.err    = os->vos.err;
@@ -628,7 +629,7 @@ static b32 oracle(Test *t, char *suite, char *name, b32 verbose)
     info.reserve = (iz)1<<22;
     stackrest    = 1;
     info.stack   = stackleft();
-    i32 status = sh_main(os, &info);
+    i32 status = sh_main(os, &info) & 255;
     vfinish(os);
     stackrest    = 0;
     // Some run-* scripts always print advisory "warning: ..." lines,

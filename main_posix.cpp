@@ -24,7 +24,11 @@ struct Os {
     Io    *pending;     // submitted operations, oldest first
     i32    wakefd[2];   // self-pipe written by the SIGCHLD handler
     b32    pipeign;     // SIGPIPE was ignored on entry, so stays ignored
+    u64    entryign;    // signals ignored on entry: they stay ignored
+    u64    changed;     // signals whose disposition the shell changed
 };
+
+static u64 volatile sigbits;  // caught signals not yet taken
 
 static Os *sigos;  // for the signal handler
 
@@ -315,9 +319,22 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
         if (chdir(cwd)) {
             // run anyway: bash reports nothing here
         }
-        // The shell ignores SIGPIPE for its in-process subshells
+        // The shell ignores SIGPIPE for its in-process subshells, and
+        // catches or ignores what its traps say: the child starts with
+        // defaults, except what it was told to ignore (trap '' in the
+        // spawning subshell) and what was ignored on entry
         if (!sigos || !sigos->pipeign) signal(SIGPIPE, SIG_DFL);
         signal(SIGCHLD, SIG_DFL);
+        u64 changed = sigos ? sigos->changed : 0;
+        u64 ign = s->sigign | (sigos ? sigos->entryign : 0);
+        for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
+            u64 bit = (u64)1 << (sig-1);
+            if (ign & bit) {
+                signal(sig, SIG_IGN);
+            } else if (changed & bit) {
+                signal(sig, SIG_DFL);
+            }
+        }
         execve(path, argv, envp);
         i32 e = errno;
         writeall(report[1], (u8 *)&e, sizeof(e));
@@ -336,13 +353,14 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
         return r;
     }
     r.proc = (Handle)pid;
+    r.pid  = pid;
     return r;
 }
 
 static i32 waitstatus(i32 status)
 {
     if (WIFEXITED(status)) return WEXITSTATUS(status);
-    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    if (WIFSIGNALED(status)) return WSIGNALED | (128 + WTERMSIG(status));
     return 127;
 }
 
@@ -370,12 +388,64 @@ static void onsigchld(int)
     errno = saved;
 }
 
+// A trapped signal: note it and wake os_wait.
+static void onsignal(int sig)
+{
+    i32 saved = errno;
+    __atomic_fetch_or(&sigbits, (u64)1<<(sig-1), __ATOMIC_RELAXED);
+    u8 c = 0;
+    if (write(sigos->wakefd[1], &c, 1)) {}
+    errno = saved;
+}
+
+static i32 os_kill(Os *, i64 pid, i32 sig)
+{
+    if (pid<=0 || pid>(i64)0x7fffffff) return E_SRCH;
+    return kill((pid_t)pid, sig) ? errno : 0;
+}
+
+static u64 os_sigpending(Os *)
+{
+    return __atomic_exchange_n(&sigbits, (u64)0, __ATOMIC_RELAXED);
+}
+
+static void os_sigmode(Os *os, i32 sig, i32 mode)
+{
+    u64 bit = (u64)1 << (sig-1);
+    if (sig<1 || sig>=NSIG || sig==SIGKILL || sig==SIGSTOP || (os->entryign & bit)) {
+        return;
+    }
+    if (sig == SIGCHLD) return;  // os_wait's own handler
+    struct sigaction sa = {};
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    switch (mode) {
+    case SIGM_DEFAULT:
+        // the shell keeps ignoring SIGPIPE for its in-process subshells
+        sa.sa_handler = sig==SIGPIPE ? SIG_IGN : SIG_DFL;
+        break;
+    case SIGM_IGNORE:
+        sa.sa_handler = SIG_IGN;
+        break;
+    case SIGM_CATCH:
+        sa.sa_handler = onsignal;
+        break;
+    }
+    sigaction(sig, &sa, 0);
+    os->changed |= bit;
+}
+
 static void initasync(Os *os)
 {
     sigos = os;
     struct sigaction sa = {};
     sigaction(SIGPIPE, 0, &sa);
     os->pipeign = sa.sa_handler == SIG_IGN;
+    for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
+        if (!sigaction(sig, 0, &sa) && sa.sa_handler==SIG_IGN) {
+            os->entryign |= (u64)1 << (sig-1);
+        }
+    }
     signal(SIGPIPE, SIG_IGN);
     if (pipe(os->wakefd)) {
         os->wakefd[0] = os->wakefd[1] = -1;
@@ -493,6 +563,7 @@ static Io *os_wait(Os *os, i64 deadline)
             u8 buf[64];
             while (read(os->wakefd[0], buf, sizeof(buf)) > 0) {}
         }
+        if (sigbits) return 0;  // the core takes the signal first
         i32 k = 1;
         for (Io **p = &os->pending; *p; p = &(*p)->next) {
             Io *io = *p;
@@ -597,5 +668,17 @@ int main(int argc, char **argv)
     for (i32 i = 0; i < 3; i++) {
         info.std[i] = (Handle)i;
     }
-    return sh_main(&os, &info);
+    info.sigign = os.entryign;
+    i32 status = sh_main(&os, &info);
+    if (status & WSIGNALED) {
+        // Killed by a signal: die by it, so that the parent sees that
+        i32 sig = (status & 255) - 128;
+        signal(sig, SIG_DFL);
+        sigset_t set;
+        sigemptyset(&set);
+        sigaddset(&set, sig);
+        sigprocmask(SIG_UNBLOCK, &set, 0);
+        kill(getpid(), sig);
+    }
+    return status & 255;
 }

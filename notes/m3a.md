@@ -34,11 +34,15 @@ Done (core foundation):
   pipes and captures for programs, `wait` for procsubs (see "Process
   substitution" and "Materialization" below); `os_tempfile` on every
   layer, `/dev/fd/N` in the vos; tests `t/exec/616`-`621`.
+- Signals and traps (`trap.cpp`, see "Signals and traps" below): the
+  trap and kill builtins, EXIT/ERR/DEBUG/RETURN, signals to virtual
+  processes, the vos, POSIX and Win32 layers, subshell trap rules,
+  per-spawn ignored signals, reports of deaths by signals, SIGPIPE
+  dispositions, wait and read interrupted; tests `t/exec/622`-`628`.
 
 Remaining M3a work (see "Plan for the rest of M3a" below): launcher
-fibers for external stages with comsubs, traps and SIGPIPE
-dispositions, fork-on-exec, interim fiber `&`/wait/coproc, the isolate
-fuzzer, timers.
+fibers for external stages with comsubs, fork-on-exec, interim fiber
+`&`/wait/coproc, the isolate fuzzer, timers.
 
 ## Model
 
@@ -339,8 +343,121 @@ pipeline members (checked against the oracle for first, middle and last
 stages). A shell stage ends through `sigpipe()` (shell.cpp) from
 `fdwrite`; the code after the write in that vproc does not run
 (`{ yes; echo "after $?" >&2; } | { read x; }` prints `after 141`
-because `yes` is a separate program). `trap '' PIPE` (a write error
-instead) waits for traps.
+because `yes` is a separate program). With `trap '' PIPE` the write
+fails instead ("write error: Broken pipe"), and programs started then
+ignore SIGPIPE too; with a PIPE trap the write fails and the trap runs
+at the next safe point.
+
+## Signals and traps
+
+`trap.cpp`. Numbers and names are Linux x86-64's everywhere.
+
+**Trap table.** `Shell.traps` is null or `NTRAP` `Str`s in the store:
+index 0 EXIT, 1-64 signals, then `TRAP_DEBUG`, `TRAP_ERR`,
+`TRAP_RETURN`. Null data is the default, empty (non-null) data ignores.
+`settrap` changes one; at the top level (`subshell == 0`) it also sets
+the process's disposition (`os_sigmode`: caught when trapped, or when an
+EXIT trap must run on a fatal signal). Signals ignored on entry
+(`OsInfo.sigign`, `Shell.hardign`) cannot be trapped.
+- Subshells (`subshell()`, `vproccopy`): `subshelltraps` gives a new
+  table with caught signals reset and ignored ones kept (ERR with
+  errtrace, DEBUG/RETURN with functrace); `Shell.shown` keeps pointing
+  at the parent's table, which `trap`/`trap -p` list until the subshell
+  changes any trap (bash 5.3). Sync subshells allocate above the store
+  mark, so rollback frees it; vprocs copy (`copytraps`).
+- A program started gets `Spawn.sigign`: the signals the starting level
+  ignores (`trap '' INT` applied per spawn, never process-wide). POSIX
+  sets them to SIG_IGN in the child and resets the others the shell
+  changed; Win32 handles INT by `SetConsoleCtrlHandler(0, 1)` around
+  `CreateProcess`; the vos makes the fake ignore them.
+
+**Virtual processes.** Every level that can receive a signal has a
+`Sigproc` (sched.cpp) on `Sched.sigprocs`: the shell (`Sched.top`), each
+synchronous subshell (on `subshell()`'s stack), each fiber vproc (in its
+`Vproc`, registered from creation, so `kill $!` reaches a procsub that
+has not run yet). `kill PID` looks there first (`$$` is `top`, as bash
+signals the parent process), then `os_kill`. Real signals arrive through
+`os_sigpending` and go to `top`. A level takes its pending signals only
+when it runs (`checksigs`): `top` while a sync subshell runs waits for
+it, as bash takes a signal once its foreground child is done.
+
+**Safe points** (`checksigs`): after each simple command (`runsimple`
+wraps `runsimple1`), after `( )` and pipelines, before the EXIT trap.
+`runsigs`: ignored: dropped; trapped: `runtrap`; default and harmless
+(CHLD CONT URG WINCH and the stop signals, since stopping is not
+modelled): dropped; else `sigdie`: the EXIT trap (not for KILL), then
+`ESC_EXIT` with `Shell.killsig`, status 128+N. A trap may run inside
+another, even its own (bash recurses too).
+
+**Interrupting waits** (`taskinterrupt`, sched.cpp). `sigsend` to a
+blocked task: a signal that will kill the level fails any pipe or OS
+wait (`all`); a trapped one only the waits of a `read` or `wait`
+builtin (`Task.introk`). The wait returns an error with `Task.intr`
+set; `fileread`/`fdwrite`/`runprogram` call `sigtaken`, which kills the
+level now if it should die, else lets `read` return 128+N
+(`Shell.intrsig`) or resumes the read. `waitpsub` uses `taskjoinintr`
+and returns 128+N. When `os_wait` returns early for a signal,
+`schedule()` hands it to `top` and interrupts a `read`/`wait` there.
+
+**Trap actions** (`runtrap`): parsed and run like eval in a fresh pool
+arena (`capdepth+1`), keeping `$?` (unless the action returns from a
+function: `return` in a trap returns from the function), LINENO and
+BASH_COMMAND (simple commands in actions do not change it). `exit`
+without a status in an action uses the status from before it
+(`Shell.trapstatus`). ERR runs from `checkerrexit` where set -e would
+act, not in functions without errtrace; DEBUG before simple commands,
+`(( ))`, `[[ ]]` and each `for` iteration (BASH_COMMAND the header), not
+in functions without functrace; RETURN at the end of a function (with
+functrace) or a sourced file. None of these runs inside its own action
+(`Shell.trapbusy`); DEBUG does run inside other actions.
+
+**EXIT** (`runexittrap`): at `sh_main`'s end, at the end of a sync
+subshell or vproc whose own table has one, and from `sigdie`. Not after
+exec (`Shell.execed`). After set -e (`Shell.errexited`) the abandoned
+commands' redirections are undone first (`unwindtemp`, keeping exec's
+in a subshell, `Undo.keep`); after `exit` they stay in force, as in
+bash.
+
+**Deaths by signals.** `os_waitproc` and `IO_PROC` return 128+N with
+`WSIGNALED`; `sh_main` returns that too when the shell dies by a signal,
+so POSIX re-raises it, fake_bash passes it on and the test harness
+masks it. `runprogram` turns it into `Shell.childsig`/`childpid`; a
+sync subshell that dies sets them in its parent; vproc task statuses
+carry `WSIGNALED`. Reports (`reportsig`, `reportpipeline`) follow bash:
+none for INT and PIPE, nor inside command or process substitutions
+(`Shell.noreport`); SIGTERM, or a signal the reporting shell traps or
+ignores, gets the short form (description padded to 27, the command),
+others `NAME: line N: PID description command`; a pipeline reports only
+when its last stage died, one line per stage in the long form. The
+last simple command of a `( list )`, a simple pipeline stage, or the
+last of a `( list )` stage is what bash execs, so its death is the
+subshell's, reported by the parent with the subshell's text
+(`tailcommand`, `Shell.tailnode`/`taillevel`).
+
+**Platforms.** API: `os_kill`, `os_sigpending`, `os_sigmode`,
+`Spawn.sigign`, `Spawned.pid`, `OsInfo.sigign`, `WSIGNALED`.
+- vos: processes have pids (from 10000; the outer shell 2, nested
+  shells their own). Shells get every signal as a pending bit and are
+  woken from a pipe read or `os_wait` (`VProc.intr`), never from a write
+  or `os_waitproc`; fakes die (128+N) unless the signal is harmless or
+  in their `sigign`. `os_sleep` blocks in virtual time (`VW_SLEEP`), so
+  that a sleeping program can be killed; when nothing can run the clock
+  jumps to the earliest sleeper (`vadvance`), which also means sleepers
+  never look like a deadlock.
+- POSIX: `os_sigmode` installs `sigaction` (SA_RESTART) handlers that
+  set bits and write the self-pipe; `os_wait` returns null once bits
+  are set; `os_kill` is kill(2).
+- Win32: `os_kill` is TerminateProcess with exit code 128+N; nothing
+  arrives through `os_sigpending` yet (Ctrl-C and the signal channel
+  to our own shells are M3b/M5b); crash codes carry `WSIGNALED`.
+
+Not done: job specs (`kill %1`: no job table yet), `wait -n` and
+signals during `read -t` (timers), Ctrl-C on Win32, extdebug, the
+`declare -t` trace attribute, SIGCHLD traps, bash's quirk that a
+subshell resetting an inherited ignored SIGQUIT still ignores it. The
+execscript oracle differs only in the order of trap listings
+(exec.right was made where SIGUSR1 > SIGTERM), getconf (no fake) and
+coproc.
 
 Bash 5.3 oddity, not copied: run as a script file, `shopt -s lastpipe;
 echo e | exit 7` exits 0; with `-c` (how specs run) it exits 7, which is
@@ -414,9 +531,7 @@ In suggested order, each with the API to use:
    programs (Known limits).
 4. **Here-documents and captures for externals**: done (see
    "Materialization"); `&` must use `capturewriter`.
-5. **Traps and SIGPIPE**: subshells reset caught traps; `sigpipe()`
-   must run a PIPE trap, or with `trap '' PIPE` report
-   "write error: Broken pipe" instead.
+5. **Traps and SIGPIPE**: done (see "Signals and traps").
 6. **Interim `&`, wait and coproc** as fiber vprocs: `spawnvproc` with a
    job table entry instead of a join; `wait` joins. These outlive the
    command, so see invariant 3.
