@@ -517,6 +517,7 @@ static void runexittrap(Shell *sh, Arena)
     i32 status = sh->status;
     Escape e = {};
     e.up    = sh->esc;
+    e.bout  = sh->bout;
     e.undo  = sh->undo;
     e.frame = sh->frame;
     sh->esc = &e;

@@ -425,6 +425,7 @@ static void showprompt(Shell *sh, b32 first)
     Arena  a = *scratchat(sh, sh->capdepth+1);
     Escape e = {};
     e.up    = sh->esc;
+    e.bout  = sh->bout;
     e.undo  = sh->undo;
     e.frame = sh->frame;
     sh->esc = &e;
@@ -446,6 +447,7 @@ static iz readstdin(Shell *sh, File *f, u8 *buf, iz len)
     if (!sh->interactive) return fileread(sh, f, buf, len);
     Escape e = {};
     e.up    = sh->esc;
+    e.bout  = sh->bout;
     e.undo  = sh->undo;
     e.frame = sh->frame;
     sh->esc = &e;

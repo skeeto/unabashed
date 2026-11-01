@@ -497,6 +497,7 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     // then an EXIT action that reads BASH_SOURCE)
     Escape e = {};
     e.up    = sh->esc;
+    e.bout  = sh->bout;
     e.undo  = sh->undo;
     e.frame = sh->frame;
     sh->esc = &e;

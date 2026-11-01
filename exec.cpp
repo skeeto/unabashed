@@ -390,6 +390,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     Watermark w     = storeenter(sh->store);
     Escape    e     = {};
     e.up    = sh->esc;
+    e.bout  = sh->bout;
     e.undo  = sh->undo;
     e.frame = sh->frame;
     sh->esc = &e;
@@ -923,6 +924,7 @@ static Str traceprefix(Shell *sh, Arena *a)
     i32 status = sh->status;
     Escape e = {};
     e.up    = sh->esc;
+    e.bout  = sh->bout;
     e.undo  = sh->undo;
     e.frame = sh->frame;
     sh->esc = &e;
@@ -1453,6 +1455,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         Watermark w = storeenter(sh->store);
         Escape e = {};
         e.up = sh->esc;
+        e.bout = sh->bout;
         e.undo = sh->undo;
         sh->esc = &e;
         sh->args.v = argv + 1;
@@ -1605,6 +1608,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     // that resumes after an expansion error has no stale frames
     Escape e = {};
     e.up    = sh->esc;
+    e.bout  = sh->bout;
     e.undo  = sh->undo;
     e.frame = sh->frame;
     sh->esc = &e;
@@ -1664,6 +1668,7 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, b32 valsub, Arena scratch)
 
     Escape e = {};
     e.up    = sh->esc;
+    e.bout  = sh->bout;
     e.undo  = sh->undo;
     e.frame = sh->frame;
     sh->esc = &e;
@@ -3091,6 +3096,7 @@ static void runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
 {
     Escape e = {};
     e.up        = sh->esc;
+    e.bout      = sh->bout;
     e.undo      = sh->undo;
     e.frame     = sh->frame;
     e.loopdepth = sh->loopdepth;

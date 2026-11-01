@@ -313,6 +313,11 @@ enum : i32 {  // reasons to unwind to an escape point
     ESC_INTR,       // interactive: Ctrl-C abandons the command line
 };
 
+struct BOut {         // output of the running builtin
+    Buf b;        // never grows: it shares an arena with the builtin
+    b32 failed;   // an early write failed
+};
+
 struct Escape {
     void   *jmp[5];
     i32     why;      // ESC_*
@@ -320,11 +325,7 @@ struct Escape {
     Undo   *undo;     // redirections to keep
     Frame  *frame;
     i32     loopdepth;
-};
-
-struct BOut {         // output of the running builtin
-    Buf b;        // never grows: it shares an arena with the builtin
-    b32 failed;   // an early write failed
+    BOut   *bout;     // builtin output current when it was set up
 };
 
 enum { NPOOL = 64 };
@@ -907,6 +908,8 @@ static iz fdread(Shell *sh, i32 fd, u8 *buf, iz len)
 // Unwind to the innermost escape point.
 [[noreturn]] static void escape(Shell *sh, i32 why)
 {
+    // A builtin's output buffer lives in its frame, which is now gone
+    sh->bout     = sh->esc->bout;
     sh->esc->why = why;
     __builtin_longjmp(sh->esc->jmp, 1);
 }
