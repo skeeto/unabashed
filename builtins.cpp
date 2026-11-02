@@ -1903,7 +1903,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             case 'd': delim = val.len ? val[0] : 0; break;
             case 'n':
             case 'N':
-                if (!parsei64(val, &nchars) || nchars < 0) {
+                if (!parsei64(val, &nchars) || nchars < 0 || nchars > 0x7fffffff) {
                     builtinerror(sh, scratch, "read", concat(&scratch, val, ": invalid number"));
                     return 1;
                 }
@@ -1918,7 +1918,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                 break;
             case 'u': {
                 i64 v;
-                if (!parsei64(val, &v) || v<0) {
+                if (!parsei64(val, &v) || v<0 || v>0x7fffffff) {
                     builtinerror(sh, scratch, "read", concat(&scratch, val, ": invalid file descriptor specification"));
                     return 1;
                 } else if (v>=FDMAX || !sh->fds->fd[v]) {
@@ -2951,7 +2951,10 @@ static i32 getopts(Shell *sh, Str *args, iz nargs, Arena scratch)
 
     Got g = getvar(sh, &scratch, "OPTIND");
     i64 optind = 1;
-    if (!parsei64(g.value, &optind) || optind < 1) optind = 1;
+    // bash keeps OPTIND in an int: larger values are truncated
+    if (!parsei64(g.value, &optind)) optind = 1;
+    optind = (i32)(u32)(u64)optind;
+    if (optind < 1) optind = 1;
     if (sh->optchar<1 || (optind<=ac && sh->optchar>=av[optind-1].len)) {
         sh->optchar = 1;  // the words changed under it
     }
