@@ -2,10 +2,10 @@
 # Usage: tools/fuzz MODE [MINUTES [CORES]]
 # Build main_fuzz.cpp in one of its modes and fuzz it with AFL++ in
 # ~/fuzz-MODE, from a snapshot of the working tree. MODE is run, parse,
-# chaos or isolate (see main_fuzz.cpp), or regex or pattern, which
-# compare regex.cpp or pattern.cpp with glibc in memory
-# (t/unit/regex_diff.cpp, t/unit/pattern_diff.cpp). Defaults: 60
-# minutes, 2 cores.
+# chaos or isolate (see main_fuzz.cpp), or regex, pattern or float,
+# which compare regex.cpp, pattern.cpp or float.cpp with glibc in
+# memory (t/unit/regex_diff.cpp, t/unit/pattern_diff.cpp,
+# t/unit/float_diff.cpp). Defaults: 60 minutes, 2 cores.
 # Run it in WSL or on Linux with AFL++ installed; crashes land in
 # ~/fuzz-MODE/out/*/crashes. To replay them, build the same mode with a
 # plain compiler, which runs each file named on its command line:
@@ -23,6 +23,7 @@ chaos)   def=-DFUZZ_CHAOS ;;
 isolate) def=-DFUZZ_ISOLATE ;;
 regex)   def= ;;
 pattern) def= ;;
+float)   def= ;;
 *)       echo "tools/fuzz: unknown mode $mode" >&2; exit 2 ;;
 esac
 src=$(cd "$(dirname "$0")/.." && pwd)
@@ -33,6 +34,7 @@ mkdir -p "$dir/src" "$dir/in"
 target=main_fuzz.cpp
 [ "$mode" = regex ] && target=t/unit/regex_diff.cpp
 [ "$mode" = pattern ] && target=t/unit/pattern_diff.cpp
+[ "$mode" = float ] && target=t/unit/float_diff.cpp
 afl-clang-fast++ -std=c++20 -fno-exceptions -fno-rtti -g3 -O1 \
     -fsanitize=undefined -fsanitize-trap $def \
     -o "$dir/fuzz" "$dir/src/$target"
@@ -64,6 +66,22 @@ elif [ "$mode" = pattern ]; then
 011 *([[:upper:]])x ABx
 020 \**[é-ü] *aü
 000 [a-c]??\? b12?
+END
+elif [ "$mode" = float ]; then
+    # Seeds: a format byte (octal: conversion in the low 3 bits of
+    # aAeEfFgG, flags above), a width byte, a precision byte (times 4,
+    # 377 for none), the number's text
+    n=0
+    while read -r f w p text; do
+        n=$((n + 1))
+        printf "\\$f\\$w\\$p%s" "$text" >"$dir/in/$n"
+    done <<'END'
+004 000 377 3.14159
+002 012 002 1e-4940
+007 000 001 0x1.fffffffffffffffep16383
+106 040 005 9.9999995
+000 000 000 0xf.8p0
+005 000 012 1.18973149535723176508e+4932
 END
 else
     # Seeds: the small spec scripts
