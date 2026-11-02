@@ -21,8 +21,10 @@ static Builtin *findbuiltin(Str name);
 static b32      parsei64(Str, i64 *);
 static void     execute(Shell *, Node *, Arena);
 static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i32 line = 1,
-                          b32 (*fill)(void *, Lexer *) = 0, void *fillctx = 0);
+                          b32 (*fill)(void *, Lexer *) = 0, void *fillctx = 0,
+                          b32 comsub = 0);
 static Str      runfunsub(Shell *, Arena *, Str src, b32 valsub, Arena);
+static i32      compatlevel(Shell *);  // builtins.cpp
 static void     joinpsubs(Shell *);
 static void     closeall(Shell *);
 
@@ -259,6 +261,17 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
     return {};
 }
 
+// let's text is already expanded: as in bash (compat 52 and later, or
+// under array_expand_once), an associative subscript is not skipped by
+// shell quoting
+static b32 arithliteralsub(void *ctx, Str name)
+{
+    ShellArith *c = (ShellArith *)ctx;
+    if (compatlevel(c->sh)<=51 && !c->sh->shopt[S_ARRAY_EXPAND_ONCE]) return 0;
+    Value *v = lookup(c->sh, name);
+    return v && v->arr && v->arr->bucket;
+}
+
 static Arith arithrun(Shell *sh, Arena *a, Str expr, b32 *readonly, Str who = {})
 {
     ShellArith c = {};
@@ -271,6 +284,7 @@ static Arith arithrun(Shell *sh, Arena *a, Str expr, b32 *readonly, Str who = {}
     env.get     = arithget;
     env.set     = arithset;
     env.nounset = sh->opt[O_NOUNSET];
+    if (who == "let") env.literalsub = arithliteralsub;
     Arith r = arith(&env, a, expr);
     if (!r.ok && r.unbound) {
         fatalerror(sh, *a, r.err);  // set -u: fatal, with no prefix
@@ -352,6 +366,7 @@ struct SubJob {
     Node *node;
     Str   src;
     b32   newloops;  // break and continue cannot see enclosing loops
+    b32   comsub;    // SUB_SOURCE from $(...): see runsource
     b32   nojobs;    // a ( list ): it starts with no jobs or coprocesses
     Func *fn;        // SUB_CALL: a function and its arguments
     Str  *argv;
@@ -369,10 +384,11 @@ static void runjob(Shell *sh, SubJob *j, Arena scratch)
     case SUB_SOURCE:
         // Parsed again at run time, so its syntax errors are its own
         sh->tracedepth++;  // restored with the subshell
-        runsource(sh, j->src, "command substitution", scratch, 0, sh->line);
+        runsource(sh, j->src, "command substitution", scratch, 0, sh->line,
+                  0, 0, j->comsub);
         break;
     case SUB_FUNSUB:
-        runsource(sh, j->src, sh->iname, scratch, 0, sh->line);
+        runsource(sh, j->src, sh->iname, scratch, 0, sh->line, 0, 0, 1);
         break;
     case SUB_CALL:
         sh->status = callfunction(sh, j->fn, j->argv, j->argc, scratch);
@@ -532,8 +548,9 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
     i32   depth = ++sh->capdepth;
     Arena child = *scratchat(sh, depth);
     SubJob j = {};
-    j.kind = SUB_SOURCE;
-    j.src  = src;
+    j.kind   = SUB_SOURCE;
+    j.src    = src;
+    j.comsub = kind == 0;
     if (kind==2 && src.len && src[0]=='|') {
         // ${| cmd; }: the current shell, expanding to a local REPLY
         Str val = runfunsub(sh, a, cuthead(src, 1), 1, child);
@@ -551,7 +568,7 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
     } else {
         b32 errexit = sh->opt[O_ERREXIT];
         b32 verbose = sh->opt[O_VERBOSE];
-        if (!sh->shopt[S_INHERIT_ERREXIT] && !sh->opt[O_POSIX]) {
+        if (!sh->shopt[S_INHERIT_ERREXIT]) {
             sh->opt[O_ERREXIT] = 0;
         }
         sh->opt[O_VERBOSE] = 0;  // as bash, which turns off -v there
@@ -1059,6 +1076,7 @@ static u32 hashcmdbucket(Str name)
 }
 
 static i32 setoptionbyname(Shell *, Str name, b32 on);  // builtins.cpp
+static void setposix(Shell *, b32 on);                 // builtins.cpp
 
 static HashCmd *hashfind(Shell *sh, Str name)
 {
@@ -1582,7 +1600,12 @@ static void leaveframe(Shell *sh, Frame *f)
     poplocals(sh, f);
     if (f->opts) {
         b32 eof = sh->opt[O_IGNOREEOF];
+        b32 posix = sh->opt[O_POSIX];
         for (i32 i = 0; i < O_COUNT; i++) sh->opt[i] = f->opts[i];
+        if (posix != sh->opt[O_POSIX]) {
+            sh->opt[O_POSIX] = posix;
+            setposix(sh, !posix);  // and POSIXLY_CORRECT
+        }
         if (eof != sh->opt[O_IGNOREEOF]) {
             setoptionbyname(sh, "ignoreeof", sh->opt[O_IGNOREEOF]);  // and IGNOREEOF
         }
@@ -1705,14 +1728,22 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, b32 valsub, Arena scratch)
     sh->esc = &e;
     Str val = {};
     i32 tracedepth = sh->tracedepth++;
+    // As in $(...): no -v, and -e only with inherit_errexit, both
+    // restored afterwards
+    b32 errexit = sh->opt[O_ERREXIT];
+    b32 verbose = sh->opt[O_VERBOSE];
+    if (!sh->shopt[S_INHERIT_ERREXIT]) sh->opt[O_ERREXIT] = 0;
+    sh->opt[O_VERBOSE] = 0;
     b32 escaped = __builtin_setjmp(e.jmp);
     if (!escaped) {
         if (valsub) makelocal(sh, &scratch, "REPLY");
-        runsource(sh, src, sh->iname, scratch, 0, sh->line);
+        runsource(sh, src, sh->iname, scratch, 0, sh->line, 0, 0, 1);
         if (valsub) val = clone(a, getvar(sh, &scratch, "REPLY").value);
     }
     sh->esc = e.up;
     sh->tracedepth = tracedepth;
+    sh->opt[O_ERREXIT] = errexit;
+    sh->opt[O_VERBOSE] = verbose;
 
     if (sh->flow == FLOW_RETURN) {
         sh->flow = FLOW_NONE;
@@ -3239,9 +3270,12 @@ static void runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
 
 // Parse and run src one command at a time, as -c, eval, source and
 // command substitution do, numbering its lines from line. Returns the
-// final status.
+// final status. With comsub, src is the printed text of a $(...) or
+// ${ ...; } body, whose aliases the parser expanded only in POSIX mode:
+// as in bash, it is parsed again with aliases only outside POSIX mode,
+// until a command changes expand_aliases.
 static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i32 line,
-                     b32 (*fill)(void *, Lexer *), void *fillctx)
+                     b32 (*fill)(void *, Lexer *), void *fillctx, b32 comsub)
 {
     byte *beg = scratch.beg;
     byte *end = scratch.mem ? scratch.mem->limit : scratch.end;
@@ -3256,6 +3290,9 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
     L->extglob       = L->extglobopt = sh->shopt[S_EXTGLOB];
     L->posix         = sh->opt[O_POSIX];
     L->utf8          = sh->utf8;
+    if (comsub && L->posix) {
+        L->expandaliases = 0;
+    }
     Lexer *outer = sh->lexer;
     Str    oname = sh->iname;
     sh->lexer = L;
@@ -3328,7 +3365,10 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             runcommand(sh, r.cmd, *L->a, reader);
         }
         // Syncing options the command may have changed
-        L->expandaliases = L->aliasopt = sh->shopt[S_EXPAND_ALIASES];
+        if (!comsub || L->aliasopt!=sh->shopt[S_EXPAND_ALIASES]) {
+            L->expandaliases = L->aliasopt = sh->shopt[S_EXPAND_ALIASES];
+            comsub = 0;
+        }
         L->extglob       = L->extglobopt = sh->shopt[S_EXTGLOB];
         L->posix         = sh->opt[O_POSIX];
         if (sh->exiting || sh->flow) break;

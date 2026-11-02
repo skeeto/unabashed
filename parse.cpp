@@ -270,11 +270,11 @@ struct Alias {
     uz     seq;        // order of definition, for BASH_ALIASES
 };
 
-// Look up an alias by name. Returns null if not found.
+// Look up an alias by name. Returns null if not found or unaliased.
 static Alias *findalias(Alias *t, Str name)
 {
     for (u64 h = hash(name); t; h <<= 2) {
-        if (t->name == name) return t;
+        if (t->name == name) return t->value.data ? t : 0;
         t = t->child[h>>62];
     }
     return 0;

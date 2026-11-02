@@ -683,6 +683,20 @@ static Array *argvarray(Shell *sh, Arena *a, i32 d)
 
 enum { NALIASBUCKETS = 64 };  // bash's alias table
 
+// As bash: no metacharacters, quotes, $, < or >, or slash
+static b32 validaliasname(Str name)
+{
+    for (iz i = 0; i < name.len; i++) {
+        switch (name[i]) {
+        case ' ': case '\t': case '\n': case '(': case ')': case '<':
+        case '>': case ';': case '&': case '|': case '"': case '\'':
+        case '\\': case '`': case '$': case '/':
+            return 0;
+        }
+    }
+    return 1;
+}
+
 // Define an alias, or give it a new value.
 static void defalias(Shell *sh, Str name, Str value)
 {
@@ -970,7 +984,13 @@ static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str val
     if (!val) return 0;
     if (val->attrs & V_NOASSIGN) return 1;
     switch (val->dyn) {
-    case DYN_BASH_ALIASES: defalias(sh, key, value);   return 1;
+    case DYN_BASH_ALIASES:
+        if (!validaliasname(key)) {
+            shellerror(sh, scratch, concat3(&scratch, "`", key, "': invalid alias name"));
+        } else {
+            defalias(sh, key, value);
+        }
+        return 1;
     case DYN_BASH_CMDS:    hashenter(sh, key, value, 0); return 1;
     case DYN_DIRSTACK:     return 1;  // no pushd yet
     }

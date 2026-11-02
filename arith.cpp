@@ -34,6 +34,10 @@ struct ArithEnv {
     // Assign a value; return an error message (no prefix) or a null Str.
     Str  (*set)(void *ctx, ArithRef *, i64 value, Arena *);
     b32  nounset;  // set -u: an unset variable is an error
+    // Optional: true if name's subscript ends at the first ']', with no
+    // quoting, as bash skips an associative array's subscript in text
+    // already expanded (let)
+    b32  (*literalsub)(void *ctx, Str name);
 
     // Maintained by arith, so that calls nested in a callback continue
     // the recursion count; zero-initialize them.
@@ -419,7 +423,13 @@ static u8 *arithscanident(ArithExpr *x, u8 *p, b32 peek)
         x->tokref.name = span(beg, p);
     }
     if (arithat(x, p) == '[') {
-        u8 *e = arithskipsub(x, p);
+        ArithEnv *env = x->c->env;
+        u8 *e = 0;
+        if (env->literalsub && env->literalsub(env->ctx, span(beg, p))) {
+            for (e = p+1; arithat(x, e) && *e!=']'; e++) {}
+        } else {
+            e = arithskipsub(x, p);
+        }
         if (arithat(x, e) != ']') {
             aritherror(x, "bad array subscript");
             return p;

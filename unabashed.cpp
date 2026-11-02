@@ -217,8 +217,17 @@ static void varchanged(Shell *sh, Str name)
         // Assigning or unsetting OPTIND restarts getopts at a word start
         if (!sh->ingetopts) sh->optchar = 1;
     } else if (name == "POSIXLY_CORRECT") {
-        Arena none = {};
-        if (getvar(sh, &none, name).set) sh->opt[O_POSIX] = 1;
+        Value *v = lookup(sh, name);
+        b32 on = !!v;
+        if (on && (v->attrs&V_TEMP) && !sh->posixsaved) {
+            // as bash, one level of saving for POSIXLY_CORRECT=y cmd
+            for (i32 i = 0; i < countof(posixshopts); i++) {
+                sh->posixshopts[i] = sh->shopt[posixshopts[i]];
+            }
+            sh->posixsaved = 1;
+        }
+        sh->opt[O_POSIX] = on;
+        posixinit(sh, on);
     } else if (name == "GLOBIGNORE") {
         // A non-empty value turns dotglob on, and unsetting turns it off
         Arena none = {};
@@ -538,6 +547,7 @@ static i32 sh_main(Os *os, OsInfo *info)
     sh->fds     = alloc<Fdtab>(&perm);
     sh->reserve = info->reserve;
     sh->name    = info->nargs ? info->args[0] : Str("bash");
+    sh->shellname = sh->name;
     sh->iname   = sh->name;
     sh->pid     = info->pid;
     sh->bashpid = info->pid;
@@ -602,7 +612,7 @@ static i32 sh_main(Os *os, OsInfo *info)
             }
             if (a=="--norc" || a=="--noprofile" || a=="--noediting") continue;
             if (a == "--posix") {
-                sh->opt[O_POSIX] = 1;
+                setposix(sh, 1);
                 continue;
             }
             if (a.len<2 || (a[0]!='-' && a[0]!='+') || startswith(a, "--")) break;

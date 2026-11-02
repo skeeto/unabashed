@@ -602,15 +602,46 @@ static Str basename(Str path)
     return cuthead(path, i);
 }
 
+// Prompt text from outside the prompt (names, directories): control
+// characters made visible as ^X, then, when the prompt will be expanded,
+// backslash-quoted for double quotes, as bash does.
+static void promptput(Buf *b, Str s, b32 vis, b32 quote)
+{
+    for (iz i = 0; i < s.len; i++) {
+        u8 c = s[i];
+        if (vis && (c<0x20 || c==0x7f)) {
+            putbyte(b, '^');
+            c = c==0x7f ? '?' : (u8)(c | 0x40);
+        }
+        if (quote && (c=='$' || c=='`' || c=='"' || c=='\\')) {
+            putbyte(b, '\\');
+        }
+        putbyte(b, c);
+    }
+}
+
 // Decode the backslash escapes of a prompt string, as ${x@P} does,
 // then expand it as if in double quotes when promptvars is on.
 static Str promptdecode(X *x, Str s)
 {
     Shell *sh = x->sh;
     Arena *a  = x->a;
+    b32 expand  = sh->shopt[S_PROMPTVARS] || sh->opt[O_POSIX];
+    b32 editing = sh->opt[O_EMACS] || sh->opt[O_VI];
     Buf b(a, s.len+16);
+    PfZone *zone = 0;
     for (iz i = 0; i < s.len; i++) {
         u8 c = s[i];
+        if (c=='!' && sh->opt[O_POSIX]) {
+            // the history number, or ! for !!; no history here
+            if (i+1<s.len && s[i+1]=='!') {
+                putbyte(&b, '!');
+                i++;
+            } else {
+                putbyte(&b, '1');
+            }
+            continue;
+        }
         if (c!='\\' || i+1==s.len) {
             putbyte(&b, c);
             continue;
@@ -619,34 +650,83 @@ static Str promptdecode(X *x, Str s)
         switch (c) {
         case 'a':  putbyte(&b, 7);  break;
         case 'e':  putbyte(&b, 27); break;
-        case 'n':  putbyte(&b, '\n'); break;
         case 'r':  putbyte(&b, '\r'); break;
         case '\\': putbyte(&b, '\\'); break;
-        case '[':
-        case ']':  break;
-        case '$':  putbyte(&b, sh->euid ? '$' : '#'); break;
-        case 's':  print(&b, basename(sh->name)); break;
-        case 'j':  putbyte(&b, '0'); break;
+        case 'n':  print(&b, editing ? Str("\r\n") : Str("\n")); break;
+        case '[':  if (editing) putbyte(&b, 1); break;
+        case ']':  if (editing) putbyte(&b, 2); break;
+        case '$':
+            if (expand && sh->euid) putbyte(&b, '\\');
+            putbyte(&b, sh->euid ? '$' : '#');
+            break;
+        case '!':  putbyte(&b, '1'); break;  // no history
+        case '#':  putbyte(&b, '1'); break;
+        case 's':  promptput(&b, basename(sh->shellname), 1, expand); break;
+        case 'j': {
+            i64 n = 0;
+            for (Job *j = sh->jobs; j; j = j->next) n++;
+            print(&b, n);
+        } break;
+        case 'l':  print(&b, "tty"); break;
         case 'v':  print(&b, "5.3"); break;
         case 'V':  print(&b, "5.3.0"); break;
-        case 'H':  print(&b, getvar(sh, a, "HOSTNAME").value); break;
-        case 'h':  print(&b, cut(getvar(sh, a, "HOSTNAME").value, '.').head); break;
-        case 'u':  print(&b, getvar(sh, a, "USER").value); break;
+        case 'H':
+            promptput(&b, getvar(sh, a, "HOSTNAME").value, 0, expand);
+            break;
+        case 'h':
+            promptput(&b, cut(getvar(sh, a, "HOSTNAME").value, '.').head, 0, expand);
+            break;
+        case 'u':  promptput(&b, getvar(sh, a, "USER").value, 0, expand); break;
         case 'w':
         case 'W': {
             Str pwd  = getvar(sh, a, "PWD").value;
             Got home = getvar(sh, a, "HOME");
-            if (home.set && home.value.len && startswith(pwd, home.value) &&
-                    (pwd.len==home.value.len || pwd[home.value.len]=='/')) {
-                if (pwd.len == home.value.len) {
-                    pwd = "~";
-                } else if (c == 'w') {
-                    pwd = concat(a, "~", cuthead(pwd, home.value.len));
-                }
+            b32 athome = home.set && home.value==pwd;
+            if (c=='W' && !athome) {
+                if (pwd!="/" && pwd!="//") pwd = basename(pwd);
+            } else if (home.set && home.value.len && startswith(pwd, home.value) &&
+                       (pwd.len==home.value.len || pwd[home.value.len]=='/')) {
+                pwd = concat(a, "~", cuthead(pwd, home.value.len));
             }
-            print(&b, c=='W' && pwd.len>1 ? basename(pwd) : pwd);
-            break;
-        }
+            promptput(&b, pwd, 1, expand);
+        } break;
+        case 'd': case 't': case 'T': case '@': case 'A': case 'D': {
+            Str f = {};
+            switch (c) {
+            case 'd': f = "%a %b %d";  break;
+            case 't': f = "%H:%M:%S";  break;
+            case 'T': f = "%I:%M:%S";  break;
+            case '@': f = "%I:%M %p";  break;
+            case 'A': f = "%H:%M";     break;
+            }
+            if (c == 'D') {
+                if (i+1>=s.len || s[i+1]!='{') {
+                    putbyte(&b, '\\');
+                    putbyte(&b, c);
+                    break;
+                }
+                iz k = i + 2;
+                for (; k<s.len && s[k]!='}'; k++) {}
+                f = span(s.data+i+2, s.data+k);
+                f = f.len ? f : Str("%X");
+                i = k<s.len ? k : s.len-1;
+            }
+            if (!zone) {
+                Str tz = "UTC";
+                Value *v = lookup(sh, "TZ");
+                if (v && (v->attrs & V_EXPORT)) {
+                    Got g = getvar(sh, a, "TZ");
+                    tz = g.set ? g.value : tz;
+                }
+                zone  = alloc<PfZone>(a);
+                *zone = parsezone(tz);
+            }
+            PfTm tm = localtm(os_now(sh->os)/1000000000, zone);
+            PfTout t = {};
+            fmttime(&t, f, &tm);
+            Str r = t.full ? Str{} : Str{t.data, t.len};
+            promptput(&b, r, 0, c=='D' && expand);
+        } break;
         default:
             if (c>='0' && c<='7') {
                 i32 v = 0;
@@ -663,7 +743,7 @@ static Str promptdecode(X *x, Str s)
         }
     }
     Str r = finish(&b);
-    return sh->shopt[S_PROMPTVARS] ? expandword(x, r, XC_DQUOTE) : r;
+    return expand ? expandword(x, r, XC_DQUOTE) : r;
 }
 
 // One value transformed by ${name@t}, except for @A and @a.
@@ -1183,6 +1263,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     Str uname = hassub ? span(name.data, s.data+i) : name;  // for errors
 
     Param p = {};
+    Param q = {};  // the indirection's own value
     b32 got = 0;
     if (indirect && rest.len==1 && (rest[0]=='*' || rest[0]=='@') &&
             !hassub && identstart(name[0])) {
@@ -1192,8 +1273,8 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         sort(names.data, names.len, strless, *x->a);
         putlist(x, names.data, names.len, rest[0]=='*', ctx);
         return;
-    } else if (indirect && hassub && allsub(sub)) {
-        // ${!name[@]}: the keys
+    } else if (indirect && hassub && allsub(sub) && !rest.len) {
+        // ${!name[@]}: the keys (with an operator, an indirection)
         p = getkeys(x, name, sub=="*");
         got = 1;
         indirect = 0;
@@ -1209,12 +1290,24 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         if (rest.len && find(":-=?+#%/^,~@", takehead(rest, 1))<0) {
             badsubst(x, whole);  // checked before the indirection
         }
-        Param q = hassub ? getelems(x, name, sub) : getparam(x, name);
+        q = hassub ? getelems(x, name, sub) : getparam(x, name);
         if (q.bad) return;
         if (!q.set && !q.list) {
-            Arena a = *x->a;
-            expansionerror(sh, a, concat(&a, uname, ": invalid indirect expansion"));
+            // As bash: only an unset variable, or an element of a
+            // missing array, is an error; an unset positional, special
+            // or element names nothing, and expands as unset
+            b32 ident = identstart(name[0]);
+            if ((ident && !hassub) || (hassub && !lookup(sh, name))) {
+                Arena a = *x->a;
+                expansionerror(sh, a, concat(&a, uname, ": invalid indirect expansion"));
+            }
+            uname    = concat(x->a, "!", uname);
+            got      = 1;
+            indirect = 0;
+            hassub   = 0;
         }
+    }
+    if (indirect) {
         if (q.list && !q.ln) {
             return;  // nothing to name a variable
         }
@@ -1369,7 +1462,12 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     }
 
     if (!p.set && !p.list && sh->opt[O_NOUNSET]) {
-        unbound(x, uname);
+        // As bash: a non-empty array's @a and @A are not unbound for
+        // want of element 0
+        Value *val  = op=='@' && identstart(name[0]) ? lookup(sh, name) : 0;
+        Array *arr  = varray(sh, x->a, val);
+        b32 exempt  = arr && acount(arr) && (rest=="@a" || rest=="@A");
+        if (!exempt) unbound(x, uname);
     }
 
     if (op=='#' || op=='%') {
@@ -1409,7 +1507,10 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             mode = PF_ANCHOREND;
             body = cuthead(body, 1);
         }
-        iz  slash = findunquoted(body, '/');
+        // As bash, a pattern may start with the slash after ${x//
+        iz  off   = all && body.len && body[0]=='/';
+        iz  slash = findunquoted(cuthead(body, off), '/');
+        slash += slash<0 ? 0 : off;
         Str patword = slash<0 ? body : takehead(body, slash);
         Str repword = slash<0 ? Str{} : cuthead(body, slash+1);
         Str pat = expandpat(x, patword, pctx);
@@ -1526,11 +1627,25 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             putlist(x, v, n, p.star, ctx);
         } else if (p.ln) {
             putvalue(x, assignform(x, name, p.lv[0]), ctx);
+        } else if (val) {
+            Str let = attrletters(x->a, val->attrs & ~(V_LOCAL|V_TEMP));
+            if (let.len) {
+                putvalue(x, concat3(x->a, "declare -", let, concat(x->a, " ", name)), ctx);
+            }
         }
         return;
     }
     if (op=='@' && p.list && !p.ln) {
-        return;  // no values: nothing to transform, nor to check
+        // No values: nothing to transform, nor to check, except that a
+        // variable with attributes still reports them
+        Value *val = identstart(name[0]) ? lookup(sh, name) : 0;
+        Str    let = val ? attrletters(x->a, val->attrs & ~(V_LOCAL|V_TEMP)) : Str{};
+        if (let.len && rest=="@a") {
+            putvalue(x, let, ctx);
+        } else if (let.len && rest=="@A") {
+            putvalue(x, concat3(x->a, "declare -", let, concat(x->a, " ", name)), ctx);
+        }
+        return;
     }
     if (op=='@' && rest.len==2 && transformop(rest[1])) {
         u8 t = rest[1];
@@ -1574,10 +1689,13 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         } else if (t == 'A') {
             if (p.set && identstart(name[0])) {
                 putvalue(x, assignform(x, name, p.value), ctx);
-            } else if (val && (val->arr || (val->attrs & (V_ARRAY|V_ASSOC)))) {
-                // an array without element 0: declared alone
+            } else if (val && identstart(name[0])) {
+                // an array without the element, or a variable with
+                // attributes but no value: declared alone
                 Str let = attrletters(x->a, val->attrs & ~(V_LOCAL|V_TEMP));
-                putvalue(x, concat3(x->a, "declare -", let, concat(x->a, " ", name)), ctx);
+                if (let.len) {
+                    putvalue(x, concat3(x->a, "declare -", let, concat(x->a, " ", name)), ctx);
+                }
             }
         } else if (p.set) {
             putvalue(x, transform(x, name, p.value, t), ctx);

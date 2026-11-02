@@ -413,6 +413,7 @@ struct Shell {
     uz       aliasseq;     // aliases defined so far
     Args     args;
     Str      name;         // $0
+    Str      shellname;    // argv[0], for \s in prompts
     Str      iname;        // input name in syntax errors: -c or a file
     Str      srcname;      // BASH_SOURCE[0]: file of the running code
 
@@ -456,6 +457,8 @@ struct Shell {
     // Options
     b32      opt[O_COUNT];
     b32      shopt[S_COUNT];
+    b32      posixsaved;     // posixshopts below hold the settings
+    b32      posixshopts[5]; // before a temporary POSIXLY_CORRECT
     b32      cflag;        // started with -c
     b32      sflag;
 

@@ -1401,10 +1401,54 @@ static i32 b_shift(Shell *sh, Str *args, iz nargs, Arena scratch)
     return 0;
 }
 
+// The shopt options that POSIX mode turns on, as bash's posix_initialize
+static i32 posixshopts[] = {
+    S_INTERACTIVE_COMMENTS, S_SOURCEPATH, S_EXPAND_ALIASES,
+    S_INHERIT_ERREXIT, S_SHIFT_VERBOSE,
+};
+
+// Entering or leaving POSIX mode (POSIXLY_CORRECT changed): leaving
+// restores the settings saved for a temporary binding, if any, else
+// bash's defaults.
+static void posixinit(Shell *sh, b32 on)
+{
+    if (on) {
+        for (i32 i = 0; i < countof(posixshopts); i++) {
+            sh->shopt[posixshopts[i]] = 1;
+        }
+    } else if (sh->posixsaved) {
+        for (i32 i = 0; i < countof(posixshopts); i++) {
+            sh->shopt[posixshopts[i]] = sh->posixshopts[i];
+        }
+        sh->posixsaved = 0;
+    } else {
+        sh->shopt[S_EXPAND_ALIASES] = sh->interactive;
+        sh->shopt[S_SHIFT_VERBOSE]  = 0;
+    }
+}
+
+// set -o posix and --posix: POSIXLY_CORRECT follows the option
+static void setposix(Shell *sh, b32 on)
+{
+    if (sh->opt[O_POSIX] == on) return;
+    byte  mem[256];
+    Arena a = {mem, mem+sizeof(mem)};
+    if (on) {
+        setvar(sh, a, "POSIXLY_CORRECT", "y");
+    } else {
+        unsetvar(sh, "POSIXLY_CORRECT");
+    }
+    sh->opt[O_POSIX] = on;  // even if the variable is readonly
+}
+
 static i32 setoptionbyname(Shell *sh, Str name, b32 on)
 {
     for (i32 k = 0; k < O_COUNT; k++) {
         if (setoptions[k].name == name) {
+            if (k == O_POSIX) {
+                setposix(sh, on);
+                return 1;
+            }
             sh->opt[k] = on;
             if (k==O_EMACS && on) sh->opt[O_VI] = 0;
             if (k==O_VI && on) sh->opt[O_EMACS] = 0;
@@ -2820,8 +2864,9 @@ static i32 b_alias(Shell *sh, Str *args, iz nargs, Arena scratch)
             }
             continue;
         }
-        if (!c.head.len) {
-            builtinerror(sh, scratch, "alias", concat3(&scratch, "`", args[i], "': invalid alias name"));
+        if (!c.head.len || !validaliasname(c.head)) {
+            Str name = c.head.len ? c.head : args[i];
+            builtinerror(sh, scratch, "alias", concat3(&scratch, "`", name, "': invalid alias name"));
             status = 1;
             continue;
         }
