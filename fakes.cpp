@@ -6083,6 +6083,80 @@ static i32 fake_od(Os *os, FakeCtx *ctx)
 }
 
 
+// hexdump
+
+static void fkhex7(FkOut *o, iz v)
+{
+    for (i32 k = 6; k >= 0; k--) {
+        putbyte(o, (u8)"0123456789abcdef"[v>>(4*k) & 15]);
+    }
+}
+
+// Only util-linux's one-byte octal display, -b, for the bash tests
+// that use it. Lines hold 16 bytes after a 7-digit hex offset, a short
+// last line is padded to full width, and repeated lines fold into "*"
+// unless -v.
+static i32 fake_hexdump(Os *os, FakeCtx *ctx)
+{
+    FkProg p = fkprog(os, ctx);
+    FkOpt  o = fkopts(&p, 1);
+    b32    octal = 0, verbose = 0;
+    for (i32 ch; (ch = fkgetopt(&o, "bv")) != -1;) {
+        switch (ch) {
+        case 'b': octal   = 1; break;
+        case 'v': verbose = 1; break;
+        default:  return fkusage(&p, 1);
+        }
+    }
+    if (!octal) {
+        print(diag(&p), "only -b is supported");
+        enddiag(&p);
+        return fkexit(&p, 1);
+    }
+    if (!o.nrest) o.rest[o.nrest++] = "-";
+    i32 status = 0;
+    Buf all(p.a, 1<<12);
+    for (iz i = 0; i < o.nrest; i++) {
+        Str s = fkslurp(&p, o.rest[i]);
+        if (!s.data) {
+            status = 1;
+            continue;
+        }
+        print(&all, s);
+    }
+    Str data = finish(&all);
+    b32 star = 0;
+    for (iz off = 0; off < data.len; off += 16) {
+        iz n = data.len-off<16 ? data.len-off : 16;
+        if (!verbose && off && n==16 &&
+            !__builtin_memcmp(data.data+off, data.data+off-16, 16)) {
+            if (!star) print(&p.out, "*\n");
+            star = 1;
+            continue;
+        }
+        star = 0;
+        fkhex7(&p.out, off);
+        for (iz k = 0; k < 16; k++) {
+            putbyte(&p.out, ' ');
+            if (k < n) {
+                u8 c = data[off+k];
+                putbyte(&p.out, (u8)('0' + (c>>6)));
+                putbyte(&p.out, (u8)('0' + (c>>3&7)));
+                putbyte(&p.out, (u8)('0' + (c&7)));
+            } else {
+                print(&p.out, "   ");
+            }
+        }
+        putbyte(&p.out, '\n');
+    }
+    if (data.len) {
+        fkhex7(&p.out, data.len);
+        putbyte(&p.out, '\n');
+    }
+    return fkexit(&p, status);
+}
+
+
 // cmp and diff
 
 // A byte as cmp -b shows it, in the manner of cat -v.
@@ -10106,6 +10180,7 @@ static Fake fakes[] = {
     {"false",    fake_false},
     {"grep",     fake_grep},
     {"head",     fake_head},
+    {"hexdump",  fake_hexdump},
     {"id",       fake_id},
     {"ln",       fake_ln},
     {"ls",       fake_ls},

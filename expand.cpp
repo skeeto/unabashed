@@ -784,11 +784,32 @@ static Arith substrarith(X *x, Str name, Str expr)
     return r;
 }
 
+// Skip n characters (n < 0: all) from byte offset k: the offset after
+// them, or with count, how many there were. ASCII goes 8 bytes a step.
+static i64 utf8skip(Str v, iz k, i64 n, b32 count = 0)
+{
+    i64 c = 0;
+    while (k<v.len && c!=n) {
+        if ((n<0 || n-c>=8) && v.len-k>=8) {
+            u64 w;
+            __builtin_memcpy(&w, v.data+k, 8);
+            if (!(w & 0x8080808080808080ull)) {
+                k += 8;
+                c += 8;
+                continue;
+            }
+        }
+        utf8decode(v, &k);
+        c++;
+    }
+    return count ? c : k;
+}
+
 static Str applysubstring(X *x, Str name, Str v, Str off, Str len, b32 haslen)
 {
     Shell *sh = x->sh;
     Arith  o  = substrarith(x, name, off);
-    i64 n = v.len;
+    i64 n = sh->utf8 ? utf8skip(v, 0, -1, 1) : v.len;  // characters
     i64 start = o.value<0 ? n + o.value : o.value;
     if (start<0 || start>n) {
         return Str{v.data, 0};
@@ -806,6 +827,11 @@ static Str applysubstring(X *x, Str name, Str v, Str off, Str len, b32 haslen)
         } else {
             end = start+l.value<n ? start+l.value : n;
         }
+    }
+    if (n < v.len) {
+        iz beg = (iz)utf8skip(v, 0, start);
+        iz lim = (iz)utf8skip(v, beg, end>start ? end-start : 0);
+        return span(v.data+beg, v.data+lim);
     }
     return span(v.data+start, v.data+end);
 }

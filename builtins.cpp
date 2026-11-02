@@ -198,6 +198,11 @@ static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
     env.utf8       = sh->utf8;
     env.now        = pfnow;
     env.shellstart = sh->start / 1000000000;
+    Value *tz = lookup(sh, "TZ");
+    if (tz && (tz->attrs & V_EXPORT)) {
+        Got g = getvar(sh, &scratch, "TZ");
+        env.tz = !g.set ? Str{} : g.value.data ? g.value : Str("");
+    }
     env.error      = pferror;
     env.flush      = var.data ? 0 : pfflushout;
     env.setint     = pfsetint;

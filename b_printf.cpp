@@ -17,6 +17,7 @@ struct PrintfEnv {
     b32   utf8;                             // UTF-8 locale, else C
     i64   (*now)(void *ctx);                // seconds since the epoch
     i64   shellstart;                       // for %(...)T with -2
+    Str   tz;                               // TZ if exported, else null
     void  (*error)(void *ctx, Str msg);     // "printf: ..." diagnostics
     void  (*setint)(void *ctx, Str, i64);   // %n assignment, may be null
     void  (*flush)(void *ctx, Str);         // line-buffered output, may be null
@@ -769,7 +770,7 @@ static PfNum scannum(Str s, b32 unsign)
 }
 
 
-// Time formatting: glibc's strftime in the C locale, UTC only
+// Time formatting: glibc's strftime in the C locale
 
 struct PfTm {
     i32 sec;
@@ -780,7 +781,9 @@ struct PfTm {
     i32 year;  // minus 1900
     i32 wday;
     i32 yday;
-    i64 secs;  // for %s
+    i64 secs;    // for %s
+    i64 gmtoff;  // seconds east of UTC
+    Str zone;
     b32 ok;
 };
 
@@ -827,7 +830,224 @@ static PfTm breaktime(i64 t)
     r.mday = (i32)d;
     r.yday = cumul[r.mon] + r.mday - 1 + (r.mon>1 && leapyear(y));
     r.secs = t;
+    r.zone = "UTC";
     r.ok   = 1;
+    return r;
+}
+
+// Time zones: POSIX TZ strings, as glibc reads them when no zoneinfo
+// file has the name. A string with daylight saving time but no rules
+// gets glibc's built-in default, the United States rules since 2007.
+
+struct PfRule {
+    u8  kind;  // 'J' Jn, 'N' n, 'M' Mm.w.d
+    i32 d;
+    i32 m;
+    i32 w;
+    i64 secs;  // local time of day of the change
+};
+
+struct PfZone {
+    Str    name[2];  // standard, daylight
+    i64    off[2];   // seconds east of UTC
+    b32    dst;
+    PfRule rule[2];  // daylight saving time starts, ends
+};
+
+static b32 tzname(Str s, iz *i, Str *name)
+{
+    iz k = *i;
+    if (byteat(s, k) == '<') {
+        iz beg = ++k;
+        for (; alnum(byteat(s, k)) || byteat(s, k)=='+' || byteat(s, k)=='-'; k++) {}
+        if (k-beg<3 || byteat(s, k)!='>') {
+            return 0;
+        }
+        *name = span(s.data+beg, s.data+k);
+        *i    = k + 1;
+        return 1;
+    }
+    for (; letter(byteat(s, k)); k++) {}
+    if (k-*i < 3) {
+        return 0;
+    }
+    *name = span(s.data+*i, s.data+k);
+    *i    = k;
+    return 1;
+}
+
+// [+-]hh[:mm[:ss]] in seconds, the hours clamped to maxh, minutes and
+// seconds to 59. False without digits.
+static b32 tzclock(Str s, iz *i, i64 maxh, i64 *secs)
+{
+    iz  k   = *i;
+    i64 neg = 1;
+    if (byteat(s, k)=='+' || byteat(s, k)=='-') {
+        neg = s[k++]=='-' ? -1 : 1;
+    }
+    if (!digit(byteat(s, k))) {
+        return 0;
+    }
+    i64 part[3] = {};
+    for (i32 n = 0; n < 3; n++) {
+        for (; digit(byteat(s, k)); k++) {
+            part[n] = part[n]<100000 ? part[n]*10 + s[k] - '0' : part[n];
+        }
+        if (n==2 || byteat(s, k)!=':' || !digit(byteat(s, k+1))) {
+            break;
+        }
+        k++;
+    }
+    i64 h = part[0]<maxh ? part[0] : maxh;
+    i64 m = part[1]<59 ? part[1] : 59;
+    i64 c = part[2]<59 ? part[2] : 59;
+    *secs = neg * (h*3600 + m*60 + c);
+    *i    = k;
+    return 1;
+}
+
+static b32 tzrule(Str s, iz *i, PfRule *r)
+{
+    iz k = *i;
+    r->secs = 7200;
+    if (byteat(s, k) == 'J') {
+        r->kind = 'J';
+        k++;
+    } else if (byteat(s, k) == 'M') {
+        r->kind = 'M';
+        k++;
+    } else {
+        r->kind = 'N';
+    }
+    i32 v[3] = {};
+    for (i32 n = 0; n < (r->kind=='M' ? 3 : 1); n++) {
+        if (n && byteat(s, k++)!='.') {
+            return 0;
+        }
+        if (!digit(byteat(s, k))) {
+            return 0;
+        }
+        for (; digit(byteat(s, k)); k++) {
+            v[n] = v[n]<100000 ? v[n]*10 + s[k] - '0' : v[n];
+        }
+    }
+    if (r->kind=='J' && (v[0]<1 || v[0]>365)) return 0;
+    if (r->kind=='N' && v[0]>365) return 0;
+    if (r->kind=='M' && (v[0]<1 || v[0]>12 || v[1]<1 || v[1]>5 || v[2]>6)) return 0;
+    r->d = r->kind=='M' ? v[2] : v[0];
+    r->m = v[0];
+    r->w = v[1];
+    if (byteat(s, k) == '/') {
+        k++;
+        if (!tzclock(s, &k, 167, &r->secs)) {
+            return 0;
+        }
+    }
+    *i = k;
+    return 1;
+}
+
+// Parse TZ; an empty value is glibc's "Universal".
+static PfZone parsezone(Str tz)
+{
+    PfZone z = {};
+    iz i = byteat(tz, 0)==':';
+    if (i == tz.len) {
+        z.name[0] = z.name[1] = "Universal";
+        return z;
+    }
+    if (!tzname(tz, &i, &z.name[0])) {
+        return z;  // UTC without a name
+    }
+    z.name[1] = z.name[0];
+    i64 off;
+    if (!tzclock(tz, &i, 24, &off)) {
+        return z;
+    }
+    z.off[0] = z.off[1] = -off;
+    if (!tzname(tz, &i, &z.name[1])) {
+        z.name[1] = z.name[0];
+        return z;
+    }
+    z.dst    = 1;
+    z.off[1] = tzclock(tz, &i, 24, &off) ? -off : z.off[0]+3600;
+    b32 ok = byteat(tz, i) == ',';
+    if (ok) {
+        i++;
+        ok = tzrule(tz, &i, &z.rule[0]) && byteat(tz, i)==',';
+    }
+    if (ok) {
+        i++;
+        ok = tzrule(tz, &i, &z.rule[1]);
+    }
+    if (!ok) {
+        PfRule start = {'M', 0, 3, 2, 7200};
+        PfRule end   = {'M', 0, 11, 1, 7200};
+        z.rule[0] = start;
+        z.rule[1] = end;
+    }
+    return z;
+}
+
+static i64 daysfromcivil(i64 y, i64 m, i64 d)
+{
+    y -= m <= 2;
+    i64 era = (y>=0 ? y : y-399) / 400;
+    i64 yoe = y - era*400;
+    i64 doy = (153*(m>2 ? m-3 : m+9) + 2)/5 + d - 1;
+    i64 doe = yoe*365 + yoe/4 - yoe/100 + doy;
+    return era*146097 + doe - 719468;
+}
+
+// When a rule changes the clock in a year, in UTC. As glibc, years up
+// to 1970 count their days from the start of 1970.
+static i64 rulechange(PfRule *r, i64 year, i64 off)
+{
+    static i32 cumul[2][13] = {
+        {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365},
+        {0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366},
+    };
+    b32 leap = leapyear(year);
+    i64 t    = year>1970 ? daysfromcivil(year, 1, 1)*86400 : 0;
+    switch (r->kind) {
+    case 'J':
+        t += (r->d - 1 + (r->d>=60 && leap)) * (i64)86400;
+        break;
+    case 'N':
+        t += r->d * (i64)86400;
+        break;
+    case 'M': {
+        i64 first = daysfromcivil(year, r->m, 1);
+        i64 dow   = (first%7 + 11) % 7;  // 1970-01-01 was a Thursday
+        i64 len   = cumul[leap][r->m] - cumul[leap][r->m-1];
+        i64 d     = (r->d - dow + 7) % 7;
+        for (i32 n = 1; n<r->w && d+7<len; n++) {
+            d += 7;
+        }
+        t += (cumul[leap][r->m-1] + d) * 86400;
+    } break;
+    }
+    return t - off + r->secs;
+}
+
+// Like localtime in the zone.
+static PfTm localtm(i64 t, PfZone *z)
+{
+    b32 isdst = 0;
+    if (z->dst) {
+        PfTm u = breaktime(t);
+        if (u.ok) {
+            i64 year  = u.year + (i64)1900;
+            i64 start = rulechange(&z->rule[0], year, z->off[0]);
+            i64 end   = rulechange(&z->rule[1], year, z->off[1]);
+            isdst = start>end ? t<end || t>=start : t>=start && t<end;
+        }
+    }
+    i64  off = z->off[isdst];
+    PfTm r   = breaktime(t + off);
+    r.secs   = t;
+    r.gmtoff = off;
+    r.zone   = z->name[isdst];
     return r;
 }
 
@@ -912,7 +1132,7 @@ static i32 isoweekdays(i32 yday, i32 wday)
 
 static void tsub(PfTout *, Str, PfTm *, i32 width, i32 pad, i32 casing);
 
-// Format tm like glibc's strftime in the C locale and the UTC zone.
+// Format tm like glibc's strftime in the C locale.
 static void fmttime(PfTout *t, Str f, PfTm *tm)
 {
     static Str days[] = {
@@ -1184,13 +1404,14 @@ static void fmttime(PfTout *t, Str f, PfTm *tm)
 
         case 'Z':
             if (change) casing = CASE_LOWER;
-            tadd(t, "UTC", width, pad, casing);
+            tadd(t, tm->zone, width, pad, casing);
             continue;
 
-        case 'z':
-            tadd(t, "+", width, pad, CASE_KEEP);
-            num = 0; digits = 4;
-            goto number;
+        case 'z': {
+            i64 diff = (tm->gmtoff<0 ? -tm->gmtoff : tm->gmtoff) / 60;
+            tadd(t, tm->gmtoff<0 ? Str("-") : Str("+"), width, pad, CASE_KEEP);
+            num = (i32)(diff/60*100 + diff%60); digits = 4;
+        } goto number;
 
         case 0:
             i--;
@@ -1710,7 +1931,8 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs)
     p->args    = args;
     p->nargs   = nargs;
 
-    iz *match = 0;  // see matchparens, built on the first %(
+    iz     *match = 0;  // see matchparens, built on the first %(
+    PfZone *zone  = 0;  // from env->tz, on the first %(...)T
     b32 stale = 1;  // match predates a rewrite of fmt
     b32 owned = 0;  // fmt is our own copy, safe to rewrite
 
@@ -1894,9 +2116,13 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs)
                 } else if (secs == -2) {
                     secs = env->shellstart;
                 }
-                PfTm tm = breaktime(secs);
+                if (!zone) {
+                    zone  = alloc<PfZone>(out->a);
+                    *zone = parsezone(env->tz.data ? env->tz : Str("UTC"));
+                }
+                PfTm tm = localtm(secs, zone);
                 if (!tm.ok) {
-                    tm = breaktime(0);
+                    tm = localtm(0, zone);
                 }
                 PfTout t = {};
                 fmttime(&t, tf, &tm);

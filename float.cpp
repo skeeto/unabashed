@@ -458,7 +458,7 @@ static F80Parse f80parse(Str s, Arena scratch)
     }
 
     // value = num/den exactly
-    Big num = bignew(&scratch, nd/9 + (q>0 ? q/9 : 0) + 4, 0);
+    Big num = bignew(&scratch, (iz)(nd/9 + (q>0 ? q/9 : 0) + 4), 0);
     for (iz k = 0; k < nd;) {
         u32 chunk = 0, mul = 1;
         for (iz n = 0; n<9 && k<nd; n++, k++) {
@@ -467,7 +467,7 @@ static F80Parse f80parse(Str s, Arena scratch)
         }
         bigmuladd(&num, &scratch, mul, chunk);
     }
-    Big den = bignew(&scratch, (q<0 ? -q/9 : 0) + 4, 1);
+    Big den = bignew(&scratch, (iz)((q<0 ? -q/9 : 0) + 4), 1);
     if (q > 0) {
         bigmulpow10(&num, &scratch, q);
     } else {
