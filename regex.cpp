@@ -1395,6 +1395,14 @@ struct RxList {
     i32  len;
 };
 
+// n rows of w words: a subject's positions times the node sets, which
+// overflows a 32-bit size for subjects of a few megabytes
+static u32 *rxtable(Arena *a, iz n, i32 w)
+{
+    if (w && n > (iz)((uz)-1 >> 1)/(iz)sizeof(u32)/w) os_oom();
+    return alloc<u32>(a, n*w);
+}
+
 static RxList newlist(Arena *a, i32 nn)
 {
     RxList l = {};
@@ -1568,7 +1576,7 @@ static u32 *rxsift(RxCtx *c, i32 last, iz s, iz e, Arena *a)
 {
     Regex *re   = c->re;
     i32    w    = c->words;
-    u32   *v    = alloc<u32>(a, (e-s+1)*w);
+    u32   *v    = rxtable(a, e-s+1, w);
     u32   *any  = re->backrefs ? alloc<u32>(a, w) : 0;  // union of later sets
     i32   *work = alloc<i32>(a, re->nnodes);
     u32   *seen = alloc<u32>(a, w);  // reached, viable or not
@@ -2002,7 +2010,7 @@ static i32 rxexec(Regex *re, Str s, RxMatch *m, Arena scratch, i64 budget = -1)
                 u32  *closes = 0;
                 Arena t      = scratch;
                 if (re->copies) {
-                    closes = alloc<u32>(&t, (s.len-p+1)*c.words);
+                    closes = rxtable(&t, s.len-p+1, c.words);
                     rxlongest(&c, p, &last, closes, 1, t);
                     last = -1;
                 }
