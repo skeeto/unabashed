@@ -663,17 +663,31 @@ static void f80pad(Buf *b, i64 n, u8 c)
 }
 
 // Pad sign, prefix and body to the width: zeros go between the prefix
-// and the body, spaces outside.
+// and the body, spaces outside. The body may sit in scratch just past
+// b's capacity, where b grows in place when f80bound fell short (a
+// width or precision near 2^30), so everything is reserved first and
+// the body moved to its place before the padding is written.
 static void f80emit(Buf *b, F80Spec *fs, Str sign, Str prefix, Str body, b32 zeros)
 {
-    b32 z   = zeros && fs->zero && !fs->left;
-    i64 pad = fs->width - sign.len - prefix.len - body.len;
-    if (!fs->left && !z) f80pad(b, pad, ' ');
-    print(b, sign);
-    print(b, prefix);
-    if (z) f80pad(b, pad, '0');
-    print(b, body);
-    if (fs->left) f80pad(b, pad, ' ');
+    b32 z     = zeros && fs->zero && !fs->left;
+    iz  head  = sign.len + prefix.len;
+    i64 pad   = fs->width - head - body.len;
+    pad = pad>0 ? pad : 0;
+    i64 total = head + body.len + pad;
+    if (total > (i64)((uz)-1 >> 1)) os_oom();
+    reserve(b, (iz)total);
+    u8 *out = b->data + b->len;
+    iz  at  = fs->left ? head : (iz)total - body.len;
+    if (body.len) __builtin_memmove(out+at, body.data, (uz)body.len);
+    iz i = 0;
+    if (!fs->left && !z) for (; i < pad; i++) out[i] = ' ';
+    copybytes(out+i, sign.data, sign.len);
+    i += sign.len;
+    copybytes(out+i, prefix.data, prefix.len);
+    i += prefix.len;
+    if (z) for (iz n = 0; n < pad; n++) out[i++] = '0';
+    if (fs->left) for (i = at+body.len; i < total; i++) out[i] = ' ';
+    b->len += (iz)total;
 }
 
 // Digit k of d, zero outside it.
