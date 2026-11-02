@@ -12,6 +12,8 @@ static Str usage(Str name)
         {"readonly", "readonly [-aAf] [name[=value] ...] or readonly -p"},
         {"unset",    "unset [-f] [-v] [-n] [name ...]"},
         {"read",     "read [-Eers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]"},
+        {"mapfile",  "mapfile [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]"},
+        {"readarray", "readarray [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]"},
         {"shift",    "shift [n]"},
         {"set",      "set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]"},
         {"shopt",    "shopt [-pqsu] [-o] [optname ...]"},
@@ -2160,6 +2162,292 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     return timedout ? 128+14 : eof;
 }
 
+// mapfile's input. Lines are read in blocks where that consumes nothing
+// a later reader would miss: text in memory, a seekable file (seeking
+// back to just past the last line taken, as bash), or any input when
+// every line is taken. With a count or a callback, a pipe is read
+// through each delimiter exactly, by peeking where the platform can,
+// else a byte at a time, as bash.
+enum : i32 {
+    MF_MEM,    // f->mem, in place
+    MF_SEEK,   // blocks, then seek back
+    MF_BLOCK,  // blocks, up to the end
+    MF_PEEK,   // exactly through each delimiter
+    MF_BYTE,   // a byte at a time
+};
+
+struct MfIn {
+    Shell *sh;
+    File  *f;
+    i32    fd;
+    i32    mode;
+    u8     delim;
+    u8    *buf;
+    iz     cap;
+    iz     len;
+    iz     pos;
+};
+
+static b32 mfrefill(MfIn *in)
+{
+    Shell *sh = in->sh;
+    iz     n  = 0;
+    switch (in->mode) {
+    case MF_MEM:
+        return 0;
+    case MF_SEEK:
+    case MF_BLOCK:
+        n = fdread(sh, in->fd, in->buf, in->cap);
+        break;
+    case MF_PEEK: {
+        n = os_peek(sh->os, in->f->h, in->buf, in->cap);
+        iz want = n<0 ? 1 : n;
+        for (iz k = 0; k < n; k++) {
+            if (in->buf[k] == in->delim) {
+                want = k + 1;
+                break;
+            }
+        }
+        n = fdread(sh, in->fd, in->buf, want ? want : 1);
+    } break;
+    case MF_BYTE:
+        n = fdread(sh, in->fd, in->buf, 1);
+        break;
+    }
+    in->pos = 0;
+    in->len = n>0 ? n : 0;
+    return n > 0;
+}
+
+// Give back what was read past the lines taken, before someone else
+// reads the input (a callback) and when done.
+static void mfsync(MfIn *in)
+{
+    if (in->mode == MF_MEM) {
+        in->f->pos = in->pos;
+    } else if (in->mode==MF_SEEK && in->pos<in->len) {
+        os_seek(in->sh->os, in->f->h, in->pos-in->len, 1);
+        in->pos = in->len = 0;
+    }
+}
+
+// After a callback, which may have read the input too.
+static void mfresync(MfIn *in)
+{
+    if (in->mode == MF_MEM) {
+        in->pos = in->f->pos;
+        in->len = in->f->mem.len;
+    }
+}
+
+// The next line, with its delimiter if it has one, or null data at the
+// end. It may point into the input's buffer, valid until the next call.
+static Str mfline(MfIn *in, Arena *a)
+{
+    Buf part = {};
+    for (;;) {
+        if (in->pos==in->len && !mfrefill(in)) {
+            break;
+        }
+        iz beg = in->pos;
+        iz k   = beg;
+        for (; k<in->len && in->buf[k]!=in->delim; k++) {}
+        if (k < in->len) {
+            in->pos = k + 1;
+            Str s = span(in->buf+beg, in->buf+k+1);
+            if (!part.data) return s;
+            print(&part, s);
+            return finish(&part);
+        }
+        if (!part.data) part = Buf(a, 2*(k-beg) + 64);
+        print(&part, span(in->buf+beg, in->buf+k));
+        in->pos = k;
+    }
+    return part.len ? finish(&part) : Str{};
+}
+
+static b32 mfcount(Shell *sh, Arena scratch, Str name, Str arg, i64 min, Str what, i64 *v)
+{
+    if (!parsei64(arg, v) || *v<min || *v>0xffffffffll) {
+        builtinerror(sh, scratch, name, concat3(&scratch, arg, ": invalid ", what));
+        return 0;
+    }
+    return 1;
+}
+
+static i32 b_mapfile(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    Str name     = args[0];
+    u8  delim    = '\n';
+    i64 count    = 0;
+    i64 origin   = 0;
+    b32 isorigin = 0;
+    i64 skip     = 0;
+    b32 chop     = 0;
+    i32 fd       = 0;
+    Str callback = {};
+    i64 quantum  = 5000;
+    iz  i = 1;
+    for (; i<nargs && args[i].len>1 && args[i][0]=='-'; i++) {
+        Str a = args[i];
+        if (a == "--") {
+            i++;
+            break;
+        }
+        for (iz k = 1; k < a.len; k++) {
+            u8  c   = a[k];
+            Str val = {};
+            if (c=='d' || c=='n' || c=='O' || c=='s' || c=='u' || c=='C' || c=='c') {
+                if (k+1 < a.len) {
+                    val = cuthead(a, k+1);
+                } else if (i+1 < nargs) {
+                    val = args[++i];
+                } else {
+                    Str opt = span(a.data+k-1, a.data+k+1);
+                    builtinerror(sh, scratch, name, concat(&scratch, opt, ": option requires an argument"));
+                    usageerror(sh, scratch, name);
+                    return 2;
+                }
+                k = a.len;
+            }
+            switch (c) {
+            case 'd':
+                delim = val.len ? val[0] : 0;
+                break;
+            case 'n':
+                if (!mfcount(sh, scratch, name, val, 0, "line count", &count)) return 1;
+                break;
+            case 'O':
+                if (!parsei64(val, &origin) || origin<0) {
+                    builtinerror(sh, scratch, name, concat(&scratch, val, ": invalid array origin"));
+                    return 1;
+                }
+                isorigin = 1;
+                break;
+            case 's':
+                if (!mfcount(sh, scratch, name, val, 0, "line count", &skip)) return 1;
+                break;
+            case 't':
+                chop = 1;
+                break;
+            case 'u': {
+                i64 v;
+                if (!parsei64(val, &v) || v<0 || v>0x7fffffff) {
+                    builtinerror(sh, scratch, name, concat(&scratch, val, ": invalid file descriptor specification"));
+                    return 1;
+                } else if (v>=FDMAX || !sh->fds->fd[v]) {
+                    Str msg = concat(&scratch, fmti64(&scratch, v), ": invalid file descriptor: Bad file descriptor");
+                    builtinerror(sh, scratch, name, msg);
+                    return 1;
+                }
+                fd = (i32)v;
+            } break;
+            case 'C':
+                callback = val;
+                break;
+            case 'c':
+                if (!mfcount(sh, scratch, name, val, 1, "callback quantum", &quantum)) return 1;
+                break;
+            default:
+                invalidoption(sh, scratch, name, span(a.data+k-1, a.data+k+1));
+                return 2;
+            }
+        }
+    }
+
+    Str arrname = i<nargs ? args[i] : Str("MAPFILE");
+    if (!arrname.len) {
+        builtinerror(sh, scratch, name, "empty array variable name");
+        return 2;
+    } else if (!validvarname(arrname)) {
+        notident(sh, scratch, name, arrname);
+        return 1;
+    }
+    i32 aflags = 0;
+    arrname = arraytarget(sh, scratch, arrname, &aflags, 1);  // namerefs
+    if (!arrname.data) return 1;
+    Value *val = assignslot(sh, scratch, arrname, aflags);
+    if (!val) return 1;
+    if (val->arr && val->arr->bucket) {
+        builtinerror(sh, scratch, name, concat(&scratch, arrname, ": not an indexed array"));
+        return 1;
+    }
+    toarray(sh, val);
+    if (!isorigin) aclear(sh->store, val->arr);
+    val->arr->isset = 1;
+
+    MfIn in  = {};
+    in.sh    = sh;
+    in.f     = sh->fds->fd[fd];
+    in.fd    = fd;
+    in.delim = delim;
+    in.cap   = (iz)1 << 16;
+    b32 exact = count || callback.data;
+    File *f = in.f;
+    if (f && f->kind==F_MEM && (f->flags & OF_READ)) {
+        in.mode = MF_MEM;
+        in.buf  = f->mem.data;
+        in.pos  = f->pos<f->mem.len ? f->pos : f->mem.len;
+        in.len  = f->mem.len;
+    } else if (f && f->kind==F_OS && os_peek(sh->os, f->h, 0, 0)<0 &&
+               os_seek(sh->os, f->h, 0, 1)>=0) {
+        in.mode = MF_SEEK;
+    } else if (!exact) {
+        in.mode = MF_BLOCK;
+    } else if (f && f->kind==F_OS && os_peek(sh->os, f->h, 0, 0)>=0) {
+        in.mode = MF_PEEK;
+        in.cap  = 1 << 12;
+    } else {
+        in.mode = MF_BYTE;
+    }
+    if (in.mode != MF_MEM) {
+        in.buf = allocbytes(&scratch, in.cap);
+    }
+
+    for (i64 n = 0; n < skip; n++) {
+        Arena t = scratch;
+        if (!mfline(&in, &t).data) break;
+    }
+    i64 idx = origin;
+    for (i64 n = 1;; idx++, n++) {
+        Arena t    = scratch;
+        Str   line = mfline(&in, &t);
+        if (!line.data) break;
+        if (chop && line[line.len-1]==delim) {
+            line.len--;
+        }
+        for (iz k = 0; k < line.len; k++) {
+            if (!line[k]) {
+                line.len = k;  // bash keeps C strings
+                break;
+            }
+        }
+        if (callback.data && n%quantum==0) {
+            mfsync(&in);
+            Buf  cmd(&t, callback.len + line.len + 40);
+            print(&cmd, callback);
+            putbyte(&cmd, ' ');
+            print(&cmd, idx);
+            putbyte(&cmd, ' ');
+            print(&cmd, singlequote(&t, line));
+            Str src = finish(&cmd);
+            line = clone(&t, line);  // the callback may refill the buffer
+            i32 status = sh->status;
+            i32 lineno = sh->line;
+            sh->evaldepth++;
+            runsource(sh, src, "stdin", t, 0, lineno);
+            sh->evaldepth--;
+            sh->line   = lineno;
+            sh->status = status;
+            mfresync(&in);
+        }
+        setelem(sh, t, arrname, idx, {}, line, aflags|SV_NOREF);
+        if (count && n>=count) break;
+    }
+    mfsync(&in);
+    return 0;
+}
+
 
 // Commands
 
@@ -3052,9 +3340,11 @@ static Builtin builtins[] = {
     {"kill",     b_kill,     0},
     {"let",      b_let,      0},
     {"local",    b_local,    B_DECL},
+    {"mapfile",  b_mapfile,  0},
     {"printf",   b_printf,   0},
     {"pwd",      b_pwd,      0},
     {"read",     b_read,     0},
+    {"readarray", b_mapfile, 0},
     {"readonly", b_readonly, B_SPECIAL|B_DECL},
     {"return",   b_return,   B_SPECIAL},
     {"set",      b_set,      B_SPECIAL},

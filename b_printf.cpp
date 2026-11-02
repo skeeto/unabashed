@@ -854,7 +854,7 @@ struct PfZone {
     PfRule rule[2];  // daylight saving time starts, ends
 };
 
-static b32 tzname(Str s, iz *i, Str *name)
+static b32 zonename(Str s, iz *i, Str *name)
 {
     iz k = *i;
     if (byteat(s, k) == '<') {
@@ -956,7 +956,7 @@ static PfZone parsezone(Str tz)
         z.name[0] = z.name[1] = "Universal";
         return z;
     }
-    if (!tzname(tz, &i, &z.name[0])) {
+    if (!zonename(tz, &i, &z.name[0])) {
         return z;  // UTC without a name
     }
     z.name[1] = z.name[0];
@@ -965,7 +965,7 @@ static PfZone parsezone(Str tz)
         return z;
     }
     z.off[0] = z.off[1] = -off;
-    if (!tzname(tz, &i, &z.name[1])) {
+    if (!zonename(tz, &i, &z.name[1])) {
         z.name[1] = z.name[0];
         return z;
     }

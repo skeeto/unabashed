@@ -24,6 +24,7 @@ struct Os {
     Fibers fibers;
     Io    *pending;     // submitted operations, oldest first
     i32    wakefd[2];   // self-pipe written by the SIGCHLD handler
+    i32    peekfd[2];   // private pipe for os_peek, once needed
     b32    pipeign;     // SIGPIPE was ignored on entry, so stays ignored
     u64    entryign;    // signals ignored on entry: they stay ignored
     u64    changed;     // signals whose disposition the shell changed
@@ -195,10 +196,45 @@ static OsPipe os_pipe(Os *)
     return r;
 }
 
+#ifdef __linux__
+// Look into a pipe without consuming: tee(2) copies what it holds into
+// a private pipe, which is then drained. Zero when it holds nothing.
+static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
+{
+    struct stat st;
+    if (fstat((i32)h, &st) || !S_ISFIFO(st.st_mode)) {
+        return -1;
+    } else if (!len) {
+        return 0;
+    }
+    if (!os->peekfd[1]) {
+        i32 fds[2];
+        if (pipe(fds)) {
+            return -1;
+        }
+        os->peekfd[0] = highfd(fds[0]);
+        os->peekfd[1] = highfd(fds[1]);
+    }
+    len = len<(1<<16) ? len : 1<<16;  // what the private pipe holds
+    iz n = tee((i32)h, os->peekfd[1], (uz)len, SPLICE_F_NONBLOCK);
+    if (n < 0) {
+        return errno==EAGAIN ? 0 : -1;
+    }
+    for (iz got = 0; got < n;) {
+        iz r = read(os->peekfd[0], buf+got, (uz)(n-got));
+        if (r <= 0) {
+            return -1;
+        }
+        got += r;
+    }
+    return n;
+}
+#else
 static iz os_peek(Os *, Handle, u8 *, iz)
 {
     return -1;  // pipes cannot be peeked
 }
+#endif
 
 static i64 os_seek(Os *, Handle h, i64 off, i32 whence)
 {
