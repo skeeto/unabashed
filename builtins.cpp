@@ -1236,6 +1236,7 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
     i32 rflags = 0;
     name = arraytarget(sh, scratch, name, &rflags);
     if (!name.data) return 1;
+    name = clone(&scratch, name);  // the subscript may run code
     Var *v = findvar(sh, name);
     if (!v || !v->top) return 0;
     Value *cur = v->top;
@@ -1249,6 +1250,8 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
     }
     if (cur->arr && cur->arr->bucket) {
         Str key = raw ? sub : subkey(x, sub);
+        // the expansion (${ cmd; }) may have unset or replaced it
+        if (!v->top || !v->top->arr || !v->top->arr->bucket) return 0;
         Value *val = ownvalue(sh, &v->top);
         hdel(sh->store, val->arr, key);
         varchanged(sh, name);
@@ -1269,6 +1272,8 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
     } else if (!allsub(sub)) {
         idx = subindex(x, sub);
     }
+    cur = v->top;  // the expansion may have unset or replaced it
+    if (!cur) return 0;
     if (!cur->arr) {
         if (idx && quiet) {
             return 0;
@@ -2435,6 +2440,7 @@ static i32 b_mapfile(Shell *sh, Str *args, iz nargs, Arena scratch)
     i32 aflags = 0;
     arrname = arraytarget(sh, scratch, arrname, &aflags, 1);  // namerefs
     if (!arrname.data) return 1;
+    arrname = clone(&scratch, arrname);  // callbacks may change the nameref
     Value *val = assignslot(sh, scratch, arrname, aflags);
     if (!val) return 1;
     if (val->arr && val->arr->bucket) {

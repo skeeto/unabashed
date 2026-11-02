@@ -1024,7 +1024,9 @@ static Param getelems(X *x, Str name, Str sub, b32 length)
             r.bad = 1;
             return r;
         }
-        HItem *t = hfind(arr, key);
+        // the subscript (${ cmd; }) may have unset or replaced it
+        if (find(sub, "$") >= 0) arr = varray(sh, x->a, lookup(sh, name));
+        HItem *t = arr && arr->bucket ? hfind(arr, key) : 0;
         if (t) {
             r.value = t->val;
             r.set   = 1;
@@ -1032,6 +1034,8 @@ static Param getelems(X *x, Str name, Str sub, b32 length)
         return r;
     }
     i64 idx = subindex(x, sub);
+    if (find(sub, "$") >= 0) arr = varray(sh, x->a, lookup(sh, name));  // as above
+    if (arr && arr->bucket) return r;
     if (idx < 0) {
         // counting back from the end of an array; a scalar has none
         idx = (i64)((u64)idx + (arr ? (u64)amax(arr)+1 : 0));  // wraps, as bash
@@ -1345,6 +1349,18 @@ static void expandbraced(X *x, Str whole, i32 ctx)
 
     if (!got) {
         p = hassub ? getelems(x, name, sub, length) : getparam(x, name);
+    }
+    if (find(rest, "$") >= 0) {
+        // The operator's words may change the variable, as $((x=1)) or
+        // ${ unset x; } do, which frees the value: use copies
+        if (p.value.data) p.value = clone(x->a, p.value);
+        if (p.list && p.ln) {
+            Str *lv = alloc<Str>(x->a, p.ln);
+            for (iz k = 0; k < p.ln; k++) {
+                lv[k] = p.lv[k].data ? clone(x->a, p.lv[k]) : p.lv[k];
+            }
+            p.lv = lv;
+        }
     }
     b32 elem = hassub && !allsub(sub);  // a single array element
 
@@ -2572,6 +2588,7 @@ static Sub evalsub(Shell *sh, Arena *a, Str name, Str sub, Str word, b32 raw = 0
         r.idx = subindex(x, sub);
     }
     if (r.idx < 0) {
+        v = lookup(sh, name);  // the subscript may have run code
         i64 top = v && v->arr ? amax(v->arr) : v && v->str.data ? 0 : -1;
         r.idx = (i64)((u64)r.idx + (u64)top + 1);  // wraps, as bash
         if (r.idx < 0) {
@@ -2587,6 +2604,7 @@ static b32 assignelem(Shell *sh, Arena scratch, Str name, Str sub, Str word, Str
 {
     if (!(flags & SV_NOREF)) name = arraytarget(sh, scratch, name, &flags);
     if (!name.data) return 0;
+    name = clone(&scratch, name);  // the subscript may run code
     Sub s = evalsub(sh, &scratch, name, sub, word, flags & SV_RAWKEY);
     if (!s.ok) return 0;
     return setelem(sh, scratch, name, s.idx, s.key, value, flags & ~SV_RAWKEY);
@@ -2701,6 +2719,19 @@ static void unhide(Hidden h)
     if (h.var) h.var->top = h.top;
 }
 
+// The table an associative append goes to, looked up again after each
+// expansion: code run there (${ cmd; }) may unset or replace the
+// variable, and then the rest goes to a table of our own that replaces
+// whatever is there at the end. A hidden binding is out of its reach.
+static Array *appendtarget(Shell *sh, Arena scratch, Str name, i32 flags, Hidden hid, Array *dst, Array **own)
+{
+    if (hid.var || *own) return dst;
+    Value *v = assignslot(sh, scratch, name, flags|SV_FORCE);
+    if (v && v->arr && v->arr->bucket) return v->arr;
+    *own = newassoc(sh->store, ASSOC_BUCKETS);
+    return *own;
+}
+
 // Discard the rest of the command after a failed compound assignment.
 [[noreturn]] static void compoundfail(Shell *sh)
 {
@@ -2715,7 +2746,12 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
     Arena *a  = &scratch;
     Store *st = sh->store;
     Slice<Str> words = compoundwords(sh, a, body);
-    if (!(flags & SV_NOREF)) name = arraytarget(sh, scratch, name, &flags, 1);
+    if (!(flags & SV_NOREF)) {
+        // A copy: the nameref's value it points into may change while
+        // the words expand
+        name = arraytarget(sh, scratch, name, &flags, 1);
+        if (name.data) name = clone(a, name);
+    }
     if (!name.data) compoundfail(sh);
 
     Var   *var = findvar(sh, name);
@@ -2812,10 +2848,12 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
         return 1;
     }
 
-    // Associative: build the new table while the old stays visible
+    // Associative: build the new table while the old stays visible. An
+    // append goes to the live table, its words expanded as they come, so
+    // later ones see earlier elements.
     Value *val = assignslot(sh, scratch, name, flags|SV_FORCE);
-    Array *arr = val->arr;
-    Array *dst = append ? arr : newassoc(st, arr->nbuckets);
+    Array *dst = append ? val->arr : newassoc(st, val->arr->nbuckets);
+    Array *own = append ? 0 : dst;
     u32    at  = val->attrs;
     b32    failed = 0;
     Hidden hid = hidelocal(sh, name, flags);
@@ -2823,12 +2861,20 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
         // key value key value ..., each word expanded as an assignment
         // value is: no splitting, no globbing
         Slice<Str> f = {};
-        for (iz k = 0; k < words.len; k++) {
+        for (iz k = 0; !append && k < words.len; k++) {
             f = push(a, f, expandstring(sh, a, words[k], XC_ASSIGN));
         }
-        for (iz k = 0; k < f.len; k += 2) {
-            Str key = f[k];
-            Str v   = k+1<f.len ? f[k+1] : Str("");
+        iz n = append ? words.len : f.len;
+        for (iz k = 0; k < n; k += 2) {
+            Str key, v;
+            if (append) {
+                key = expandstring(sh, a, words[k], XC_ASSIGN);
+                v   = k+1<n ? expandstring(sh, a, words[k+1], XC_ASSIGN) : Str("");
+                dst = appendtarget(sh, scratch, name, flags, hid, dst, &own);
+            } else {
+                key = f[k];
+                v   = k+1<n ? f[k+1] : Str("");
+            }
             if (!key.len) {
                 // declare shows the word requoted, and goes on
                 badarraysub(sh, scratch, decl ? singlequote(a, key) : words[k]);
@@ -2857,6 +2903,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
             X  *x   = newx(sh, a);
             Str key = subkey(x, span(lhs.data+1, lhs.data+lhs.len-1));
             Str v   = expandstring(sh, a, cuthead(w, eq+1), XC_ASSIGN);
+            if (append) dst = appendtarget(sh, scratch, name, flags, hid, dst, &own);
             if (!key.len) {
                 Str shown = w;
                 if (decl) {
@@ -2874,6 +2921,15 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
     }
     unhide(hid);
     val = assignslot(sh, scratch, name, flags|SV_FORCE);
+    if (!(val->arr && val->arr->bucket)) {
+        // the expansions unset or replaced it
+        if (val->arr) {
+            afree(st, val->arr);
+            val->arr    = 0;
+            val->attrs &= ~V_ARRAY;
+        }
+        toassoc(sh, val, 0);
+    }
     if (dst != val->arr) {
         afree(st, val->arr);
         val->arr = dst;
