@@ -1280,8 +1280,13 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         indirect = 0;
     } else if (indirect && !hassub && identstart(name[0]) &&
                (rawlookup(sh, name) ? rawlookup(sh, name)->attrs & V_NAMEREF : 0)) {
-        // ${!ref} names the variable a nameref refers to
-        Ref ref = resolveref(sh, name);
+        // ${!ref} names the variable a nameref refers to; a chain that
+        // loops or is too deep names none, without a warning
+        Ref ref = resolveref(sh, name, 0, 1);
+        if (ref.loop) {
+            Arena a = *x->a;
+            expansionerror(sh, a, concat(&a, uname, ": invalid indirect expansion"));
+        }
         p.value = ref.last ? ref.last->str : Str{};
         p.set   = !!p.value.data;
         got = 1;

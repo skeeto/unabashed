@@ -153,15 +153,16 @@ static void refwarning(Shell *sh, Str name, Str msg)
 // back to where it started or name itself, and is at most 8 long.
 static Value *globalvalue(Shell *, Str name);
 
-// With global, only global bindings take part, as for declare -g.
-static Ref resolveref(Shell *sh, Str name, b32 global = 0)
+// With global, only global bindings take part, as for declare -g. With
+// quiet, a loop is not reported.
+static Ref resolveref(Shell *sh, Str name, b32 global = 0, b32 quiet = 0)
 {
     Ref    r = {};
     Value *v = global ? globalvalue(sh, name) : rawlookup(sh, name);
     r.name = name;
     for (i32 level = 0; v && (v->attrs & V_NAMEREF); level++) {
         if (level == NAMEREF_MAX) {
-            refwarning(sh, name, ": maximum nameref depth (8) exceeded");
+            if (!quiet) refwarning(sh, name, ": maximum nameref depth (8) exceeded");
             r.name = {};
             r.loop = 1;
             return r;
@@ -182,7 +183,7 @@ static Ref resolveref(Shell *sh, Str name, b32 global = 0)
         }
         Value *n = global ? globalvalue(sh, t) : rawlookup(sh, t);
         if (n && (t==name || t==r.name)) {
-            refwarning(sh, name, ": circular name reference");
+            if (!quiet) refwarning(sh, name, ": circular name reference");
             r.loop = 1;
             if (sh->funcdepth && n->depth) {
                 r.name   = t;
