@@ -4,8 +4,8 @@
 // arguments, and reuses the format while arguments remain. Conversions
 // that bash hands to the C library (%c %s %d %i %o %u %x %X) follow
 // glibc's formatting, quirks included; %b %q %Q, %(...)T and the wide
-// %lc %ls follow bash's own padding. Floating point conversions are
-// deferred to M4: they consume an argument and print nothing.
+// %lc %ls follow bash's own padding. Floating point conversions read
+// and print x87 long doubles in software (float.cpp), as glibc does.
 //
 // This is free and unencumbered software released into the public domain.
 
@@ -19,6 +19,9 @@ struct PrintfEnv {
     i64   shellstart;                       // for %(...)T with -2
     void  (*error)(void *ctx, Str msg);     // "printf: ..." diagnostics
     void  (*setint)(void *ctx, Str, i64);   // %n assignment, may be null
+    void  (*flush)(void *ctx, Str);         // line-buffered output, may be null
+    iz    flushed;                          // output bytes already flushed
+    Buf  *out;                              // (set by printfmt)
 };
 
 static i32 printfmt(PrintfEnv *, Buf *, Str fmt, Str *args, iz nargs);
@@ -347,9 +350,26 @@ enum : i32 {
     ESC_B,       // in a %b argument
 };
 
+// Before a diagnostic, flush the complete lines of output, as bash's
+// line-buffered standard output has written them by then.
+static void pfflush(PrintfEnv *env)
+{
+    Buf *out = env->out;
+    if (!env->flush || !out) {
+        return;
+    }
+    iz nl = out->len;
+    for (; nl>env->flushed && out->data[nl-1]!='\n'; nl--) {}
+    if (nl > env->flushed) {
+        env->flush(env->ctx, span(out->data+env->flushed, out->data+nl));
+        env->flushed = nl;
+    }
+}
+
 static void escerror(PrintfEnv *env, Str msg)
 {
     if (env->error) {
+        pfflush(env);
         env->error(env->ctx, msg);
     }
 }
@@ -1253,6 +1273,7 @@ static void diag(Printf *p, Str a, Str b = {}, Str c = {}, Str d = {})
     print(&m, b);
     print(&m, c);
     print(&m, d);
+    pfflush(p->env);
     p->env->error(p->env->ctx, finish(&m));
 }
 
@@ -1288,9 +1309,9 @@ static i64 asciicode(Printf *p)
     return s[1];
 }
 
-static void chkconv(Printf *p, Str s, PfNum n, b32 range)
+static void chkconv(Printf *p, Str s, iz end, b32 range)
 {
-    if (!n.end || n.end<s.len) {
+    if (!end || end<s.len) {
         Str msg = ": invalid number";
         if (byteat(s, 0)=='0' && digit(byteat(s, 1))) {
             msg = ": invalid octal number";
@@ -1315,9 +1336,25 @@ static u64 getnum(Printf *p, b32 unsign)
         return (u64)asciicode(p);
     }
     PfNum n = scannum(s, unsign);
-    chkconv(p, s, n, n.range);
+    chkconv(p, s, n.end, n.range);
     p->next++;
     return n.bits;
+}
+
+// A floating point argument, as strtold reads it.
+static F80 getfloat(Printf *p)
+{
+    if (!hasarg(p)) {
+        return {};
+    }
+    Str s = p->args[p->next];
+    if (byteat(s, 0)=='\'' || byteat(s, 0)=='"') {
+        return f80fromint(asciicode(p));
+    }
+    F80Parse r = f80parse(s, *p->out->a);
+    chkconv(p, s, r.end, r.range);
+    p->next++;
+    return r.v;
 }
 
 // A * width or precision, with fallback when out of int range.
@@ -1333,7 +1370,7 @@ static i32 getint(Printf *p, i32 fallback)
     PfNum n    = scannum(s, 0);
     i64   v    = (i64)n.bits;
     b32   over = n.range || v<-0x7fffffffll-1 || v>0x7fffffffll;
-    chkconv(p, s, n, over);
+    chkconv(p, s, n.end, over);
     p->next++;
     return over ? fallback : (i32)v;
 }
@@ -1519,6 +1556,16 @@ static b32 isintconv(u8 c)
     return c=='d' || c=='i' || c=='o' || c=='u' || c=='x' || c=='X';
 }
 
+static b32 isfloatconv(u8 c)
+{
+    switch (c) {
+    case 'a': case 'A': case 'e': case 'E':
+    case 'f': case 'F': case 'g': case 'G':
+        return 1;
+    }
+    return 0;
+}
+
 // glibc's printf_unknown, then the rest of bash's rebuilt spec.
 static void cunknown(Buf *b, PfLibc *cs, PfSpec *sp)
 {
@@ -1536,6 +1583,7 @@ static void cunknown(Buf *b, PfLibc *cs, PfSpec *sp)
     print(b, ".0-");
     print(b, sp->pdigits);
     if (isintconv(sp->conv)) putbyte(b, 'l');
+    if (isfloatconv(sp->conv)) putbyte(b, 'L');
     putbyte(b, sp->conv);
 }
 
@@ -1657,6 +1705,7 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs)
     Printf  pf = {};
     Printf *p  = &pf;
     p->env     = env;
+    env->out   = out;
     p->out     = out;
     p->args    = args;
     p->nargs   = nargs;
@@ -1911,9 +1960,26 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs)
             case 'a': case 'A':
             case 'e': case 'E':
             case 'f': case 'F':
-            case 'g': case 'G':
-                getstr(p);  // TODO(M4): long double formatting
-                break;
+            case 'g': case 'G': {
+                F80 v = getfloat(p);
+                cs = cspec(&sp);
+                if (cs.overflow) {
+                    goto overflow;
+                } else if (cs.unknown) {
+                    cunknown(out, &cs, &sp);
+                } else {
+                    F80Spec fs = {};
+                    fs.alt   = cs.alt;
+                    fs.plus  = cs.plus;
+                    fs.space = cs.space;
+                    fs.left  = cs.left;
+                    fs.zero  = cs.zero;
+                    fs.width = cs.width;
+                    fs.prec  = cs.prec;
+                    reserve(out, f80bound(&fs));  // working memory beyond
+                    f80format(out, v, sp.conv, &fs, *out->a);
+                }
+            } break;
 
             default:
                 diag(p, "`", {&sp.conv, 1}, "': invalid format character");

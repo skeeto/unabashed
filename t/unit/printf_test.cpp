@@ -16,6 +16,7 @@
 #pragma GCC diagnostic ignored "-Wunused-function"  // base.cpp's spares
 #include "../../base.cpp"
 #pragma GCC diagnostic pop
+#include "../../float.cpp"
 #include "../../b_printf.cpp"
 
 [[noreturn]] static void os_oom()
@@ -299,9 +300,9 @@ static void testinline(Arena perm)
     expect(perm, "%(%s)T",   "-2",   "1600000000");
     expect(perm, "%(%s)T",   "-3",   "-3");
     expect(perm, "%()T",     {},     "22:13:20");
-    expect(perm, "%f|%s",    "1.5",  "|");
-    expect(perm, "%5.2e|",   "x",    "|");
-    expect(perm, "%a%A%E%F%g%G", {}, "");
+    expect(perm, "%f|%s",    "1.5",  "1.500000|");
+    expect(perm, "%9.2e|",   "1",    " 1.00e+00|");
+    expect(perm, "%a%A%E%F%g%G", {}, "0x0p+00X0P+00.000000E+000.00000000");
 
     // Standalone quoting entry points
     Arena *a = &perm;

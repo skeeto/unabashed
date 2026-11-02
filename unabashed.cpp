@@ -156,6 +156,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "regex.cpp"
 #include "brace.cpp"
 #include "b_test.cpp"
+#include "float.cpp"
 #include "b_printf.cpp"
 #include "sched.cpp"
 #include "shell.cpp"

@@ -146,6 +146,20 @@ static i64 pfnow(void *ctx)
     return os_now(c->sh->os) / 1000000000;
 }
 
+static void pfflushout(void *ctx, Str s)
+{
+    PfCtx *c = (PfCtx *)ctx;
+    bprint(c->sh, s);
+}
+
+static void pfsetint(void *ctx, Str name, i64 v)
+{
+    PfCtx *c = (PfCtx *)ctx;
+    Arena  t = *c->a;  // past the output, which waits meanwhile
+    Str    s = fmti64(&t, v);
+    setvar(c->sh, t, name, s);
+}
+
 static void pferror(void *ctx, Str msg)
 {
     PfCtx *c = (PfCtx *)ctx;
@@ -185,12 +199,14 @@ static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
     env.now        = pfnow;
     env.shellstart = sh->start / 1000000000;
     env.error      = pferror;
+    env.flush      = var.data ? 0 : pfflushout;
+    env.setint     = pfsetint;
     Buf out(&scratch, 256);
     i32 status = printfmt(&env, &out, args[i], args+i+1, nargs-i-1);
     if (var.data) {
         if (!assignto(sh, scratch, var, finish(&out))) return 1;
     } else {
-        bprint(sh, finish(&out));
+        bprint(sh, cuthead(finish(&out), env.flushed));
     }
     return status;
 }
