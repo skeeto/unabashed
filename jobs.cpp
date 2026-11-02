@@ -739,7 +739,13 @@ static void disposecoproc(Shell *sh, Coproc *c)
     }
     Arena scratch = *scratchat(sh, sh->capdepth+1);
     unsetvar(sh, concat(&scratch, c->name, "_PID"), 1);  // even readonly, as bash
-    unsetvar(sh, tempname(sh, c->name));  // what a nameref names
+    Str    name = tempname(sh, c->name);  // what a nameref names
+    Value *v    = lookup(sh, name);
+    if (v && (v->attrs & V_READONLY)) {
+        shellerror(sh, scratch, concat(&scratch, c->name, ": cannot unset: readonly variable"));
+    } else {
+        unsetvar(sh, name);
+    }
     Fdtab *t = sh->fds;
     i32 fds[2] = {c->rfd, c->wfd};
     for (i32 i = 0; i < 2; i++) {
