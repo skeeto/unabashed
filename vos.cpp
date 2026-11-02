@@ -33,6 +33,7 @@ struct VNode {
     i32    nlink;
     i64    ino;
     i64    mtime;
+    i64    atime;   // last read, updated as relatime does
     i64    ctime;   // status change
     i32    uid;     // owner and group: 0 for the initial tree
     Str    data;    // file contents or link target
@@ -147,6 +148,7 @@ static VNode *vnew(Vos *v, VNode *dir, Str name, i32 type, i32 mode)
     n->nlink  = 1;
     n->ino    = ++v->nextino;
     n->mtime  = v->clock;
+    n->atime  = v->clock;
     n->ctime  = v->clock;
     n->uid    = v->user;
     n->parent = dir ? dir : n;
@@ -942,6 +944,7 @@ static iz os_read(Os *os, Handle h, u8 *buf, iz len)
         n = n<0 ? 0 : n;
         copybytes(buf, f->node->data.data+f->pos, n);
         f->pos += n;
+        if (f->node->atime <= f->node->mtime) f->node->atime = v->clock;
         return n;
     }
     case VK_PIPEREAD: {
@@ -997,7 +1000,7 @@ static Stat vstat(VNode *n)
     r.nlink = n->nlink;
     r.size  = n->data.len;
     r.mtime = n->mtime;
-    r.atime = n->mtime;  // never "modified since last read"
+    r.atime = n->atime;
     r.ctime = n->ctime;
     r.blocks = (r.size + 4095)/4096 * 8;  // as ext4 with 4 KiB blocks
     r.dev   = 1;
@@ -1035,6 +1038,11 @@ static Stat os_stat(Os *os, Arena, Str path, b32 follow)
     return vstat(res.node);
 }
 
+static b32 os_isatty(Os *os, Handle h)
+{
+    return vistty(osvos(os), h);
+}
+
 static Stat os_fstat(Os *os, Handle h)
 {
     Vos *v = osvos(os);
@@ -1042,6 +1050,7 @@ static Stat os_fstat(Os *os, Handle h)
     if (h < 3) {
         r.type = h==0 && v->ttyin ? FT_CHAR : FT_PIPE;
         r.mode = 0600;
+        r.uid  = r.gid = v->user;  // the user's terminal or pipes
         return r;
     }
     VFile *f = vfile(v, h);
@@ -1055,6 +1064,7 @@ static Stat os_fstat(Os *os, Handle h)
     } else {
         r.type = FT_PIPE;
         r.mode = 0600;
+        r.uid  = r.gid = v->user;
     }
     return r;
 }
@@ -1581,6 +1591,7 @@ static i32 os_link(Os *os, Arena, Str from, Str to)
     VNode *n = vnew(v, dir, r.base, s.node->type, s.node->mode);
     n->ino   = s.node->ino;
     n->mtime = s.node->mtime;
+    n->atime = s.node->atime;
     n->ctime = v->clock;
     n->prog  = s.node->prog;
     n->data  = clone(&v->a, s.node->data);
@@ -1676,6 +1687,7 @@ static i32 os_utime(Os *os, Arena, Str path, i64 mtime)
     VResolved r = vresolve(v, path, 1);
     if (!r.node) return r.err;
     r.node->mtime = mtime;
+    r.node->atime = mtime;
     r.node->ctime = v->clock;
     return 0;
 }

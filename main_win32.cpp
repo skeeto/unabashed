@@ -1771,6 +1771,14 @@ static Stat os_stat(Os *, Arena scratch, Str path, b32 follow)
     return r;
 }
 
+static b32 os_isatty(Os *os, Handle h)
+{
+    Wobj *w = lookup(os, h);
+    if (w) return w->kind==K_CONIN || w->kind==K_CONOUT;
+    i32 mode = 0;
+    return !!GetConsoleMode(h, &mode);
+}
+
 static Stat os_fstat(Os *os, Handle h)
 {
     // Registered objects are described without touching the handle,

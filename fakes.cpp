@@ -3116,6 +3116,49 @@ static b32 fkmodeopt(Str a)  // looks like "-w" or "-rwx,+x"
     return 1;
 }
 
+// chgrp [-cfhRv] GROUP FILE...: files have no group of their own here
+// (their gid is their owner's), so only checks: a numeric group, files
+// that exist, and only the process's own group unless root.
+static i32 fake_chgrp(Os *os, FakeCtx *ctx)
+{
+    FkProg p = fkprog(os, ctx);
+    FkOpt  o = fkopts(&p, 1);
+    for (i32 c; (c = fkgetopt(&o, "cfhRv")) != -1;) {
+        if (c == '?') return fkusage(&p, 1);
+    }
+    if (o.nrest < 2) {
+        print(diag(&p), o.nrest ? Str("missing operand after ") : Str("missing operand"));
+        if (o.nrest) quote(&p.err, o.rest[0]);
+        enddiag(&p);
+        return fkusage(&p, 1);
+    }
+    FkNum g = fkparseint(o.rest[0]);
+    if (!g.ok || g.v<0) {
+        print(diag(&p), "invalid group: ");
+        quote(&p.err, o.rest[0]);
+        enddiag(&p);
+        return fkexit(&p, 1);
+    }
+    OsIds ids = os_ids(os);
+    i32 status = 0;
+    for (iz i = 1; i < o.nrest; i++) {
+        Str  name = o.rest[i];
+        Stat st   = os_stat(os, *p.a, fkpath(&p, name), 1);
+        if (st.err) {
+            print(diag(&p), "cannot access ");
+            quoteaf(&p.err, name);
+            enddiag(&p, st.err);
+            status = 1;
+        } else if (ids.euid && (g.v!=ids.egid || st.uid!=ids.euid)) {
+            print(diag(&p), "changing group of ");
+            quoteaf(&p.err, name);
+            enddiag(&p, E_PERM);
+            status = 1;
+        }
+    }
+    return fkexit(&p, status);
+}
+
 static i32 fake_chmod(Os *os, FakeCtx *ctx)
 {
     FkProg  p = fkprog(os, ctx);
@@ -10167,6 +10210,7 @@ static Fake fakes[] = {
     {"awk",      fake_awk},
     {"basename", fake_basename},
     {"cat",      fake_cat},
+    {"chgrp",    fake_chgrp},
     {"chmod",    fake_chmod},
     {"cmp",      fake_cmp},
     {"cp",       fake_cp},

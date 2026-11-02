@@ -173,6 +173,8 @@ static iz      os_peek(Os *, Handle, u8 *, iz);
 static i64     os_seek(Os *, Handle, i64, i32 whence);
 static Stat    os_stat(Os *, Arena scratch, Str path, b32 follow);
 static Stat    os_fstat(Os *, Handle);
+// A terminal, as isatty(3): a console on Windows (not a mintty pipe)
+static b32     os_isatty(Os *, Handle);
 // Directory entries in the platform's order, or null with *err set.
 static Dirent *os_list(Os *, Arena *, Str dir, i32 *err);
 // Start a program. The child's descriptors are exactly those listed.

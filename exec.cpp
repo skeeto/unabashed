@@ -2252,9 +2252,11 @@ static b32 envaccess(void *ctx, Str path, i32 mode)
     return (bits & mode) == mode;
 }
 
-static b32 envisatty(void *, i64)
+static b32 envisatty(void *ctx, i64 fd)
 {
-    return 0;
+    Shell *sh = ((TestCtx *)ctx)->sh;
+    File  *f  = fd>=0 && fd<FDMAX ? sh->fds->fd[fd] : 0;
+    return f && f->kind==F_OS && os_isatty(sh->os, f->h);
 }
 
 static i32 envoption(void *ctx, Str name)

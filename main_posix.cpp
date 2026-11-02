@@ -296,6 +296,11 @@ static Stat os_fstat(Os *, Handle h)
     return tostat(&s);
 }
 
+static b32 os_isatty(Os *, Handle h)
+{
+    return isatty((i32)h);
+}
+
 static Dirent *os_list(Os *, Arena *a, Str dir, i32 *err)
 {
     Arena tmp = *a;

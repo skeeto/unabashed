@@ -1,17 +1,21 @@
-== stdout 0
+== stdout 193
+1
+3
+declare -A a=(["80's"]="3" )
+bash: line 10: let: a[x]y]=3: arithmetic syntax error: invalid arithmetic operator (error token is "]=3")
+1
+declare -A a=(["80's"]="3" )
+declare -a i=([2]="4")
 
-== stderr 332
-bash: line 2: 1: ambiguous redirect
-bash: line 3: typeset: `a': not a valid identifier
-bash: line 5: shopt: assoc_expand_once: invalid shell option name
-bash: line 6: let: ++a[80's]: bad array subscript (error token is "a[80's]")
-bash: line 6: 80's: arithmetic syntax error: invalid arithmetic operator (error token is "'s")
+== stderr 0
 
-== merged 332
-bash: line 2: 1: ambiguous redirect
-bash: line 3: typeset: `a': not a valid identifier
-bash: line 5: shopt: assoc_expand_once: invalid shell option name
-bash: line 6: let: ++a[80's]: bad array subscript (error token is "a[80's]")
-bash: line 6: 80's: arithmetic syntax error: invalid arithmetic operator (error token is "'s")
+== merged 193
+1
+3
+declare -A a=(["80's"]="3" )
+bash: line 10: let: a[x]y]=3: arithmetic syntax error: invalid arithmetic operator (error token is "]=3")
+1
+declare -A a=(["80's"]="3" )
+declare -a i=([2]="4")
 
-== status 1
+== status 0
