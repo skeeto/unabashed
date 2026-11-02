@@ -257,6 +257,7 @@ static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     sh->status  = status;
     sh->exiting = 1;
+    sh->exitcalled = 1;
     escape(sh, ESC_EXIT);
 }
 

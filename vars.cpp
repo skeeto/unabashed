@@ -1143,7 +1143,11 @@ static b32 unsetvar(Shell *sh, Str name, b32 force = 0)
         val->str   = {};
         val->arr   = 0;
         val->dyn   = 0;
-        val->attrs &= V_LOCAL;
+        // As bash, it keeps only an export it took over from a
+        // temporary binding (v=t f, where f has local v)
+        b32 tempexport = (val->attrs & V_EXPORT) && val->below &&
+                         (val->below->attrs & V_TEMP) && (val->below->attrs & V_EXPORT);
+        val->attrs &= V_LOCAL | (tempexport ? (u32)V_EXPORT : 0u);
     } else {
         if (top->attrs & V_EXPORT) sh->exportgen++;
         jset(sh->store, &v->top, top->below);

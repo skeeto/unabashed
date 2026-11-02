@@ -1683,6 +1683,12 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
         }
     }
     sh->esc = e.up;
+    if (escaped && e.why==ESC_EXIT && sh->exitcalled) {
+        // As bash, exit runs the EXIT trap still inside the function:
+        // its FUNCNAME, locals and positional parameters
+        sh->exitcalled = 0;
+        if (!sh->execed && !sh->killsig) runexittrap(sh, scratch);
+    }
 
     if (!--code->refs && code->dead) {
         freecode(sh, code);
