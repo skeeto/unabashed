@@ -1807,6 +1807,19 @@ static b32 ifsmember(Str ifs, u8 c)
     return 0;
 }
 
+// Counting characters for read -n and -N in UTF-8: does byte c start
+// one? A lead byte expects its continuation bytes, which do not count;
+// any other byte is a character of its own.
+static b32 charstart(u8 c, i32 *pend)
+{
+    if (*pend && c>=0x80 && c<0xc0) {
+        (*pend)--;
+        return 0;
+    }
+    *pend = c>=0xc2 && c<0xe0 ? 1 : c>=0xe0 && c<0xf0 ? 2 : c>=0xf0 && c<0xf5 ? 3 : 0;
+    return 1;
+}
+
 static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     b32 raw = 0, silent = 0;
@@ -1919,9 +1932,18 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         iz  lim  = rest.len;
         b32 capped = nchars>=0 && nchars<=lim;  // stops at the count, not EOF
         lim = capped ? (iz)nchars : lim;
+        if (nchars>=0 && sh->utf8) {
+            // The count is of characters
+            i64 c    = 0;
+            i32 pend = 0;
+            for (lim = 0; lim < rest.len; lim++) {
+                if (charstart(rest[lim], &pend) && c++==nchars) break;
+            }
+            capped = c >= nchars;
+        }
         iz  k = 0;
         b32 slash = 0;
-        for (; k<lim && (exact || rest[k]!=delim); k++) slash |= rest[k]=='\\';
+        for (; k<lim && (exact || rest[k]!=delim); k++) slash |= rest[k]=='\\' || !rest[k];
         if (raw || !slash) {
             b32 found = k < lim;
             s = clone(&scratch, takehead(rest, k));
@@ -1944,8 +1966,9 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     u8 *ahead = 0;
     iz  alen = 0, aoff = 0;
     iz  look = 128;  // grows while lines are longer
+    i32 pend = 0;  // continuation bytes of a UTF-8 character to come
     for (; !done;) {
-        if (nchars>=0 && count>=nchars) break;
+        if (nchars>=0 && count>=nchars && !pend) break;
         if (aoff==alen && seekable) {
             ahead = ahead ? ahead : allocbytes(&scratch, 1<<12);
             iz n = fdread(sh, fd, ahead, look);
@@ -2029,12 +2052,13 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (d == '\n') continue;  // line continuation
             putbyte(&line, (u8)d);
             putbyte(&esc, 1);
-            count++;
+            count += !sh->utf8 || charstart((u8)d, &pend);
             continue;
         }
+        if (!c) continue;  // bash drops null bytes
         putbyte(&line, (u8)c);
         putbyte(&esc, 0);
-        count++;
+        count += !sh->utf8 || charstart((u8)c, &pend);
     }
     if (!done) {
         s = finish(&line);
