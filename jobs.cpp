@@ -569,6 +569,18 @@ static File *devnull(Shell *sh, Arena scratch)
 // when in and out are given. Returns the task, with *pid its BASHPID.
 static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid)
 {
+    // A here-document it inherits becomes an OS object first, so that
+    // both read one open file, as bash's forked child shares the
+    // temporary file or pipe: { read x; } & reads only its own line
+    Fdtab *t = sh->fds;
+    for (i32 fd = in ? 1 : 0; fd < t->top; fd++) {
+        File *f = t->fd[fd];
+        if (f && f->kind==F_MEM) {
+            byte  mem[256];
+            Arena a = {mem, mem+sizeof(mem)};
+            materialize(sh, a, f);
+        }
+    }
     Vproc *m = vprocwith(sh, in, out);
     Shell *c = m->sh;
     c->loopdepth = 0;
