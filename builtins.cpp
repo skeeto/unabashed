@@ -1278,7 +1278,7 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
         }
         return unsetvar(sh, name) ? 0 : 1;
     }
-    if (idx < 0) idx += amax(cur->arr) + 1;
+    if (idx < 0) idx = (i64)((u64)idx + (u64)amax(cur->arr) + 1);  // wraps, as bash
     if (idx < 0) {
         builtinerror(sh, scratch, "unset", concat3(&scratch, "[", sub, "]: bad array subscript"));
         return 1;
@@ -2387,7 +2387,7 @@ static i32 b_mapfile(Shell *sh, Str *args, iz nargs, Arena scratch)
                 if (!mfcount(sh, scratch, name, val, 0, "line count", &count)) return 1;
                 break;
             case 'O':
-                if (!parsei64(val, &origin) || origin<0) {
+                if (!parsei64(val, &origin) || origin<0 || origin>0xffffffffll) {
                     builtinerror(sh, scratch, name, concat(&scratch, val, ": invalid array origin"));
                     return 1;
                 }
@@ -2478,7 +2478,8 @@ static i32 b_mapfile(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (!mfline(&in, &t).data) break;
     }
     i64 idx = origin;
-    for (i64 n = 1;; idx++, n++) {
+    // bash counts indices in an unsigned int, wrapping to 0
+    for (i64 n = 1;; idx = (idx+1) & 0xffffffff, n++) {
         Arena t    = scratch;
         Str   line = mfline(&in, &t);
         if (!line.data) break;

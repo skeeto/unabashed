@@ -1034,7 +1034,7 @@ static Param getelems(X *x, Str name, Str sub, b32 length)
     i64 idx = subindex(x, sub);
     if (idx < 0) {
         // counting back from the end of an array; a scalar has none
-        idx += arr ? amax(arr)+1 : 0;
+        idx = (i64)((u64)idx + (arr ? (u64)amax(arr)+1 : 0));  // wraps, as bash
         if (idx < 0) {
             badelem(x, name, sub, length);
             r.bad = 1;
@@ -1574,7 +1574,10 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             b32 assoc = arr && arr->bucket;
             Arith o = substrarith(x, uname, off);
             i64 top = assoc ? p.ln-1 : p.ln ? p.li[p.ln-1] : -1;
-            i64 from = o.value<0 ? top + 1 + o.value : o.value;
+            // bash's count of indices wraps for the largest top index,
+            // and then a negative offset selects nothing
+            b32 wraps = top == 0x7fffffffffffffff;
+            i64 from  = o.value>=0 ? o.value : wraps ? -1 : top + 1 + o.value;
             iz start = p.ln;
             if (from >= 0) {
                 for (start = 0; start<p.ln && p.li[start]<from; start++) {}
@@ -2565,7 +2568,7 @@ static Sub evalsub(Shell *sh, Arena *a, Str name, Str sub, Str word, b32 raw = 0
     }
     if (r.idx < 0) {
         i64 top = v && v->arr ? amax(v->arr) : v && v->str.data ? 0 : -1;
-        r.idx += top + 1;
+        r.idx = (i64)((u64)r.idx + (u64)top + 1);  // wraps, as bash
         if (r.idx < 0) {
             if (word.data) badarraysub(sh, *a, word);
             return r;
@@ -2757,7 +2760,8 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
         toarray(sh, val);
         if (!append) aclear(st, val->arr);
         val->arr->isset = 1;
-        i64 ind = append ? amax(val->arr)+1 : 0;
+        // Indices wrap past the largest, as bash's, to a bad subscript
+        i64 ind = append ? (i64)((u64)amax(val->arr) + 1) : 0;
         for (iz k = 0; k < items.len; k++) {
             CItem it = items[k];
             if (it.hassub) {
@@ -2785,15 +2789,19 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
                 ind = evalarith(sh, a, sub).value;
                 if (ind < 0) {
                     Value *v = lookup(sh, name);
-                    ind += (v && v->arr ? amax(v->arr) : -1) + 1;
+                    ind = (i64)((u64)ind + (u64)(v && v->arr ? amax(v->arr) : -1) + 1);
                 }
                 if (ind < 0) {
                     badarraysub(sh, scratch, it.word);
                     compoundfail(sh);
                 }
+            } else if (ind < 0) {
+                Str sub = concat3(a, "[", fmti64(a, ind), "]");
+                badarraysub(sh, scratch, concat(a, name, sub));
+                compoundfail(sh);
             }
             setelem(sh, scratch, name, ind, {}, it.val, eflags|(it.append ? SV_APPEND : 0));
-            ind++;
+            ind = (i64)((u64)ind + 1);
         }
         assigned(sh, assignslot(sh, scratch, name, flags|SV_FORCE), name);
         return 1;
