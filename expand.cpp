@@ -784,32 +784,78 @@ static Arith substrarith(X *x, Str name, Str expr)
     return r;
 }
 
-// Skip n characters (n < 0: all) from byte offset k: the offset after
-// them, or with count, how many there were. ASCII goes 8 bytes a step.
-static i64 utf8skip(Str v, iz k, i64 n, b32 count = 0)
+// Skip n characters (n < 0: all) from byte offset k, ASCII 8 bytes a
+// step: where that ends, and how many there were.
+struct Skip {
+    iz  at;
+    i64 n;
+};
+
+static Skip utf8skip(Str v, iz k, i64 n)
 {
-    i64 c = 0;
-    while (k<v.len && c!=n) {
-        if ((n<0 || n-c>=8) && v.len-k>=8) {
+    Skip r = {k, 0};
+    while (r.at<v.len && r.n!=n) {
+        if ((n<0 || n-r.n>=8) && v.len-r.at>=8) {
             u64 w;
-            __builtin_memcpy(&w, v.data+k, 8);
+            __builtin_memcpy(&w, v.data+r.at, 8);
             if (!(w & 0x8080808080808080ull)) {
-                k += 8;
-                c += 8;
+                r.at += 8;
+                r.n  += 8;
                 continue;
             }
         }
-        utf8decode(v, &k);
-        c++;
+        utf8decode(v, &r.at);
+        r.n++;
     }
-    return count ? c : k;
+    return r;
+}
+
+static void substrnegative(X *x, Str len)
+{
+    Arena a = *x->a;
+    Str msg = concat(&a, len, ": substring expression < 0");
+    expansionerror(x->sh, a, msg);
+}
+
+// ${v:off:len} in a UTF-8 locale, counting characters, and the whole
+// value only when an offset or length counts from its end.
+static Str utf8substring(X *x, Str name, Str v, i64 off, Str len, b32 haslen)
+{
+    i64  n = -1;  // characters, once counted
+    i64  start;
+    Skip b;
+    if (off < 0) {
+        n     = utf8skip(v, 0, -1).n;
+        start = n + off;
+        if (start < 0) return Str{v.data, 0};
+        b = utf8skip(v, 0, start);
+    } else {
+        start = off;
+        b     = utf8skip(v, 0, start);
+        if (b.n < start) return Str{v.data, 0};
+    }
+    iz lim = v.len;
+    if (haslen) {
+        Arith l = substrarith(x, name, len);
+        if (l.value < 0) {
+            n = n<0 ? start+utf8skip(v, b.at, -1).n : n;
+            i64 end = n + l.value;
+            if (end < start) substrnegative(x, len);
+            lim = utf8skip(v, b.at, end>start ? end-start : 0).at;
+        } else {
+            lim = utf8skip(v, b.at, l.value).at;
+        }
+    }
+    return span(v.data+b.at, v.data+lim);
 }
 
 static Str applysubstring(X *x, Str name, Str v, Str off, Str len, b32 haslen)
 {
-    Shell *sh = x->sh;
-    Arith  o  = substrarith(x, name, off);
-    i64 n = sh->utf8 ? utf8skip(v, 0, -1, 1) : v.len;  // characters
+    Arith o = substrarith(x, name, off);
+    if (x->sh->utf8) {
+        return utf8substring(x, name, v, o.value, len, haslen);
+    }
+    i64 n = v.len;
     i64 start = o.value<0 ? n + o.value : o.value;
     if (start<0 || start>n) {
         return Str{v.data, 0};
@@ -819,19 +865,10 @@ static Str applysubstring(X *x, Str name, Str v, Str off, Str len, b32 haslen)
         Arith l = substrarith(x, name, len);
         if (l.value < 0) {
             end = n + l.value;
-            if (end < start) {
-                Arena a = *x->a;
-                Str msg = concat(&a, len, ": substring expression < 0");
-                expansionerror(sh, a, msg);
-            }
+            if (end < start) substrnegative(x, len);
         } else {
             end = start+l.value<n ? start+l.value : n;
         }
-    }
-    if (n < v.len) {
-        iz beg = (iz)utf8skip(v, 0, start);
-        iz lim = (iz)utf8skip(v, beg, end>start ? end-start : 0);
-        return span(v.data+beg, v.data+lim);
     }
     return span(v.data+start, v.data+end);
 }
