@@ -217,6 +217,8 @@ Taken (recommendations, revisit if the user disagrees):
 - Forward slashes in canonical native paths; case kept as typed.
 - Our own children recognized by a PE section marker.
 - `type cygpath` reports a builtin in msys mode (accepted deviation).
+- igncr, completion_strip_exe and cygpath follow the path mode (the
+  msyspath switch), not the persona (step 6).
 - Shebang interpreters that are ourselves self-spawn.
 - Native mode applet-first only through busybox alias stubs.
 - The exec job sets kill-on-close on the program's M3b job (Win8+).
@@ -740,7 +742,7 @@ Tests:
   msyspath hiding them and cygpath; the long options; the shell copied
   as cygpath.exe).
 - paths_test: every u/w/m/up/wp/mp golden record again through the
-  builtin's parsing and run (287 more golden checks), 60 inline cases
+  builtin's parsing and run (287 more golden checks), 48 inline checks
   (options, -a, -p, -W/-S, -f, errors) and a property loop over random
   argument lists.
 
