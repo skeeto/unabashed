@@ -45,14 +45,23 @@ gets checked. Rules:
 ## M5b (real background processes)
 
 - **Win32 Ctrl-C a starting program can still miss** (m3b.md, "Programs
-  that miss a Ctrl-C"): one that attaches between the event and the
-  handler's read of the console's process list (about 0.2 ms), one
-  over 100 ms old and still not attached, and the real program of a
-  wrapper that starts it more than 50 ms after the event run on
-  unnoticed. Not seen in t/win32 since. Only the Windows tests cover
-  it: vos has no group signals (`os_siggroup` is 0), so the core's
-  `WMISSED` handling (the fallback when a missed program cannot be
-  ended) has no tests.exe coverage; not run on the XP laptop.
+  that miss a Ctrl-C"): one listed as attached when the handler reads
+  the console's process list that still never acts on the event runs
+  on unnoticed. t/win32/008 hits this in 1 to 2 runs in 100 (`-x`,
+  idle Windows 11; 3 of 500 traced runs, 5 of 280 untraced): busybox,
+  created about 3 ms before the event by a cat stub 5 ms old, is in
+  the list read 0.2 to 0.3 ms after conrun sent the event, yet exits 0
+  at end of file 5 ms later. Either it attached between the event and
+  the read, or the event came too early in its startup to act; the
+  list cannot tell, and telling it by age would be a guess. Also
+  unnoticed: one over 100 ms old and still not attached, and the real
+  program of a wrapper that starts it more than 50 ms after the event.
+  Only the Windows tests cover it: vos has no group signals
+  (`os_siggroup` is 0), so the core's `WMISSED` handling (the fallback
+  when a missed program cannot be ended) has no tests.exe coverage;
+  the job objects (Windows 8 and later) are untested on Windows 8 and
+  10, where disassociating a job's completion port may fail (handled:
+  later messages are ignored); not run on the XP laptop.
 
 - A background vproc still running when the shell exits is waited for;
   bash leaves it running. (m3a.md)

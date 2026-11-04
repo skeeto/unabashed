@@ -168,7 +168,7 @@ which decides once all stages are joined), and pipelines (any stage
 that died of it, or a failed program stage). Signals taken before the
 wait starts are the level's own.
 
-**Programs that miss a Ctrl-C** (`judge`, `watchmissed`, `WMISSED`):
+**Programs that miss a Ctrl-C** (`judge`, `watchjob`, `WMISSED`):
 a console control event reaches only the processes attached to the
 console when it is sent, and a process attaches while it starts (since
 Windows 8 in its own initialization, after `CreateProcess` returns). A
@@ -206,27 +206,55 @@ old:
 - Not attached, a console image (the PE subsystem read through its
   PEB): it cannot have had the event and has run none of its own
   code, so it is ended with `0xC000013A`, as the event would have.
-- Attached: its descendants created before the event (Toolhelp, pid
-  reuse ruled out by creation times) that are not attached are ended
-  the same way, once their initial thread runs (`PEB.Ldr` set; earlier,
-  the stub's `CreateProcess` fails). Another level may end the same
-  one, which is fine.
+- Attached: its descendants created before the event that are not
+  attached are ended the same way, once their initial thread runs
+  (`PEB.Ldr` set; earlier, the stub's `CreateProcess` fails). Another
+  level may end the same one, which is fine. The descendants are its
+  job's processes (below).
 - Attached and childless: perhaps a stub caught before starting
-  busybox, so after posting the signal the handler watches it for 50
-  ms, ending anything it starts. It exiting first, or the 50 ms
-  passing, means it had the event. procexit waits for the watch.
-- A missed one that cannot be ended (exited first, never started, no
-  snapshot) is reported by `os_waitproc` with `WMISSED`, and the core
-  takes the signals noted during that wait as the level's own: in
-  `runprogram`, and in `runpipeline` for a stage started directly.
+  busybox, so it is watched: for 50 ms after the event, or until it
+  exits, anything it starts is ended, and if one exits by itself first
+  (it could not be ended), the stub is reported as having missed the
+  event. procexit waits for the watch.
+- A missed one that cannot be ended (exited first, never started) is
+  reported by `os_waitproc` with `WMISSED`, and the core takes the
+  signals noted during that wait as the level's own: in `runprogram`,
+  and in `runpipeline` for a stage started directly.
 A Ctrl-C during `os_spawn`'s `CreateProcess` (`nctrl` moved) ends the
-new program if it is not attached. The cost per spawn is one lock and
-one counter read; the rest runs only at a Ctrl-C. On XP a process is
-listed from its creation and the attached rules are off (no
+new program if it is not attached. On XP a process is listed from its
+creation and the attached rules are off (no
 `GetSystemTimePreciseAsFileTime`, the same Windows 8 test as the
 clock). Residuals are in notes/issues.md (M5b). t/win32/008: 36 of 60
 runs failed before (`-x`, 30 times), 0 of 60 after; 012 covers a
 handled early Ctrl-C and a missed `sleep 5` ended at once.
+
+008 kept failing in about 1 run in 10 (21 of 200, `-x`, idle
+machine). Traces
+(spawns, the console list, each judgement, kills, job messages and
+exits per process, `QueryPerformanceCounter` times) of five failures
+showed one case: the cat stub was 1.3 to 2.2 ms old, attached and
+childless, so watched; busybox was created 0.2 to 1.4 ms after the
+event; the watch, polling the process tree (Toolhelp) after `Sleep(1)`,
+first looked 14 to 15 ms after posting the signal (the default timer
+resolution), by which time g had died, busybox had read end of file
+and exited 0, and so had the stub: an exited childless stub "had it".
+Polling faster only narrows that. So since Windows 8 each program the
+shell starts runs in a job object of its own, created suspended and
+assigned before it runs (allowing breakaway, as no job would): the
+job's process list is exactly its live descendants, without pid reuse
+to rule out, and a watch associates the job with an I/O completion
+port, which reports every process the job gains (`NEW_PROCESS`, also
+for the ones already in it) and how each exits (`EXIT_PROCESS` for an
+exit status, `ABNORMAL_EXIT_PROCESS` for an exception code, which
+includes `0xC000013A`). The control handler waits on the port: a new
+process is ended, one that exits normally was missed and could not be,
+and the program's own exit ends the watch at once. Settling
+disassociates the job (Windows 11 allows it; where it fails, the
+messages carry a key no later watch uses). Per spawn: a job object, an
+assignment and a resume, besides the lock. After this, 008 failed in
+3 of 500 runs traced with a memory buffer (heavier tracing hid it: 0
+of 440) and 5 of 280 untraced, all "after 0"; the traced three were
+all another case (notes/issues.md, M5b).
 
 **Ctrl-C before SIGPIPE** (`sigpipe`, shell.cpp): a stage acts on
 Ctrl-C only at a safe point, so its reader could die of it first and
