@@ -44,6 +44,16 @@ gets checked. Rules:
 
 ## M5b (real background processes)
 
+- **Win32 Ctrl-C a starting program can still miss** (m3b.md, "Programs
+  that miss a Ctrl-C"): one that attaches between the event and the
+  handler's read of the console's process list (about 0.2 ms), one
+  over 100 ms old and still not attached, and the real program of a
+  wrapper that starts it more than 50 ms after the event run on
+  unnoticed. Not seen in t/win32 since. Only the Windows tests cover
+  it: vos has no group signals (`os_siggroup` is 0), so the core's
+  `WMISSED` handling (the fallback when a missed program cannot be
+  ended) has no tests.exe coverage; not run on the XP laptop.
+
 - A background vproc still running when the shell exits is waited for;
   bash leaves it running. (m3a.md)
 - `exec prog < <(...)` forks while the procsub is alive, so the
@@ -190,10 +200,12 @@ gets checked. Rules:
 - No Big5 or other non-UTF-8 multibyte locale (glob-test's zh_TW
   part).
 - Windows: ctime is reported as mtime and blocks estimated from size;
-  a program that exits nonzero after Ctrl-C counts as killed by it,
-  and one under 100 ms old when it comes is taken to have missed it
-  (so one that handles it that early and exits 0 still ends the
-  level, as under cmd.exe);
+  a program that exits nonzero after Ctrl-C counts as killed by it;
+  a program under 100 ms old that has not yet attached to the console
+  when Ctrl-C comes is ended as Ctrl-C would have ended it (also a
+  descendant of one that has, and anything a childless one starts
+  within 50 ms, which can end a cleanup program an early handler
+  starts; m3b.md);
   Ctrl-Break is SIGQUIT; death by SIGINT exits with 0xC000013A.
 - Trap actions that signal themselves stop at ten nested levels
   (status 139); bash recurses until it crashes.

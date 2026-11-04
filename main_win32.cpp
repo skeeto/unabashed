@@ -130,6 +130,19 @@ struct StartupInfo {  // STARTUPINFOW
 };
 static_assert(sizeof(StartupInfo) == (sizeof(void *)==8 ? 104 : 68));
 
+struct ProcessEntry {  // PROCESSENTRY32W
+    u32 size;
+    u32 usage;
+    i32 pid;
+    uz  heap;
+    u32 module;
+    u32 threads;
+    i32 ppid;
+    i32 pri;
+    u32 flags;
+    c16 exe[260];
+};
+
 struct ProcessInfo {  // PROCESS_INFORMATION
     uz  process;
     uz  thread;
@@ -183,6 +196,15 @@ W32(uz,     GetStdHandle(i32));
 W32(i32,    GetSystemDirectoryW(c16 *, i32));
 W32(void,   GetSystemTimeAsFileTime(Filetime *));
 W32(b32,    ReadConsoleW(uz, c16 *, i32, i32 *, uz));
+W32(i32,    GetConsoleProcessList(i32 *, i32));
+W32(uz,     CreateToolhelp32Snapshot(i32, i32));
+W32(b32,    GetProcessTimes(uz, Filetime *, Filetime *, Filetime *, Filetime *));
+W32(b32,    GetThreadTimes(uz, Filetime *, Filetime *, Filetime *, Filetime *));
+W32(b32,    Process32FirstW(uz, ProcessEntry *));
+W32(b32,    Process32NextW(uz, ProcessEntry *));
+W32(b32,    QueryPerformanceCounter(i64 *));
+W32(b32,    QueryPerformanceFrequency(i64 *));
+W32(b32,    ReadProcessMemory(uz, void *, void *, iz, iz *));
 W32(b32,    PeekNamedPipe(uz, u8 *, i32, i32 *, i32 *, i32 *));
 W32(b32,    ReadFile(uz, u8 *, i32, i32 *, uz));
 W32(b32,    RegisterWaitForSingleObject(uz *, uz, void (__stdcall *)(void *, u8),
@@ -368,10 +390,24 @@ struct Hent {  // handle registration
     Wobj *obj;
 };
 
-struct Recent {  // a program started lately (see notemissed)
+struct Recent {  // a program started lately (see judge)
     uz  proc;
-    i64 time;    // started, in Filetime units
-    b32 missed;  // a Ctrl-C came while it was young
+    i64 time;    // started, in QueryPerformanceCounter ticks
+    i32 pid;
+    i32 state;   // R_*, after a Ctrl-C
+};
+enum : i32 { R_MISSED = 1, R_WATCHED };
+
+struct Procent {  // a process in a snapshot (see judgekids)
+    i32 pid;
+    i32 ppid;
+};
+
+struct Judging {  // one Ctrl-C's view (see judge)
+    i32 pids[256];  // attached to the console, read after the event
+    i32 npids;      // -1: unknown
+    i32 nprocs;     // in Os.snap, -1 until taken
+    u64 at;         // the event reached this process (creation times)
 };
 
 struct Pwait {  // an IO_PROC waited for by the thread pool
@@ -399,11 +435,13 @@ struct PipeLocalInfo {  // FILE_PIPE_LOCAL_INFORMATION
 };
 
 using NtQueryInformationFileFn = i32 (__stdcall *)(uz, IoStatusBlock *, void *, u32, i32);
+using NtQueryInformationProcessFn = i32 (__stdcall *)(uz, i32, void *, u32, u32 *);
 
 struct Os {
     Fibers fibers;
     void (__stdcall *now)(Filetime *);  // precise clock where available
     NtQueryInformationFileFn queryfile;  // ntdll, resolved at run time
+    NtQueryInformationProcessFn queryproc;  // ntdll, likewise
     b32  (__stdcall *cancelsync)(uz);    // CancelSynchronousIo, Vista
     Arena      perm;       // platform records, recycled through free lists
     uz         wake;       // auto-reset event for the main thread
@@ -426,10 +464,12 @@ struct Os {
     uz         mainthread;
     i32        mainio;     // atomic: odd while the main thread blocks in
                            // a read Ctrl-C may cancel
+    i32        nctrl;      // atomic: Ctrl-C events so far
     i32        recentlock; // atomic: guards recent
-    i32        nmissed;    // atomic: entries of recent with missed set
-    i32        nrecent;    // where the next entry goes
+    b32        lateattach; // Windows 8: attach after CreateProcess
+    i64        youngticks; // 100 ms: programs judged at a Ctrl-C
     Recent     recent[32];
+    Procent    snap[4096]; // guarded by recentlock (see judgekids)
 };
 
 enum : i32 { MAXHELPERS = 64 };
@@ -1107,10 +1147,7 @@ static i32 procexit(Os *os, uz proc)
 {
     i32 code = 127;
     if (!GetExitCodeProcess(proc, &code)) code = 127;
-    i32 missed = 0;
-    if (__atomic_load_n(&os->nmissed, __ATOMIC_ACQUIRE)) {
-        missed = takemissed(os, proc) ? WMISSED : 0;
-    }
+    i32 missed = takemissed(os, proc) ? WMISSED : 0;
     CloseHandle(proc);
     releaselends(os, proc);
     return exitstatus((u32)code) | missed;
@@ -1366,73 +1403,278 @@ static void unlockrecent(Os *os)
     __atomic_store_n(&os->recentlock, 0, __ATOMIC_RELEASE);
 }
 
-static void droprecent(Os *os, Recent *r)
+static i64 ticks()
 {
-    if (r->missed) __atomic_fetch_sub(&os->nmissed, 1, __ATOMIC_RELEASE);
-    *r = {};
+    i64 t = 0;
+    QueryPerformanceCounter(&t);
+    return t;
 }
 
-// Note a program just started (or only forget an earlier process with
-// the same handle value, when it ignores Ctrl-C).
-static void addrecent(Os *os, uz proc, b32 add)
+static u64 bornat(uz proc)  // creation time, 0 if unknown
 {
-    Filetime ft;
-    os->now(&ft);
+    Filetime t[4] = {};
+    if (!GetProcessTimes(proc, t, t+1, t+2, t+3)) return 0;
+    return (u64)t[0].hi<<32 | t[0].lo;
+}
+
+static b32 exited(uz proc)
+{
+    return !WaitForSingleObject(proc, 0);
+}
+
+// The pointer in slot i of a process's PEB, 0 if unknown.
+static byte *pebslot(Os *os, uz proc, iz i)
+{
+    uz pbi[6] = {};  // PROCESS_BASIC_INFORMATION
+    if (!os->queryproc || os->queryproc(proc, 0, pbi, sizeof(pbi), 0)) {
+        return 0;
+    }
+    byte *r  = 0;
+    iz    n  = 0;
+    byte *at = (byte *)pbi[1] + i*(iz)sizeof(uz);
+    return ReadProcessMemory(proc, at, &r, sizeof(r), &n) ? r : 0;
+}
+
+// Is the process's image a console program? Read through its PEB, so
+// it works before the process has run. False if unknown.
+static b32 consoleimage(Os *os, uz proc)
+{
+    byte *base = pebslot(os, proc, 2);  // ImageBaseAddress
+    iz    n    = 0;
+    if (!base) return 0;
+    i32 nt = 0;  // IMAGE_DOS_HEADER.e_lfanew
+    if (!ReadProcessMemory(proc, base+0x3c, &nt, 4, &n) || nt<0) return 0;
+    c16 subsystem = 0;  // IMAGE_OPTIONAL_HEADER.Subsystem
+    if (!ReadProcessMemory(proc, base+nt+0x5c, &subsystem, 2, &n)) return 0;
+    return subsystem == 3;  // IMAGE_SUBSYSTEM_WINDOWS_CUI
+}
+
+// End, as a Ctrl-C would have, a process that missed one, once its
+// initial thread runs (the loader has set PEB.Ldr): ended earlier, its
+// parent's CreateProcess would fail. Another level may be ending it
+// too. False if it exited otherwise, or does not start soon.
+static b32 endmissed(Os *os, uz proc)
+{
+    for (i32 i = 0; i<50 && !exited(proc); i++) {
+        if (pebslot(os, proc, 3)) {
+            TerminateProcess(proc, 0xc000013a);
+            WaitForSingleObject(proc, 1000);
+            break;
+        }
+        Sleep(1);
+    }
+    i32 code = 0;
+    return exited(proc) && GetExitCodeProcess(proc, &code) &&
+           (u32)code==0xc000013au;
+}
+
+// Note a program just started with Ctrl-C enabled. procexit removes
+// the entry before the handle closes, so a handle here is live.
+static void addrecent(Os *os, uz proc, i32 pid)
+{
+    i64 now = ticks();
     lockrecent(os);
+    Recent *r = os->recent;
     for (i32 i = 0; i < countof(os->recent); i++) {
-        if (os->recent[i].proc == proc) droprecent(os, os->recent+i);
+        Recent *c = os->recent + i;
+        if (!c->proc) {
+            r = c;
+            break;
+        }
+        r = c->time<r->time ? c : r;  // else the oldest
     }
-    if (add) {
-        Recent *r = os->recent + os->nrecent;
-        os->nrecent = (os->nrecent + 1) % countof(os->recent);
-        droprecent(os, r);
-        r->proc = proc;
-        r->time = (i64)((u64)ft.hi<<32 | ft.lo);
-    }
+    *r = {};
+    r->proc = proc;
+    r->pid  = pid;
+    r->time = now;
     unlockrecent(os);
 }
 
-// Forget a process. True if a Ctrl-C came while it was young.
+// Forget a process. True if a Ctrl-C came that it may have missed,
+// which waits for a watch on it (watchmissed) to settle.
 static b32 takemissed(Os *os, uz proc)
 {
-    b32 r = 0;
-    lockrecent(os);
-    for (i32 i = 0; i < countof(os->recent); i++) {
-        if (os->recent[i].proc == proc) {
-            r |= os->recent[i].missed;
-            droprecent(os, os->recent+i);
+    for (i32 n = 0;; n++) {
+        b32 r = 0;
+        b32 watched = 0;
+        lockrecent(os);
+        for (i32 i = 0; i < countof(os->recent); i++) {
+            Recent *e = os->recent + i;
+            if (e->proc != proc) continue;
+            watched = e->state==R_WATCHED && n<1000;
+            if (!watched) {
+                r  = e->state == R_MISSED;
+                *e = {};
+            }
         }
+        unlockrecent(os);
+        if (!watched) return r;
+        Sleep(1);
     }
-    unlockrecent(os);
+}
+
+static b32 attached(Judging *j, i32 pid)
+{
+    b32 r = j->npids < 0;
+    for (i32 i = 0; i < j->npids; i++) {
+        r |= j->pids[i] == pid;
+    }
     return r;
 }
 
-// A Ctrl-C reaches only the processes attached to the console when it
-// is sent, and a process attaches while it starts (since Windows 8 in
-// its own initialization, after CreateProcess returns), so a program
-// started just before misses it, where bash's forked child would have
-// it. A wrapper that ignores Ctrl-C and waits for the real program
-// (w64devkit's command aliases for busybox) passes on the miss. So a
-// program not yet 100 ms old when a Ctrl-C comes is taken to have
-// missed it: os_waitproc reports it (WMISSED), and the level waiting
-// for it takes the signal as its own. One that handled it and exits
-// 0 then ends the level anyway. Runs on the control handler's thread
-// before the signal is posted, so that nothing the shell does about it
-// (a stage ending, a pipe closing) reaches the program first.
-static void notemissed(Os *os)
+enum : i32 { KIDS = 1, KIDMISSED = 2 };  // judgekids
+
+// Judge the descendants of an attached program: those not attached,
+// and created before the event reached this process, missed it, and so
+// do all of them when late is set (the program had none then).
+static i32 judgekids(Os *os, Judging *j, Recent *r, b32 late)
 {
-    Filetime ft;
-    os->now(&ft);
-    i64 young = (i64)((u64)ft.hi<<32 | ft.lo) - 100*10000;
+    if (j->nprocs < 0) {
+        j->nprocs = 0;
+        uz snap = CreateToolhelp32Snapshot(2, 0);  // TH32CS_SNAPPROCESS
+        if (snap == BADHANDLE) return KIDMISSED;   // unknown
+        ProcessEntry e = {};
+        e.size = sizeof(e);
+        for (b32 ok = Process32FirstW(snap, &e); ok; ok = Process32NextW(snap, &e)) {
+            if (j->nprocs == countof(os->snap)) break;
+            os->snap[j->nprocs].pid  = e.pid;
+            os->snap[j->nprocs].ppid = e.ppid;
+            j->nprocs++;
+        }
+        CloseHandle(snap);
+    }
+
+    i32 set[64];
+    u64 born[64];
+    i32 nset = 1;
+    set[0]  = r->pid;
+    born[0] = bornat(r->proc);
+    i32 ret = 0;
+    for (i32 k = 0; k < nset; k++) {
+        for (i32 i = 0; i < j->nprocs; i++) {
+            Procent *p = os->snap + i;
+            if (p->ppid!=set[k] || p->pid==set[k]) continue;
+            uz h = OpenProcess(0x100411, 0, p->pid);  // query, read, end, wait
+            if (!h) continue;
+            u64 t = bornat(h);
+            if (t>=born[k] && (late || t<j->at)) {  // not a reused pid
+                ret |= KIDS;
+                if (late || (!attached(j, p->pid) && consoleimage(os, h))) {
+                    ret |= endmissed(os, h) ? 0 : KIDMISSED;
+                }
+                if (nset < countof(set)) {
+                    set[nset]  = p->pid;
+                    born[nset] = t;
+                    nset++;
+                }
+            }
+            CloseHandle(h);
+        }
+    }
+    return ret;
+}
+
+// A Ctrl-C reaches only the processes attached to the console when it
+// is sent, and since Windows 8 a process attaches in its own startup,
+// after CreateProcess returns, so a program started just before can
+// miss it, where bash's forked child would have it. Judge a young
+// program (lock held) by the console's process list, read as soon as
+// the event reached this process:
+// * Not attached, a console program: it cannot have had it, and has run
+//   none of its own code, so it is ended as the Ctrl-C would have.
+// * Attached: it had it, and so did its descendants that are attached;
+//   the others are ended likewise, once started. One without any may
+//   be a wrapper that ignores Ctrl-C and waits for the real program
+//   (w64devkit's command aliases for busybox), caught before starting
+//   it, so it is watched (watchmissed).
+// A missed program that cannot be ended is reported by os_waitproc
+// (WMISSED), and the level waiting for it takes the signal as its own.
+static void judge(Os *os, Judging *j, Recent *r)
+{
+    if (!attached(j, r->pid)) {
+        if (consoleimage(os, r->proc)) TerminateProcess(r->proc, 0xc000013a);
+    } else if (os->lateattach) {
+        i32 kids = judgekids(os, j, r, 0);
+        if (kids & KIDMISSED) {
+            r->state = R_MISSED;
+        } else if (!kids) {
+            r->state = R_WATCHED;
+        }
+    }
+}
+
+// Judge the young programs (see judge), on the control handler's thread
+// before the signal is posted, so that nothing the shell does about it
+// (a stage ending, a pipe closing) reaches a program first. True if
+// any is to be watched.
+static b32 notemissed(Os *os)
+{
+    Judging j = {};
+    j.npids  = GetConsoleProcessList(j.pids, countof(j.pids));
+    j.npids  = j.npids>0 && j.npids<=countof(j.pids) ? j.npids : -1;
+    j.nprocs = -1;
+    Filetime ft[4] = {};  // this thread's creation: when the event came
+    GetThreadTimes(GetCurrentThread(), ft, ft+1, ft+2, ft+3);
+    j.at = (u64)ft[0].hi<<32 | ft[0].lo;
+    i64 now = ticks();
+    b32 watch = 0;
     lockrecent(os);
     for (i32 i = 0; i < countof(os->recent); i++) {
         Recent *r = os->recent + i;
-        if (r->proc && !r->missed && r->time>young) {
-            r->missed = 1;
-            __atomic_fetch_add(&os->nmissed, 1, __ATOMIC_RELEASE);
+        if (r->proc && now-r->time<os->youngticks) {
+            judge(os, &j, r);
+            watch |= r->state == R_WATCHED;
         }
     }
     unlockrecent(os);
+    return watch;
+}
+
+// For about 50 ms after a Ctrl-C, a watched program that exits had it,
+// and anything it starts missed it and is ended. One still running
+// after that had it (it is no wrapper caught starting up).
+static void watchmissed(Os *os)
+{
+    for (i32 n = 0; n < 50; n++) {
+        Sleep(1);
+        Judging j = {};
+        j.npids  = -1;
+        j.nprocs = -1;
+        b32 more = 0;
+        lockrecent(os);
+        for (i32 i = 0; i < countof(os->recent); i++) {
+            Recent *r = os->recent + i;
+            if (r->state != R_WATCHED) continue;
+            b32 gone = exited(r->proc);
+            i32 kids = judgekids(os, &j, r, 1);
+            if (kids) {
+                r->state = kids&KIDMISSED ? R_MISSED : 0;
+            } else if (gone) {
+                r->state = 0;
+            }
+            more |= r->state == R_WATCHED;
+        }
+        unlockrecent(os);
+        if (!more) return;
+    }
+    lockrecent(os);
+    for (i32 i = 0; i < countof(os->recent); i++) {
+        Recent *r = os->recent + i;
+        r->state = r->state==R_WATCHED ? 0 : r->state;
+    }
+    unlockrecent(os);
+}
+
+// A Ctrl-C came while os_spawn was in CreateProcess (nctrl moved): the
+// new program missed it if not yet attached.
+static void notemissedspawn(Os *os, uz proc, i32 pid)
+{
+    Judging j = {};
+    j.npids = GetConsoleProcessList(j.pids, countof(j.pids));
+    j.npids = j.npids>0 && j.npids<=countof(j.pids) ? j.npids : -1;
+    if (!attached(&j, pid) && consoleimage(os, proc)) {
+        TerminateProcess(proc, 0xc000013a);
+    }
 }
 
 static b32 __stdcall onctrl(u32 type)
@@ -1445,7 +1687,11 @@ static b32 __stdcall onctrl(u32 type)
     case 2:  sig = 1; break;  // CTRL_CLOSE_EVENT
     default: return 0;
     }
-    if (sig != 1) notemissed(os);
+    b32 watch = 0;
+    if (sig != 1) {
+        __atomic_fetch_add(&os->nctrl, 1, __ATOMIC_SEQ_CST);
+        watch = notemissed(os);
+    }
     __atomic_fetch_or(&os->siggrp, (u64)1<<(sig-1), __ATOMIC_SEQ_CST);
     SetEvent(os->wake);
     i32 t = __atomic_load_n(&os->mainio, __ATOMIC_SEQ_CST);
@@ -1455,6 +1701,7 @@ static b32 __stdcall onctrl(u32 type)
             Sleep(1);
         }
     }
+    if (watch) watchmissed(os);
     if (type == 2) {
         Sleep(10000);  // the shell exits meanwhile, else the system ends it
     }
@@ -2054,6 +2301,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     // that the shell itself is unaffected
     b32 noint = s->sigign>>1 & 1;
     if (noint) SetConsoleCtrlHandler(0, 1);
+    i32 nctrl = __atomic_load_n(&os->nctrl, __ATOMIC_SEQ_CST);
     b32 ok = CreateProcessW(app.data, line.data, 0, 0, 1,
                             CREATE_UNICODE_ENVIRONMENT, wenv.data,
                             cwd.data, &si, &pi);
@@ -2066,7 +2314,12 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
         code = ok ? 0 : GetLastError();
     }
     if (noint) SetConsoleCtrlHandler(0, 0);
-    if (ok) addrecent(os, pi.process, !noint);
+    if (ok && !noint) {
+        addrecent(os, pi.process, pi.pid);
+        if (__atomic_load_n(&os->nctrl, __ATOMIC_SEQ_CST) != nctrl) {
+            notemissedspawn(os, pi.process, pi.pid);
+        }
+    }
     for (i32 i = 0; i < 3; i++) {
         if (std[i]) CloseHandle(std[i]);
         if (!objs[i]) continue;
@@ -2395,7 +2648,12 @@ void mainCRTStartup()
     void *precise = dynamic(u"kernel32.dll", "GetSystemTimePreciseAsFileTime");
     if (precise) {
         os.now = (void (__stdcall *)(Filetime *))precise;  // Windows 8
+        os.lateattach = 1;
     }
+    os.queryproc = (NtQueryInformationProcessFn)dynamic(u"ntdll.dll", "NtQueryInformationProcess");
+    i64 freq = 0;
+    QueryPerformanceFrequency(&freq);
+    os.youngticks = freq / 10;
     os.cancelsync = (b32 (__stdcall *)(uz))dynamic(u"kernel32.dll", "CancelSynchronousIo");
     os.perm     = newarena(&os, (iz)1<<24);
     os.wake     = CreateEventW(0, 0, 0, 0);
