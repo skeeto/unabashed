@@ -510,10 +510,13 @@ static void sortglob(Shell *sh, Arena scratch, Slice<Str> m)
         if (how == GS_NUMERIC) {
             b32 num = m[i].len > 0;
             i64 v   = 0;
-            for (iz j = 0; j<m[i].len && num; j++) {
+            for (iz j = 0; j < m[i].len; j++) {
                 i32 dg = m[i][j] - '0';
-                num = dg>=0 && dg<=9;
-                v   = v>(0x7fffffffffffffff-dg)/10 ? 0x7fffffffffffffff : v*10+dg;
+                if (dg<0 || dg>9) {
+                    num = 0;
+                    break;
+                }
+                v = v>(0x7fffffffffffffff-dg)/10 ? 0x7fffffffffffffff : v*10+dg;
             }
             k[i].num = num;
             k[i].key = v;
