@@ -224,14 +224,19 @@ reports `subshell - simplestages`.
    external given an in-memory pipe gets an OS pipe plus a pump.
 3. For every stage but the last, in order: a **direct** external
    (`directstage`: a likely external with no redirections, no `$(`,
-   backquote or procsub in its words, found on PATH, and no inherited
-   descriptor needing a pump) expands in a synchronous subshell with
-   the stage's descriptors and starts without waiting
-   (`Shell.spawnto` makes `runprogram` return the process); anything
-   else becomes a fiber vproc, followed by a `yield` so that it gets
-   going first, as a forked child does (this matches bash's usual
-   xtrace order). A direct stage that turns out to be a script without
-   `#!` falls back to a vproc. Then drop the parent's pipe references.
+   backquote, procsub, funsub or `@P` in its words (`runscode`), found
+   on PATH, and no inherited descriptor needing a pump) expands in a
+   synchronous subshell with the stage's descriptors and starts
+   without waiting (`Shell.spawnto`, which `runsimple1` hands only to
+   the command's own `runexternal`, makes `runprogram` return the
+   process; programs the words run are waited for); anything else
+   becomes a fiber vproc, followed by a `yield` so that it gets going
+   first, as a forked child does (this matches bash's usual xtrace
+   order). A direct stage that turns out to be a script without `#!`
+   falls back to a vproc. Then drop the parent's references to that
+   stage's pipes at once: words that run code `runscode` misses
+   (`i='a[$(cat)]'; ${a[i]}`) may read the next stage's input while it
+   expands, and must see EOF when the writers on its left finish.
 4. Run the last stage on the current stack: in a synchronous subshell,
    or in the shell itself under lastpipe (without monitor mode).
 5. Close the last stage's input, join the stages right to left (fibers

@@ -630,17 +630,32 @@ static b32 likelyexternal(Shell *sh, Node *n)
     return !findbuiltin(name) && !findfunc(sh, name);
 }
 
+// Might expanding this word text run shell code? Comsubs, procsubs,
+// funsubs and prompt strings (a comsub in the value). A false positive
+// costs only speed. A subscript evaluated from a variable's value can
+// still run a comsub unseen (i='a[$(cmd)]'; ${a[i]}).
+static b32 runscode(Str t)
+{
+    if (find(t, "$(")>=0 || find(t, "`")>=0 || find(t, "<(")>=0 ||
+        find(t, ">(")>=0 || find(t, "@P")>=0) {
+        return 1;
+    }
+    for (iz i = 0; i+2 < t.len; i++) {
+        if (t[i]=='$' && t[i+1]=='{' && funsubchar(t[i+2])) return 1;
+    }
+    return 0;
+}
+
 // May a stage start directly, with no vproc? A likely external with
-// no redirections, whose words run no shell code when expanded, and
-// no descriptor that would need a pump.
+// no redirections, whose words probably run no shell code when
+// expanded, and no descriptor that would need a pump. The words expand
+// before the stages to the right start, so code that waits on them
+// would hang (runpipeline drops the pipe ends of those on the left).
 static b32 directstage(Shell *sh, Arena scratch, Node *n, b32 first)
 {
     if (!likelyexternal(sh, n) || n->redirs) return 0;
     for (Word *w = n->words; w; w = w->next) {
-        Str t = w->text;
-        if (find(t, "$(")>=0 || find(t, "`")>=0 || find(t, "<(")>=0 || find(t, ">(")>=0) {
-            return 0;
-        }
+        if (runscode(w->text)) return 0;
     }
     Fdtab *t = sh->fds;
     for (i32 fd = first ? 0 : 2; fd < t->top; fd++) {
@@ -756,8 +771,9 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             pids[k]  = ((Vproc *)tasks[k]->arg)->sh->bashpid;
             yield(s);
         }
-    }
-    for (i32 k = 0; k+1 < nstages; k++) {
+        // Drop the parent's ends at once: a later direct stage whose
+        // words read its input expands here (a comsub runscode missed),
+        // and would wait forever on a writer held here
         fileunref(sh, in[k]);
         fileunref(sh, out[k]);
     }

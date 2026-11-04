@@ -147,7 +147,13 @@ gets checked. Rules:
 ## M8 (performance)
 
 - Launcher fibers: an external pipeline stage whose words contain
-  `$(...)` or a procsub runs as a full vproc. (m3a.md)
+  `$(...)`, a procsub, a funsub or `@P` runs as a full vproc. (m3a.md)
+  The other external stages before the last expand synchronously
+  before the stages to their right start, so a comsub `runscode`
+  cannot see (`i='a[$(cmd)]'; x | prog ${a[i]} | y`, from the
+  variable's value) hangs if it waits on a later stage, as through a
+  FIFO the later stage writes; bash runs it concurrently. A launcher
+  fiber per such stage fixes this too. (m3a.md, fuzz triage)
 - Read-ahead for foreign pipes on Windows (Linux peeks with tee(2)).
 - No compile cache for `=~` (bash has none either).
 - **Arenas never decommit**: a scratch arena keeps its peak commit for
@@ -181,6 +187,12 @@ gets checked. Rules:
   m4.md)
 - The oracle Docker image lacks the hexdump fake (rebuild before
   recording a spec that uses it). (m4.md)
+- The vos's FIFOs (`mkfifo`) are plain files: an open does not wait
+  for the other end, a reader at the end sees EOF instead of waiting
+  for a writer, and data stays after both close: `mkfifo f; echo y >f;
+  cat f` prints y where bash waits forever at the first open, and
+  `cat f | prog | { echo x >f; cat; }` loses x when cat opens first.
+  Nothing that waits on a FIFO can be tested there. (fuzz triage)
 - `/tmp/bash-5.3` in WSL vanishes when WSL restarts; bench/run needs
   it rebuilt from the tarball.
 

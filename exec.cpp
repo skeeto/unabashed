@@ -1530,6 +1530,8 @@ static Str readwholefile(Shell *sh, Arena *a, Str path, i32 *err)
 // the caller has already found it.
 static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, Str found = {})
 {
+    Spawnto *direct = sh->spawnto;  // for runprogram only
+    sh->spawnto = 0;
     Str name = argv[0];
     Str path = found;
     b32 slash = haspath(sh, name);
@@ -1569,8 +1571,8 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
             return 127;
         }
     }
+    sh->spawnto = direct;
     i32 st = runprogram(sh, a, path, argv, argc, env);
-    Spawnto *direct = sh->spawnto;
     sh->spawnto = 0;
     if (st >= 0) return st;
     i32 err = -st;
@@ -1989,6 +1991,10 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
 
 static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
 {
+    // A direct pipeline stage's program starts without waiting, but not
+    // the programs its words or a trap run first: they finish before it
+    Spawnto *direct = sh->spawnto;
+    sh->spawnto = 0;
     safepoint(sh->sched);
     sh->line    = n->line;
     sh->current = n;
@@ -2281,6 +2287,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             if (!done) env = push(a, env, entry);
         }
         sh->childsig = 0;
+        sh->spawnto = direct;
         sh->status = runexternal(sh, scratch, argv.data, argv.len, env);
         reportchild(sh, scratch, n);
     }
