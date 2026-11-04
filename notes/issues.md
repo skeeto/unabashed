@@ -66,7 +66,8 @@ gets checked. Rules:
   case folding is ASCII only, `CON` and the other devices are all the
   null device, and `//./pipe/` cannot be listed. (m5a.md, step 4)
 - **Agent-batch gate, redefined by the user**: the shell's own time
-  (end to end minus the externals run directly) ≥5x lower than Git
+  (end to end minus the externals run directly and the process
+  creation floor) ≥5x lower than Git
   Bash's (m5a.md, Decisions). Not yet measured against it; the floor
   was measured from a busybox driver, and Claude Code spawns from node,
   which step 10's CRT-free driver should stand in for.

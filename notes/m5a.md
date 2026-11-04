@@ -233,12 +233,13 @@ For the user, when they come up:
   GNU make tarballs need a download).
 
 Decided by the user (2026-11-04): the agent-batch gate is the shell's
-own time, ≥5x Git Bash's. Per command, the shell's share is the
+own time, ≥5x Git Bash's. Per command, the shell's own time is the
 end-to-end time minus the time of the same external programs run
-directly (step 3 measured both); process creation of the shell itself
-counts as shell time. Step 3 put Git Bash's share at about 29 ms
-(50.8 - 21.3) against about 2 ms for unabashed beyond the 17-18 ms
-spawn floor, so the gate is mostly decided by our startup cost.
+directly, minus the process creation floor (a do-nothing program such
+as argv.exe started the same way), all measured by step 3's method.
+Step 3's numbers put Git Bash's at about 11 ms (50.8 - 21.3 - 18.3)
+and unabashed's no-op at about 1 ms (19.4 - 18.3), so the gate is
+decided by how cheaply we run the batch's shell work and start up.
 
 
 ## Exit criteria checks
@@ -248,7 +249,7 @@ spawn floor, so the gate is mostly decided by our startup cost.
 2. tools/w64trial: configure, make and make check pass, and config.h
    plus config.status substitutions equal a busybox sh run.
 3. Agent batch: the shell's own time (end to end minus the externals
-   run directly) ≥5x lower than Git Bash's (medians of 5, matching
+   run directly, minus the process creation floor) ≥5x lower than Git Bash's (medians of 5, matching
    checksums).
 4. Configure workload vs busybox sh, tables recorded.
 5. No regressions (t/parse, t/exec, chaos, oracle counts), t/win32 green
