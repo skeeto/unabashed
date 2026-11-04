@@ -27,3 +27,19 @@ re=$'\xa5'
 [[ å =~ $re ]]; echo 11 $?
 shopt -s nocasematch
 [[ å =~ $re ]]; echo 12 $?
+shopt -u nocasematch
+LC_ALL=C
+# Nodes outside glibc's automaton states, a newline before ^ after an
+# empty back-reference, and an end node whose context fails
+re='()\1|$.'
+[[ $'\n' =~ $re ]]; m 13 $?
+re='^$.|()b\1'
+[[ $'\n a b' =~ $re ]]; m 14 $?
+re='^|(\B|)(^)\2.(\B|)\1.'
+[[ ab =~ $re ]]; m 15 $?
+re='.()\1^'
+[[ $'\n' =~ $re ]]; m 16 $?
+re='.()^'
+[[ $'\n' =~ $re ]]; m 17 $?
+re='\>(^|a)\1$|(a|b)$\>.'
+[[ $'a\n  ' =~ $re ]]; m 18 $?

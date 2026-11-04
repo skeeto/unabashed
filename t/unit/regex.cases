@@ -279,3 +279,26 @@ u	%A5[[.a.]]?	%C3%A5
 iu	%A5	%C3%A5
 u	%A5%20%C3%BC***.*[%C3%A5%BC].	%7F)[%C3%A5%20%C3%BC%C3%A5&%C2d%C3%BC].&%C3
 u	%80(||y)?[%7F-%80[%80,].	%E2%80%80%7F^%D1qN%7F%11%04[fW+
+
+# glibc's sifted states hold only nodes in its automaton's states: the
+# original of a node an anchor copied is not one of them
+-	()\1|$.	%0A
+-	$.()\1|	%0A
+-	^$.|()b\1	%0A%20a%20b
+-	a(ab|a)\1(a|b)|($)(^|a)[^a].	%0Abaababb
+# Without a span for a back-reference in its initial state, nothing
+# after it can refer to the groups before it
+-	^|(\B|)(^)\2.(\B|)\1.	ab
+# Where an empty back-reference arrives, a newline the match consumed
+# is no line start
+-	.()\1^	%0A
+-	x.()\1^	x%0A
+-	.()\1(a|^)	%0A
+-	.^	%0A
+-	.()^	%0A
+i	(a|\b).\1(^)	%0Axab%0A%0Aa%20
+-	(a|\b)[^a]\1(^)	ababbbb%0A%0A
+# glibc's retry of a shorter end takes a state holding an end node whose
+# context fails as final, and ends the walk at node 0
+-	\>(^|a)\1$|(a|b)$\>.	a%0A%20%20
+-	($).(^)|\'(^)\3|)a	bx%0Aab%0Axba

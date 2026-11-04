@@ -302,12 +302,20 @@ static Str randsubject(Arena *a)
     return finish(&b);
 }
 
-static Str readall(Arena *a, FILE *f)
+// All of f, or up to cap bytes
+static Str readall(Arena *a, FILE *f, iz cap)
 {
-    iz  cap = (iz)1 << 20;
-    Str r   = {allocbytes(a, cap), 0};
-    r.len = (iz)fread(r.data, 1, (uz)cap, f);
-    return r;
+    Str r = {allocbytes(a, 0), 0};
+    for (;;) {
+        iz n = cap - r.len;
+        n = n<(1<<16) ? n : 1<<16;
+        if (!n) return r;
+        allocbytes(a, n);
+        iz got = (iz)fread(r.data+r.len, 1, (uz)n, f);
+        r.len += got;
+        a->beg = (byte *)r.data + r.len;
+        if (got < n) return r;
+    }
 }
 
 static Str dropnul(Arena *a, Str s)
@@ -359,7 +367,7 @@ int main(int argc, char **argv)
 
     b32 show = argc>1 && !strcmp(argv[1], "--show");
     if (argc>1 && (show || !strcmp(argv[1], "--record"))) {
-        Str src = readall(&perm, stdin);
+        Str src = readall(&perm, stdin, cap/2);
         for (Cut c = cut(src, '\n'); c.head.len || c.tail.len; c = cut(c.tail, '\n')) {
             Str line = c.head;
             if (line.len && line[line.len-1]=='\r') line.len--;
@@ -389,7 +397,7 @@ int main(int argc, char **argv)
 
     // One AFL case from stdin
     Arena a   = perm;
-    Str   in  = readall(&a, stdin);
+    Str   in  = readall(&a, stdin, (iz)1<<20);
     if (!in.len) return 0;
     i32   flags = (in[0]&1 ? REX_ICASE : 0) | (in[0]&2 ? REX_UTF8 : 0);
     Cut   c     = cut(dropnul(&a, cuthead(in, 1)), '\n');

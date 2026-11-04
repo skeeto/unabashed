@@ -1628,37 +1628,146 @@ struct RxEntry {
     i32 len;
 };
 
-// For each position in [s, e], the nodes from which the match can still
-// arrive at the end node last at e: glibc's sifted states. A node that
-// consumes is checked as glibc's check_node_accept does, where a
-// newline does not satisfy a $ before it. A back-reference is in a set
-// when one of its spans (ents) leads into the set where it ends, as
-// glibc's sift_states_bkref, and only that way: to glibc, its move
-// when it matches empty is no epsilon move.
-static u32 *rxsift(RxCtx *c, i32 last, iz s, iz e, Slice<RxEntry> ents, Arena *a)
-{
-    Regex *re   = c->re;
-    i32    w    = c->words;
-    u32   *v    = rxtable(a, e-s+1, w);
-    i32   *work = alloc<i32>(a, re->nnodes);
-    u32   *seen = alloc<u32>(a, w);  // reached, viable or not
+// The back-references' spans at each position in [s, e]: those at p
+// are ents[order[at[p-s]]] to ents[order[at[p-s+1]-1]].
+struct RxSpans {
+    i32 *at;
+    i32 *order;
+};
 
-    // The spans at each position, by counting sort
-    i32 *at    = alloc<i32>(a, e-s+2);
-    i32 *order = alloc<i32>(a, ents.len);
+static RxSpans rxspans(Slice<RxEntry> ents, iz s, iz e, Arena *a)
+{
+    RxSpans r = {};
+    r.at    = alloc<i32>(a, e-s+2);
+    r.order = alloc<i32>(a, ents.len);
     for (iz i = 0; i < ents.len; i++) {
         iz p = ents[i].idx;
-        if (p>=s && p<=e && ents[i].len>=0) at[p-s+1]++;
+        if (p>=s && p<=e && ents[i].len>=0) r.at[p-s+1]++;
     }
-    for (iz i = 0; i <= e-s; i++) at[i+1] += at[i];
+    for (iz i = 0; i <= e-s; i++) r.at[i+1] += r.at[i];
     i32 *fill = alloc<i32>(a, e-s+1);
     for (iz i = 0; i < ents.len; i++) {
         iz p = ents[i].idx;
-        if (p>=s && p<=e && ents[i].len>=0) order[at[p-s] + fill[p-s]++] = (i32)i;
+        if (p>=s && p<=e && ents[i].len>=0) r.order[r.at[p-s] + fill[p-s]++] = (i32)i;
     }
+    return r;
+}
+
+// For each position in [s, e], the nodes in glibc's automaton state
+// with back-references there, which moves along the spans found (ents)
+// whatever path led to each: closures of what arrives at a position,
+// holding the nodes whose context allows them. Where a back-reference
+// arrives, empty or not, glibc builds the state again from the context
+// as it is, so that a newline before it is no line start, for every
+// node there. Also, its initial state grows through back-references
+// whose groups close in it (see re->init), before its context filters
+// it.
+static u32 *rxreach(RxCtx *c, iz s, iz e, Slice<RxEntry> ents, Arena *a)
+{
+    Regex  *re    = c->re;
+    i32     w     = c->words;
+    u32    *in    = rxtable(a, e-s+1, w);
+    u32    *seed  = rxtable(a, e-s+1, w);  // what arrives at each position
+    u8     *ref   = alloc<u8>(a, e-s+1);   // a back-reference arrives
+    u32    *seen  = alloc<u32>(a, w);
+    i32    *work  = alloc<i32>(a, re->nnodes);
+    RxSpans sp    = rxspans(ents, s, e, a);
+    rxset(seed, re->start);
+
+    for (iz p = s; p <= e; p++) {
+        u32 *row  = in + (p-s)*w;
+        i32 *pos  = sp.order + sp.at[p-s];  // the spans here
+        i32  npos = sp.at[p-s+1] - sp.at[p-s];
+
+        // The closure, again from the context as it is when an empty
+        // back-reference turns out to arrive
+        for (b32 again = 1; again;) {
+            again = 0;
+            i32 top = 0;
+            for (i32 i = 0; i < w; i++) {
+                seen[i] = seed[(p-s)*w+i];
+                row[i]  = 0;
+            }
+            for (i32 x = 0; x < re->nnodes; x++) {
+                if (rxbit(seen, x)) work[top++] = x;
+            }
+            while (top) {
+                i32     x    = work[--top];
+                RxNode *nd   = re->nodes + x;
+                iz      from = ref[p-s] ? p : s;
+                b32     g    = !nd->cons || rxprev(c, nd->cons, p, from);
+                i32     d[2] = {-1, -1};
+                if (g) rxset(row, x);
+                if (rxeps(nd->type)) {
+                    d[0] = nd->e1;
+                    d[1] = nd->e2;
+                } else if (nd->type == RT_BACKREF) {
+                    b32 empty = 0;
+                    for (i32 j = 0; g && j<npos; j++) {
+                        RxEntry *en = ents.data + pos[j];
+                        empty |= en->node==x && !en->len;
+                    }
+                    if (empty && !ref[p-s]) {
+                        ref[p-s] = 1;
+                        again    = 1;
+                    }
+                    if (empty || (p==s && re->initclose[nd->arg])) d[0] = nd->e1;
+                }
+                for (i32 k = 0; k < 2; k++) {
+                    if (d[k]>=0 && !rxbit(seen, d[k])) {
+                        rxset(seen, d[k]);
+                        work[top++] = d[k];
+                    }
+                }
+            }
+        }
+
+        // Moves on from the nodes in the state
+        for (i32 x = 0; x < re->nnodes; x++) {
+            RxNode *nd = re->nodes + x;
+            if (!rxbit(row, x)) continue;
+            if (nd->type == RT_BACKREF) {
+                for (i32 j = 0; j < npos; j++) {
+                    RxEntry *en = ents.data + pos[j];
+                    if (en->node!=x || !en->len || p+en->len>e) continue;
+                    rxset(seed + (p-s+en->len)*w, nd->next);
+                    ref[p-s+en->len] = 1;
+                }
+            } else if (nd->type <= RT_ANY) {
+                iz k = rxaccept(c, nd, p);
+                if (k && p+k<=e && rxnext(c, nd->cons, p, 1)) {
+                    rxset(seed + (p-s+k)*w, nd->next);
+                }
+            }
+        }
+    }
+    return in;
+}
+
+// For each position in [s, e], the nodes from which the match can still
+// arrive at the end node last at e: glibc's sifted states. Like glibc,
+// it keeps only nodes in the automaton's state there (states, from s,
+// see rxreach; null for every node), which rules out the original of a
+// node an anchor copied, as in $.()\1| on "\n". A node that consumes is
+// checked as glibc's check_node_accept does, where a newline does not
+// satisfy a $ before it. A back-reference is in a set when one of its
+// spans (ents) leads into the set where it ends, as glibc's
+// sift_states_bkref, and only that way: to glibc, its move when it
+// matches empty is no epsilon move.
+static u32 *rxsift(RxCtx *c, i32 last, iz s, iz e, Slice<RxEntry> ents, u32 *states, Arena *a)
+{
+    Regex  *re    = c->re;
+    i32     w     = c->words;
+    u32    *v     = rxtable(a, e-s+1, w);
+    i32    *work  = alloc<i32>(a, re->nnodes);
+    u32    *seen  = alloc<u32>(a, w);  // reached, viable or not
+    RxSpans sp    = rxspans(ents, s, e, a);
+    i32    *at    = sp.at;
+    i32    *order = sp.order;
 
     for (iz p = e; p >= s; p--) {
         u32 *cur = v + (p-s)*w;
+        u32 *in  = states ? states+(p-s)*w : 0;
         i32  top = 0;
         for (i32 i = 0; i < w; i++) seen[i] = 0;
         if (p == e) {
@@ -1669,7 +1778,7 @@ static u32 *rxsift(RxCtx *c, i32 last, iz s, iz e, Slice<RxEntry> ents, Arena *a
         for (i32 i = 0; i<re->nconsume && p<e; i++) {
             i32     x  = re->consume[i];
             RxNode *nd = re->nodes + x;
-            if (nd->type == RT_BACKREF) continue;
+            if (nd->type==RT_BACKREF || (in && !rxbit(in, x))) continue;
             if (nd->cons && !rxprev(c, nd->cons, p, s)) continue;
             iz k = rxaccept(c, nd, p);
             if (k && p+k<=e && rxnext(c, nd->cons, p, 0) &&
@@ -1690,6 +1799,7 @@ static u32 *rxsift(RxCtx *c, i32 last, iz s, iz e, Slice<RxEntry> ents, Arena *a
                     if (rxbit(seen, q)) continue;
                     rxset(seen, q);
                     work[top++] = q;
+                    if (in && !rxbit(in, q)) continue;
                     if (!nq->cons || rxprev(c, nq->cons, p, s)) rxset(cur, q);
                 }
             }
@@ -1699,7 +1809,8 @@ static u32 *rxsift(RxCtx *c, i32 last, iz s, iz e, Slice<RxEntry> ents, Arena *a
                 RxEntry *en = ents.data + order[j];
                 RxNode  *nd = re->nodes + en->node;
                 i32      d  = en->len ? nd->next : nd->e1;
-                if (rxbit(seen, en->node) || p+en->len>e) continue;
+                if (rxbit(seen, en->node) || (in && !rxbit(in, en->node))) continue;
+                if (p+en->len > e) continue;
                 if (!rxbit(v+(p+en->len-s)*w, d)) continue;
                 rxset(cur, en->node);
                 rxset(seen, en->node);
@@ -2164,7 +2275,7 @@ struct RxFrame {
     iz       quirk;     // the last position a newline quirk let through
     i32      node;
     i32      steps;     // epsilon moves since the last character
-    b32      afterref;  // the last character came from a back-reference
+    b32      afterref;  // a back-reference arrived here
 };
 
 // Records kept once each, indexed by a 4-ary hash trie
@@ -2176,8 +2287,9 @@ struct RxEntSet {
 struct RxLong {
     iz             best;  // the longest end, or -1
     i32            last;  // the lowest-numbered end node reaching it
-    Slice<RxEntry> ents;  // the back-references' spans glibc finds, and
-                          // the end nodes reached (len -1)
+    Slice<RxEntry> ents;  // the back-references' spans glibc finds, the
+                          // end nodes reached (len -1), and those whose
+                          // context fails (len -2)
     RxEntSet      *set;
 };
 
@@ -2196,15 +2308,21 @@ static void rxrecord(RxLong *r, RxMemo *seen, Arena *a, RxEntry en)
 }
 
 // The lowest-numbered end node a search from rxlongest reached at e,
-// or -1.
+// or -1. glibc's retry of shorter ends takes a state for a final one
+// when it holds an end node at all, even one whose context fails, and
+// then sifts from node 0, its check_halt_state_context's answer for
+// none: \>(^|a)\1$|(a|b)$\>. matches empty on "a\n  ".
 static i32 rxendat(Slice<RxEntry> ents, iz e)
 {
     i32 last = -1;
+    b32 halt = 0;
     for (iz i = 0; i < ents.len; i++) {
         RxEntry en = ents[i];
-        if (en.len<0 && en.idx==e && (last<0 || en.node<last)) last = en.node;
+        if (en.idx != e) continue;
+        halt |= en.len == -2;
+        if (en.len==-1 && (last<0 || en.node<last)) last = en.node;
     }
-    return last;
+    return last<0 && halt ? 0 : last;
 }
 
 // With back-references: the ends of a match from s, and the spans
@@ -2226,6 +2344,9 @@ static i32 rxendat(Slice<RxEntry> ents, iz e)
 // a newline before a ^ or after a $ is no line boundary there: a span
 // cannot be used when the way from its group's start to the
 // back-reference went through such an anchor (.^(a)\1 on "\naa").
+// Where a back-reference arrives, empty or not, glibc builds the state
+// from that context too, so a newline the match consumed no longer
+// counts as a line start for a ^ after it (.()\1^ fails on "\n").
 //
 // Its initial state also takes each back-reference whose group closes
 // in it to match empty, set or not: in (|^())\2 the empty alternative
@@ -2269,7 +2390,18 @@ static RxLong rxlongest(RxCtx *c, iz s, u32 *closes, b32 record, Arena *perm)
             if (!rxspend(c)) return r;
             RxNode *x = re->nodes + cur;
             b32     g = !x->cons || rxprev(c, x->cons, idx, ref ? idx : s);
-            if (!g && !rxeps(x->type)) break;  // not in the state
+            if (!g && !rxeps(x->type)) {  // not in the state
+                if (x->type==RT_END && !record) {
+                    rxrecord(&r, &seen, &scratch, {idx, cur, -2});
+                }
+                b32 grow = x->type==RT_BACKREF && idx==s && re->initclose[x->arg];
+                if (!grow || rxbit(eps, cur)) break;
+                // glibc grows its initial state before its context
+                // filters it, for an end node there to make it final
+                rxset(eps, cur);
+                cur = x->e1;
+                continue;
+            }
             if (g && x->cons && !rxprev(c, x->cons, idx, idx)) quirk = idx;
             if (x->type == RT_OPEN) {
                 regs[x->arg+1].so = idx;
@@ -2293,6 +2425,8 @@ static RxLong rxlongest(RxCtx *c, iz s, u32 *closes, b32 record, Arena *perm)
                         r.last = idx>r.best || cur<r.last ? cur : r.last;
                         r.best = idx;
                     }
+                } else if (!record) {
+                    rxrecord(&r, &seen, &scratch, {idx, cur, -2});
                 }
                 break;
             }
@@ -2337,11 +2471,18 @@ static RxLong rxlongest(RxCtx *c, iz s, u32 *closes, b32 record, Arena *perm)
                               rxnext(c, x->cons, idx, 0) &&
                               rxsame(c, m.so, idx, m.eo-m.so);
                 if (!use && !(idx==s && re->initclose[x->arg])) break;
+                if (!use) {
+                    // Without a span glibc's search for later ones cannot
+                    // pass here, so no group so far can be referred to:
+                    // ^|(\B|)(^)\2.(\B|)\1. matches empty on "ab"
+                    for (i32 i = 1; i < ng; i++) regs[i].so = regs[i].eo = -1;
+                }
                 k = use ? m.eo-m.so : 0;
                 if (use && !record) rxrecord(&r, &seen, &scratch, {idx, cur, (i32)k});
                 if (!k) {
                     if (rxbit(eps, cur)) break;
                     rxset(eps, cur);
+                    ref |= use;
                     cur = x->e1;
                     continue;
                 }
@@ -2417,6 +2558,7 @@ static i32 rxexec(Regex *re, Str s, RxMatch *m, Arena scratch, i64 budget = -1)
     }
 
     for (iz from = 0; from <= s.len;) {
+        Arena  base = scratch;  // to drop a rejected start's spans
         iz     b    = -1;
         iz     e    = -1;
         i32    last = -1;
@@ -2453,13 +2595,16 @@ static i32 rxexec(Regex *re, Str s, RxMatch *m, Arena scratch, i64 budget = -1)
             // and look for a later one; with back-references it first
             // tries the shorter ends its automaton reached. A sifted
             // state at the start without the start node fails the walk.
+            // The automaton's states (in) are those of the longest end,
+            // and hold for the shorter ones.
             Arena t = scratch;
             if (!re->backrefs) last = rxlastnode(&c, b, e, t);
-            u32 *v = 0;
+            u32 *v  = 0;
+            u32 *in = re->backrefs ? rxreach(&c, b, e, lg.ents, &t) : 0;
             if (re->plural || re->backrefs) {
                 for (;;) {
                     Arena u = t;
-                    v = rxsift(&c, last, b, e, lg.ents, &u);
+                    v = rxsift(&c, last, b, e, lg.ents, in, &u);
                     b32 found = rxbit(v, re->start);
                     for (i32 i = 0; re->backrefs && i<c.words; i++) found |= v[i] != 0;
                     if (found) {
@@ -2474,6 +2619,7 @@ static i32 rxexec(Regex *re, Str s, RxMatch *m, Arena scratch, i64 budget = -1)
                     if (e < b) break;
                 }
                 if (!v) {
+                    scratch = base;
                     from = b + shift + 1;
                     continue;
                 }

@@ -106,6 +106,18 @@ gets checked. Rules:
   (regex_diff --random 4, case 2936180: glibc and ours both still
   running after 15 s in a few MB; --random has no per-case timeout,
   so that seed stops there). (m4.md)
+- regex.cpp differs from glibc on back-reference patterns without
+  repetition where `rxlongest`'s first pass records close nodes reached
+  through back-references glibc finds no span for, which then hide the
+  span of a later back-reference: `[^a]($|)\1($)\2` on a space (glibc
+  (0,1)(1,1)(1,1), ours no match), and `($|)($)($|)\1\2$\`$($)` on an
+  empty subject (glibc matches, ours not). Both differ on master too;
+  2 in 400k generated cases. (m4.md)
+- regex.cpp's back-reference span records (`RxEntry`, kept once each
+  per start) are not bounded by the memo's 256 MiB: with two groups a
+  search records a span for most pairs of position and length, which
+  costs time (`(a*)(a*)\1\2x` on 600 a's: 10.6 s on master, 15.0 s)
+  and memory. (m4.md)
 - Job control: `set -m`, fg/bg, stopped jobs, suspend (jobs oracle).
 - dirstack (pushd/popd/dirs), ulimit, help (dirstack, redir, vredir
   oracles).
