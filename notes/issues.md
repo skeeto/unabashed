@@ -32,23 +32,46 @@ gets checked. Rules:
   with real msvcrt and UCRT children, x64 to i686 and back, that the
   width follows the child's PE32/PE32+ and that 0-2 entries agree
   with hStd*. (m5a.md, step 2)
-- **splitcygwin gaps** (step 5's msys re-split): it assumes Cygwin's
+- **splitcygwin gaps** (the msys re-split): it assumes Cygwin's
   globbing is on (with `MSYS`/`CYGWIN=noglob` Cygwin keeps the quotes);
   the program name, a non-ASCII byte before `:` as a drive word, and
-  tilde with an existing HOME were not recorded; the caller still has
-  to glob, read response files (dying on the 11th) and map an empty
-  command line to the program's path. (m5a.md, step 2)
+  tilde with an existing HOME were not recorded. msysargv's message and
+  status on the 11th response file are unverified. (m5a.md, steps 2, 5)
 - **pesniff ignores** delay-load imports, the loader's rounding of
   PointerToRawData to 512 bytes and DLL names over 63 bytes; reads at
   most 1024 section headers. None matters for the binaries tried.
   (m5a.md, step 2)
-- **t/msys baseline is red**: unabashed.exe passes 1 of 60 (057); steps
-  4-9 turn it green (m5a.md, "Step 3"). Exit criterion 1. In the vos
-  (`./tests.exe t/msys/*.sh`) 1 of the 41 `# vos` scripts passes (057).
+- **t/msys baseline is red**: unabashed.exe passes 15 of 60 (001-006,
+  008-010, 016, 019, 041, 054, 056, 057); steps 6-9 turn it green
+  (m5a.md, "Step 5"). Exit criterion 1. In the vos (`./tests.exe
+  t/msys/*.sh`) 14 of the 41 `# vos` scripts pass.
 - **t/winvos/ is a hand-checked baseline**, not oracle output: it pins
-  today's minimal Windows behavior (no mount table, `C:/\`-style
-  paths, bare argv[0] to children, no `.exe` stripping) and must be
-  updated deliberately as steps 5 and 7 land. (m5a.md, step 4)
+  the step 5 behavior (bare argv[0] to children, no `.exe` stripping,
+  no environment conversion for children) and must be updated
+  deliberately as step 7 lands. (m5a.md, steps 4, 5)
+- **Children see the shell's own forms until step 7**: no argument or
+  environment conversion (an msys shell hands a native child `/c/x`
+  and a colon PATH; 017, 018, 034, 055 fail on it), argv[0] is the
+  typed name, a program named without `.exe` does not run (040), and
+  `type`/`command -v` keep `.exe` (038-040). An msys-persona child of
+  our shell gets an MSVCRT-quoted command line but re-splits it the
+  Cygwin way; the two disagree on some backslash and quote runs.
+- **/proc lists nothing** and only `/proc/self/{exename,winexename}`
+  and `/proc/cygdrive` exist; Git Bash lists /proc and has /proc/PID,
+  stat, swaps, sys... (007 fails on `/proc/s*`). `/dev/zero`,
+  `/dev/random` and the other sinks only accept writes; reads fail.
+  (m5a.md, step 5)
+- **Native mode skips two busybox-w32 fix-ups**: assigning PATH does
+  not turn `:` into `;`, and cd does not fix a path's case to what is
+  on disk (PWD keeps the case typed). (m5a.md, step 5)
+- **Identity is not re-rendered by msyspath**: toggling it re-renders
+  PATH and PWD only; BASH, OSTYPE, MACHTYPE and HOME keep the startup
+  persona's forms. pwd's usage text in the Windows modes still says
+  `[-LP]` (Git Bash's is unverified). (m5a.md, step 5)
+- **completion_strip_exe** (Cygwin's extra shopt) is missing from
+  `shopt`'s listing (053); step 6 with igncr.
+- **FUZZ_WIN only runs the native persona**; the msys persona and the
+  msyspath toggle are fuzzed only through the spec replays.
 - **The vos's cmd.exe is a small model**: no `&`, `&&`, `||`, `|`,
   redirections, parentheses, `if`, `for`, `goto`, `call`, `setlocal`,
   `echo on`, delayed expansion or the pre-`/s` quote rules (batch
@@ -85,19 +108,20 @@ gets checked. Rules:
   (`5.3.15(1)-release`); the corpus prints only BASH_VERSINFO[5].
 - **Accepted: `type cygpath`** says builtin in msys mode (m5a.md,
   Decisions). Not in the corpus, nor is cygpath's usage text (GPL).
-- **paths.cpp is lexical where Cygwin asks the file system** (m5a.md
-  step 1): cygpath -w of `C:` or `C:x` (Cygwin: cwd\C), relative paths
-  through missing directories (Cygwin: an error), `..` through missing
-  directories, `\\.\NUL` (Cygwin -w: `\\?\NUL`), SHELL naming an
-  existing program (Cygwin appends `.exe`), cygpath mapping `<>|"` to
-  private-use characters, /proc/self (Cygwin: /proc/PID), and a closed
-  /dev/fd/N argument (Cygwin keeps it; we give /proc/PID/fd/N). Decide
-  in step 5 which of these the shell should check with os_* calls.
+- **Accepted: paths.cpp stays lexical where Cygwin asks the file
+  system** (m5a.md steps 1, 5): cygpath -w of `C:` or `C:x` (Cygwin:
+  cwd\C), relative paths and `..` through missing directories,
+  `\\.\NUL` (Cygwin -w: `\\?\NUL`), SHELL naming an existing program
+  (Cygwin appends `.exe`), cygpath mapping `<>|"` to private-use
+  characters, /proc/self (Cygwin: /proc/PID), and a closed /dev/fd/N
+  argument. The shell asks the file system only for the `.exe` suffix
+  rule and the virtual files. None is in the corpus.
 - **msysenv does not add MSYSTEM, SYSTEMROOT and WINDIR** when absent,
   as the runtime does; step 7's spawner must. (m5a.md step 1)
-- **Startup import of Windows-form variables** (`envtoposix`) and
-  `/dev/consN`, `/dev/ptyN`, `/dev/ttySN` are untested against Git Bash
-  (only inline expectations); step 3's corpus should record them.
+- **Startup import of Windows-form variables** (`envtoposix`) is
+  checked by t/msys 016-019 for HOME and TMP; 034 (the other names)
+  waits on step 7's child environment. `/dev/consN`, `/dev/ptyN`,
+  `/dev/ttySN` are untested against Git Bash.
 
 
 ## M5b (real background processes)

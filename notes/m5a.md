@@ -523,3 +523,151 @@ and the WSL POSIX build without warnings (tests.exe 144/0 there).
 t/msys in the vos: 41 `# vos` specs, 1 passed (057), 40 failed, 20 not
 `# vos`; the failures have step 3's baseline causes (no mount table,
 `C:/\`, bare argv[0], CRs kept).
+
+### Step 5: path modes in the shell
+
+Shell state (shell.cpp):
+- `Shell.pathmode` (PM_POSIX, PM_MSYS, PM_NATIVE) replaces
+  `Shell.windows`; `sh->win32` keeps the platform fact (trap.cpp).
+  `sh->paths` is the PathCtx (mounts, cygdrive, pid, temp), `sh->exe`
+  the shell's image in native form.
+- `sh->cwd` is now the native working directory the platform sees
+  (empty for a virtual msys directory such as /proc), and `sh->wd` the
+  logical one, bash's the_current_working_directory: cd's base, what
+  pwd prints, `\w`, DIRSTACK and jobs' directories. $PWD is only
+  exported state; assigning it moves nothing, as in bash.
+
+Startup (unabashed.cpp):
+- `pathsetup` runs before initvars. The install root is the shell's
+  directory less `usr/bin` or `bin`; `root/etc/fstab`, read with
+  os_open, gives the mounts (initmounts) and with personaof's argv[0]
+  rule the persona: sh, ash and lash are native, anything else is msys
+  (so unabashed.exe beside no fstab is msys). With no fstab the
+  cygdrive prefix is `/`, as every MSYS2 install sets it, and a shell
+  in `root/bin` (w64devkit's layout) mounts /bin on its own directory
+  so that PATH survives a trip through msys form.
+- Environment, msys: names in the renv list are uppercased, PATH and
+  ORIGINAL_PATH convert as lists and HOME, SHELL, TMPDIR, TMP, TEMP as
+  single paths (envtoposix), TERM=msys is dropped, `=X:` entries stay
+  in badenv for children. HOME defaults from USERPROFILE, TERM to
+  xterm-256color, PATH to /usr/bin. Native (busybox-w32's rules, only
+  when Path, ComSpec or ProgramData show it is a real Windows
+  environment): names uppercased; values slashified except COMSPEC and
+  SYSTEMROOT; an invalid name goes to badenv as is and is imported
+  with `_` for each invalid byte; HOME from USERPROFILE, unexported;
+  USER and LOGNAME from USERNAME.
+- Identity: native is `win32` and `x86_64-w64-mingw32` (i686 on 32
+  bits), BASH and SHELL the image; msys follows the Git Bash
+  recordings (`cygwin`, `x86_64-pc-cygwin`, BASH the POSIX image path
+  without `.exe`, SHELL /usr/bin/bash by default). BASH_VERSINFO[5]
+  is MACHTYPE.
+- PWD: msys converts the native cwd with toposix; an inherited PWD
+  naming the same file is kept (not in native mode).
+- In msys mode `msysargv` re-splits `OsInfo.cmdline` with splitcygwin
+  and does the caller's duties: `@file` (at most ten deep; the 11th is
+  fatal, wording unverified), braces and globbing with the shell's own
+  glob, `~` from HOME, an empty command line meaning the image's path.
+  cygbraces and cygunquote moved from vos.cpp to wide.cpp for it.
+
+Paths (expand.cpp, exec.cpp):
+- `resolve` is the one door to paths.cpp: it builds a PathCtx with the
+  mode and cwd (native mode fills a `C:x` path's drive directory from
+  the `=C:` entry), joins a relative msys path onto `sh->wd`, calls
+  topath, recognizes the /dev directory and prefixes literal names
+  (trailing dot or space) with `//?/`. `absolute` uses it outside
+  POSIX mode. isabsolute and haspath know `\` and drives.
+- `pathstat` replaces os_stat(absolute) everywhere the shell tests a
+  name (test, [[, glob, source, exec, redirections, noclobber): it
+  answers for /dev and its devices, /proc/self, /proc/cygdrive and
+  reserved DOS names, and applies the msys rule that `foo` finds
+  `foo.exe`. `openwin` opens the virtual files: /dev/fd/N and
+  /dev/std* dup, /dev/tty is CONIN$/CONOUT$, /dev/null and the sinks
+  are NUL (sinks refuse reads), /proc/self/exename and winexename are
+  served from memory, /proc/PID/comm is not there.
+- glob lists mount points inside a directory, dev and proc at /, and
+  /dev's devices (pathlist).
+- PATH and CDPATH split on `;` in native mode, `:` otherwise; the
+  search tries `""` and `.exe` in msys mode and all five extensions in
+  native mode. Children start in `spawncwd`, the root's native path
+  when the logical directory is virtual.
+
+cd and pwd (builtins.cpp):
+- msys: a non-`/` operand converts with toposix first; logical cd
+  canonicalizes the POSIX path (keeping `//`), -P asks the file
+  system. native: the operand resolves as typed (`/x` on the current
+  drive, `C:` the drive's own directory) and PWD is the canonical
+  native path in the case typed.
+- setcwd updates OLDPWD, PWD, wd, cwd and the `=X:` entry for the new
+  drive, which children inherit.
+- `cd ''` is "null directory", status 1, in every mode (bash 5.3).
+- pwd takes combined -L/-P/-W; -W (Windows modes only) prints the
+  native form with `/`.
+- The hidden shopt `msyspath` (-s, -u, -q, `shopt msyspath`, -O/+O)
+  switches the mode at run time; it is absent from bare shopt,
+  `shopt -p` and BASHOPTS. Switching re-renders PATH, PWD and the
+  working directories and clears the command hash.
+- `\w`, `\W`, jobs and dirs contract HOME ignoring case in the Windows
+  modes.
+
+Platform (main_win32.cpp): widepath passes a `\\?\` path through
+untouched, since GetFullPathNameW strips the trailing dot that made it
+literal.
+
+Decision on paths.cpp's lexical items (issues.md, Accepted): the shell
+stays lexical. It asks the file system only where the corpus shows
+Git Bash depends on it: the `.exe` suffix rule and the virtual files.
+Each listed item is a cygpath or child-argument corner no recorded
+script reaches, and checking them would put os_* calls inside the
+pure engine.
+
+Tests:
+- t/winvos baselines changed on purpose: native `cd /c/Windows` now
+  fails (it is C:/c/Windows) and `cd c:/WORK` keeps the case typed
+  (001); PATH and TEMP are imported with forward slashes while COMSPEC
+  is not (002, 005); /dev/tty exists (004); 006's msys child path is
+  spelled `C:/msys/...`; the msys persona prints /c/work, a POSIX PATH
+  and /usr/bin/bash.exe (007).
+- New t/winvos specs: 008-native-paths (`/x`, `C:x` by the drive's
+  directory, `=C:` inherited, `;` PATH and CDPATH, pwd -W), 009-native-env
+  (the import rules, an invalid name, identity, the hidden shopt and
+  its re-rendering), 010-msys-paths (/dev, /proc, the suffix rule,
+  HOME in any case, the root listing, the toggle). The personality
+  environment gained `ProgramFiles(x86)` for the invalid-name rule, and
+  an msys personality's command line is quoted the Cygwin way.
+- main_test `test_pathmodes`: -O/+O msyspath and the msys re-split of
+  a raw command line (globbing, quoted patterns, braces).
+- t/win32/013-paths: cd/pwd both ways, `\\?\` paths, `2>nul`, reads of
+  /dev/null and NUL, a trailing-dot name, the native persona as sh.exe.
+  It found the two bugs fixed in 0a26827.
+
+Results: tests.exe 149/0; t/exec 3413/0, with --chaos 20 42533/0;
+t/parse 3045/0; t/unit 149/0; t/winvos 10 specs 198/0, with --chaos
+20 798/0; paths_test 923855/0; wide_test 100581/0; t/win32 -x 26/0;
+the WSL POSIX build without warnings (tests.exe, t/exec, t/parse,
+t/winvos all 0 failed there); FUZZ_WIN replay of t/winvos, t/msys,
+t/exec and t/win32 and the Linux FUZZ_CHAOS replay of the same 738
+files clean (one expected out-of-memory exit, 608).
+
+t/msys by topic, passed of total, before -> after (vos: the `# vos`
+scripts under `./tests.exe t/msys/*.sh`; real: `t/msys/run`):
+
+| topic                    | vos           | real          |
+|--------------------------|---------------|---------------|
+| cd, pwd (001-010)        | 0/9 -> 9/9    | 0/10 -> 9/10  |
+| cygpath (011-015)        | 0/5 -> 0/5    | 0/5 -> 0/5    |
+| home, tmp (016-019)      | 0/3 -> 2/3    | 0/4 -> 2/4    |
+| argconv (020-028)        | 0/9 -> 0/9    | 0/9 -> 0/9    |
+| envconv (029-034)        | 0/5 -> 0/5    | 0/6 -> 0/6    |
+| msysq (035-037)          | -             | 0/3 -> 0/3    |
+| type, exe (038-041)      | 0/3 -> 1/3    | 0/4 -> 1/4    |
+| noacl, shebang (042-047) | -             | 0/6 -> 0/6    |
+| crlf (048-051)           | 0/3 -> 0/3    | 0/4 -> 0/4    |
+| options (052-053)        | 0/2 -> 0/2    | 0/2 -> 0/2    |
+| dev, proc (054-057)      | 1/2 -> 2/2    | 1/4 -> 3/4    |
+| claude (058-060)         | -             | 0/3 -> 0/3    |
+| all                      | 1/41 -> 14/41 | 1/60 -> 15/60 |
+
+The failures left belong to later steps: cygpath, CRLF and the
+options to step 6; argument and environment conversion, argv[0], the
+run-time suffix rule and `.exe` stripping in type to step 7 (017, 018,
+034, 040, 055); 007 to the /proc listing (issues.md).
