@@ -232,6 +232,15 @@ static void hostile(Arena perm)
         expect(seconds()-t < 5, "back-reference paths take polynomial time", {});
     }
     {
+        // The search's frames take nearly all of 256 KiB, so the memo
+        // gives its room back (it ran out of memory when it did not)
+        Arena a = perm;
+        a.end = a.beg + ((iz)1<<18);
+        Str s = repeat(&a, "a", 2400);
+        Str r = run(&a, "(b)\\1|a*c", s, 0);
+        expect(r=="nomatch", "(b)\\1|a*c in 256 KiB", r);
+    }
+    {
         // Back-references search every path: a budget stops it
         Arena a = perm;
         Str   s = repeat(&a, "a", 30);

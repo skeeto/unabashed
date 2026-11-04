@@ -128,6 +128,11 @@ gets checked. Rules:
   `$(...)` or a procsub runs as a full vproc. (m3a.md)
 - Read-ahead for foreign pipes on Windows (Linux peeks with tee(2)).
 - No compile cache for `=~` (bash has none either).
+- **Arenas never decommit**: a scratch arena keeps its peak commit for
+  the shell's life, so one `[[ =~ ]]` whose back-reference memo grows
+  (up to 256 MiB; `^(a+)+\1$` on 1000 a's takes 96 MB) leaves that
+  much committed. plan.md's `os_decommit` is not implemented. (m4.md,
+  review)
 
 
 ## Test infrastructure

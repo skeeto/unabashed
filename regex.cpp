@@ -1689,10 +1689,15 @@ static b32 rxspend(RxCtx *c)
 // The states a back-reference search has visited after a character,
 // keyed by everything its future depends on, in a 4-ary hash trie.
 // Coming back to one adds nothing new, which makes the searches
-// polynomial where the paths are exponential, as with ((a|aa)*)\1\1c,
-// at a cost in memory: records come from the search's own arena, up to
-// memomax bytes, after which states are not recorded. Positions in keys
-// are 32-bit, so longer subjects get none.
+// polynomial where the paths are exponential, as with ((a|aa)*)\1\1c.
+// A state is only recorded once its node and position were reached
+// before, so searches where nothing repeats, like (.*)x\1, pay for a
+// bit each, and those bits wait until the search has consumed as many
+// characters as they take words. Records come from chunks of the
+// search's own arena, up to memomax bytes, after which states are not
+// recorded; when the search itself is short of room, the memo is
+// dropped and its chunks hold the search's frames instead. Positions
+// in keys are 32-bit, so longer subjects get none.
 enum : i32 { RS_OPEN, RS_DEAD, RS_UNCLOSED };
 
 struct RxSeen {
@@ -1704,43 +1709,127 @@ struct RxSeen {
     i32      how;    // how the walk's search from here ended
 };
 
-struct RxMemo {
-    RxSeen *root;
-    Arena  *a;
-    iz      left;  // bytes it may still take
-    i32     len;   // values in a key
+struct RxChunk {
+    RxChunk *next;
+    byte    *end;
 };
 
-static RxMemo newmemo(RxCtx *c, Arena *a, i32 len)
+struct RxMemo {
+    RxSeen  *root;
+    Arena   *a;
+    Arena    blk;     // the rest of the latest chunk
+    RxChunk *chunks;  // latest first
+    i32     *key;     // the state to look up
+    u32     *once;    // node-major bits: (node, position) reached
+    iz       base;    // the position of once's first bit
+    iz       row;     // words for each node in once
+    iz       left;    // bytes it may still take
+    iz       wait;    // characters before it starts
+    i32      nnodes;
+    i32      len;     // values in a key
+    b32      off;
+};
+
+static iz rxavail(Arena *a)
+{
+    return (a->mem ? a->mem->limit : a->end) - a->beg;
+}
+
+// Zeroed bytes from the memo's chunks, or null when it has no room.
+static void *rxkeep(RxMemo *m, iz size)
+{
+    if (m->off) return 0;
+    size = (size + 15) & -(iz)16;
+    if (m->blk.end-m->blk.beg < size) {
+        // 64 KiB, or less to leave half the arena to the search
+        iz need = (iz)sizeof(RxChunk) + 32 + size;
+        iz want = need>((iz)1<<16) ? need : (iz)1<<16;
+        want = want<rxavail(m->a)/2 ? want : rxavail(m->a)/2;
+        want = want<m->left ? want : m->left;
+        if (want < need) return 0;
+        m->left -= want;
+        byte    *p = (byte *)allocbytes(m->a, want);
+        RxChunk *k = (RxChunk *)(p + (-(uz)p & 15));
+        k->next    = m->chunks;
+        k->end     = p + want;
+        m->chunks  = k;
+        m->blk.beg = (byte *)k + ((sizeof(RxChunk) + 15) & -(uz)16);
+        m->blk.end = k->end;
+    }
+    byte *r = m->blk.beg;
+    m->blk.beg += size;
+    __builtin_memset(r, 0, (uz)size);
+    return r;
+}
+
+// A memo for keys of len values whose positions lie in [base, base+span].
+static RxMemo newmemo(RxCtx *c, Arena *a, i32 len, iz base, iz span)
 {
     RxMemo m = {};
-    m.a    = a;
-    m.left = c->memomax;
-    m.len  = len;
+    m.a      = a;
+    m.left   = c->memomax;
+    m.len    = len;
+    m.base   = base;
+    m.row    = span/32 + 1;
+    m.nnodes = c->re->nnodes;
+    m.off    = m.row > m.left/4/m.nnodes;
+    m.wait   = m.row * m.nnodes;
     return m;
 }
 
-// Whether the memo may take size more bytes; takes them if so.
-static b32 rxroom(RxMemo *m, iz size)
+// The arena for size bytes of the search's own, from the memo's chunks
+// when the search's arena is short, which ends the memo.
+static Arena *rxframes(RxMemo *m, iz size)
 {
-    Arena *a     = m->a;
-    iz     avail = (a->mem ? a->mem->limit : a->end) - a->beg;
-    size += 16;  // alignment
-    if (size>m->left || size>avail/2) return 0;
-    m->left -= size;
-    return 1;
+    if (rxavail(m->a) >= size) return m->a;
+    if (!m->off) {
+        m->off  = 1;
+        m->root = 0;
+        m->blk  = {};
+    }
+    while (m->blk.end-m->blk.beg<size && m->chunks) {
+        RxChunk *k = m->chunks;
+        m->chunks  = k->next;
+        m->blk.beg = (byte *)k;
+        m->blk.end = k->end;
+    }
+    return m->blk.end-m->blk.beg>=size ? &m->blk : m->a;
 }
 
-// The record of state key, null if there is no room. Sets *old when it
-// was visited before.
-static RxSeen *rxvisit(RxMemo *m, i32 *key, b32 *old)
+// Whether the search reached node x at position idx before, marking it
+// reached: only then can its state repeat.
+static b32 rxagain(RxMemo *m, i32 x, iz idx)
 {
+    if (m->off) return 0;
+    if (!m->once) {
+        // Zeroing the bits waits until the search has done as much
+        // work, so searches that end soon, as most do, pay nothing
+        if (m->wait-- > 0) return 0;
+        m->key  = (i32 *)rxkeep(m, m->len*(iz)sizeof(i32));
+        m->once = (u32 *)rxkeep(m, m->row*m->nnodes*(iz)sizeof(u32));
+        m->off  = !m->key || !m->once;
+        if (m->off) return 0;
+    }
+    iz   p   = idx - m->base;
+    u32 *w   = m->once + x*m->row + p/32;
+    u32  bit = (u32)1 << (p%32);
+    b32  r   = !!(*w & bit);
+    *w |= bit;
+    return r;
+}
+
+// The record of state m->key, null if it is not recorded. Sets *old when
+// it was visited before.
+static RxSeen *rxvisit(RxMemo *m, b32 *old)
+{
+    i32 *key = m->key;
+    *old = 0;
+    if (m->off) return 0;
     u64 h = 0x100;
     for (i32 i = 0; i < m->len; i++) {
         h ^= (u32)key[i];
         h *= 1111111111111111111u;
     }
-    *old = 0;
     RxSeen **e = &m->root;
     for (; *e; h <<= 2) {
         i32 i = 0;
@@ -1751,9 +1840,11 @@ static RxSeen *rxvisit(RxMemo *m, i32 *key, b32 *old)
         }
         e = &(*e)->child[h>>62];
     }
-    if (rxroom(m, (iz)sizeof(RxSeen) + m->len*(iz)sizeof(i32))) {
-        *e = alloc<RxSeen>(m->a);
-        (*e)->key = alloc<i32>(m->a, m->len);
+    iz    size = (iz)sizeof(RxSeen) + m->len*(iz)sizeof(i32);
+    byte *r    = (byte *)rxkeep(m, size);
+    if (r) {
+        *e = (RxSeen *)r;
+        (*e)->key = (i32 *)(r + sizeof(RxSeen));
         copybytes((*e)->key, key, m->len*(iz)sizeof(i32));
     }
     return *e;
@@ -1781,9 +1872,7 @@ struct RxWalk {
     i32      nfails;
     RxMemo   seen;
     RxSeen  *open;   // states whose searches have not ended
-    i32     *key;
     b32      fs;     // backtracking
-    Arena   *a;
 };
 
 static b32 rxviable(RxWalk *w, iz idx, i32 x)
@@ -1799,9 +1888,12 @@ static void rxpush(RxWalk *w, i32 node)
     if (f) {
         w->free = f->next;
     } else {
-        f = alloc<RxFail>(w->a);
-        f->regs = alloc<RxMatch>(w->a, 2*ng);
-        f->eps  = alloc<u32>(w->a, nw);
+        iz     size = (iz)sizeof(RxFail) + 2*ng*(iz)sizeof(RxMatch) + nw*4 + 32;
+        Arena *a    = rxframes(&w->seen, size);
+        if (w->seen.off) w->open = 0;
+        f = alloc<RxFail>(a);
+        f->regs = alloc<RxMatch>(a, 2*ng);
+        f->eps  = alloc<u32>(a, nw);
     }
     f->idx  = w->idx;
     f->node = node;
@@ -1891,9 +1983,9 @@ static i32 rxfail(RxWalk *w, i32 how, RxMatch *end)
     for (; w->open && w->open->depth>=w->nfails && w->fails; w->open = w->open->up) {
         RxSeen *st = w->open;
         st->how = how;
-        if (how==RS_UNCLOSED && !copy && rxroom(&w->seen, size)) {
-            copy = alloc<RxMatch>(w->a, ng);
-            copybytes(copy, end, size);
+        if (how==RS_UNCLOSED && !copy) {
+            copy = (RxMatch *)rxkeep(&w->seen, size);
+            if (copy) copybytes(copy, end, size);
         }
         st->regs = copy;
         if (how==RS_UNCLOSED && !copy) st->how = RS_OPEN;
@@ -1908,7 +2000,8 @@ static RxSeen *rxended(RxWalk *w, i32 x)
     RxMatch *regs = w->regs;
     RxMatch *prev = w->prev;
     i32      ng   = w->c->re->nsub + 1;
-    i32     *key  = w->key;
+    i32     *key  = w->seen.key;
+    if (!rxagain(&w->seen, x, w->idx)) return 0;
     key[0] = x;
     key[1] = (i32)w->idx;
     for (i32 i = 0; i < ng; i++) {
@@ -1918,7 +2011,7 @@ static RxSeen *rxended(RxWalk *w, i32 x)
         key[5+4*i] = (i32)prev[i].eo;
     }
     b32     old = 0;
-    RxSeen *st  = rxvisit(&w->seen, key, &old);
+    RxSeen *st  = rxvisit(&w->seen, &old);
     if (st && !old) {
         st->depth = w->nfails;
         st->up    = w->open;
@@ -1949,9 +2042,7 @@ static b32 rxwalk(RxCtx *c, u32 *v, i32 last, iz s, iz e, RxMatch *regs, Arena s
     w.eps  = alloc<u32>(&scratch, c->words);
     w.idx  = s;
     w.fs   = re->plural && re->backrefs;
-    w.a    = &scratch;
-    w.seen = newmemo(c, &scratch, 2 + 4*ng);
-    w.key  = alloc<i32>(&scratch, w.seen.len);
+    w.seen = newmemo(c, &scratch, 2 + 4*ng, s, e-s);
     for (i32 i = 0; i < ng; i++) regs[i].so = regs[i].eo = -1;
     regs[0].so = s;
     regs[0].eo = e;
@@ -2026,8 +2117,6 @@ static iz rxlongest(RxCtx *c, iz s, i32 *last, u32 *closes, b32 record, Arena sc
     iz       best  = -1;
     RxFrame *stack = 0;
     RxFrame *free  = 0;
-    RxMemo   seen  = newmemo(c, &scratch, 3 + 3*re->nrefs);
-    i32     *key   = alloc<i32>(&scratch, seen.len);
 
     RxFrame *f = alloc<RxFrame>(&scratch);
     f->regs   = alloc<RxMatch>(&scratch, ng);
@@ -2037,6 +2126,9 @@ static iz rxlongest(RxCtx *c, iz s, i32 *last, u32 *closes, b32 record, Arena sc
     f->idx  = s;
     f->node = re->start;
     stack   = f;
+
+    RxMemo seen = newmemo(c, &scratch, 3 + 3*re->nrefs, s, c->s.len-s);
+    iz     size = (iz)sizeof(RxFrame) + ng*(iz)(sizeof(RxMatch)+1) + nw*4 + 32;
 
     while (stack) {
         f = stack;
@@ -2087,10 +2179,11 @@ static iz rxlongest(RxCtx *c, iz s, i32 *last, u32 *closes, b32 record, Arena sc
                     if (g) {
                         free = g->next;
                     } else {
-                        g = alloc<RxFrame>(&scratch);
-                        g->regs   = alloc<RxMatch>(&scratch, ng);
-                        g->usable = alloc<u8>(&scratch, ng);
-                        g->eps    = alloc<u32>(&scratch, nw);
+                        Arena *a = rxframes(&seen, size);
+                        g = alloc<RxFrame>(a);
+                        g->regs   = alloc<RxMatch>(a, ng);
+                        g->usable = alloc<u8>(a, ng);
+                        g->eps    = alloc<u32>(a, nw);
                     }
                     copybytes(g->regs, regs, ng*(iz)sizeof(RxMatch));
                     copybytes(g->usable, ok, ng);
@@ -2129,7 +2222,10 @@ static iz rxlongest(RxCtx *c, iz s, i32 *last, u32 *closes, b32 record, Arena sc
             for (i32 i = 0; i < nw; i++) eps[i] = 0;
             cur = x->next;
 
+            if (!rxagain(&seen, cur, idx)) continue;
+
             // Only the registers back-references read matter ahead
+            i32 *key = seen.key;
             key[0] = cur;
             key[1] = (i32)idx;
             key[2] = ref;
@@ -2140,7 +2236,7 @@ static iz rxlongest(RxCtx *c, iz s, i32 *last, u32 *closes, b32 record, Arena sc
                 key[5+3*i] = closes && !record && ok[g];
             }
             b32 old = 0;
-            rxvisit(&seen, key, &old);
+            rxvisit(&seen, &old);
             if (old) break;
         }
         f->next = free;
