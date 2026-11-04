@@ -65,6 +65,19 @@ gets checked. Rules:
   (`5.3.15(1)-release`); the corpus prints only BASH_VERSINFO[5].
 - **Accepted: `type cygpath`** says builtin in msys mode (m5a.md,
   Decisions). Not in the corpus, nor is cygpath's usage text (GPL).
+- **paths.cpp is lexical where Cygwin asks the file system** (m5a.md
+  step 1): cygpath -w of `C:` or `C:x` (Cygwin: cwd\C), relative paths
+  through missing directories (Cygwin: an error), `..` through missing
+  directories, `\\.\NUL` (Cygwin -w: `\\?\NUL`), SHELL naming an
+  existing program (Cygwin appends `.exe`), cygpath mapping `<>|"` to
+  private-use characters, /proc/self (Cygwin: /proc/PID), and a closed
+  /dev/fd/N argument (Cygwin keeps it; we give /proc/PID/fd/N). Decide
+  in step 5 which of these the shell should check with os_* calls.
+- **msysenv does not add MSYSTEM, SYSTEMROOT and WINDIR** when absent,
+  as the runtime does; step 7's spawner must. (m5a.md step 1)
+- **Startup import of Windows-form variables** (`envtoposix`) and
+  `/dev/consN`, `/dev/ptyN`, `/dev/ttySN` are untested against Git Bash
+  (only inline expectations); step 3's corpus should record them.
 
 
 ## M5b (real background processes)

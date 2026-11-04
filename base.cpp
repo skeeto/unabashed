@@ -227,6 +227,16 @@ static u8 lowercase(u8 c)
     return c>='A' && c<='Z' ? (u8)(c + 32) : c;
 }
 
+static u8 upcase(u8 c)
+{
+    return c>='a' && c<='z' ? (u8)(c - 32) : c;
+}
+
+static u8 byteat(Str s, iz i)  // zero past the end, like a terminator
+{
+    return i>=0 && i<s.len ? s[i] : 0;
+}
+
 static Str trimleft(Str s)
 {
     for (; s.len && whitespace(*s.data); s.data++, s.len--) {}

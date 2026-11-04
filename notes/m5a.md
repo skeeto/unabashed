@@ -141,6 +141,71 @@ then 8 and 9 in parallel; then 10.
    scratch copy of w64devkit, final notes.
 
 
+## Implementation
+
+### Step 1: paths.cpp
+
+API (all pure; results in the given arena):
+- `initmounts(ctx, a, root, fstab)`: the root and /bin mounts, then
+  fstab (`parsefstab`: `\040`, `posix=0` as nocase, two fields as a
+  nocase mount, three ignored, `cygdrive`, `usertemp`, `bind`,
+  `override`; unknown options reject the line).
+- `topath(ctx, a, path) -> PathRes`: canonical native path for
+  opening, or a virtual kind (PK_NULL, PK_TTY, PK_FD, PK_DEVICE,
+  PK_DEV, PK_PROC, PK_CYGDRIVE), with `literal` for names Win32 would
+  alter in msys mode.
+- `toposix(ctx, a, path)`: cygpath -u. `towin(ctx, a, path, back)`:
+  cygpath -w (back) or -m. `towinabs`: the same from the cwd.
+- `toposixlist(ctx, a, list)`, `towinlist(ctx, a, list, back)`: -up,
+  -wp, -mp. `envtoposix(ctx, a, name, value)`: startup import of
+  conv_envvars (quotes and trailing backslashes stripped).
+- `msysarg(ctx, a, arg, excl)`, `msysargv(ctx, a, argv, env)`: one
+  argument, or an argv under the child environment's
+  MSYS2_ARG_CONV_EXCL and MSYS_NO_PATHCONV.
+- `msysenv(ctx, a, env)`: the environment block for a native child.
+- `personaof(argv0, fstab) -> PathMode`.
+
+Goldens: t/unit/paths_record.sh runs the curated t/unit/paths.cases
+in Git Bash 5.3.15 (cygpath on fixed strings, plus an argv/environment
+printer it compiles into an empty scratch directory) and writes
+t/unit/paths.golden with the recording context (root, %TEMP%, cwd,
+drives, fstab), which paths_test.cpp rebuilds. Cases whose answer
+depends on the file system or open descriptors were left out (below),
+and cygpath -w never sees a UNC path, which would hit the network.
+paths_test.cpp: 553 golden checks, 146 inline (native mode, fstab,
+virtual files, reserved names, POSIX mode, persona, startup import),
+and about 920k property checks on random input (canonical and
+idempotent topath, Windows and POSIX round trips through the mounts,
+msysarg leaves slash-free arguments alone, sorted msysenv).
+
+Found by recording (msys2.md corrected where it was wrong):
+- TZ is dropped *if* it starts with ':' or holds anything but
+  alphanumerics and `-+:`; an empty TZ is kept.
+- A missing or empty PATH appends `PATH=<root>\usr`; `PATH=` itself
+  is kept. MSYS_NO_PATHCONV with an empty value also disables the
+  heuristic (not conv_envvars). MSYS2_ARG_CONV_EXCL only counts when
+  exported.
+- As arguments, /dev/null, zero, full, random, urandom and clipboard
+  all become `/Device/Null`; /dev/std* become /proc/self/fd/N and
+  /dev/fd/N becomes /proc/PID/fd/N; /dev itself and unknown /dev
+  entries map under the root; `/dev/null/` is left alone.
+- `/a:...` is an escaped Windows path: `/a:/b;` gives `a:/b;` and
+  `--a=/b:/c` gives `--a=b:/c`. `PATH=C:/a` as an environment entry
+  gives `C;A:\`.
+- cygpath -wp turns empty elements into "."; -w of /dev/tty, /dev/ptmx
+  and /proc entries prints them unchanged; a missing drive with a
+  trailing slash gives `X://`; `\\.\C:\x` stays `//./C:/x` with -u.
+
+Choices of ours: reserved DOS names are devices in both modes (classic
+Win32 rule in native mode; bare names only in msys mode, where a
+reserved name with an extension, or a trailing dot or space, opens
+literally). In msys mode `C:` is the drive root and `..` in a relative
+path resolves in the POSIX namespace; in native mode `C:x` uses the
+drive's cwd. `..` resolves lexically (Cygwin checks the file system).
+`envless` moved from vars.cpp to paths.cpp, `upcase` and `byteat` from
+b_printf.cpp to base.cpp.
+
+
 ## Decisions
 
 Taken (recommendations, revisit if the user disagrees):

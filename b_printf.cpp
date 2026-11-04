@@ -46,16 +46,6 @@ static i32 hexdigit(u8 c)  // -1 if not a hex digit
     return c>='a' && c<='f' ? c - 'a' + 10 : -1;
 }
 
-static u8 upcase(u8 c)
-{
-    return c>='a' && c<='z' ? (u8)(c - 32) : c;
-}
-
-static u8 byteat(Str s, iz i)  // zero past the end, like a terminator
-{
-    return i>=0 && i<s.len ? s[i] : 0;
-}
-
 // Give back the unused tail of a buffer that ends at the arena's front.
 static Str shrinkbuf(Buf *b)
 {

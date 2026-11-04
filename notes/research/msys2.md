@@ -135,7 +135,8 @@ Spawning a native child (build_env with keep_posix false):
 - conv_envvars are converted back to Windows form with backslashes. Observed: TMP=C:\Users\wellons\AppData\Local\Temp.
 - Every other non-empty variable goes through the same arg heuristic: `FOO=/tmp/a:/usr` becomes `C:/…/Temp/a;C:/…/git/usr`.
 - MSYS2_ENV_CONV_EXCL: ';'-separated prefixes matched against the whole "KEY=VALUE" string, or "*" for all.
-- TZ is dropped unless it starts with ':' or is only alphanumerics and `-+:`.
+- TZ (any case) is dropped if it starts with ':' or holds anything but alphanumerics and `-+:` (recorded: `TZ=:America/New_York`, `TZ=America/New_York` and `TZ=<+01>-1` are dropped; `TZ=UTC+1` and an empty TZ are kept).
+- If PATH is missing or empty, `PATH=<root>\usr` (not usr\bin) is appended after sorting.
 - The block is sorted with strcmp, as Windows expects.
 - keep_posix is also true for strace.
 

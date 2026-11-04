@@ -1,0 +1,106 @@
+# Cases for t/unit/paths_record.sh (bash syntax). Only pure queries:
+# cygpath on fixed strings and a native argv printer. ROOTM/ROOTW and
+# TEMPM/TEMPW are the install root and %TEMP% in -m and -w forms.
+# Cases whose answer depends on the file system (existing files, open
+# descriptors) are left out; notes/m5a.md lists them.
+# This is free and unencumbered software released into the public domain.
+
+# cygpath -u: Windows to POSIX through the mount table
+u 'C:\x' C:/x C: c: x: X:/ 'D:\' 'c:foo' 'C:a\b' 'C:x\y' 'C:x' 1:/x
+u 'a\b' 'x\y' 'x\\y' '.\x' '..\x' 'x\..\y' . .. x/y ./x NUL nul
+u /a:b /c/ /C/ /c//x /c/x// /usr/bin// /a//b /usr/../x /proc/cygdrive/c/x
+u "$ROOTW\\usr\\bin" "$ROOTM" "$ROOTM/" "$ROOTM/usr" "$ROOTM/usr/bin/x"
+u "$ROOTM/bin" "${ROOTM}x" "$ROOTW\\" "$ROOTW\\usr\\bin\\.."
+u "$TEMPW\\x" "$TEMPM" "${TEMPM}x" "$TEMPM/" "$TEMPW\\x\\.."
+u 'C:\\' 'C:\x\' c:/x/ 'C:/x/../..' 'C:/x/../../y' C:/.. 'C:\.\x' 'C:\x\.'
+u 'C:\x\..' 'C:\x\..\y' 'C:\x\.\y' 'C:\x\\y' 'C:\a b\c' 'C:\a\b.' 'C:\a\b '
+u '\\?\C:\x' '\\?\C:' '\\?\C:\' '\\.\C:\x' //?/c:/x '\x\y' '\' '\\\x'
+u '\\.\NUL' '\\.\pipe\x' '\\srv\share' '\\srv\share\' '\\srv\share\x\..\y'
+u '\\srv' //srv/share/x '\\?\UNC\srv\share\x' 'C:/con' 'C:/a/nul.txt'
+
+# cygpath -w and -m: POSIX to Windows
+w / /c /c/ /C/ /C/Users /x /X /X/ /a/ /a/b /a//b /a/./b /usr /usr/ /usr/bin
+w /bin /bin/x /BIN/x /USR/BIN /tmp /TMP/x /tmp/ /tmp/. /dev/null /dev/zero
+w /dev/full /dev/random /dev/urandom /dev/clipboard /dev/tty /dev/ptmx
+w /dev/xyz /dev /dev/ /dev/shm /proc /proc/cpuinfo /proc/cygdrive
+w /proc/cygdrive/ /proc/cygdrive/c/x /proc/cygdrive/x/y /cygdrive/c
+w /c/.. /usr/bin/.. /usr/../x /etc/../tmp/x /c/Windows/.. /c/Windows/../
+w /usr/bin/./ /usr/bin/. /./ /// ///x /c//x /c/x// /usr/bin// '/c/x\'
+w '/x\y' '/c\y' '/a\\b' /usr/../c/x /bin/../x /a. '/a ' /nul /c/nul
+w /c/x. '/c/x ' /c/x... /Dev/null /PROC
+w 'C:\x' C:/x '//?/C:/x' '\\?\C:\x' 'C:\x\..\y' 'C:\x\.\y' 'C:\x\\y'
+w 'D:\' 'c:foo' 'C:x' 'C:/a/nul.txt' 'C:/con' 'C:\x.' 'C:/x. ' . ./x
+w "$ROOTW\\usr\\bin" "$TEMPW\\x"
+
+# cygpath -p: path lists
+wp '/c/a:/usr/bin:.' /a::/b :: : /c/x: :/c/x C:/a:/b /usr/bin:/tmp/x x:y
+wp /proc:/dev/null
+up 'C:\a;D:\b' 'C:\a;;D:\b;' ';' 'a;b' "$ROOTW\\usr\\bin;$TEMPW"
+up '"C:\a b";C:\x\' 'C:/a;C:' '/c/x;/d/y' 'C:\a:D:\b'
+
+# Arguments to a native child (msys2.md section 2), misfires included
+arg /c/Users /tmp/x / /usr/bin /c //c //server/share /dev/null
+arg --dir=/foo:/bar '/c/x;/d/y' http://a/b a/b ./a/b '*/x' 1:2 x:/y
+arg @/file '/a b' /foo,/bar -DX=/y -o/x /x/.. '<(true)' /dev/stdin
+arg /dev/fd/1 /dev/clipboard /dev/tty /proc/self /proc //c/x /X: /X:/y
+arg '/C:\y' -I/x -I/x:/y --a=/b:/c a,/b -a,/b scheme://x/y git+ssh://h/p
+arg :/ :: ::1 a::b /a::/b ';;' '/a;;/b' '/a:/b;' /a:/b: /a: :/a /a::b
+arg /x/..y /x/../y /x/... /.. /../x /. /./x .//x ../x '..\x' '.\x' '\x'
+arg '\\x\y' 'C:\x' C:/x C:/x:/y 'C:/x;/y' 'c:/x;d:/y' C:x C:
+arg -L/usr/lib -Wl,-rpath,/usr/lib -Wl,/x --prefix=/usr x=/y x=/y:/z
+arg a=b=/c -x=/y --=/y -/x -1/x -ab/x -a/x -a/x,y
+arg '"/x"' "'/x'" '/x"' '"/x' 'a"/x"' '-I"/x"' '`/x`' '/x?' '/x*' '/x[1]'
+arg /~ '~/x' a/~b x@@/y @@ @/x +/x %/x '$/x' '#/x' '!/x' '(/x)'
+arg ' /x' '/x ' 'a b/c' 'a /c' $'\t/x' '/x\y' '/c\y' /dev/null:/x
+arg /dev/nullx /dev/null/ /c/x:/dev/null /tmp:/c/x /a:.:/b /a:./x
+arg /a:../x .:/a x:./y x:../y x:.y rev:./a HEAD:/x a:/b -a:/b --a:/b
+arg a=x:/b /a=/b /a,/b x/y:/z ./x:/y ../x:/y .:/x ..:/x a.b:/x
+arg /a:http://x/y /a:git+ssh://h/p /a:1x://y /A:/b /usr/bin/ /usr//bin
+arg /usr/./bin /c/x/ /x/ /xy /a:b/c /ab:/c file://x http: /http://x
+arg -Dx=http://y /c/Users/. /c/.. /c/../x /a/b/../c /tmp/../x
+arg /proc/cygdrive/c/x /proc/cygdrive /proc/cygdrive/ /cygdrive/c/x
+arg /dev/zero /dev/full /dev/random /dev/urandom /dev/stdout /dev/fd/0
+arg /dev/fd /dev/fd/x /dev/stdin:/x /nul /c/nul /c/x/nul.txt /dev/ptmx
+arg /dev/xyz /dev /dev/ /dev/shm /dev/cons0 /dev/console /proc/cpuinfo
+arg /Dev/null /PROC /proc/Cygdrive/c /c/ /C/ /c//x /c/x// /usr/bin//
+arg /c/Users/.. /./ /X /X/ /a/b /bin/../x /c/Users/x/ /c/Users/../x
+arg '/a<b' '/a>b' '/a|b' '/a"b' /a:b/c /ab/c:d '/xy.' '/xy ' '/c/x. '
+arg '/a\\b' $'/\xc3\xa9' $'\xc3\xa9/x' $'/x\xc3\xa9' -I/ -I/usr/bin/
+arg -isystem/usr/x -I//x/y -Ic:/x --x=//y '-x=/a b' 'a=/b;/c' --dir=/a:
+arg '/' '//' '///' '/:' '/;' '/,' '/=' /-x /a-b/c '/a=b'
+
+# MSYS2_ARG_CONV_EXCL
+excl '/t;--x=' /tmp /usr --x=/a --y=/a
+excl '*' /tmp /usr
+excl ';;/u' /tmp /usr
+excl '/x;*' /tmp
+excl '' /tmp
+
+# The environment of a native child
+env_ PATH=/usr/bin:/c/x:. HOME=/c/Users/x TMP=/tmp 'TEMP=C:\t' TMPDIR=rel
+env_ SHELL=/usr/bin/nosuch ORIGINAL_PATH=/a:/b LD_LIBRARY_PATH=/x:/y
+env_ T_A=/tmp/a:/usr T_B=/c/x 'T_C=x;y' T_D=/dev/null 'T_E=a b /c' T_F=
+env_ T_G=/x/.. 'T_H=C:\x' T_I=-I/x T_J=/x=/y T_K=x/y T_L=--a=/b:/c
+env_ TZ=UTC
+env_ TZ=EST5EDT
+env_ TZ=:America/New_York
+env_ TZ=America/New_York
+env_ TZ=UTC+1
+env_ 'TZ=<+01>-1'
+env_ TZ=
+env_ 'TZ=a b'
+env_ TZ=X-1:30
+env_ tz=x/y
+env_ 'MSYS2_ENV_CONV_EXCL=T_A;T_B=/c' T_A=/tmp T_B=/c/x T_BB=/c/x T_C=/tmp
+env_ 'MSYS2_ENV_CONV_EXCL=*' T_A=/tmp HOME=/c/x
+env_ MSYS_NO_PATHCONV=1 T_A=/tmp HOME=/c/x
+env_ PATH=
+env_ T_X=y
+env_ PATH=/c/a::/b:
+env_ PATH=C:/a
+env_ PATH=rel:/usr/bin
+env_ 'HOME=C:\x'
+env_ HOME=
+env_ SHELL=
+env_ Path=/usr/bin T_X=/tmp
+env_ B=/x A=/y a=/z _=/w

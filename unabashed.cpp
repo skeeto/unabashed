@@ -159,6 +159,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "b_test.cpp"
 #include "float.cpp"
 #include "b_printf.cpp"
+#include "paths.cpp"
 #include "sched.cpp"
 #include "shell.cpp"
 #include "array.cpp"

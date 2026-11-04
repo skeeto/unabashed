@@ -1451,11 +1451,6 @@ static void exportfuncs(Func *f, Arena *a, Slice<Str> *out)
     }
 }
 
-static b32 envless(Str *a, Str *b)
-{
-    return compare(*a, *b) < 0;
-}
-
 // The environment for a child process, sorted by name.
 static Slice<Str> makeenv(Shell *sh, Arena *a)
 {

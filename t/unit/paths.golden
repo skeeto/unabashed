@@ -1,0 +1,2311 @@
+@root C:/Users/wellons/git/
+@temp C:/Users/wellons/AppData/Local/Temp
+@cwd C:/Users/wellons/AppData/Local/Temp/claude/C--Users-wellons-src-unabashed/49667c1f-f31a-4608-a8d2-7135244c0f96/scratchpad/rec1/empty
+@drives CDE
+@fstab # For a description of the file format, see the Users Guide
+@fstab # https://cygwin.com/cygwin-ug-net/using.html#mount-table
+@fstab 
+@fstab # DO NOT REMOVE NEXT LINE. It remove cygdrive prefix from path
+@fstab none / cygdrive binary,posix=0,noacl,user 0 0
+@fstab none /tmp usertemp binary,posix=0,noacl 0 0
+T u
+I C:\\x
+O /c/x
+.
+T u
+I C:/x
+O /c/x
+.
+T u
+I C:
+O /c
+.
+T u
+I c:
+O /c
+.
+T u
+I x:
+O /x
+.
+T u
+I X:/
+O /x/
+.
+T u
+I D:\\
+O /d/
+.
+T u
+I c:foo
+O c:foo
+.
+T u
+I C:a\\b
+O C:a/b
+.
+T u
+I C:x\\y
+O C:x/y
+.
+T u
+I C:x
+O C:x
+.
+T u
+I 1:/x
+O 1:/x
+.
+T u
+I a\\b
+O a/b
+.
+T u
+I x\\y
+O x/y
+.
+T u
+I x\\\\y
+O x//y
+.
+T u
+I .\\x
+O ./x
+.
+T u
+I ..\\x
+O ../x
+.
+T u
+I x\\..\\y
+O x/../y
+.
+T u
+I .
+O .
+.
+T u
+I ..
+O ..
+.
+T u
+I x/y
+O x/y
+.
+T u
+I ./x
+O ./x
+.
+T u
+I NUL
+O NUL
+.
+T u
+I nul
+O nul
+.
+T u
+I /a:b
+O /a:b
+.
+T u
+I /c/
+O /c/
+.
+T u
+I /C/
+O /C/
+.
+T u
+I /c//x
+O /c//x
+.
+T u
+I /c/x//
+O /c/x//
+.
+T u
+I /usr/bin//
+O /usr/bin//
+.
+T u
+I /a//b
+O /a//b
+.
+T u
+I /usr/../x
+O /usr/../x
+.
+T u
+I /proc/cygdrive/c/x
+O /proc/cygdrive/c/x
+.
+T u
+I C:\\Users\\wellons\\git\\usr\\bin
+O /usr/bin
+.
+T u
+I C:/Users/wellons/git
+O /
+.
+T u
+I C:/Users/wellons/git/
+O /
+.
+T u
+I C:/Users/wellons/git/usr
+O /usr
+.
+T u
+I C:/Users/wellons/git/usr/bin/x
+O /usr/bin/x
+.
+T u
+I C:/Users/wellons/git/bin
+O /bin
+.
+T u
+I C:/Users/wellons/gitx
+O /c/Users/wellons/gitx
+.
+T u
+I C:\\Users\\wellons\\git\\
+O /
+.
+T u
+I C:\\Users\\wellons\\git\\usr\\bin\\..
+O /usr/
+.
+T u
+I C:\\Users\\wellons\\AppData\\Local\\Temp\\x
+O /tmp/x
+.
+T u
+I C:/Users/wellons/AppData/Local/Temp
+O /tmp
+.
+T u
+I C:/Users/wellons/AppData/Local/Tempx
+O /c/Users/wellons/AppData/Local/Tempx
+.
+T u
+I C:/Users/wellons/AppData/Local/Temp/
+O /tmp/
+.
+T u
+I C:\\Users\\wellons\\AppData\\Local\\Temp\\x\\..
+O /tmp
+.
+T u
+I C:\\\\
+O /c/
+.
+T u
+I C:\\x\\
+O /c/x/
+.
+T u
+I c:/x/
+O /c/x/
+.
+T u
+I C:/x/../..
+O /c
+.
+T u
+I C:/x/../../y
+O /c/y
+.
+T u
+I C:/..
+O /c
+.
+T u
+I C:\\.\\x
+O /c/x
+.
+T u
+I C:\\x\\.
+O /c/x/
+.
+T u
+I C:\\x\\..
+O /c
+.
+T u
+I C:\\x\\..\\y
+O /c/y
+.
+T u
+I C:\\x\\.\\y
+O /c/x/y
+.
+T u
+I C:\\x\\\\y
+O /c/x/y
+.
+T u
+I C:\\a b\\c
+O /c/a b/c
+.
+T u
+I C:\\a\\b.
+O /c/a/b.
+.
+T u
+I C:\\a\\b 
+O /c/a/b 
+.
+T u
+I \\\\?\\C:\\x
+O /c/x
+.
+T u
+I \\\\?\\C:
+O /c
+.
+T u
+I \\\\?\\C:\\
+O /c/
+.
+T u
+I \\\\.\\C:\\x
+O //./C:/x
+.
+T u
+I //?/c:/x
+O /c/x
+.
+T u
+I \\x\\y
+O /c/x/y
+.
+T u
+I \\
+O /c
+.
+T u
+I \\\\\\x
+O /c/x
+.
+T u
+I \\\\.\\NUL
+O //./NUL
+.
+T u
+I \\\\.\\pipe\\x
+O //./pipe/x
+.
+T u
+I \\\\srv\\share
+O //srv/share
+.
+T u
+I \\\\srv\\share\\
+O //srv/share/
+.
+T u
+I \\\\srv\\share\\x\\..\\y
+O //srv/share/x/../y
+.
+T u
+I \\\\srv
+O //srv
+.
+T u
+I //srv/share/x
+O //srv/share/x
+.
+T u
+I \\\\?\\UNC\\srv\\share\\x
+O //srv/share/x
+.
+T u
+I C:/con
+O /c/con
+.
+T u
+I C:/a/nul.txt
+O /c/a/nul.txt
+.
+T w
+I /
+O C:\\Users\\wellons\\git\\
+.
+T m
+I /
+O C:/Users/wellons/git/
+.
+T w
+I /c
+O C:\\
+.
+T m
+I /c
+O C:/
+.
+T w
+I /c/
+O C:\\
+.
+T m
+I /c/
+O C:/
+.
+T w
+I /C/
+O C:\\
+.
+T m
+I /C/
+O C:/
+.
+T w
+I /C/Users
+O C:\\Users
+.
+T m
+I /C/Users
+O C:/Users
+.
+T w
+I /x
+O X:\\
+.
+T m
+I /x
+O X:/
+.
+T w
+I /X
+O X:\\
+.
+T m
+I /X
+O X:/
+.
+T w
+I /X/
+O X:\\\\
+.
+T m
+I /X/
+O X://
+.
+T w
+I /a/
+O A:\\\\
+.
+T m
+I /a/
+O A://
+.
+T w
+I /a/b
+O A:\\b
+.
+T m
+I /a/b
+O A:/b
+.
+T w
+I /a//b
+O A:\\b
+.
+T m
+I /a//b
+O A:/b
+.
+T w
+I /a/./b
+O A:\\b
+.
+T m
+I /a/./b
+O A:/b
+.
+T w
+I /usr
+O C:\\Users\\wellons\\git\\usr
+.
+T m
+I /usr
+O C:/Users/wellons/git/usr
+.
+T w
+I /usr/
+O C:\\Users\\wellons\\git\\usr\\
+.
+T m
+I /usr/
+O C:/Users/wellons/git/usr/
+.
+T w
+I /usr/bin
+O C:\\Users\\wellons\\git\\usr\\bin
+.
+T m
+I /usr/bin
+O C:/Users/wellons/git/usr/bin
+.
+T w
+I /bin
+O C:\\Users\\wellons\\git\\usr\\bin
+.
+T m
+I /bin
+O C:/Users/wellons/git/usr/bin
+.
+T w
+I /bin/x
+O C:\\Users\\wellons\\git\\usr\\bin\\x
+.
+T m
+I /bin/x
+O C:/Users/wellons/git/usr/bin/x
+.
+T w
+I /BIN/x
+O C:\\Users\\wellons\\git\\BIN\\x
+.
+T m
+I /BIN/x
+O C:/Users/wellons/git/BIN/x
+.
+T w
+I /USR/BIN
+O C:\\Users\\wellons\\git\\USR\\BIN
+.
+T m
+I /USR/BIN
+O C:/Users/wellons/git/USR/BIN
+.
+T w
+I /tmp
+O C:\\Users\\wellons\\AppData\\Local\\Temp
+.
+T m
+I /tmp
+O C:/Users/wellons/AppData/Local/Temp
+.
+T w
+I /TMP/x
+O C:\\Users\\wellons\\AppData\\Local\\Temp\\x
+.
+T m
+I /TMP/x
+O C:/Users/wellons/AppData/Local/Temp/x
+.
+T w
+I /tmp/
+O C:\\Users\\wellons\\AppData\\Local\\Temp\\
+.
+T m
+I /tmp/
+O C:/Users/wellons/AppData/Local/Temp/
+.
+T w
+I /tmp/.
+O C:\\Users\\wellons\\AppData\\Local\\Temp\\
+.
+T m
+I /tmp/.
+O C:/Users/wellons/AppData/Local/Temp/
+.
+T w
+I /dev/null
+O \\\\.\\NUL
+.
+T m
+I /dev/null
+O //./NUL
+.
+T w
+I /dev/zero
+O \\\\.\\NUL
+.
+T m
+I /dev/zero
+O //./NUL
+.
+T w
+I /dev/full
+O \\\\.\\NUL
+.
+T m
+I /dev/full
+O //./NUL
+.
+T w
+I /dev/random
+O \\\\.\\NUL
+.
+T m
+I /dev/random
+O //./NUL
+.
+T w
+I /dev/urandom
+O \\\\.\\NUL
+.
+T m
+I /dev/urandom
+O //./NUL
+.
+T w
+I /dev/clipboard
+O \\\\.\\NUL
+.
+T m
+I /dev/clipboard
+O //./NUL
+.
+T w
+I /dev/tty
+O /dev/tty
+.
+T m
+I /dev/tty
+O /dev/tty
+.
+T w
+I /dev/ptmx
+O /dev/ptmx
+.
+T m
+I /dev/ptmx
+O /dev/ptmx
+.
+T w
+I /dev/xyz
+O C:\\Users\\wellons\\git\\dev\\xyz
+.
+T m
+I /dev/xyz
+O C:/Users/wellons/git/dev/xyz
+.
+T w
+I /dev
+O C:\\Users\\wellons\\git\\dev
+.
+T m
+I /dev
+O C:/Users/wellons/git/dev
+.
+T w
+I /dev/
+O C:\\Users\\wellons\\git\\dev\\
+.
+T m
+I /dev/
+O C:/Users/wellons/git/dev/
+.
+T w
+I /dev/shm
+O C:\\Users\\wellons\\git\\dev\\shm
+.
+T m
+I /dev/shm
+O C:/Users/wellons/git/dev/shm
+.
+T w
+I /proc
+O /proc
+.
+T m
+I /proc
+O /proc
+.
+T w
+I /proc/cpuinfo
+O /proc/cpuinfo
+.
+T m
+I /proc/cpuinfo
+O /proc/cpuinfo
+.
+T w
+I /proc/cygdrive
+O C:\\Users\\wellons\\git\\
+.
+T m
+I /proc/cygdrive
+O C:/Users/wellons/git/
+.
+T w
+I /proc/cygdrive/
+O C:\\Users\\wellons\\git\\
+.
+T m
+I /proc/cygdrive/
+O C:/Users/wellons/git/
+.
+T w
+I /proc/cygdrive/c/x
+O C:\\x
+.
+T m
+I /proc/cygdrive/c/x
+O C:/x
+.
+T w
+I /proc/cygdrive/x/y
+O X:\\y
+.
+T m
+I /proc/cygdrive/x/y
+O X:/y
+.
+T w
+I /cygdrive/c
+O C:\\Users\\wellons\\git\\cygdrive\\c
+.
+T m
+I /cygdrive/c
+O C:/Users/wellons/git/cygdrive/c
+.
+T w
+I /c/..
+O C:\\Users\\wellons\\git\\
+.
+T m
+I /c/..
+O C:/Users/wellons/git/
+.
+T w
+I /usr/bin/..
+O C:\\Users\\wellons\\git\\usr\\
+.
+T m
+I /usr/bin/..
+O C:/Users/wellons/git/usr/
+.
+T w
+I /usr/../x
+O X:\\
+.
+T m
+I /usr/../x
+O X:/
+.
+T w
+I /etc/../tmp/x
+O C:\\Users\\wellons\\AppData\\Local\\Temp\\x
+.
+T m
+I /etc/../tmp/x
+O C:/Users/wellons/AppData/Local/Temp/x
+.
+T w
+I /c/Windows/..
+O C:\\
+.
+T m
+I /c/Windows/..
+O C:/
+.
+T w
+I /c/Windows/../
+O C:\\
+.
+T m
+I /c/Windows/../
+O C:/
+.
+T w
+I /usr/bin/./
+O C:\\Users\\wellons\\git\\usr\\bin\\
+.
+T m
+I /usr/bin/./
+O C:/Users/wellons/git/usr/bin/
+.
+T w
+I /usr/bin/.
+O C:\\Users\\wellons\\git\\usr\\bin\\
+.
+T m
+I /usr/bin/.
+O C:/Users/wellons/git/usr/bin/
+.
+T w
+I /./
+O C:\\Users\\wellons\\git\\
+.
+T m
+I /./
+O C:/Users/wellons/git/
+.
+T w
+I ///
+O C:\\Users\\wellons\\git\\
+.
+T m
+I ///
+O C:/Users/wellons/git/
+.
+T w
+I ///x
+O X:\\
+.
+T m
+I ///x
+O X:/
+.
+T w
+I /c//x
+O C:\\x
+.
+T m
+I /c//x
+O C:/x
+.
+T w
+I /c/x//
+O C:\\x\\
+.
+T m
+I /c/x//
+O C:/x/
+.
+T w
+I /usr/bin//
+O C:\\Users\\wellons\\git\\usr\\bin\\
+.
+T m
+I /usr/bin//
+O C:/Users/wellons/git/usr/bin/
+.
+T w
+I /c/x\\
+O C:\\x\\
+.
+T m
+I /c/x\\
+O C:/x/
+.
+T w
+I /x\\y
+O X:\\y
+.
+T m
+I /x\\y
+O X:/y
+.
+T w
+I /c\\y
+O C:\\y
+.
+T m
+I /c\\y
+O C:/y
+.
+T w
+I /a\\\\b
+O A:\\b
+.
+T m
+I /a\\\\b
+O A:/b
+.
+T w
+I /usr/../c/x
+O C:\\x
+.
+T m
+I /usr/../c/x
+O C:/x
+.
+T w
+I /bin/../x
+O X:\\
+.
+T m
+I /bin/../x
+O X:/
+.
+T w
+I /a.
+O C:\\Users\\wellons\\git\\a.
+.
+T m
+I /a.
+O C:/Users/wellons/git/a.
+.
+T w
+I /a 
+O C:\\Users\\wellons\\git\\a 
+.
+T m
+I /a 
+O C:/Users/wellons/git/a 
+.
+T w
+I /nul
+O C:\\Users\\wellons\\git\\nul
+.
+T m
+I /nul
+O C:/Users/wellons/git/nul
+.
+T w
+I /c/nul
+O C:\\nul
+.
+T m
+I /c/nul
+O C:/nul
+.
+T w
+I /c/x.
+O C:\\x.
+.
+T m
+I /c/x.
+O C:/x.
+.
+T w
+I /c/x 
+O C:\\x 
+.
+T m
+I /c/x 
+O C:/x 
+.
+T w
+I /c/x...
+O C:\\x...
+.
+T m
+I /c/x...
+O C:/x...
+.
+T w
+I /Dev/null
+O C:\\Users\\wellons\\git\\Dev\\null
+.
+T m
+I /Dev/null
+O C:/Users/wellons/git/Dev/null
+.
+T w
+I /PROC
+O C:\\Users\\wellons\\git\\PROC
+.
+T m
+I /PROC
+O C:/Users/wellons/git/PROC
+.
+T w
+I C:\\x
+O C:\\x
+.
+T m
+I C:\\x
+O C:/x
+.
+T w
+I C:/x
+O C:\\x
+.
+T m
+I C:/x
+O C:/x
+.
+T w
+I //?/C:/x
+O C:\\x
+.
+T m
+I //?/C:/x
+O C:/x
+.
+T w
+I \\\\?\\C:\\x
+O C:\\x
+.
+T m
+I \\\\?\\C:\\x
+O C:/x
+.
+T w
+I C:\\x\\..\\y
+O C:\\y
+.
+T m
+I C:\\x\\..\\y
+O C:/y
+.
+T w
+I C:\\x\\.\\y
+O C:\\x\\y
+.
+T m
+I C:\\x\\.\\y
+O C:/x/y
+.
+T w
+I C:\\x\\\\y
+O C:\\x\\y
+.
+T m
+I C:\\x\\\\y
+O C:/x/y
+.
+T w
+I D:\\
+O D:\\
+.
+T m
+I D:\\
+O D:/
+.
+T w
+I c:foo
+O C:foo
+.
+T m
+I c:foo
+O C:foo
+.
+T w
+I C:x
+O C:x
+.
+T m
+I C:x
+O C:x
+.
+T w
+I C:/a/nul.txt
+O C:\\a\\nul.txt
+.
+T m
+I C:/a/nul.txt
+O C:/a/nul.txt
+.
+T w
+I C:/con
+O C:\\con
+.
+T m
+I C:/con
+O C:/con
+.
+T w
+I C:\\x.
+O C:\\x.
+.
+T m
+I C:\\x.
+O C:/x.
+.
+T w
+I C:/x. 
+O C:\\x. 
+.
+T m
+I C:/x. 
+O C:/x. 
+.
+T w
+I .
+O .
+.
+T m
+I .
+O .
+.
+T w
+I ./x
+O x
+.
+T m
+I ./x
+O x
+.
+T w
+I C:\\Users\\wellons\\git\\usr\\bin
+O C:\\Users\\wellons\\git\\usr\\bin
+.
+T m
+I C:\\Users\\wellons\\git\\usr\\bin
+O C:/Users/wellons/git/usr/bin
+.
+T w
+I C:\\Users\\wellons\\AppData\\Local\\Temp\\x
+O C:\\Users\\wellons\\AppData\\Local\\Temp\\x
+.
+T m
+I C:\\Users\\wellons\\AppData\\Local\\Temp\\x
+O C:/Users/wellons/AppData/Local/Temp/x
+.
+T wp
+I /c/a:/usr/bin:.
+O C:\\a;C:\\Users\\wellons\\git\\usr\\bin;.
+.
+T mp
+I /c/a:/usr/bin:.
+O C:/a;C:/Users/wellons/git/usr/bin;.
+.
+T wp
+I /a::/b
+O A:\\;.;B:\\
+.
+T mp
+I /a::/b
+O A:/;.;B:/
+.
+T wp
+I ::
+O .;.;.
+.
+T mp
+I ::
+O .;.;.
+.
+T wp
+I :
+O .;.
+.
+T mp
+I :
+O .;.
+.
+T wp
+I /c/x:
+O C:\\x;.
+.
+T mp
+I /c/x:
+O C:/x;.
+.
+T wp
+I :/c/x
+O .;C:\\x
+.
+T mp
+I :/c/x
+O .;C:/x
+.
+T wp
+I C:/a:/b
+O C;A:\\;B:\\
+.
+T mp
+I C:/a:/b
+O C;A:/;B:/
+.
+T wp
+I /usr/bin:/tmp/x
+O C:\\Users\\wellons\\git\\usr\\bin;C:\\Users\\wellons\\AppData\\Local\\Temp\\x
+.
+T mp
+I /usr/bin:/tmp/x
+O C:/Users/wellons/git/usr/bin;C:/Users/wellons/AppData/Local/Temp/x
+.
+T wp
+I x:y
+O x;y
+.
+T mp
+I x:y
+O x;y
+.
+T wp
+I /proc:/dev/null
+O /proc;\\\\.\\NUL
+.
+T mp
+I /proc:/dev/null
+O /proc;//./NUL
+.
+T up
+I C:\\a;D:\\b
+O /c/a:/d/b
+.
+T up
+I C:\\a;;D:\\b;
+O /c/a:/d/b
+.
+T up
+I ;
+O 
+.
+T up
+I a;b
+O a:b
+.
+T up
+I C:\\Users\\wellons\\git\\usr\\bin;C:\\Users\\wellons\\AppData\\Local\\Temp
+O /usr/bin:/tmp
+.
+T up
+I "C:\\a b";C:\\x\\
+O "C:/a b":/c/x/
+.
+T up
+I C:/a;C:
+O /c/a:/c
+.
+T up
+I /c/x;/d/y
+O /c/x:/d/y
+.
+T up
+I C:\\a:D:\\b
+O /c/a:D:/b
+.
+T arg
+I /c/Users
+O C:/Users
+.
+T arg
+I /tmp/x
+O C:/Users/wellons/AppData/Local/Temp/x
+.
+T arg
+I /
+O C:/Users/wellons/git/
+.
+T arg
+I /usr/bin
+O C:/Users/wellons/git/usr/bin
+.
+T arg
+I /c
+O C:/
+.
+T arg
+I //c
+O /c
+.
+T arg
+I //server/share
+O //server/share
+.
+T arg
+I /dev/null
+O nul
+.
+T arg
+I --dir=/foo:/bar
+O --dir=C:\\Users\\wellons\\git\\foo;C:\\Users\\wellons\\git\\bar
+.
+T arg
+I /c/x;/d/y
+O /c/x;/d/y
+.
+T arg
+I http://a/b
+O http://a/b
+.
+T arg
+I a/b
+O a/b
+.
+T arg
+I ./a/b
+O ./a/b
+.
+T arg
+I */x
+O */x
+.
+T arg
+I 1:2
+O 1:2
+.
+T arg
+I x:/y
+O x:/y
+.
+T arg
+I @/file
+O @C:/Users/wellons/git/file
+.
+T arg
+I /a b
+O C:/Users/wellons/git/a b
+.
+T arg
+I /foo,/bar
+O C:/Users/wellons/git/foo,/bar
+.
+T arg
+I -DX=/y
+O -DX=Y:/
+.
+T arg
+I -o/x
+O -oX:/
+.
+T arg
+I /x/..
+O X://..
+.
+T arg
+I <(true)
+O <(true)
+.
+T arg
+I /dev/stdin
+O /proc/self/fd/0
+.
+T arg
+I /dev/fd/1
+O /proc/PID/fd/1
+.
+T arg
+I /dev/clipboard
+O /Device/Null
+.
+T arg
+I /dev/tty
+O /dev/tty
+.
+T arg
+I /proc/self
+O /proc/self
+.
+T arg
+I /proc
+O /proc
+.
+T arg
+I //c/x
+O //c/x
+.
+T arg
+I /X:
+O X:
+.
+T arg
+I /X:/y
+O X:/y
+.
+T arg
+I /C:\\y
+O C:/y
+.
+T arg
+I -I/x
+O -IX:/
+.
+T arg
+I -I/x:/y
+O -Ix:/y
+.
+T arg
+I --a=/b:/c
+O --a=b:/c
+.
+T arg
+I a,/b
+O a,/b
+.
+T arg
+I -a,/b
+O -a,B:/
+.
+T arg
+I scheme://x/y
+O scheme://x/y
+.
+T arg
+I git+ssh://h/p
+O git+ssh://h/p
+.
+T arg
+I :/
+O :/
+.
+T arg
+I ::
+O ::
+.
+T arg
+I ::1
+O ::1
+.
+T arg
+I a::b
+O a::b
+.
+T arg
+I /a::/b
+O /a::/b
+.
+T arg
+I ;;
+O ;;
+.
+T arg
+I /a;;/b
+O /a;;/b
+.
+T arg
+I /a:/b;
+O a:/b;
+.
+T arg
+I /a:/b:
+O a:/b:
+.
+T arg
+I /a:
+O a:
+.
+T arg
+I :/a
+O :/a
+.
+T arg
+I /a::b
+O /a::b
+.
+T arg
+I /x/..y
+O X://..y
+.
+T arg
+I /x/../y
+O X://../y
+.
+T arg
+I /x/...
+O X://...
+.
+T arg
+I /..
+O /..
+.
+T arg
+I /../x
+O /../x
+.
+T arg
+I /.
+O C:/Users/wellons/git/
+.
+T arg
+I /./x
+O X:/
+.
+T arg
+I .//x
+O .//x
+.
+T arg
+I ../x
+O ../x
+.
+T arg
+I ..\\x
+O ..\\x
+.
+T arg
+I .\\x
+O .\\x
+.
+T arg
+I \\x
+O \\x
+.
+T arg
+I \\\\x\\y
+O \\\\x\\y
+.
+T arg
+I C:\\x
+O C:\\x
+.
+T arg
+I C:/x
+O C:/x
+.
+T arg
+I C:/x:/y
+O C:/x:/y
+.
+T arg
+I C:/x;/y
+O C:/x;/y
+.
+T arg
+I c:/x;d:/y
+O c:/x;d:/y
+.
+T arg
+I C:x
+O C:x
+.
+T arg
+I C:
+O C:
+.
+T arg
+I -L/usr/lib
+O -LC:/Users/wellons/git/usr/lib
+.
+T arg
+I -Wl,-rpath,/usr/lib
+O -Wl,-rpath,C:/Users/wellons/git/usr/lib
+.
+T arg
+I -Wl,/x
+O -Wl,X:/
+.
+T arg
+I --prefix=/usr
+O --prefix=C:/Users/wellons/git/usr
+.
+T arg
+I x=/y
+O x=Y:/
+.
+T arg
+I x=/y:/z
+O x=y:/z
+.
+T arg
+I a=b=/c
+O a=b=C:/
+.
+T arg
+I -x=/y
+O -x=Y:/
+.
+T arg
+I --=/y
+O --=Y:/
+.
+T arg
+I -/x
+O -/x
+.
+T arg
+I -1/x
+O -1/x
+.
+T arg
+I -ab/x
+O -ab/x
+.
+T arg
+I -a/x
+O -aX:/
+.
+T arg
+I -a/x,y
+O -a/x,y
+.
+T arg
+I "/x"
+O "X:/"
+.
+T arg
+I '/x'
+O '/x'
+.
+T arg
+I /x"
+O X:/"
+.
+T arg
+I "/x
+O "X:/
+.
+T arg
+I a"/x"
+O a"X:/"
+.
+T arg
+I -I"/x"
+O -I"X:/"
+.
+T arg
+I `/x`
+O `/x`
+.
+T arg
+I /x?
+O /x?
+.
+T arg
+I /x*
+O /x*
+.
+T arg
+I /x[1]
+O /x[1]
+.
+T arg
+I /~
+O /~
+.
+T arg
+I ~/x
+O ~/x
+.
+T arg
+I a/~b
+O a/~b
+.
+T arg
+I x@@/y
+O x@@/y
+.
+T arg
+I @@
+O @@
+.
+T arg
+I @/x
+O @X:/
+.
+T arg
+I +/x
+O +X:/
+.
+T arg
+I %/x
+O %X:/
+.
+T arg
+I $/x
+O $X:/
+.
+T arg
+I #/x
+O #X:/
+.
+T arg
+I !/x
+O !X:/
+.
+T arg
+I (/x)
+O (C:/Users/wellons/git/x)
+.
+T arg
+I  /x
+O  /x
+.
+T arg
+I /x 
+O C:/Users/wellons/git/x 
+.
+T arg
+I a b/c
+O a b/c
+.
+T arg
+I a /c
+O a /c
+.
+T arg
+I \x09/x
+O \x09/x
+.
+T arg
+I /x\\y
+O X:/y
+.
+T arg
+I /c\\y
+O C:/y
+.
+T arg
+I /dev/null:/x
+O nul;X:\\
+.
+T arg
+I /dev/nullx
+O C:/Users/wellons/git/dev/nullx
+.
+T arg
+I /dev/null/
+O /dev/null/
+.
+T arg
+I /c/x:/dev/null
+O C:\\x;nul
+.
+T arg
+I /tmp:/c/x
+O C:\\Users\\wellons\\AppData\\Local\\Temp;C:\\x
+.
+T arg
+I /a:.:/b
+O a:.:/b
+.
+T arg
+I /a:./x
+O /a:./x
+.
+T arg
+I /a:../x
+O /a:../x
+.
+T arg
+I .:/a
+O .;A:\\
+.
+T arg
+I x:./y
+O x:./y
+.
+T arg
+I x:../y
+O x:../y
+.
+T arg
+I x:.y
+O x:.y
+.
+T arg
+I rev:./a
+O rev:./a
+.
+T arg
+I HEAD:/x
+O HEAD:/x
+.
+T arg
+I a:/b
+O a:/b
+.
+T arg
+I -a:/b
+O -a:B:/
+.
+T arg
+I --a:/b
+O --a:B:/
+.
+T arg
+I a=x:/b
+O a=x:/b
+.
+T arg
+I /a=/b
+O C:/Users/wellons/git/a=/b
+.
+T arg
+I /a,/b
+O C:/Users/wellons/git/a,/b
+.
+T arg
+I x/y:/z
+O x\\y;Z:\\
+.
+T arg
+I ./x:/y
+O .\\x;Y:\\
+.
+T arg
+I ../x:/y
+O ..\\x;Y:\\
+.
+T arg
+I .:/x
+O .;X:\\
+.
+T arg
+I ..:/x
+O ..;X:\\
+.
+T arg
+I a.b:/x
+O a.b:/x
+.
+T arg
+I /a:http://x/y
+O a:http://x/y
+.
+T arg
+I /a:git+ssh://h/p
+O a:git+ssh://h/p
+.
+T arg
+I /a:1x://y
+O a:1x://y
+.
+T arg
+I /A:/b
+O A:/b
+.
+T arg
+I /usr/bin/
+O C:/Users/wellons/git/usr/bin/
+.
+T arg
+I /usr//bin
+O C:/Users/wellons/git/usr/bin
+.
+T arg
+I /usr/./bin
+O C:/Users/wellons/git/usr/bin
+.
+T arg
+I /c/x/
+O C:/x/
+.
+T arg
+I /x/
+O X://
+.
+T arg
+I /xy
+O C:/Users/wellons/git/xy
+.
+T arg
+I /a:b/c
+O a:b/c
+.
+T arg
+I /ab:/c
+O C:\\Users\\wellons\\git\\ab;C:\\
+.
+T arg
+I file://x
+O file://x
+.
+T arg
+I http:
+O http:
+.
+T arg
+I /http://x
+O C:\\Users\\wellons\\git\\http;\\x
+.
+T arg
+I -Dx=http://y
+O -Dx=http://y
+.
+T arg
+I /c/Users/.
+O C:/Users/
+.
+T arg
+I /c/..
+O C://..
+.
+T arg
+I /c/../x
+O C://../x
+.
+T arg
+I /a/b/../c
+O A:/b/../c
+.
+T arg
+I /tmp/../x
+O C:/Users/wellons/AppData/Local/Temp/../x
+.
+T arg
+I /proc/cygdrive/c/x
+O C:/x
+.
+T arg
+I /proc/cygdrive
+O /proc/cygdrive
+.
+T arg
+I /proc/cygdrive/
+O C:/Users/wellons/git/
+.
+T arg
+I /cygdrive/c/x
+O C:/Users/wellons/git/cygdrive/c/x
+.
+T arg
+I /dev/zero
+O /Device/Null
+.
+T arg
+I /dev/full
+O /Device/Null
+.
+T arg
+I /dev/random
+O /Device/Null
+.
+T arg
+I /dev/urandom
+O /Device/Null
+.
+T arg
+I /dev/stdout
+O /proc/self/fd/1
+.
+T arg
+I /dev/fd/0
+O /proc/PID/fd/0
+.
+T arg
+I /dev/fd
+O /proc/self/fd
+.
+T arg
+I /dev/fd/x
+O /dev/fd/x
+.
+T arg
+I /dev/stdin:/x
+O \\proc\\self\\fd\\0;X:\\
+.
+T arg
+I /nul
+O C:/Users/wellons/git/nul
+.
+T arg
+I /c/nul
+O C:/nul
+.
+T arg
+I /c/x/nul.txt
+O C:/x/nul.txt
+.
+T arg
+I /dev/ptmx
+O /dev/ptmx
+.
+T arg
+I /dev/xyz
+O C:/Users/wellons/git/dev/xyz
+.
+T arg
+I /dev
+O C:/Users/wellons/git/dev
+.
+T arg
+I /dev/
+O C:/Users/wellons/git/dev/
+.
+T arg
+I /dev/shm
+O C:/Users/wellons/git/dev/shm
+.
+T arg
+I /dev/cons0
+O /dev/cons0
+.
+T arg
+I /dev/console
+O /dev/console
+.
+T arg
+I /proc/cpuinfo
+O /proc/cpuinfo
+.
+T arg
+I /Dev/null
+O C:/Users/wellons/git/Dev/null
+.
+T arg
+I /PROC
+O C:/Users/wellons/git/PROC
+.
+T arg
+I /proc/Cygdrive/c
+O /proc/Cygdrive/c
+.
+T arg
+I /c/
+O C:/
+.
+T arg
+I /C/
+O C:/
+.
+T arg
+I /c//x
+O C:/x
+.
+T arg
+I /c/x//
+O C:/x/
+.
+T arg
+I /usr/bin//
+O C:/Users/wellons/git/usr/bin/
+.
+T arg
+I /c/Users/..
+O C:/Users/..
+.
+T arg
+I /./
+O C:/Users/wellons/git/
+.
+T arg
+I /X
+O X:/
+.
+T arg
+I /X/
+O X://
+.
+T arg
+I /a/b
+O A:/b
+.
+T arg
+I /bin/../x
+O C:/Users/wellons/git/usr/bin/../x
+.
+T arg
+I /c/Users/x/
+O C:/Users/x/
+.
+T arg
+I /c/Users/../x
+O C:/Users/../x
+.
+T arg
+I /a<b
+O C:/Users/wellons/git/a<b
+.
+T arg
+I /a>b
+O C:/Users/wellons/git/a>b
+.
+T arg
+I /a|b
+O C:/Users/wellons/git/a|b
+.
+T arg
+I /a"b
+O C:/Users/wellons/git/a"b
+.
+T arg
+I /a:b/c
+O a:b/c
+.
+T arg
+I /ab/c:d
+O /ab/c:d
+.
+T arg
+I /xy.
+O C:/Users/wellons/git/xy.
+.
+T arg
+I /xy 
+O C:/Users/wellons/git/xy 
+.
+T arg
+I /c/x. 
+O C:/x. 
+.
+T arg
+I /a\\\\b
+O A:/b
+.
+T arg
+I /\xc3\xa9
+O C:/Users/wellons/git/\xc3\xa9
+.
+T arg
+I \xc3\xa9/x
+O \xc3\xa9/x
+.
+T arg
+I /x\xc3\xa9
+O C:/Users/wellons/git/x\xc3\xa9
+.
+T arg
+I -I/
+O -IC:/Users/wellons/git/
+.
+T arg
+I -I/usr/bin/
+O -IC:/Users/wellons/git/usr/bin/
+.
+T arg
+I -isystem/usr/x
+O -isystem/usr/x
+.
+T arg
+I -I//x/y
+O -I//x/y
+.
+T arg
+I -Ic:/x
+O -Ic:/x
+.
+T arg
+I --x=//y
+O --x=/y
+.
+T arg
+I -x=/a b
+O -x=C:/Users/wellons/git/a b
+.
+T arg
+I a=/b;/c
+O a=/b;/c
+.
+T arg
+I --dir=/a:
+O --dir=a:
+.
+T arg
+I /
+O C:/Users/wellons/git/
+.
+T arg
+I //
+O /
+.
+T arg
+I ///
+O //
+.
+T arg
+I /:
+O /:
+.
+T arg
+I /;
+O /;
+.
+T arg
+I /,
+O C:/Users/wellons/git/,
+.
+T arg
+I /=
+O C:/Users/wellons/git/=
+.
+T arg
+I /-x
+O C:/Users/wellons/git/-x
+.
+T arg
+I /a-b/c
+O C:/Users/wellons/git/a-b/c
+.
+T arg
+I /a=b
+O C:/Users/wellons/git/a=b
+.
+T excl
+X /t;--x=
+I /tmp
+I /usr
+I --x=/a
+I --y=/a
+O /tmp
+O C:/Users/wellons/git/usr
+O --x=/a
+O --y=A:/
+.
+T excl
+X *
+I /tmp
+I /usr
+O /tmp
+O /usr
+.
+T excl
+X ;;/u
+I /tmp
+I /usr
+O C:/Users/wellons/AppData/Local/Temp
+O /usr
+.
+T excl
+X /x;*
+I /tmp
+O /tmp
+.
+T excl
+X 
+I /tmp
+O C:/Users/wellons/AppData/Local/Temp
+.
+T env
+I PATH=/usr/bin:/c/x:.
+I HOME=/c/Users/x
+I TMP=/tmp
+I TEMP=C:\\t
+I TMPDIR=rel
+O HOME=C:\\Users\\x
+O PATH=C:\\Users\\wellons\\git\\usr\\bin;C:\\x;.
+O TEMP=C:\\t
+O TMP=C:\\Users\\wellons\\AppData\\Local\\Temp
+O TMPDIR=C:\\Users\\wellons\\AppData\\Local\\Temp\\claude\\C--Users-wellons-src-unabashed\\49667c1f-f31a-4608-a8d2-7135244c0f96\\scratchpad\\rec1\\empty\\rel
+.
+T env
+I SHELL=/usr/bin/nosuch
+I ORIGINAL_PATH=/a:/b
+I LD_LIBRARY_PATH=/x:/y
+O LD_LIBRARY_PATH=X:\\;Y:\\
+O ORIGINAL_PATH=A:\\;B:\\
+O SHELL=C:\\Users\\wellons\\git\\usr\\bin\\nosuch
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I T_A=/tmp/a:/usr
+I T_B=/c/x
+I T_C=x;y
+I T_D=/dev/null
+I T_E=a b /c
+I T_F=
+O T_A=C:\\Users\\wellons\\AppData\\Local\\Temp\\a;C:\\Users\\wellons\\git\\usr
+O T_B=C:/x
+O T_C=x;y
+O T_D=nul
+O T_E=a b /c
+O T_F=
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I T_G=/x/..
+I T_H=C:\\x
+I T_I=-I/x
+I T_J=/x=/y
+I T_K=x/y
+I T_L=--a=/b:/c
+O T_G=X://..
+O T_H=C:\\x
+O T_I=-IX:/
+O T_J=C:/Users/wellons/git/x=/y
+O T_K=x/y
+O T_L=--a=b:/c
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I TZ=UTC
+O TZ=UTC
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I TZ=EST5EDT
+O TZ=EST5EDT
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I TZ=:America/New_York
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I TZ=America/New_York
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I TZ=UTC+1
+O TZ=UTC+1
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I TZ=<+01>-1
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I TZ=
+O TZ=
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I TZ=a b
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I TZ=X-1:30
+O TZ=X-1:30
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I tz=x/y
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I MSYS2_ENV_CONV_EXCL=T_A;T_B=/c
+I T_A=/tmp
+I T_B=/c/x
+I T_BB=/c/x
+I T_C=/tmp
+O MSYS2_ENV_CONV_EXCL=T_A;T_B=C:/
+O T_A=/tmp
+O T_B=/c/x
+O T_BB=C:/x
+O T_C=C:/Users/wellons/AppData/Local/Temp
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I MSYS2_ENV_CONV_EXCL=*
+I T_A=/tmp
+I HOME=/c/x
+O HOME=C:\\x
+O MSYS2_ENV_CONV_EXCL=*
+O T_A=/tmp
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I MSYS_NO_PATHCONV=1
+I T_A=/tmp
+I HOME=/c/x
+O HOME=C:\\x
+O MSYS_NO_PATHCONV=1
+O T_A=/tmp
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I PATH=
+O PATH=
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I T_X=y
+O T_X=y
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I PATH=/c/a::/b:
+O PATH=C:\\a;.;B:\\;.
+.
+T env
+I PATH=C:/a
+O PATH=C;A:\\
+.
+T env
+I PATH=rel:/usr/bin
+O PATH=rel;C:\\Users\\wellons\\git\\usr\\bin
+.
+T env
+I HOME=C:\\x
+O HOME=C:\\x
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I HOME=
+O HOME=
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I SHELL=
+O SHELL=
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I Path=/usr/bin
+I T_X=/tmp
+O Path=C:/Users/wellons/git/usr/bin
+O T_X=C:/Users/wellons/AppData/Local/Temp
+O PATH=C:\\Users\\wellons\\git\\usr
+.
+T env
+I B=/x
+I A=/y
+I a=/z
+I _=/w
+O A=Y:/
+O B=X:/
+O _=W:/
+O a=Z:/
+O PATH=C:\\Users\\wellons\\git\\usr
+.
