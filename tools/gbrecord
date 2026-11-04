@@ -1,0 +1,54 @@
+#!/bin/sh
+# Record Git Bash behaviour for t/msys scripts: t/msys/foo.sh -> foo.spec
+#
+#   tools/gbrecord WORKDIR t/msys/foo.sh [t/msys/bar.sh ...]
+#
+# Curated scripts only. Each script runs four times under tools/sandbox
+# in WORKDIR/NAME (outside the repository): apart and with 2>&1, then
+# both again, and the two specs must be identical, so nondeterministic
+# output is caught at recording time. The shell is Git Bash copied into
+# a scratch install, run as `bash.exe --norc --noprofile test.sh` (or
+# `bash.exe ARGS` with "# shell: ARGS"). The spec format is tools/record's;
+# paths are normalized to @ROOT@, @WORK@ and @GIT@. See tools/README.md.
+#
+# Environment:
+#   GITBASH       the real Git Bash (default C:/Users/wellons/git/usr/bin/bash.exe)
+#   MSYS_TIMEOUT  seconds per run (60)
+# Runs under w64devkit's sh.
+set -u
+root=$(cd "$(dirname "$0")/.." && pwd)
+. "$root/t/msys/lib.sh"
+
+if [ $# -lt 2 ]; then
+    echo "usage: tools/gbrecord WORKDIR SCRIPT..." >&2
+    exit 2
+fi
+mkdir -p "$1" || exit 2
+work=$(msys_abs "$1") || exit 2
+shift
+msys_init "$gitbash"
+
+fail=0
+for script; do
+    case $script in
+    *.sh) ;;
+    *) echo "gbrecord: $script: not a .sh" >&2; fail=1; continue ;;
+    esac
+    if [ ! -f "$script" ]; then
+        echo "gbrecord: $script: no such file" >&2
+        fail=1
+        continue
+    fi
+    spec=${script%.sh}.spec
+    msys_spec "$script" "$work/first.spec" || { fail=1; continue; }
+    msys_spec "$script" "$work/second.spec" || { fail=1; continue; }
+    if ! cmp -s "$work/first.spec" "$work/second.spec"; then
+        echo "gbrecord: $script: nondeterministic" >&2
+        diff "$work/first.spec" "$work/second.spec" | head -20 >&2
+        fail=1
+        continue
+    fi
+    cp "$work/first.spec" "$spec" || exit 2
+    echo "$spec"
+done
+exit $fail

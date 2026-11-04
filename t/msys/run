@@ -1,0 +1,71 @@
+#!/bin/sh
+# t/msys/run: the Git Bash differential tests. Curated scripts only,
+# recorded from Git Bash by tools/gbrecord, run by the shell under test
+# on the real file system and processes inside tools/sandbox, each in a
+# directory of its own under WORKDIR (keep it out of the repository).
+#
+# usage: t/msys/run [-s SHELL] [-x] WORKDIR [TEST.sh...]
+#   -s SHELL  the shell under test (default: unabashed.exe beside this
+#             repository's Makefile); `-s "$GITBASH"` checks the
+#             recordings against Git Bash itself
+#   -x        run each test once more with UNABASHED_XPIO=1 (XP I/O)
+#
+# SHELL is copied into a scratch install, WORKDIR/inst/usr/bin/bash.exe,
+# whose etc/fstab mounts Git's usr/bin on /usr/bin and /bin and Git's
+# etc on /etc. Each NAME.sh runs as `bash.exe --norc --noprofile test.sh`
+# (or `bash.exe ARGS` with "# shell: ARGS") twice, apart and with 2>&1,
+# in a fixed environment; the normalized result must equal NAME.spec.
+# Details: tools/README.md, "Git Bash differential tests". Runs under
+# w64devkit's sh. GITBASH names the real Git Bash.
+set -u
+here=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$here/../.." && pwd)
+. "$here/lib.sh"
+shell=$root/unabashed.exe
+xp=0
+while [ $# -gt 0 ]; do
+    case $1 in
+    -s) shell=$2; shift 2 ;;
+    -x) xp=1; shift ;;
+    *)  break ;;
+    esac
+done
+if [ $# -lt 1 ]; then
+    echo "usage: t/msys/run [-s SHELL] [-x] WORKDIR [TEST.sh...]" >&2
+    exit 2
+fi
+mkdir -p "$1" || exit 2
+work=$(msys_abs "$1") || exit 2
+shift
+[ $# -gt 0 ] || set -- "$here"/*.sh
+msys_init "$shell"
+mkdir -p "$work/got" || exit 2
+
+pass=0
+fail=0
+for t; do
+    case $t in */lib.sh) continue ;; esac
+    name=$(basename "$t" .sh)
+    want=${t%.sh}.spec
+    if [ ! -f "$want" ]; then
+        echo "SKIP $name (no spec)"
+        continue
+    fi
+    modes=normal
+    [ $xp = 1 ] && modes="normal xpio"
+    for mode in $modes; do
+        msys_xenv=
+        [ $mode = xpio ] && msys_xenv=UNABASHED_XPIO=1
+        got=$work/got/$name.spec
+        rm -f "$got"
+        if msys_spec "$t" "$got" && cmp -s "$want" "$got"; then
+            pass=$((pass+1))
+        else
+            fail=$((fail+1))
+            echo "FAIL $name ($mode)"
+            [ -f "$got" ] && diff "$want" "$got" | head -20
+        fi
+    done
+done
+echo "$pass passed, $fail failed"
+[ $fail = 0 ]
