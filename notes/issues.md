@@ -100,6 +100,15 @@ gets checked. Rules:
   rejected; bash wraps. (review)
 - A `~user` tilde prefix is left as is; bash looks the user's home
   up (`~root/x` is `/root/x`), in words and in BASH_ENV. (review)
+- exec run by eval, a function or `${ ...; }` inside a subshell is
+  undone when the enclosing simple command ends:
+  `( eval 'exec 2>/dev/null'; nosuch )` reports the error, bash does
+  not. The command's unwind pops exec's keep records. (fuzz triage)
+- `${ cmd & }` waits until the background writer closes its output
+  (pumps); bash reads the substitution's file at once. A fatal error
+  in `${ ...; }` restores stdout before the EXIT trap, as `bash -c`
+  and eval do; reading a script file, bash leaves it on the
+  substitution and the trap's output is lost. (fuzz triage)
 
 
 ## M8 (performance)
