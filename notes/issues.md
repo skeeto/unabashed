@@ -118,6 +118,15 @@ gets checked. Rules:
   file is on the lowest free descriptor from 3, so
   `${ exec 3>/dev/null; echo a; }` is empty there, and fd 3 is closed
   after it. (fuzz triage)
+- Eval text that ends inside `$(...)` on a backslash: bash's
+  "unexpected EOF" cites the line after ours in some cases
+  (`echo $(echo \`, `\\`, `a\`, `$\`, `$(\` report the eval's line + 2,
+  we say + 1) but not others (`\\\`, `\\\\` are + 1 in both). Follows
+  from how bash's shell_getc pads a final backslash and counts reads
+  at end of input; not modelled. (review)
+- `f & kill -9 $!; wait` prints no "Killed" report; bash reports the
+  job when wait collects it. (`sleep 1` instead of wait works, spec
+  636.) (review)
 
 
 ## M8 (performance)
