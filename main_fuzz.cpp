@@ -26,8 +26,9 @@
 //   something whose outcome legitimately depends on the schedule: see
 //   chaosexempt for the constructs, and vos.cpp's tracing (Vos.racy)
 //   for what is caught as it happens (a write finding its reader gone,
+//   or overflowing the captured output while tasks run concurrently,
 //   readers sharing a pipe, the file system changing while tasks run
-//   concurrently).
+//   concurrently). Replay builds print both runs' output on a mismatch.
 // - FUZZ_ISOLATE: in one shell, the state dump (isolatedump) printed
 //   before "( eval S )" equals the one printed after it, except for
 //   variables that change on their own (isolatenoise).
@@ -274,6 +275,8 @@ static b32 chaosexempt(Str s)
 }
 
 struct ChaosRun {
+    Str     out;      // replay only: the captured streams, to compare
+    Str     err;
     i32     status;
     b32     racy;
     b32     deadlock;
@@ -294,6 +297,14 @@ static void chaoscapture(Os *os, ChaosRun *r, i32 status)
     r->racy     = v->racy;
     r->deadlock = find(v->err, "deadlock")>=0;
     r->nwriters = v->nwriters;
+    #if FUZZ_REPLAY
+    r->out.data = (u8 *)realloc(r->out.data, (uz)v->out.len+1);
+    r->err.data = (u8 *)realloc(r->err.data, (uz)v->err.len+1);
+    r->out.len  = v->out.len;
+    r->err.len  = v->err.len;
+    if (v->out.len) memcpy(r->out.data, v->out.data, (uz)v->out.len);
+    if (v->err.len) memcpy(r->err.data, v->err.data, (uz)v->err.len);
+    #endif
     // Sorted by what they wrote, compared as a multiset: neither the
     // order writers first wrote in nor their keys are compared, since a
     // key includes a pid, which depends on the order of spawns made
@@ -333,6 +344,9 @@ static void chaosreport(char const *what, i32 seed, ChaosRun *r)
                 (unsigned long long)r->writers[i].hash[0],
                 (unsigned long long)r->writers[i].hash[1]);
     }
+    fprintf(stderr, "    --- stdout\n%.*s    --- stderr\n%.*s    ---\n",
+            (int)r->out.len, (char *)r->out.data,
+            (int)r->err.len, (char *)r->err.data);
     #else
     (void)what; (void)seed; (void)r;
     #endif
@@ -340,13 +354,19 @@ static void chaosreport(char const *what, i32 seed, ChaosRun *r)
 
 static void fuzzchaos(Os *os, Str src)
 {
-    if (chaosexempt(src)) return note("exempt");
+    // Checked as the shell reads it, which drops NUL bytes: \<NUL>&&
+    // is \& then a lone &
+    static u8 *text;
+    text = (u8 *)realloc(text, (uz)src.len+1);
+    Str s = {text, 0};
+    for (iz i = 0; i < src.len; i++) {
+        if (src[i]) s.data[s.len++] = src[i];
+    }
+    if (chaosexempt(s)) return note("exempt");
     static ChaosRun first, other;
-    first = {};
     chaoscapture(os, &first, runonce(os, src, 0, 0, 0));
     if (first.racy) return note("racy");
     for (i32 seed = 1; seed <= CHAOS_SEEDS; seed++) {
-        other = {};
         u64 chaos = (u64)seed * 0x9e3779b97f4a7c15u;
         chaoscapture(os, &other, runonce(os, src, 0, 0, chaos));
         if (other.racy) return note("racy");

@@ -867,6 +867,8 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
         if (v->trace) vtraceout(v, h, buf, len);
         Str *dst = h==1 ? &v->out : &v->err;
         if (len > v->outcap - dst->len) {
+            // As a reader gone: which task it cuts off is up to timing
+            if (v->trace && vconcurrent(v)) v->racy = 1;
             return 0;
         }
         copybytes(dst->data+dst->len, buf, len);
