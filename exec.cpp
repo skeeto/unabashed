@@ -358,7 +358,8 @@ static Arith evalarithcmd(Shell *sh, Arena *a, Str expr, Str who)
     if (!r.ok && readonly) {
         shellerror(sh, *a, r.err);  // bash reports these with no prefix
     } else if (!r.ok) {
-        builtinerror(sh, *a, who, r.err);
+        // a shell error, not a builtin's: no line below 1, as bash
+        shellerror(sh, *a, concat3(a, who, ": ", r.err));
     }
     return r;
 }

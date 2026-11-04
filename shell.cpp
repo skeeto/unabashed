@@ -642,13 +642,12 @@ static Str errname(Shell *sh)
 }
 
 // The message prefix: "NAME: line N: " for scripts and -c, as bash
-// prints it, or just "NAME: " when interactive or the line is not
-// positive.
+// prints it, or just "NAME: " when interactive.
 static void msgprefix(Shell *sh, Buf *b)
 {
     print(b, errname(sh));
     print(b, ": ");
-    if (!sh->interactive && sh->line>0) {
+    if (!sh->interactive) {
         print(b, "line ");
         print(b, (i64)sh->line);
         print(b, ": ");
@@ -667,12 +666,19 @@ static void skipmsg(Arena *scratch, Str msg)
     }
 }
 
+// Unlike a builtin's error, a shell error at a line below 1 (after a
+// parse that ended at end of input) drops "line N: ", as bash.
 static void shellerror(Shell *sh, Arena scratch, Str msg)
 {
     flushbout(sh);
     skipmsg(&scratch, msg);
     Buf b(&scratch, msg.len+64);
-    msgprefix(sh, &b);
+    if (sh->line > 0) {
+        msgprefix(sh, &b);
+    } else {
+        print(&b, errname(sh));
+        print(&b, ": ");
+    }
     print(&b, msg);
     putbyte(&b, '\n');
     fdwrite(sh, 2, finish(&b));

@@ -165,7 +165,7 @@ static void pfsetint(void *ctx, Str name, i64 v)
 static void pferror(void *ctx, Str msg)
 {
     PfCtx *c = (PfCtx *)ctx;
-    shellerror(c->sh, *c->a, msg);
+    builtinerror(c->sh, *c->a, "", msg);  // msg names printf
 }
 
 static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
@@ -475,7 +475,7 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     i32 err;
     Str src = readwholefile(sh, &scratch, path, &err);
     if (err) {
-        builtinerror(sh, scratch, "", concat3(&scratch, file, Str(": "), errtext(err)));
+        shellerror(sh, scratch, concat3(&scratch, file, Str(": "), errtext(err)));
         return 1;
     }
     // As bash: many NUL bytes make a binary, and fewer are dropped

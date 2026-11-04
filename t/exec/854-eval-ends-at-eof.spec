@@ -1,4 +1,4 @@
-== stdout 1609
+== stdout 2153
 a\
 a\
 -1
@@ -252,8 +252,96 @@ a\
 status 2
 a\
 status 2
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+0status 1
+a\
+0status 1
+a\
+0status 1
+a\
+0status 1
+a\
+status 2
+a\
+status 2
+a\
+status 2
+a\
+status 2
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 1
+a\
+status 127
+a\
+status 127
+a\
+status 1
+a\
+status 1
+a\
+status 127
+a\
+status 127
+a\
+status 1
+a\
+status 1
+a\
+status 2
+a\
+status 2
+a\
+status 2
+a\
+status 2
+a\
+status 1
+a\
+status 127
+a\
+status 1
+a\
+status 127
 
-== stderr 2359
+== stderr 4543
 bash: eval: line 7: unexpected EOF while looking for matching `"'
 bash: eval: line 8: unexpected EOF while looking for matching `"'
 bash: eval: line 10: unexpected EOF while looking for matching `"'
@@ -301,8 +389,52 @@ bash: e: command not found
 /tmp/t.sh: line 2: `if :; then echo mapfile; fi'
 bash: -c: line 2: syntax error near unexpected token `then'
 bash: -c: line 2: `if :; then echo mapfile; fi'
+/tmp/t.sh: line -1: cd: /nonexist: No such file or directory
+bash: line -1: cd: /nonexist: No such file or directory
+/tmp/t.sh: line 0: cd: /nonexist: No such file or directory
+bash: line 0: cd: /nonexist: No such file or directory
+/tmp/t.sh: line -1: local: can only be used in a function
+bash: line -1: local: can only be used in a function
+/tmp/t.sh: line 0: local: can only be used in a function
+bash: line 0: local: can only be used in a function
+/tmp/t.sh: line -1: printf: x: invalid number
+bash: line -1: printf: x: invalid number
+/tmp/t.sh: line 0: printf: x: invalid number
+bash: line 0: printf: x: invalid number
+/tmp/t.sh: line -1: shift: x: numeric argument required
+bash: line -1: shift: x: numeric argument required
+/tmp/t.sh: line 0: shift: x: numeric argument required
+bash: line 0: shift: x: numeric argument required
+/tmp/t.sh: line 2: unset: q: cannot unset: readonly variable
+bash: line 2: unset: q: cannot unset: readonly variable
+/tmp/t.sh: line 0: unset: q: cannot unset: readonly variable
+bash: line 0: unset: q: cannot unset: readonly variable
+/tmp/t.sh: /nonexist: No such file or directory
+bash: /nonexist: No such file or directory
+/tmp/t.sh: /nonexist: No such file or directory
+bash: /nonexist: No such file or directory
+/tmp/t.sh: let: 1/0: division by 0 (error token is "0")
+bash: let: 1/0: division by 0 (error token is "0")
+/tmp/t.sh: let: 1/0: division by 0 (error token is "0")
+bash: let: 1/0: division by 0 (error token is "0")
+/tmp/t.sh: line 2: 1/0: No such file or directory
+bash: line 2: 1/0: No such file or directory
+/tmp/t.sh: ((: 1/0: division by 0 (error token is "0")
+bash: ((: 1/0: division by 0 (error token is "0")
+/tmp/t.sh: [[: command not found
+bash: [[: command not found
+/tmp/t.sh: [[: 1/0: division by 0 (error token is "0")
+bash: [[: 1/0: division by 0 (error token is "0")
+/tmp/t.sh: line 2: [[: invalid regular expression `(': Unmatched ( or \(
+bash: line 2: [[: invalid regular expression `(': Unmatched ( or \(
+/tmp/t.sh: line 0: [[: invalid regular expression `(': Unmatched ( or \(
+bash: line 0: [[: invalid regular expression `(': Unmatched ( or \(
+/tmp/t.sh: u: unset
+bash: u: unset
+/tmp/t.sh: u: unset
+bash: u: unset
 
-== merged 3968
+== merged 6696
 bash: eval: line 7: unexpected EOF while looking for matching `"'
 bash: eval: line 8: unexpected EOF while looking for matching `"'
 bash: eval: line 10: unexpected EOF while looking for matching `"'
@@ -603,5 +735,137 @@ a\
 bash: -c: line 2: syntax error near unexpected token `then'
 bash: -c: line 2: `if :; then echo mapfile; fi'
 status 2
+a\
+/tmp/t.sh: line -1: cd: /nonexist: No such file or directory
+status 1
+a\
+bash: line -1: cd: /nonexist: No such file or directory
+status 1
+a\
+/tmp/t.sh: line 0: cd: /nonexist: No such file or directory
+status 1
+a\
+bash: line 0: cd: /nonexist: No such file or directory
+status 1
+a\
+/tmp/t.sh: line -1: local: can only be used in a function
+status 1
+a\
+bash: line -1: local: can only be used in a function
+status 1
+a\
+/tmp/t.sh: line 0: local: can only be used in a function
+status 1
+a\
+bash: line 0: local: can only be used in a function
+status 1
+a\
+/tmp/t.sh: line -1: printf: x: invalid number
+0status 1
+a\
+bash: line -1: printf: x: invalid number
+0status 1
+a\
+/tmp/t.sh: line 0: printf: x: invalid number
+0status 1
+a\
+bash: line 0: printf: x: invalid number
+0status 1
+a\
+/tmp/t.sh: line -1: shift: x: numeric argument required
+status 2
+a\
+bash: line -1: shift: x: numeric argument required
+status 2
+a\
+/tmp/t.sh: line 0: shift: x: numeric argument required
+status 2
+a\
+bash: line 0: shift: x: numeric argument required
+status 2
+a\
+/tmp/t.sh: line 2: unset: q: cannot unset: readonly variable
+status 1
+a\
+bash: line 2: unset: q: cannot unset: readonly variable
+status 1
+a\
+/tmp/t.sh: line 0: unset: q: cannot unset: readonly variable
+status 1
+a\
+bash: line 0: unset: q: cannot unset: readonly variable
+status 1
+a\
+/tmp/t.sh: /nonexist: No such file or directory
+status 1
+a\
+bash: /nonexist: No such file or directory
+status 1
+a\
+/tmp/t.sh: /nonexist: No such file or directory
+status 1
+a\
+bash: /nonexist: No such file or directory
+status 1
+a\
+/tmp/t.sh: let: 1/0: division by 0 (error token is "0")
+status 1
+a\
+bash: let: 1/0: division by 0 (error token is "0")
+status 1
+a\
+/tmp/t.sh: let: 1/0: division by 0 (error token is "0")
+status 1
+a\
+bash: let: 1/0: division by 0 (error token is "0")
+status 1
+a\
+/tmp/t.sh: line 2: 1/0: No such file or directory
+status 127
+a\
+bash: line 2: 1/0: No such file or directory
+status 127
+a\
+/tmp/t.sh: ((: 1/0: division by 0 (error token is "0")
+status 1
+a\
+bash: ((: 1/0: division by 0 (error token is "0")
+status 1
+a\
+/tmp/t.sh: [[: command not found
+status 127
+a\
+bash: [[: command not found
+status 127
+a\
+/tmp/t.sh: [[: 1/0: division by 0 (error token is "0")
+status 1
+a\
+bash: [[: 1/0: division by 0 (error token is "0")
+status 1
+a\
+/tmp/t.sh: line 2: [[: invalid regular expression `(': Unmatched ( or \(
+status 2
+a\
+bash: line 2: [[: invalid regular expression `(': Unmatched ( or \(
+status 2
+a\
+/tmp/t.sh: line 0: [[: invalid regular expression `(': Unmatched ( or \(
+status 2
+a\
+bash: line 0: [[: invalid regular expression `(': Unmatched ( or \(
+status 2
+a\
+/tmp/t.sh: u: unset
+status 1
+a\
+bash: u: unset
+status 127
+a\
+/tmp/t.sh: u: unset
+status 1
+a\
+bash: u: unset
+status 127
 
 == status 0

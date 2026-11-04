@@ -117,3 +117,14 @@ t "x=\${ eval 'echo a$b'; } y=\${ echo b; }; echo \"\$x\$y\"
 echo funsub2 \$LINENO"
 t "c='echo a$b'; printf '%s\n' 1 >/tmp/m; mapfile -C 'eval \"\$c\"; :' -c 1 arr </tmp/m
 if :; then echo mapfile; fi"
+# Only shell errors drop a line below 1: a builtin's error keeps it,
+# and the second line of an eval run at line -1 is line 0
+for c in 'cd /nonexist' 'local x=1' 'printf %d x' 'shift x' \
+         'declare -r q=1; unset q' 'source /nonexist' 'let 1/0' \
+         '((1/0))' '[[ 1/0 -eq 1 ]]' 'r="("; [[ a =~ $r ]]' 'echo ${u?unset}'; do
+    t "eval 'echo a$b'
+$c"
+    t "eval 'echo a$b'
+eval '
+$c'"
+done
