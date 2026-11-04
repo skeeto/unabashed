@@ -606,7 +606,10 @@ static void vprocentry(Os *os, void *arg)
 {
     VProc *p = (VProc *)arg;
     Vos   *v = osvos(os);
-    vexit(os, v, v->fakes[p->prog].main(os, &p->ctx));
+    i32 status = v->fakes[p->prog].main(os, &p->ctx);
+    // A program's exit status is truncated to a byte, as by a kernel
+    // (sed's "Q888" is 120), while a shell reports its own deaths
+    vexit(os, v, p->shell ? status : status&255);
 }
 
 // The running process's stack size, for nested shells.

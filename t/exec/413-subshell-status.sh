@@ -19,3 +19,8 @@ echo "negated: $?"
 (exit 0) && echo "and ran"
 (exit abc) 2>&1
 echo "bad exit: $?"
+# A program's exit status is truncated to a byte too
+sed Q888 <<<x
+echo "sed Q888: $?"
+echo x | sed Q257 | cat
+echo "piped Q257: ${PIPESTATUS[*]}"
