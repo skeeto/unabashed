@@ -575,7 +575,13 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
         sh->opt[O_VERBOSE] = 0;  // as bash, which turns off -v there
         b32 noreport = sh->noreport;
         sh->noreport = 1;        // nor does it report signal deaths there
+        i32 childsig = sh->childsig;
+        i64 childpid = sh->childpid;
         subshell(sh, &j, child, cap);
+        // Its death is not a program's: were it left as one, the
+        // command expanding it would be reported killed by it
+        sh->childsig = childsig;
+        sh->childpid = childpid;
         sh->noreport = noreport;
         sh->opt[O_ERREXIT] = errexit;
         sh->opt[O_VERBOSE] = verbose;
