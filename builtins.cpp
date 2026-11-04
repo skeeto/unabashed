@@ -1964,10 +1964,10 @@ static i32 b_cygpath(Shell *sh, Str *args, iz nargs, Arena scratch)
             return 1;
         }
     }
-    PathCtx c  = pathctx(sh, &scratch, {});
-    Str windir = getvar(sh, &scratch, "SYSTEMROOT").value;
+    PathCtx c      = pathctx(sh, &scratch, {});
+    Str     windir = getvar(sh, &scratch, "SYSTEMROOT").value;
     windir = windir.len ? windir : getvar(sh, &scratch, "WINDIR").value;
-    CygRun  r  = cygpathrun(&c, &scratch, &o, args, nargs, in, windir);
+    CygRun  r      = cygpathrun(&c, &scratch, &o, args, nargs, in, windir);
     // cygpath buffers its output until it exits, except with -f, where
     // it flushes each line: the error comes first or last
     if (o.file.data) bprint(sh, r.out);
