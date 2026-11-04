@@ -75,6 +75,30 @@ static Node *tailcommand(Node *n)
     return 0;
 }
 
+// Whether bash would still exec the tail command once a list reaches
+// it: not while an EXIT or ERR trap, a RETURN trap in a function, or a
+// caught signal's trap is set, as those must run in the subshell.
+static b32 tailexecs(Shell *sh)
+{
+    Str *t = sh->traps;
+    if (!t) return 1;
+    if (t[TRAP_EXIT].data || t[TRAP_ERR].data) return 0;
+    if (sh->funcdepth && t[TRAP_RETURN].data) return 0;
+    for (i32 i = 1; i < NSIGNAL; i++) {
+        if (t[i].len) return 0;
+    }
+    return 1;
+}
+
+// A list is about to run n: if it is the tail and bash would not exec
+// it now, it runs as any command, its death its own to report.
+static void reachtail(Shell *sh, Node *n)
+{
+    if (n==sh->tailnode && sh->taillevel==sh->subshell+1 && !tailexecs(sh)) {
+        sh->taillevel = 0;
+    }
+}
+
 // Report the last foreground child's death by a signal, if it was one.
 static void reportchild(Shell *sh, Arena scratch, Node *n)
 {
@@ -443,7 +467,8 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     i32 status = sh->status;
     i32 killed = sh->killsig;
     i64 pid    = sh->bashpid;
-    if (!killed && sh->childsig && sh->taillevel==sh->subshell+1) {
+    if (!killed && sh->childsig && sh->taillevel==sh->subshell+1 &&
+        (status & 255)==128+sh->childsig) {
         killed = sh->childsig;  // the program it ran last, as bash would exec it
         pid    = sh->childpid;
     }
@@ -2952,6 +2977,7 @@ static void executenode(Shell *sh, Node *n, Arena scratch)
                 continue;
             default:
                 execute(sh, n->a, scratch);
+                reachtail(sh, n->b);
                 n = n->b;
                 continue;
             }
@@ -3014,6 +3040,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
             break;
         default:
             execute(sh, n->a, scratch);
+            reachtail(sh, n->b);
             execute(sh, n->b, scratch);
         }
         break;
