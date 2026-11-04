@@ -148,8 +148,11 @@ static Dirent *pathlist(Shell *sh, Arena *a, Str dir, i32 *err)
     if (sh->pathmode != PM_MSYS) {
         return os_list(sh->os, a, absolute(sh, a, dir), err);
     }
-    Arena   t = *a;
-    PathRes r = resolve(sh, &t, dir);
+    // Not a scratch copy of *a: the entries go there while these paths
+    // are still in use
+    PathRes r = resolve(sh, a, dir);
+    Str     p = dir.len && dir[0]=='/' ? dir : joinposix(a, sh->wd, dir);
+    p = posixnorm(a, slashify(a, p, '/'));
     Dirent *list = 0;
     *err = E_NOENT;
     if (r.ok && r.kind==PK_FILE) {
@@ -170,8 +173,6 @@ static Dirent *pathlist(Shell *sh, Arena *a, Str dir, i32 *err)
     }
     if (*err) return 0;
 
-    Str p = dir.len && dir[0]=='/' ? dir : joinposix(&t, sh->wd, dir);
-    p = posixnorm(&t, slashify(&t, p, '/'));
     if (p.len>1 && p[p.len-1]=='/') p.len--;
     PathCtx *c = sh->paths;
     for (iz i = 0; i < c->mounts.len; i++) {

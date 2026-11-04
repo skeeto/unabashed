@@ -1,0 +1,25 @@
+PWD /013-paths
+pwd -W native
+/a/b
+.
+/a
+. /a
+/a
+long dir
+long write: hello
+long read: hello
+/a
+nul 0
+status 127
+read null 1
+lines 0
+a/nul exists
+t. test.sh
+t. exists
+t does not
+read dot
+t. removed
+native PWD
+C:/Windows
+win32
+status 0

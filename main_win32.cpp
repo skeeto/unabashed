@@ -630,6 +630,10 @@ static Str16 widepath(Arena *a, Str path)
         return towide(a, "NUL");
     }
     Str16 rel = towide(a, nativepath(a, path));
+    c16 *s = rel.data;
+    if (rel.len>=4 && s[0]=='\\' && s[1]=='\\' && s[2]=='?' && s[3]=='\\') {
+        return rel;  // GetFullPathNameW would strip a trailing dot
+    }
     for (i32 cap = 300;;) {
         c16 *buf = alloc<c16>(a, cap+6);
         i32  len = GetFullPathNameW(rel.data, cap, buf+6, 0);
