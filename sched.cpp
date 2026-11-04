@@ -42,17 +42,16 @@ struct Task {
     i64     pid;       // a procsub's BASHPID, for $! and wait
     u64     tag;       // identity: its creator's tag and spawn count
     u64     nspawn;    // tasks it has started
-    b32     loose;     // not waited for in place, or started by such
+    u64     group;     // tracing: its nearest loose task's tag, or 0
     void  (*fn)(Task *);
     void   *arg;
     Io      io;        // its pending OS operation
 };
 
-// Chaos tracing: the last writer to a pipe or capture, whose reader
-// sees the bytes of all writers merged (see tracewrite).
+// Chaos tracing: the writer group that last wrote a pipe or capture,
+// whose reader sees the bytes of all writers merged (see tracewrite).
 struct Wtrace {
-    u64 tag;
-    b32 loose;
+    u64 group;
     b32 set;
 };
 
@@ -158,17 +157,19 @@ static u32 chaosrand(Sched *s)
 
 // Chaos tracing: the running task writes where w last wrote. A loose
 // task is not waited for in place by the one that starts it: a procsub,
-// a pipeline stage before the last (which runs alongside the last), or
-// a pump for such a writer. When it and another task write the same
-// pipe or capture, the reader may see their bytes in either order,
-// unlike writers that take turns.
+// a pipeline stage before the last (which runs alongside the last), a
+// program started directly as such a stage, or a pump for a procsub.
+// Its writes, and those of the tasks and programs it starts, form a
+// writer group (Task.group, its tag) whose order is its own; the
+// creator's other writes are a different group. When two groups write
+// the same pipe or capture, the reader may see their bytes in either
+// order, unlike writers in one group, which take turns.
 static void tracewrite(Sched *s, Wtrace *w)
 {
     if (!s->chaos) return;
     Task *t = s->cur;
-    if (w->set && w->tag!=t->tag && (w->loose || t->loose)) os_racy(s->os);
-    w->tag   = t->tag;
-    w->loose = t->loose;
+    if (w->set && w->group!=t->group) os_racy(s->os);
+    w->group = t->group;
     w->set   = 1;
 }
 
@@ -253,7 +254,7 @@ static void schedule(Sched *s)
             t->state = TS_RUNNING;
             if (t != self) {
                 s->cur = t;
-                os_tasktag(s->os, t->tag, s->ntasks, t->loose);
+                os_tasktag(s->os, t->tag, s->ntasks, t->group);
                 os_switch(s->os, t->fiber);
                 // resumed by whichever task switched back here
             }
@@ -419,14 +420,23 @@ static void taskentry(Os *, void *arg)
     }
 }
 
-// Chaos tracing: mark the running task loose (see tracewrite), or not,
-// returning what it was. What it starts meanwhile is loose too.
-static b32 setloose(Sched *s, b32 loose)
+// A new identity for something the running task starts. It follows
+// from the task's own, never from the schedule.
+static u64 nexttag(Sched *s)
 {
-    b32 was = s->cur->loose;
-    s->cur->loose = loose;
-    os_tasktag(s->os, s->cur->tag, s->ntasks, loose);
-    return was;
+    u64 h = (s->cur->tag ^ ++s->cur->nspawn) * 0x9e3779b97f4a7c15u;
+    return h ^ h>>31;
+}
+
+// Chaos tracing: put the running task in another writer group (see
+// tracewrite), returning its old one. What it starts meanwhile is in
+// that group too.
+static u64 setgroup(Sched *s, u64 group)
+{
+    u64 old = s->cur->group;
+    s->cur->group = group;
+    os_tasktag(s->os, s->cur->tag, s->ntasks, group);
+    return old;
 }
 
 // Start a task running fn(t) with t->arg. It runs once the current
@@ -460,13 +470,11 @@ static Task *taskspawn(Sched *s, void (*fn)(Task *), void *arg, iz stack)
     t->sib    = 0;
     t->pid    = 0;
     t->state  = 0;
-    // Its identity follows from its creator's, never from the schedule
-    u64 h = (s->cur->tag ^ ++s->cur->nspawn) * 0x9e3779b97f4a7c15u;
-    t->tag    = h ^ h>>31;
+    t->tag    = nexttag(s);
     t->nspawn = 0;
-    t->loose  = s->cur->loose;
+    t->group  = s->cur->group;
     s->ntasks++;
-    os_tasktag(s->os, s->cur->tag, s->ntasks, s->cur->loose);
+    os_tasktag(s->os, s->cur->tag, s->ntasks, s->cur->group);
     wake(s, t);
     return t;
 }

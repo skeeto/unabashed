@@ -683,7 +683,7 @@ static Handle capturewriter(Shell *sh, File *f, i64 owner)
     pp->owner  = owner;
     pp->wtrace = &c->wtrace;
     Task    *t  = spawnpump(s, pp);
-    t->loose = t->loose || owner;  // tracing: a writer not waited for
+    if (owner) t->group = t->tag;  // tracing: the loose writer's group
     t->sib   = c->pumps;
     c->pumps = t;
     return p.w;
@@ -1432,6 +1432,8 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         for (;;) {
             iz n = taskread(s, capread, buf, countof(buf));
             if (n <= 0) break;
+            // tracing: for the program, which is in this task's group
+            tracewrite(s, &((Capture *)capfile->cap)->wtrace);
             print(capfile->cap, {buf, n});
         }
         os_close(sh->os, capread);

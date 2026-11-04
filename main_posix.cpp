@@ -552,7 +552,7 @@ static u64 os_siggroup(Os *)
     return 0;  // terminal signals arrive as the process's own
 }
 
-static void os_tasktag(Os *, u64, iz, b32)
+static void os_tasktag(Os *, u64, iz, u64)
 {
 }
 

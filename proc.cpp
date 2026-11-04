@@ -600,7 +600,7 @@ static Str procsubst(Shell *sh, Arena *a, Str body, b32 output)
     m->sh->noreport = 1;  // nothing it runs is reported, as in bash
     Task *task = taskspawn(sh->sched, vprocmain, m, BIGSTACK);
     task->pid   = m->sh->bashpid;
-    task->loose = 1;  // tracing: not waited for in place
+    task->group = task->tag;  // tracing: not waited for in place
     task->sib   = sh->psubs;
     sh->psubs   = task;
     sh->lastbg = task->pid;  // $!, as bash
@@ -790,10 +790,10 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         ran[k] = !skip;
         sh->debugdone = stages[k]->kind == N_SIMPLE;
         if (!skip && ext[k] && directstage(sh, scratch, stages[k], !k)) {
-            b32 loose = setloose(s, 1);  // tracing: as a stage task
+            u64 group = setgroup(s, nexttag(s));  // tracing: as a stage task
             procs[k] = spawndirect(sh, stages[k], in[k], out[k], scratch,
                                    statuses+k, &retry);
-            setloose(s, loose);
+            setgroup(s, group);
             pids[k]  = sh->childpid;
             sh->status = before;
             sh->debugdone = stages[k]->kind == N_SIMPLE;  // for a retry
@@ -801,7 +801,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         if (retry) {
             b32 newloops = stages[k]->kind != N_SIMPLE;  // as bash: break | x is silent
             tasks[k] = spawnvproc(sh, stages[k], in[k], out[k], newloops);
-            tasks[k]->loose = 1;  // tracing: runs alongside the last stage
+            tasks[k]->group = tasks[k]->tag;  // tracing: runs alongside the last stage
             pids[k]  = ((Vproc *)tasks[k]->arg)->sh->bashpid;
             sh->debugdone = 0;
             yield(s);

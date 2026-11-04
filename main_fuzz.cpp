@@ -22,14 +22,16 @@
 //   reported must agree. A deadlock under one schedule only is a bug;
 //   one under every schedule is a script that would hang under bash
 //   too (it reads a terminal nobody types at, or a pipe whose writer
-//   waits for it), which the vos reports instead of hanging. Runs are not compared when the script does
-//   something whose outcome legitimately depends on the schedule: see
-//   chaosexempt for the constructs, and vos.cpp's tracing (Vos.racy)
-//   for what is caught as it happens (a write finding its reader gone,
-//   or overflowing the captured output while tasks run concurrently,
-//   readers sharing a pipe, writers taking turns at a pipe or capture
-//   when one is loose, as a procsub or an early pipeline stage, the file
-//   system changing while tasks run concurrently). Replay builds print both runs' output on a mismatch.
+//   waits for it), which the vos reports instead of hanging. Runs are
+//   not compared when the script does something whose outcome
+//   legitimately depends on the schedule: see chaosexempt for the
+//   constructs, and vos.cpp's tracing (Vos.racy) for what is caught as
+//   it happens (a write finding its reader gone, or overflowing the
+//   captured output while tasks run concurrently, readers sharing a
+//   pipe, two writer groups writing one pipe or capture, as a procsub
+//   or an early pipeline stage and the command that started it, the
+//   file system changing while tasks run concurrently). Replay builds
+//   print both runs' output on a mismatch.
 // - FUZZ_ISOLATE: in one shell, the state dump (isolatedump) printed
 //   before "( eval S )" equals the one printed after it, except for
 //   variables that change on their own (isolatenoise).

@@ -2388,7 +2388,7 @@ static void os_sigmode(Os *, i32, i32)
 {
 }
 
-static void os_tasktag(Os *, u64, iz, b32)
+static void os_tasktag(Os *, u64, iz, u64)
 {
 }
 

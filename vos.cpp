@@ -52,8 +52,7 @@ struct VPipe {
     i32  readers;
     i32  writers;
     u64  rkey;     // tracing: the last reader's identity, or 0
-    u64  wkey;     // tracing: the last writer's identity, or 0
-    b32  wloose;   // tracing: and whether it was loose (os_tasktag)
+    u64  wgroup;   // tracing: the last writer's group (vgroup), or 0
 };
 
 struct VFile {      // open file description
@@ -102,8 +101,8 @@ struct VProc {
     u64     lid;      // tracing: identity, the same under every seed
     u64     tag;      // tracing: a shell's running task (os_tasktag)
     iz      ntasks;   // tracing: a shell's task count
-    b32     loose;    // tracing: its running task is loose (os_tasktag)
-    b32     inloose;  // tracing: started by a loose task
+    u64     group;    // tracing: a shell's running task's group (os_tasktag)
+    u64     ingroup;  // tracing: the writer group it was started in
     FakeCtx ctx;
     Arena   mem;      // a fixed block: the program's memory
 };
@@ -390,17 +389,23 @@ static void vtraceout(Vos *v, Handle h, u8 *buf, iz len)
     }
 }
 
-// Tracing: the running process writes a pipe. A loose writer's bytes
-// and another's may arrive in either order (sched.cpp's tracewrite).
+// Tracing: the writer group of the running process and task, never 0.
+// A shell's loose task (os_tasktag) starts a group of its own; else it
+// writes in the group its process was started in, as programs do.
+static u64 vgroup(Vos *v)
+{
+    VProc *p = v->procs + v->cur;
+    return p->group ? vmix(p->lid, p->group) : p->ingroup;
+}
+
+// Tracing: the running process writes a pipe. Bytes of two writer
+// groups may arrive in either order (sched.cpp's tracewrite).
 static void vtracewrite(Vos *v, VPipe *p)
 {
     if (!v->trace) return;
-    VProc *me    = v->procs + v->cur;
-    u64    key   = vkey(v);
-    b32    loose = me->loose || me->inloose;
-    if (p->wkey && p->wkey!=key && (p->wloose || loose)) v->racy = 1;
-    p->wkey   = key;
-    p->wloose = loose;
+    u64 group = vgroup(v);
+    if (p->wgroup && p->wgroup!=group) v->racy = 1;
+    p->wgroup = group;
 }
 
 // Tracing: is more than one task able to run now? A process waiting
@@ -1170,12 +1175,12 @@ static u64 os_siggroup(Os *)
     return 0;  // no terminal sends signals to a group
 }
 
-static void os_tasktag(Os *os, u64 tag, iz ntasks, b32 loose)
+static void os_tasktag(Os *os, u64 tag, iz ntasks, u64 group)
 {
     Vos *v = osvos(os);
     v->procs[v->cur].tag    = tag;
     v->procs[v->cur].ntasks = ntasks;
-    v->procs[v->cur].loose  = loose;
+    v->procs[v->cur].group  = group;
 }
 
 static void os_racy(Os *os)
@@ -1288,8 +1293,8 @@ static Spawned os_spawn(Os *os, Arena, Spawn *s)
     p->ctx    = ctx;
     p->tag    = 0;
     p->ntasks = 1;
-    p->loose  = 0;
-    p->inloose = v->procs[v->cur].loose || v->procs[v->cur].inloose;
+    p->group  = 0;
+    p->ingroup = vgroup(v);
     if (v->trace) {
         // Identified by its starter and how many that task started
         VProc *me  = v->procs + v->cur;
@@ -1398,7 +1403,7 @@ static void os_submit(Os *os, Io *io)
     io->done = 0;
     io->next = 0;
     io->plt[0] = me->tag;  // tracing: done later, perhaps for another task
-    io->plt[1] = me->loose;
+    io->plt[1] = me->group;
     if (!v->chaos || vrand(v)%2) {
         if (vio(os, v, io, 1)) {
             io->done = 1;
@@ -1423,12 +1428,12 @@ static Io *os_wait(Os *os, i64 deadline)
         for (Io **p = &me->ios; *p; p = &(*p)->next) {
             Io *io = *p;
             u64 tag   = me->tag;
-            b32 loose = me->loose;
+            u64 group = me->group;
             me->tag   = io->plt[0];  // tracing: as the task that submitted it
-            me->loose = (b32)io->plt[1];
+            me->group = io->plt[1];
             b32 ok = vio(os, v, io, 1);
             me->tag   = tag;
-            me->loose = loose;
+            me->group = group;
             if (ok) {
                 *p = io->next;
                 io->done = 1;
@@ -1519,7 +1524,8 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes)
     v->procs[0].shell = 1;
     v->procs[0].pid   = 2;  // as the harnesses' OsInfo
     v->procs[0].lid   = 1;
-    v->procs[0].ntasks = 1;
+    v->procs[0].ntasks  = 1;
+    v->procs[0].ingroup = 1;  // tracing: vgroup is never 0
 
     v->root = vnew(v, 0, "", FT_DIR, 0755);
     vmkdirs(v, "home/oracle")->uid = 1000;

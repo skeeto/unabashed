@@ -173,16 +173,19 @@ gets checked. Rules:
 
 ## Test infrastructure
 
-- The chaos fuzzer's rule for writers taking turns at a pipe or
-  capture (loose writers, m3a.md) flags some ordered runs as racy: a
-  loose writer is flagged even where the order is forced (`{ echo a;
-  echo >(echo s) >/dev/null; } | cat`, a stage before the last
-  writing stderr into `2>&1 |` while the last stage writes nothing
-  there), since it does not know whether the other writer may still
-  write; that needs happens-before tracking (spawns, joins, pipe data,
-  vos waits). No spec in t/exec lost coverage to it. Its exemptions
-  are coarse (a lone `&` exempts an input), so background jobs and
-  file races get little coverage. (m3a.md)
+- The chaos fuzzer flags every run in which two writer groups (a
+  procsub, a pipeline stage before the last, and the command that
+  started them; m3a.md) write one pipe or capture, even where their
+  order is forced: by start order (`{ echo a; echo >(echo s)
+  >/dev/null; } | cat`), by a wait (`wait $!`), or by pipe data
+  (`{ cat <(echo a >&2); echo b >&2; } 2>&1 | cat`). Telling those
+  apart needs happens-before tracking (spawns, joins, pipe data, vos
+  waits). It also trusts that every way output reaches a pipe or
+  capture is traced (`fdwrite`, `pipewrite`, capture pumps, the
+  capture drain in `runprogram`, vos pipe writes): a new path that
+  appends to a capture without `tracewrite` brings back false
+  positives. Its exemptions are coarse (a lone `&` exempts an input),
+  so background jobs and file races get little coverage. (m3a.md)
 - Chaos replays at -O0 agree on some inputs (a `\<NUL>&&` background
   job plus overflowing output) where the AFL build at -O1 diverged;
   such inputs are now exempt, but the cause of the -O level mattering

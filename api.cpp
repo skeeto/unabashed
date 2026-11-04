@@ -228,10 +228,10 @@ static void    os_switch(Os *, Fiber *);
 static void    os_fiberfree(Os *, Fiber *);
 // Test layers, for the chaos fuzzer (no-ops elsewhere): the running
 // task's identity, the same under every chaos seed, how many tasks the
-// scheduler has, and whether the task is loose (not waited for in place,
-// as a procsub: its writes are not ordered with its creator's); called
-// when any changes.
-static void    os_tasktag(Os *, u64 tag, iz ntasks, b32 loose);
+// scheduler has, and its writer group (the tag of the nearest task not
+// waited for in place, as a procsub, or 0: writes in different groups
+// are not ordered with each other); called when any changes.
+static void    os_tasktag(Os *, u64 tag, iz ntasks, u64 group);
 // Test layers: what the shell just did may legitimately depend on the
 // schedule (a write that found no reader), so runs under different
 // chaos seeds need not agree.

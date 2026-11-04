@@ -776,22 +776,29 @@ schedule, in bash too:
   pipe read by two different readers (`{ head -n1; cat; }`), a file
   system change while more than one task could run (`vconcurrent`: the
   sum of every live process's tasks, not counting a task waiting for a
-  program it started), and a pipe or capture written in turn by two
-  writers of which one is *loose*, not waited for in place by the task
-  that started it: a procsub, a pipeline stage before the last (it
-  runs alongside the last stage, which runs in the creator's task; a
-  program started directly as one is started while its starter is
-  marked, `setloose`), a pump for a procsub writing a capture
-  (`capturewriter` with an owner), or anything they start
-  (`Task.loose`, reported with `os_tasktag`; `VProc.inloose` for
-  programs a loose task started). The reader then
-  sees their bytes in either order, which the per-writer hashes cannot
-  tell from a real reordering: `echo x >(echo sub) | cat`,
-  `y=$(echo >(echo deep))`, `{ echo a >&3 | echo b; } 3>&1 | cat`.
-  Checked in sched.cpp (`tracewrite`, in-memory Pipes and Captures,
-  chaos runs only) and in the vos (`vtracewrite`, vos pipes, every
-  run). A loose writer that is in fact ordered, as in `{ echo a; echo
-  >(echo s) >/dev/null; } | cat`, is flagged too.
+  program it started), and a pipe or capture written by two *writer
+  groups*. A loose task, one not waited for in place by the task that
+  started it, starts a group: a procsub, a pipeline stage before the
+  last (it runs alongside the last stage, which runs in the creator's
+  task; a program started directly as one is started while its
+  starter is in a fresh group, `setgroup`), and a pump for a procsub
+  writing a capture (`capturewriter` with an owner). Everything else
+  writes in the group of the task that started it: tasks it spawns,
+  programs (`VProc.ingroup`), their pumps, and the task draining a
+  program's output into a capture (`runprogram`). Writes within one
+  group take turns in a fixed order, since each waits for what it
+  started before writing again, so `{ echo a; cat <<<b; } | cat` is
+  still compared; two groups' bytes reach the reader in either order,
+  which the per-writer hashes cannot tell from a real reordering:
+  `echo x >(echo sub) | cat`, `y=$(echo >(echo deep))`,
+  `{ echo a >&3 | echo b; } 3>&1 | cat`. Checked in sched.cpp
+  (`tracewrite`, `Task.group`: in-memory Pipes and Captures, chaos
+  runs only) and in the vos (`vtracewrite`, `vgroup`: vos pipes, every
+  run). Two groups whose order is forced by something else are flagged
+  too: by start order (`{ echo a; echo >(echo s) >/dev/null; } | cat`:
+  a is written before the procsub starts), by a wait (`wait $!`), or
+  by pipe data (`{ cat <(echo a >&2); echo b >&2; } 2>&1 | cat`: cat
+  reads to EOF, so the procsub has written before `echo b`).
 A deadlock under one schedule only is a bug; one under every schedule
 is a script that hangs under bash too (reading a terminal that never
 types: `select ... </dev/tty`), which the vos reports instead.
