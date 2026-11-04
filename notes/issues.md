@@ -14,19 +14,6 @@ gets checked. Rules:
   are not rediscovered as bugs.
 
 
-## Next (before M5a starts)
-
-- **Win32 Ctrl-C before SIGPIPE, single-task shell** (unobserved): a
-  shell process writing to a native program that dies of Ctrl-C can
-  see the broken pipe before its own control handler thread runs, and
-  die of SIGPIPE (only PIPESTATUS differs; the parent still acts on the
-  failed program stage). Waiting for a late Ctrl-C before dying of
-  SIGPIPE would delay every `yes`-style loop into `head`. (m3b.md)
-- **Fuzz the M4 changes**: the run, chaos and isolate campaigns have not
-  seen namerefs, regex.cpp, glob.cpp, float.cpp or mapfile. Rerun them
-  (tools/fuzz) and triage.
-
-
 ## M5a (Windows paths and spawning)
 
 - **Inherited descriptors above 2 are invisible**:
@@ -62,6 +49,14 @@ gets checked. Rules:
   the job objects (Windows 8 and later) are untested on Windows 8 and
   10, where disassociating a job's completion port may fail (handled:
   later messages are ignored); not run on the XP laptop.
+- **Win32 Ctrl-C before SIGPIPE, single-task shell** (unobserved): a
+  shell process writing to a native program that dies of Ctrl-C can
+  see the broken pipe before its own control handler thread runs, and
+  die of SIGPIPE (only PIPESTATUS differs; the parent still acts on the
+  failed program stage). Waiting for a late Ctrl-C before dying of
+  SIGPIPE would delay every `yes`-style loop into `head`. Moved here
+  from Next: never seen, and its only fix costs throughput; revisit
+  with the Ctrl-C work above. (m3b.md)
 
 - A background vproc still running when the shell exits is waited for;
   bash leaves it running. (m3a.md)
