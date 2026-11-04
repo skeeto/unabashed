@@ -494,7 +494,7 @@ static b32 likelyexternaltext(Shell *sh, Str body)
     for (iz k = 0; k < countof(reserved); k++) {
         if (reserved[k].word == name) return 0;
     }
-    return name.len && !findbuiltin(name) && !findfunc(sh, name);
+    return name.len && !findbuiltin(sh, name) && !findfunc(sh, name);
 }
 
 // Join finished procsubs.
@@ -629,7 +629,7 @@ static b32 likelyexternal(Shell *sh, Node *n)
         u8 c = name[i];
         if (!alnum(c) && c!='_' && c!='-' && c!='.' && c!='/' && c!='+') return 0;
     }
-    return !findbuiltin(name) && !findfunc(sh, name);
+    return !findbuiltin(sh, name) && !findfunc(sh, name);
 }
 
 // Might expanding this word text run shell code? Comsubs, procsubs,

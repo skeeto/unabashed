@@ -214,6 +214,20 @@ static void testrecord(PathCtx *ctx, Arena scratch, Record *r)
         snprintf(what, sizeof(what), "cygpath -%.*s", (int)k.len, k.cdata);
         expect(got, want, r->line, what, in);
 
+        // The same through the cygpath builtin's argument parsing
+        Str     args[] = {"cygpath", concat(a, "-", k), "--", in};
+        CygOpts o      = cygpathopts(a, args, countof(args));
+        CygRun  run    = cygpathrun(ctx, a, &o, args, countof(args), {}, {});
+        Str     line   = concat(a, want, "\n");
+        b32     ok     = o.ok && ((run.out==line && !run.status) ||
+                                  (!want.len && run.out=="" && run.status==1));
+        snprintf(what, sizeof(what), "builtin cygpath -%.*s", (int)k.len, k.cdata);
+        if (!check(ok, r->line, what)) {
+            show("input", in);
+            show("want", line);
+            show("got", run.out);
+        }
+
     } else if (k == "arg") {
         Str in  = r->in[0];
         Str got = procpid(a, msysarg(ctx, a, in, {}));
@@ -653,6 +667,29 @@ static void testproperties(PathCtx *msys, Arena scratch)
             show("towin", w);
             failures++;
         }
+
+        // the builtin: any arguments parse without a crash, and a name
+        // converts as the engine does
+        Str toks[] = {"-u", "-w", "-m", "-a", "-p", "-l", "-s", "-W", "-S",
+                      "-f", "-h", "--", "-", "--file=", "--mixed", "-wpa",
+                      "-mf", "--bogus", "-x", "", s};
+        Str args[6] = {"cygpath"};
+        iz  nargs   = 1 + rand32()%5;
+        for (iz i = 1; i < nargs; i++) args[i] = toks[rand32()%countof(toks)];
+        CygOpts o = cygpathopts(&a, args, nargs);
+        ok = o.ok || o.err.len;
+        if (o.ok && !o.help) {
+            CygRun run = cygpathrun(msys, &a, &o, args, nargs, s, {});
+            ok &= run.status==0 || run.err.data;
+        }
+        Str one[] = {"cygpath", "-m", "--", s};
+        o = cygpathopts(&a, one, 4);
+        CygRun run = cygpathrun(msys, &a, &o, one, 4, {}, {});
+        ok &= s.len ? run.out==concat(&a, w, "\n") : run.status==1;
+        if (!check(ok, 0, "cygpath builtin property")) {
+            for (iz i = 0; i < nargs; i++) show("arg", args[i]);
+            failures++;
+        }
     }
 
     for (i32 n = 0; n < 50000 && failures < 10; n++) {
@@ -728,6 +765,109 @@ static void testproperties(PathCtx *msys, Arena scratch)
     }
 }
 
+// The cygpath builtin's argument handling: one run, its output and
+// status. The input, if any, is -f's contents.
+static void cygcase(PathCtx *ctx, Arena scratch, iz line, Slice<Str> args,
+                    Str want, i32 status, Str in = {}, Str windir = {})
+{
+    Arena  *a = &scratch;
+    CygOpts o = cygpathopts(a, args.data, args.len);
+    CygRun  r = {};
+    if (!o.ok) {
+        r.status = 1;
+    } else if (!o.help) {
+        r = cygpathrun(ctx, a, &o, args.data, args.len, in, windir);
+    }
+    b32 ok = r.out==want && r.status==status && (!r.status || !o.ok || r.err.data);
+    if (!check(ok, line, "cygpath builtin")) {
+        for (iz i = 0; i < args.len; i++) show("arg", args[i]);
+        if (!o.ok) show("error", o.err);
+        show("want", want);
+        show("got", r.out);
+        fprintf(stderr, "    status %d, want %d\n", r.status, status);
+    }
+}
+
+#define CYG(want, status, ...) \
+    do { \
+        Str argv_[] = {"cygpath", __VA_ARGS__}; \
+        cygcase(ctx, scratch, __LINE__, {argv_, countof(argv_)}, want, status); \
+    } while (0)
+
+static void testcygpath(PathCtx *ctx, Arena scratch)
+{
+    Arena *a   = &scratch;
+    Str    cwd = toposix(ctx, a, ctx->cwd);
+    Str    dir = cwd;
+    for (; dir.len && dir[dir.len-1]!='/'; dir.len--) {}
+    dir.len--;  // the parent
+
+    CYG(concat(a, cwd, "/sub\n"), 0, "-a", "--", "sub");
+    CYG(concat(a, ctx->cwd, "/sub\n"), 0, "-am", "--", "sub");
+    CYG(concat(a, cwd, "/sub/x\n"), 0, "-a", "sub\\x");
+    CYG(concat(a, cwd, "\n"), 0, "--absolute", ".");
+    CYG(concat(a, dir, "\n"), 0, "-ua", "..");
+    CYG(concat(a, cwd, "/b\n"), 0, "-a", "./a/../b");
+    CYG(concat(a, towin(ctx, a, dir, 1), "\n"), 0, "-wa", "..");
+    CYG(concat(a, ctx->cwd, "\n"), 0, "--mixed", "--absolute", ".");
+    CYG(concat(a, ctx->cwd, "/\n"), 0, "-ma", "./");
+    CYG("-x\n", 0, "-m", "--", "-x");
+    CYG("/c/Windows\n", 0, "-ua", "C:\\Windows");
+    CYG("C:\\\n", 0, "-wa", "/c/Windows/..");
+    CYG("/c/a:/d/b\n", 0, "-p", "C:\\a;D:\\b");
+    CYG("/c/a:/d/b\n", 0, "--path", "--unix", "C:\\a;D:\\b");
+    CYG("C:/a;/d/b\n", 0, "-mp", "/c/a;/d/b");
+    CYG("C:\\a;.\n", 0, "-wp", "/c/a:");
+    CYG("C:\\Windows\n", 0, "-l", "-s", "-w", "/c/Windows");
+    CYG("C:\\Windows\n", 0, "--long-name", "--windows", "/c/Windows");
+    CYG("C:/\n", 0, "-mm", "/c");
+    CYG("C:\\a\nC:\\b\n", 0, "-w", "C:\\a", "/c/b");
+    CYG("/c/a\n", 1, "-u", "C:\\a", "", "C:\\b");
+    CYG("", 1, "");
+    CYG("", 1, "-wp", "");
+    CYG("", 0, "-h");
+    CYG("", 0, "--help", "-w", "x");   // help wins over the names
+    CYG("", 1);                        // no names
+    CYG("", 1, "-w", "-u", "/c");
+    CYG("", 1, "--unix", "-m", "/c");
+    CYG("", 1, "-W", "x");
+    CYG("", 1, "-S", "-f", "x");
+    CYG("", 1, "-q", "/x");
+    CYG("", 1, "--bogus", "/x");
+    CYG("", 1, "--unix=x", "/x");
+    CYG("", 1, "-f");
+    CYG("", 1, "--file");
+
+    // -W and -S from the Windows directory the caller found
+    Str w[]  = {"cygpath", "-W"};
+    Str ws[] = {"cygpath", "-wS"};
+    Str mw[] = {"cygpath", "-mW"};
+    Str us[] = {"cygpath", "-uS"};
+    cygcase(ctx, scratch, __LINE__, {w, 2}, "/c/Windows\n", 0, {}, "C:\\Windows");
+    cygcase(ctx, scratch, __LINE__, {ws, 2}, "C:\\Windows\\System32\n", 0, {}, "C:\\Windows");
+    cygcase(ctx, scratch, __LINE__, {mw, 2}, "C:/Windows\n", 0);
+    cygcase(ctx, scratch, __LINE__, {us, 2}, "/d/win/System32\n", 0, {}, "d:/win/");
+
+    // -f: the caller reads the file; lines lose a final CR, an empty
+    // line stops the run
+    Str f1[] = {"cygpath", "-f", "-"};
+    Str f2[] = {"cygpath", "-mfFILE"};
+    Str f3[] = {"cygpath", "--file=x", "-w"};
+    Str f4[] = {"cygpath", "-wp", "--file", "y"};
+    cygcase(ctx, scratch, __LINE__, {f1, 3}, "/c/a\n/d/b\n", 0, "C:\\a\r\nD:\\b\r\n");
+    cygcase(ctx, scratch, __LINE__, {f1, 3}, "/c/a\n/d/b\n", 0, "C:\\a\nD:\\b");
+    cygcase(ctx, scratch, __LINE__, {f1, 3}, "", 0, "");
+    cygcase(ctx, scratch, __LINE__, {f2, 2}, "C:/a\n", 1, "C:\\a\n\nD:\\b\n");
+    cygcase(ctx, scratch, __LINE__, {f3, 3}, "C:\\a\n", 0, "/c/a\n");
+    cygcase(ctx, scratch, __LINE__, {f4, 4}, "C:\\a;C:\\b\n", 0, "/c/a:/c/b\n");
+    CygOpts o = cygpathopts(a, f2, 2);
+    check(o.ok && o.file=="FILE" && o.form==CYG_MIXED, __LINE__, "cygpath -fFILE");
+    o = cygpathopts(a, f3, 3);
+    check(o.ok && o.file=="x" && o.form==CYG_WINDOWS, __LINE__, "cygpath --file=x");
+    o = cygpathopts(a, f4, 4);
+    check(o.ok && o.file=="y" && o.list && o.first==4, __LINE__, "cygpath --file y");
+}
+
 int main(int argc, char **argv)
 {
     char const *path = argc>1 ? argv[1] : "t/unit/paths.golden";
@@ -758,6 +898,7 @@ int main(int argc, char **argv)
     testmsys(perm);
     testposix(perm);
     testpersona();
+    testcygpath(&ctx, perm);
     i32 inline_ = ntests - golden;
     testproperties(&ctx, perm);
 

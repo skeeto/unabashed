@@ -395,6 +395,22 @@ static void putvalue(X *x, Str v, i32 ctx)
     xput(x, v, flag);
 }
 
+// Append a command substitution's output. In native mode, as in
+// busybox-w32, an unquoted one splitting on newlines splits on CR LF
+// too: the CR goes with the newline instead of ending a field.
+static void putcomsub(X *x, Str v, i32 ctx)
+{
+    b32 set;
+    Str ifs = ifsvalue(x->sh, &set);
+    b32 nl  = !set;
+    for (iz i = 0; i < ifs.len; i++) nl |= ifs[i] == '\n';
+    b32 split = !x->nosplit && !(ctx & (XC_DQUOTE|XC_HEREDOC));
+    if (nl && split && x->sh->pathmode==PM_NATIVE) {
+        v = dropcr(x->a, v, CR_CRLF);
+    }
+    putvalue(x, v, ctx);
+}
+
 // Append $@ or $*, or a list of values derived from them.
 static void putlist(X *x, Str *v, iz n, b32 star, i32 ctx)
 {
@@ -2012,7 +2028,7 @@ static void expandinto(X *x, Str s, i32 ctx)
             }
             Str body = span(s.data+i+1, s.data+e-1);
             Str out = runcapture(sh, x->a, backquotebody(x->a, body, dq), 1);
-            putvalue(x, out, ctx);
+            putcomsub(x, out, ctx);
             i = e;
             continue;
         }
@@ -2052,7 +2068,7 @@ static void expandinto(X *x, Str s, i32 ctx)
                 } else {
                     Str body = span(s.data+i+2, s.data+(e>i+2 ? e-1 : e));
                     Str out  = runcapture(sh, x->a, body, 0);
-                    putvalue(x, out, ctx);
+                    putcomsub(x, out, ctx);
                 }
                 i = e;
                 continue;
@@ -2063,7 +2079,7 @@ static void expandinto(X *x, Str s, i32 ctx)
                 if (inner.len && funsubchar(inner[0])) {
                     // ${ cmd; } and ${| cmd; }: run in the current shell
                     Str out = runcapture(sh, x->a, inner, 2);
-                    putvalue(x, out, ctx);
+                    putcomsub(x, out, ctx);
                 } else {
                     expandbraced(x, inner, ctx);
                 }

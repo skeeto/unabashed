@@ -1927,6 +1927,58 @@ static i32 b_pwd(Shell *sh, Str *args, iz nargs, Arena scratch)
     return 0;
 }
 
+// cygpath, msys mode only (also the shell started as cygpath): MSYS2's
+// path converter on the shell's own mount table (paths.cpp).
+static i32 b_cygpath(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    static Str help =
+        "usage: cygpath [-u|-w|-m] [-alps] NAME...\n"
+        "       cygpath [-u|-w|-m] [-alps] -f FILE\n"
+        "       cygpath [-u|-w|-m] -W|-S\n"
+        "Convert paths between the POSIX (-u, the default), Windows (-w)\n"
+        "and mixed (-m, forward slashes) forms, through the mount table.\n"
+        "  -a  make relative names absolute\n"
+        "  -p  convert path lists (':' on the POSIX side, ';' on Windows)\n"
+        "  -f  convert each line of FILE (- for standard input)\n"
+        "  -W  the Windows directory    -S  the system directory\n"
+        "  -l  -s  accepted for long and short names; no effect\n";
+    CygOpts o = cygpathopts(&scratch, args, nargs);
+    if (!o.ok) {
+        flushbout(sh);
+        Str msg = concat3(&scratch, "cygpath: ", o.err, "\n");
+        fdwrite(sh, 2, concat3(&scratch, msg, cut(help, '\n').head, "\n"));
+        return 1;
+    }
+    if (o.help) {
+        bprint(sh, help);
+        return 0;
+    }
+    Str in = {};
+    if (o.file.data) {
+        i32 err = 0;
+        in = readwholefile(sh, &scratch, o.file=="-" ? Str("/dev/stdin") : o.file, &err);
+        if (err) {
+            flushbout(sh);
+            Str msg = concat3(&scratch, o.file, ": ", errtext(err));
+            fdwrite(sh, 2, concat3(&scratch, "cygpath: ", msg, "\n"));
+            return 1;
+        }
+    }
+    PathCtx c  = pathctx(sh, &scratch, {});
+    Str windir = getvar(sh, &scratch, "SYSTEMROOT").value;
+    windir = windir.len ? windir : getvar(sh, &scratch, "WINDIR").value;
+    CygRun  r  = cygpathrun(&c, &scratch, &o, args, nargs, in, windir);
+    // cygpath buffers its output until it exits, except with -f, where
+    // it flushes each line: the error comes first or last
+    if (o.file.data) bprint(sh, r.out);
+    if (r.err.data) {
+        flushbout(sh);
+        fdwrite(sh, 2, r.err);
+    }
+    if (!o.file.data) bprint(sh, r.out);
+    return r.status;
+}
+
 
 // Input
 
@@ -2742,7 +2794,7 @@ static b32 describe(Shell *sh, Arena *a, Str name, u8 mode, b32 all, b32 nofuncs
         if (!all) return 1;
     }
     // POSIX mode finds special builtins before functions
-    Builtin *b = findbuiltin(name);
+    Builtin *b = findbuiltin(sh, name);
     Func    *f = nofuncs ? 0 : findfunc(sh, name);
     b32 specialfirst = b && (b->flags & B_SPECIAL) && sh->opt[O_POSIX];
     for (b32 pass = 0; pass < 2 && mode!='p' && mode!='P'; pass++) {
@@ -2876,7 +2928,7 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         return status;
     }
-    Builtin *b = findbuiltin(args[i]);
+    Builtin *b = findbuiltin(sh, args[i]);
     if (b) {
         return b->fn(sh, args+i, nargs-i, scratch);
     }
@@ -2897,7 +2949,7 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
 static i32 b_builtin(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     if (nargs < 2) return 0;
-    Builtin *b = findbuiltin(args[1]);
+    Builtin *b = findbuiltin(sh, args[1]);
     if (!b) {
         builtinerror(sh, scratch, "builtin", concat(&scratch, args[1], ": not a shell builtin"));
         return 1;
@@ -3376,7 +3428,7 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
                 bprint(sh, h->path);
             }
             bprint(sh, "\n");
-        } else if (!haspath(sh, name) && !findbuiltin(name) && !findfunc(sh, name)) {
+        } else if (!haspath(sh, name) && !findbuiltin(sh, name) && !findfunc(sh, name)) {
             Str found = pathlookup(sh, &scratch, name);
             if (!found.data) {
                 builtinerror(sh, scratch, "hash", concat(&scratch, name, ": not found"));
@@ -3429,7 +3481,7 @@ static void compfuncs(Func *f, Arena *a, Slice<Str> *out)
     for (i32 i = 0; i < 4; i++) compfuncs(f->child[i], a, out);
 }
 
-static void compbuiltins(Arena *, Slice<Str> *);
+static void compbuiltins(Shell *, Arena *, Slice<Str> *);
 
 static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
@@ -3504,7 +3556,7 @@ static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
         iz start = names.len;
         switch (want & bit) {
         case CG_ALIAS:    compaliases(sh->aliases, a, &names); break;
-        case CG_BUILTIN:  compbuiltins(a, &names);             break;
+        case CG_BUILTIN:  compbuiltins(sh, a, &names);         break;
         case CG_EXPORT:   compvars(sh->vars, 1, a, &names);    break;
         case CG_FUNCTION: compfuncs(sh->funcs, a, &names);     break;
         case CG_VARIABLE: compvars(sh->vars, 0, a, &names);    break;
@@ -3583,6 +3635,7 @@ static Builtin builtins[] = {
     {"command",  b_command,  0},
     {"compgen",  b_compgen,  0},
     {"continue", b_continue, B_SPECIAL},
+    {"cygpath",  b_cygpath,  B_MSYS},
     {"declare",  b_declare,  B_DECL},
     {"disown",   b_disown,   0},
     {"echo",     b_echo,     0},
@@ -3622,18 +3675,26 @@ static Builtin builtins[] = {
     {"wait",     b_wait,     0},
 };
 
-static void compbuiltins(Arena *a, Slice<Str> *out)
+// Builtins that exist in this mode: cygpath only in msys mode.
+static b32 hasbuiltin(Shell *sh, Builtin *b)
 {
-    for (iz i = 0; i < countof(builtins); i++) *out = push(a, *out, builtins[i].name);
+    return !(b->flags & B_MSYS) || sh->pathmode==PM_MSYS;
 }
 
-static Builtin *findbuiltin(Str name)
+static void compbuiltins(Shell *sh, Arena *a, Slice<Str> *out)
+{
+    for (iz i = 0; i < countof(builtins); i++) {
+        if (hasbuiltin(sh, builtins+i)) *out = push(a, *out, builtins[i].name);
+    }
+}
+
+static Builtin *findbuiltin(Shell *sh, Str name)
 {
     iz lo = 0, hi = countof(builtins);
     while (lo < hi) {
         iz  mid = lo + (hi - lo)/2;
         i32 c   = compare(builtins[mid].name, name);
-        if (!c) return builtins + mid;
+        if (!c) return hasbuiltin(sh, builtins+mid) ? builtins+mid : 0;
         if (c < 0) lo = mid + 1; else hi = mid;
     }
     return 0;

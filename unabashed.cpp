@@ -924,6 +924,17 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             sh->status = 1;
             escape(sh, ESC_FATAL);
         }
+        Str prog = progbase(info->nargs ? info->args[0] : Str{});
+        if (sh->pathmode==PM_MSYS && equalfold(prog, "cygpath")) {
+            // Started as cygpath (a copy of the shell by that name): be it
+            BOut out = {};
+            out.b    = Buf(&perm, (iz)1<<12);
+            sh->bout = &out;
+            sh->status = b_cygpath(sh, info->args, info->nargs, scratch);
+            if (out.b.len) fdwrite(sh, 1, finish(&out.b));
+            sh->bout = 0;
+            escape(sh, ESC_EXIT);
+        }
 
         // Options before the command string or script
         iz  i = 1;

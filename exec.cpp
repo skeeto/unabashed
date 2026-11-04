@@ -15,9 +15,10 @@ struct Builtin {
 enum : i32 {
     B_SPECIAL = 1<<0,  // POSIX special builtin
     B_DECL    = 1<<1,  // declaration builtin: assignment arguments
+    B_MSYS    = 1<<2,  // msys mode only (cygpath)
 };
 
-static Builtin *findbuiltin(Str name);
+static Builtin *findbuiltin(Shell *, Str name);
 static b32      parsei64(Str, i64 *);
 static void     execute(Shell *, Node *, Arena);
 static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i32 line = 1,
@@ -2246,7 +2247,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         Word one = *rest;
         one.next = 0;
         first = expandwords(sh, a, &one, 0);
-        Builtin *b = first.len ? findbuiltin(first[0]) : 0;
+        Builtin *b = first.len ? findbuiltin(sh, first[0]) : 0;
         decl = b && (b->flags & B_DECL);
         argv = first;
         for (Word *w = rest->next; w; w = w->next) {
@@ -2359,7 +2360,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     b32 commit   = execonly && !sh->subshell;
     i64 lastbg   = sh->lastbg;
     Str savedname = sh->bltname;
-    if (n->redirs && findbuiltin(name)) sh->bltname = name;  // for messages
+    if (n->redirs && findbuiltin(sh, name)) sh->bltname = name;  // for messages
     b32 redirected = doredirs(sh, n->redirs, a, execonly && !commit);
     sh->bltname = savedname;
     if (!redirected) {
@@ -2379,7 +2380,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     }
 
     Func    *fn = 0;
-    Builtin *bi = findbuiltin(name);
+    Builtin *bi = findbuiltin(sh, name);
     b32 special = bi && (bi->flags & B_SPECIAL);
     if (!(special && sh->opt[O_POSIX])) {
         if (!haspath(sh, name)) fn = findfunc(sh, name);
@@ -2927,7 +2928,7 @@ static void execfuncdef(Shell *sh, Node *n, Arena scratch)
         sh->status = 1;
         return;
     }
-    Builtin *special = sh->opt[O_POSIX] ? findbuiltin(name) : 0;
+    Builtin *special = sh->opt[O_POSIX] ? findbuiltin(sh, name) : 0;
     if (special && (special->flags & B_SPECIAL)) {
         shellerror(sh, scratch, concat3(&scratch, "`", name, "': is a special builtin"));
         sh->status = 2;

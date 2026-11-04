@@ -1524,7 +1524,8 @@ static Slice<Str> msysenv(PathCtx *ctx, Arena *a, Slice<Str> env)
 // The path mode a Windows shell takes from its program name: sh, ash
 // and lash are native unless the install has an etc/fstab (Git and
 // MSYS2, where sh is bash); bash and anything else is msys.
-static PathMode personaof(Str argv0, b32 fstab)
+// A program's name without its directory and a .exe suffix.
+static Str progbase(Str argv0)
 {
     iz i = argv0.len;
     for (; i>0 && !pathsep(argv0[i-1]) && argv0[i-1]!=':'; i--) {}
@@ -1532,6 +1533,206 @@ static PathMode personaof(Str argv0, b32 fstab)
     if (name.len>4 && equalfold(taketail(name, 4), ".exe")) {
         name = cuttail(name, 4);
     }
+    return name;
+}
+
+static PathMode personaof(Str argv0, b32 fstab)
+{
+    Str name = progbase(argv0);
     b32 sh = equalfold(name, "sh") || equalfold(name, "ash") || equalfold(name, "lash");
     return sh && !fstab ? PM_NATIVE : PM_MSYS;
+}
+
+
+// cygpath (msys2.md §5): the shell's own conversions, so that its
+// answers always agree with the shell's view of the mounts
+
+enum : i32 { CYG_UNIX, CYG_WINDOWS, CYG_MIXED };
+
+struct CygOpts {
+    Str err;     // what is wrong with the arguments, unless ok
+    Str file;    // -f FILE, "-" for standard input
+    iz  first;   // index of the first name
+    i32 form;    // CYG_*
+    b32 abs;     // -a
+    b32 list;    // -p
+    b32 windir;  // -W
+    b32 sysdir;  // -S
+    b32 help;    // -h
+    b32 ok;
+};
+
+// cygpath's arguments, args[0] being its name. Short options cluster,
+// long ones are spelled out (--file=FILE too), and -l and -s (long and
+// short names) are accepted but change nothing.
+static CygOpts cygpathopts(Arena *a, Str *args, iz nargs)
+{
+    static struct { Str name; u8 letter; } longs[] = {
+        {"--absolute", 'a'}, {"--file", 'f'},       {"--help", 'h'},
+        {"--long-name", 'l'}, {"--mixed", 'm'},     {"--path", 'p'},
+        {"--short-name", 's'}, {"--sysdir", 'S'},   {"--unix", 'u'},
+        {"--windir", 'W'},   {"--windows", 'w'},
+    };
+    CygOpts r = {};
+    r.form = -1;
+    iz i = 1;
+    for (; i<nargs && args[i].len>1 && args[i][0]=='-'; i++) {
+        Str opt = args[i];
+        if (opt == "--") {
+            i++;
+            break;
+        }
+        Str letters = cuthead(opt, 1);
+        Cut value   = {};  // --file=FILE
+        if (opt[1] == '-') {
+            value   = cut(opt, '=');
+            letters = {};
+            for (iz k = 0; k < countof(longs); k++) {
+                if (longs[k].name == value.head) letters = {&longs[k].letter, 1};
+            }
+            if (!letters.len || (value.ok && letters[0]!='f')) {
+                r.err = concat(a, value.head, ": unknown option");
+                return r;
+            }
+        }
+        for (iz k = 0; k < letters.len; k++) {
+            i32 form = -1;
+            switch (letters[k]) {
+            case 'u': form = CYG_UNIX;    break;
+            case 'w': form = CYG_WINDOWS; break;
+            case 'm': form = CYG_MIXED;   break;
+            case 'a': r.abs    = 1;       break;
+            case 'p': r.list   = 1;       break;
+            case 'W': r.windir = 1;       break;
+            case 'S': r.sysdir = 1;       break;
+            case 'h': r.help   = 1;       break;
+            case 'l': case 's':           break;
+            case 'f':
+                if (value.ok) {
+                    r.file = value.tail;
+                } else if (k+1 < letters.len) {
+                    r.file = cuthead(letters, k+1);
+                } else if (i+1 < nargs) {
+                    r.file = args[++i];
+                } else {
+                    r.err = "-f: a file name is required";
+                    return r;
+                }
+                k = letters.len;
+                break;
+            default:
+                r.err = concat(a, concat(a, "-", takehead(cuthead(letters, k), 1)),
+                               ": unknown option");
+                return r;
+            }
+            if (form>=0 && r.form>=0 && form!=r.form) {
+                r.err = "only one of -u, -w and -m may be given";
+                return r;
+            }
+            r.form = form>=0 ? form : r.form;
+        }
+    }
+    r.form  = r.form<0 ? CYG_UNIX : r.form;
+    r.first = i;
+    b32 dir   = r.windir || r.sysdir;
+    b32 names = i<nargs || r.file.data;
+    if (!r.help && dir && names) {
+        r.err = "-W and -S take no names";
+    } else if (!r.help && !dir && !names) {
+        r.err = "no names to convert";
+    } else {
+        r.ok = 1;
+    }
+    return r;
+}
+
+// One name converted as the options say, or null for an empty name,
+// which cygpath cannot convert.
+static Str cygpathname(PathCtx *ctx, Arena *a, CygOpts *o, Str name)
+{
+    b32 back = o->form == CYG_WINDOWS;
+    if (o->list) {
+        return o->form==CYG_UNIX ? toposixlist(ctx, a, name)
+                                 : towinlist(ctx, a, name, back);
+    } else if (!o->abs || !name.len) {
+        return o->form==CYG_UNIX ? toposix(ctx, a, name) : towin(ctx, a, name, back);
+    }
+    Str p = {};
+    if (o->form != CYG_UNIX) {
+        p = towinabs(ctx, a, name, back);
+    } else if (!pathsep(name[0]) && !hasdrive(name)) {
+        p = posixnorm(a, joinposix(a, posixcwd(ctx, a), slashify(a, name, '/')));
+    } else {
+        p = toposix(ctx, a, name);
+        p = p.len && p[0]=='/' ? posixnorm(a, p) : p;
+    }
+    // Made absolute, "." and ".." name the directory without a slash
+    b32 root = p.len==1 || (p.len==3 && hasdrive(p));
+    if (!pathsep(name[name.len-1]) && !root && p.len && pathsep(p[p.len-1])) {
+        p.len--;
+    }
+    return p;
+}
+
+// -W or -S: the Windows directory (windir, from the environment) or the
+// system directory under it, in the requested form.
+static Str cygpathdir(PathCtx *ctx, Arena *a, CygOpts *o, Str windir)
+{
+    Str dir = winnorm(a, windir.len ? windir : Str("C:/Windows"), ctx->cwd);
+    dir = dir.data ? dir : Str("C:/Windows");
+    if (o->sysdir) {
+        dir = concat(a, dir, dir[dir.len-1]=='/' ? Str("System32") : Str("/System32"));
+    }
+    switch (o->form) {
+    case CYG_UNIX:    return toposix(ctx, a, dir);
+    case CYG_WINDOWS: return slashify(a, dir, '\\');
+    }
+    return dir;
+}
+
+struct CygRun {
+    Str out;
+    Str err;     // a message for standard error, or null
+    i32 status;
+};
+
+// Run cygpath over its names, or with -f over the lines of in (the
+// file's contents; a CR ending a line is dropped). It stops at the
+// first name it cannot convert.
+static CygRun cygpathrun(PathCtx *ctx, Arena *a, CygOpts *o, Str *args, iz nargs,
+                         Str in, Str windir)
+{
+    CygRun r = {};
+    if (o->windir || o->sysdir) {
+        r.out = concat(a, cygpathdir(ctx, a, o, windir), "\n");
+        return r;
+    }
+    Slice<Str> names = {args+o->first, nargs-o->first};
+    if (o->file.data) {
+        names = {};
+        for (Cut c = {.head={}, .tail=in, .ok=1}; c.ok;) {
+            c = cut(c.tail, '\n');
+            if (!c.ok && !c.head.len) break;
+            Str line = c.head;
+            if (line.len && line[line.len-1]=='\r') line.len--;
+            names = push(a, names, line);
+        }
+    }
+    Slice<Str> outs = {};
+    for (iz i = 0; i < names.len; i++) {
+        Str s = cygpathname(ctx, a, o, names[i]);
+        if (!s.data) {
+            r.err    = "cygpath: can't convert empty path\n";
+            r.status = 1;
+            break;
+        }
+        outs = push(a, outs, s);
+    }
+    Buf b(a, 256);
+    for (iz i = 0; i < outs.len; i++) {
+        print(&b, outs[i]);
+        putbyte(&b, '\n');
+    }
+    r.out = finish(&b);
+    return r;
 }
