@@ -29,6 +29,7 @@ enum : i32 {  // expansion contexts
     XC_ASSIGNW = 1<<6,  // looks like an assignment: XC_ASSIGN after =
     XC_NOPSUB  = 1<<7,  // <(...) and >(...) are plain text
     XC_SUBQ    = 1<<8,  // array subscripts expand once, quoted (as in arithmetic)
+    XC_PROMPT  = 1<<9,  // prompt string: as in double quotes, but " is literal
 };
 
 enum : i32 {  // expandwords flags
@@ -743,7 +744,7 @@ static Str promptdecode(X *x, Str s)
         }
     }
     Str r = finish(&b);
-    return expand ? expandword(x, r, XC_DQUOTE) : r;
+    return expand ? expandword(x, r, XC_DQUOTE|XC_PROMPT) : r;
 }
 
 // One value transformed by ${name@t}, except for @A and @a.
@@ -1911,7 +1912,8 @@ static void expandinto(X *x, Str s, i32 ctx)
             continue;
         }
 
-        if (c=='"' && (!hd || (ctx & XC_PARAM))) {
+        b32 litdq = (ctx & XC_PROMPT) && !(ctx & XC_PARAM);
+        if (c=='"' && (!hd || (ctx & XC_PARAM)) && !litdq) {
             if (dq || hd) {
                 // Inside ${...} in double quotes: quotes toggle, and
                 // between them a backslash quotes any character

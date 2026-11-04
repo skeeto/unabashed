@@ -946,9 +946,10 @@ static Str traceprefix(Shell *sh, Arena *a)
     Got g = getvar(sh, a, "PS4");
     if (!g.set) return {};
 
-    // xtrace is off while PS4 expands, so commands in it are not
-    // traced. An expansion error, even a fatal one, is reported and
-    // the raw text used instead.
+    // PS4 is a prompt string: decoded, then expanded as if in double
+    // quotes, so <(...) and >(...) are plain text. xtrace is off while
+    // it expands, so commands in it are not traced. An expansion error,
+    // even a fatal one, is reported and the raw text used instead.
     Str ps4 = g.value;
     b32 xtrace = sh->opt[O_XTRACE];
     i32 status = sh->status;
@@ -960,7 +961,7 @@ static Str traceprefix(Shell *sh, Arena *a)
     sh->esc = &e;
     sh->opt[O_XTRACE] = 0;
     if (!__builtin_setjmp(e.jmp)) {
-        ps4 = expandstring(sh, a, g.value);
+        ps4 = expandstring(sh, a, "${PS4@P}");
     } else {
         unwind(sh, e.undo);
     }
