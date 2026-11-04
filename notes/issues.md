@@ -126,10 +126,19 @@ gets checked. Rules:
 
 ## Test infrastructure
 
-- The chaos fuzzer cannot tell two writers sharing one pipe from
-  sequential writers, so `(false)|echo >(echo)|cat` is a false
-  positive; its exemptions are coarse (a lone `&` exempts an input),
-  so background jobs and file races get little coverage. (m3a.md)
+- The chaos fuzzer cannot tell two writers sharing one pipe or
+  capture from sequential writers, so `(false)|echo >(echo)|cat`,
+  `y=$(echo >(echo deep))` and `cat <(echo x) >(tr a b <<<f) | sh`
+  (the reader sees x and f in either order) are false positives.
+  Telling them apart needs to know, at each write, whether the
+  previous writer may still write: whether it is alive and not waiting
+  (through joins, pumps or vos waits) on the current one. Its
+  exemptions are coarse (a lone `&` exempts an input), so background
+  jobs and file races get little coverage. (m3a.md)
+- Chaos replays at -O0 agree on some inputs (a `\<NUL>&&` background
+  job plus overflowing output) where the AFL build at -O1 diverged;
+  such inputs are now exempt, but the cause of the -O level mattering
+  was not traced.
 - The test harness runs out of memory with more than about a dozen
   live vprocs or arrays of more than about 50,000 elements. (m3a.md,
   m4.md)
