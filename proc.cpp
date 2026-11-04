@@ -392,7 +392,7 @@ static void vprocmain(Task *t)
     if (!sh->execed && !sh->killsig) {
         // Its own EXIT trap, set in the vproc
         sh->esc = &top;
-        if (sh->errexited) unwindtemp(sh, 0);
+        if (sh->errexited) unwind(sh, 0);
         if (!__builtin_setjmp(top.jmp)) {
             runexittrap(sh, *scratchat(sh, 0));
         }

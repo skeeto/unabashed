@@ -261,7 +261,11 @@ struct Undo {        // a redirection to reverse
     i32   fd;
     File *old;       // the descriptor's previous file, or null
     b32   psub;      // a procsub's /dev/fd/N: in the store, freed on unwind
-    b32   keep;      // exec's in a subshell: lasts until the subshell ends
+};
+
+struct Fdsave {      // descriptors to restore when a subshell ends
+    File **fd;
+    i32    top;
 };
 
 
@@ -771,20 +775,17 @@ static void fileunref(Shell *sh, File *f)
 
 // Point descriptor fd at f, taking over the caller's reference. With
 // keep set the change is permanent (exec), otherwise it is recorded in
-// the undo list.
+// the undo list. A subshell restores its descriptors with restorefds.
 static void fdset(Shell *sh, i32 fd, File *f, b32 keep, Arena *scratch)
 {
     Fdtab *t = sh->fds;
-    if (keep && !sh->subshell) {
+    if (keep) {
         fileunref(sh, t->fd[fd]);
     } else {
-        // A permanent change in a subshell is undone when it exits, so
-        // its record outlives the command's scratch
-        Undo *u = keep ? (Undo *)salloc(sh->store, sizeof(Undo)) : alloc<Undo>(scratch);
+        Undo *u = alloc<Undo>(scratch);
         u->fd   = fd;
         u->old  = t->fd[fd];
         u->psub = 0;
-        u->keep = keep;
         u->next = sh->undo;
         sh->undo = u;
     }
@@ -819,7 +820,6 @@ static void fdsetpsub(Shell *sh, i32 fd, File *f)
     u->fd   = fd;
     u->old  = t->fd[fd];
     u->psub = 1;
-    u->keep = 0;
     u->next = sh->undo;
     sh->undo = u;
     t->fd[fd] = f;
@@ -847,30 +847,38 @@ static void closepsubs(Shell *sh, Undo *to)
     }
 }
 
-// Undo the redirections of the commands being abandoned, back to a
-// saved point, keeping those exec made in a subshell: set -e leaves
-// the commands it abandons before the EXIT trap runs.
-static void unwindtemp(Shell *sh, Undo *to)
+// The descriptors of a subshell's parent, each with a reference of
+// its own: exec's changes in the subshell last until it ends.
+static Fdsave savefds(Shell *sh, Arena *a)
 {
     Fdtab *t = sh->fds;
-    for (Undo **p = &sh->undo; *p && *p != to;) {
-        Undo *u = *p;
-        if (u->keep) {
-            p = &u->next;
-            continue;
-        }
-        *p = u->next;
-        fileunref(sh, t->fd[u->fd]);
-        t->fd[u->fd] = u->old;
-        if (u->psub) sfree(sh->store, u, sizeof(Undo));
+    Fdsave r = {};
+    r.top = t->top;
+    r.fd  = alloc<File *>(a, r.top);
+    for (i32 fd = 0; fd < r.top; fd++) {
+        r.fd[fd] = t->fd[fd];
+        if (r.fd[fd]) r.fd[fd]->refs++;
     }
-    while (t->top && !t->fd[t->top-1]) {
-        t->top--;
+    return r;
+}
+
+// Put back the saved descriptors once the subshell's own redirections
+// are undone, closing whatever exec left open there.
+static void restorefds(Shell *sh, Fdsave s)
+{
+    Fdtab *t = sh->fds;
+    for (i32 fd = 0; fd < t->top; fd++) {
+        fileunref(sh, t->fd[fd]);
+        t->fd[fd] = fd<s.top ? s.fd[fd] : 0;
     }
+    for (i32 fd = t->top; fd < s.top; fd++) {
+        t->fd[fd] = s.fd[fd];
+    }
+    t->top = s.top;
 }
 
 // Make the redirections recorded since a saved point permanent, as if
-// made with keep set outside a subshell.
+// made with keep set.
 static void commitredirs(Shell *sh, Undo *to)
 {
     while (sh->undo != to) {

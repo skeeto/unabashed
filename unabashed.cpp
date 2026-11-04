@@ -740,7 +740,7 @@ static i32 sh_main(Os *os, OsInfo *info)
             sh->exiting = 0;
             checksigs(sh, scratch);
             sh->exiting = 1;
-            if (sh->errexited) unwindtemp(sh, 0);
+            if (sh->errexited) unwind(sh, 0);
             runexittrap(sh, scratch);
         }
     }

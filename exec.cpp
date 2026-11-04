@@ -452,6 +452,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
         sh->bgstats = 0;
         if (sh->coprocs) hidecoproc(sh, &scratch);
     }
+    Fdsave fds = savefds(sh, &scratch);
     if (cap) {
         File *out = newfile(sh, F_CAPTURE, OF_WRITE);
         out->cap = cap;
@@ -461,7 +462,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
         runjob(sh, j, scratch);
     }
     if (!sh->execed && !sh->killsig && sh->traps) {
-        if (sh->errexited) unwindtemp(sh, saved.undo);
+        if (sh->errexited) unwind(sh, saved.undo);
         runexittrap(sh, scratch);
     }
     i32 status = sh->status;
@@ -475,6 +476,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sigleave(sh, &sig);
     if (sh->jobs) orphanjobs(sh);  // its jobs run on
     unwind(sh, saved.undo);
+    restorefds(sh, fds);
     if (sh->psubs) {
         // Its procsubs end with it, once their descriptors are closed
         joinpsubs(sh);
@@ -1574,6 +1576,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         // No #! line: bash runs it as a shell script in a subshell
         Str src = readwholefile(sh, &a, path, &err);
         Shell saved = *sh;
+        Fdsave fds = savefds(sh, &a);
         Watermark w = storeenter(sh->store);
         Escape e = {};
         e.up = sh->esc;
@@ -1606,7 +1609,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
             runsource(sh, src, name, *scratchat(sh, sh->capdepth), 1);
         }
         if (!sh->execed && !sh->killsig && sh->traps) {
-            if (sh->errexited) unwindtemp(sh, saved.undo);
+            if (sh->errexited) unwind(sh, saved.undo);
             runexittrap(sh, *scratchat(sh, sh->capdepth));
         }
         i32 status = sh->status;
@@ -1614,6 +1617,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         i64 pid    = sh->bashpid;
         sigleave(sh, &sig);
         unwind(sh, saved.undo);
+        restorefds(sh, fds);
         joinpsubs(sh);
         storeleave(sh->store, &w);
         for (i32 i = 0; i < NPOOL; i++) saved.pool[i] = sh->pool[i];
