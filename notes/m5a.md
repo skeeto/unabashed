@@ -231,9 +231,14 @@ Taken (recommendations, revisit if the user disagrees):
 For the user, when they come up:
 - Trial projects beyond local binutils-gdb libiberty and zlib (xz and
   GNU make tarballs need a download).
-- The agent-batch gate: external programs and the agent's own spawn of
-  the shell cap the ratio near 1.3x, at most 2.6x (step 3 results), so
-  "≥5x Git Bash" needs redefining.
+
+Decided by the user (2026-11-04): the agent-batch gate is the shell's
+own time, ≥5x Git Bash's. Per command, the shell's share is the
+end-to-end time minus the time of the same external programs run
+directly (step 3 measured both); process creation of the shell itself
+counts as shell time. Step 3 put Git Bash's share at about 29 ms
+(50.8 - 21.3) against about 2 ms for unabashed beyond the 17-18 ms
+spawn floor, so the gate is mostly decided by our startup cost.
 
 
 ## Exit criteria checks
@@ -242,7 +247,9 @@ For the user, when they come up:
    recorded spec; `# vos` subset green in tests.exe on Windows and WSL.
 2. tools/w64trial: configure, make and make check pass, and config.h
    plus config.status substitutions equal a busybox sh run.
-3. Agent batch ≥5x Git Bash (medians of 5, matching checksums).
+3. Agent batch: the shell's own time (end to end minus the externals
+   run directly) ≥5x lower than Git Bash's (medians of 5, matching
+   checksums).
 4. Configure workload vs busybox sh, tables recorded.
 5. No regressions (t/parse, t/exec, chaos, oracle counts), t/win32 green
    with new 013-016, XP laptop runs t/win32, kernel32-only imports and

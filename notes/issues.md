@@ -65,13 +65,11 @@ gets checked. Rules:
   than that drive's cwd, rooted paths (`/x`, `\x`) always land on C:,
   case folding is ASCII only, `CON` and the other devices are all the
   null device, and `//./pipe/` cannot be listed. (m5a.md, step 4)
-- **The agent-batch gate cannot be met as written**: with process
-  creation at about 17 ms, unabashed with Git Bash's externals is about
-  1.25x Git Bash per command and at most 2.6x with free externals, not
-  5x (m5a.md, "Step 3"). The user picks the new gate (shell-only time,
-  one-shell batch, or vos instruction counts). The floor was measured
-  from a busybox driver; Claude Code spawns from node, which step 10's
-  CRT-free driver should stand in for.
+- **Agent-batch gate, redefined by the user**: the shell's own time
+  (end to end minus the externals run directly) ≥5x lower than Git
+  Bash's (m5a.md, Decisions). Not yet measured against it; the floor
+  was measured from a busybox driver, and Claude Code spawns from node,
+  which step 10's CRT-free driver should stand in for.
 - **t/msys and bench/agent are not write-confined**: MSYS2 programs
   cannot start at Low integrity, so they run under `sandbox -L` (job,
   limits, timeout, restricted token, medium integrity). Only the corpus
