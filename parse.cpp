@@ -531,6 +531,42 @@ static iz assignment(Str s, b32 compound)
 
 // Character input (bash's shell_getc)
 
+enum : i32 {     // carriage returns in parser input
+    CR_KEEP,     // as bash on POSIX
+    CR_ALL,      // drop every CR, as Git Bash's parser (msys2.md §4)
+    CR_CRLF,     // drop a CR before a newline, as busybox-w32 (busybox.md §3)
+};
+
+// Copy s to dst without the CRs mode drops, returning the new length.
+// dst may be s.data: the copy never runs ahead of the source.
+static iz squeezecr(u8 *dst, Str s, i32 mode)
+{
+    iz n = 0;
+    for (iz i = 0; i < s.len; i++) {
+        u8  c    = s[i];
+        b32 drop = c=='\r' && (mode==CR_ALL ||
+                               (mode==CR_CRLF && i+1<s.len && s[i+1]=='\n'));
+        if (!drop) dst[n++] = c;
+    }
+    return n;
+}
+
+// Parser input without the CRs mode drops: s itself when none goes,
+// otherwise a copy.
+static Str dropcr(Arena *a, Str s, i32 mode)
+{
+    if (mode == CR_KEEP) return s;
+    iz i = 0;
+    for (; i < s.len; i++) {
+        if (s[i]=='\r' && (mode==CR_ALL || (i+1<s.len && s[i+1]=='\n'))) break;
+    }
+    if (i == s.len) return s;
+    Str r = {};
+    r.data = allocbytes(a, s.len);
+    r.len  = squeezecr(r.data, s, mode);
+    return r;
+}
+
 // Whether all input has been consumed, reading more if there is any.
 static b32 srcend(Lexer *L)
 {

@@ -1452,7 +1452,7 @@ static void setposix(Shell *sh, b32 on)
 static i32 setoptionbyname(Shell *sh, Str name, b32 on)
 {
     for (i32 k = 0; k < O_COUNT; k++) {
-        if (setoptions[k].name == name) {
+        if (setoptions[k].name==name && hasoption(sh, k)) {
             if (k == O_POSIX) {
                 setposix(sh, on);
                 return 1;
@@ -1480,6 +1480,7 @@ static i32 setoptionbyname(Shell *sh, Str name, b32 on)
 static void listsetoptions(Shell *sh, b32 plusform)
 {
     for (i32 k = 0; k < O_COUNT; k++) {
+        if (!hasoption(sh, k)) continue;
         if (plusform) {
             bprint(sh, sh->opt[k] ? Str("set -o ") : Str("set +o "));
             bprint(sh, setoptions[k].name);
@@ -1630,6 +1631,7 @@ static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
             b32 on = oflag ? sh->opt[k] : sh->shopt[k];
             Str nm = oflag ? setoptions[k].name : shoptnames[k];
             if ((set && !on) || (unset && on)) continue;
+            if (!(oflag ? hasoption(sh, k) : hasshopt(sh, k))) continue;
             if (print) {
                 bprint(sh, oflag ? Str(on ? "set -o " : "set +o ") : Str(on ? "shopt -s " : "shopt -u "));
                 bprint(sh, nm);
@@ -1649,7 +1651,8 @@ static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
         b32 msys   = sh->pathmode == PM_MSYS;
         b32 hidden = !oflag && msysshopt(sh, args[i]);
         for (i32 k = 0; k < count; k++) {
-            if ((oflag ? setoptions[k].name : shoptnames[k]) == args[i]) idx = k;
+            b32 has = oflag ? hasoption(sh, k) : hasshopt(sh, k);
+            if (has && (oflag ? setoptions[k].name : shoptnames[k])==args[i]) idx = k;
         }
         if (idx<0 && !hidden) {
             builtinerror(sh, scratch, "shopt", concat(&scratch, args[i], oflag ? Str(": invalid option name") : Str(": invalid shell option name")));
@@ -1935,6 +1938,22 @@ static i32 readbyte(Shell *sh, i32 fd)
     return n==1 ? c : n<0 ? -2 : -1;
 }
 
+// The next byte of read's input: from the block read ahead, else from
+// the descriptor. -1 at the end, -2 on error, -3 on timeout.
+static i32 readnext(Shell *sh, i32 fd, u8 *ahead, iz *aoff, iz alen, i64 deadline)
+{
+    if (*aoff < alen) return ahead[(*aoff)++];
+    Task *self = sh->sched->cur;
+    self->deadline = deadline;
+    i32 c = readbyte(sh, fd);
+    self->deadline = 0;
+    if (self->timedout) {
+        self->timedout = 0;
+        return -3;
+    }
+    return c;
+}
+
 // Parse a read -t timeout, a non-negative decimal with an optional
 // fraction of which microseconds count, into nanoseconds. False if
 // invalid.
@@ -2101,6 +2120,10 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     i64 count = 0;
     Str s = {}, e = {};
     b32 done = 0;
+    // CRs on Windows: igncr drops them all (Git Bash, which otherwise
+    // keeps them), native mode a CR before the newline (busybox-w32)
+    b32 nocr = igncr(sh);
+    b32 crlf = sh->pathmode==PM_NATIVE && delim=='\n' && !exact;
     if (in && in->kind==F_MEM && (in->flags & OF_READ)) {
         // Text in memory (a here-document or here-string): scan it in
         // place, unless an escape needs the general loop
@@ -2119,8 +2142,12 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         iz  k = 0;
         b32 slash = 0;
-        for (; k<lim && (exact || rest[k]!=delim); k++) slash |= rest[k]=='\\' || !rest[k];
-        if (raw || !slash) {
+        b32 cr = 0;
+        for (; k<lim && (exact || rest[k]!=delim); k++) {
+            slash |= rest[k]=='\\' || !rest[k];
+            cr    |= rest[k] == '\r';
+        }
+        if ((raw || !slash) && !(cr && (nocr || crlf))) {
             b32 found = k < lim;
             s = clone(&scratch, takehead(rest, k));
             e = {alloc<u8>(&scratch, k), k};
@@ -2143,6 +2170,8 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     iz  alen = 0, aoff = 0;
     iz  look = 128;  // grows while lines are longer
     i32 pend = 0;  // continuation bytes of a UTF-8 character to come
+    enum { NOHELD = -4 };
+    i32 held = NOHELD;  // a byte read ahead past a CR
     for (; !done;) {
         if (nchars>=0 && count>=nchars && !pend) break;
         if (aoff==alen && seekable) {
@@ -2184,7 +2213,14 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             }
         }
         i32 c;
-        if (aoff < alen) {
+        if (held != NOHELD) {
+            c    = held;
+            held = NOHELD;
+            if (c == -3) {
+                timedout = 1;
+                break;
+            }
+        } else if (aoff < alen) {
             c = ahead[aoff++];
         } else {
             sh->intrread = self->introk = 1;
@@ -2206,18 +2242,29 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             eof = 1;
             break;
         }
+        if (crlf && c=='\r' && (nchars<0 || count+1<nchars)) {
+            // Native mode, as busybox-w32: CR LF ends the line
+            i32 d = readnext(sh, fd, ahead, &aoff, alen, deadline);
+            if (d == -3) {
+                timedout = 1;
+                break;
+            }
+            if (d == '\n') {
+                c = d;
+            } else {
+                held = d;
+            }
+        }
         if (c==delim && !exact) break;
         if (c=='\\' && !raw) {
-            i32 d;
-            if (aoff < alen) {
-                d = ahead[aoff++];
-            } else {
-                self->deadline = deadline;
-                d = readbyte(sh, fd);
-                self->deadline = 0;
+            i32 d = readnext(sh, fd, ahead, &aoff, alen, deadline);
+            if (crlf && d=='\r' && (nchars<0 || count+1<nchars)) {
+                // and so does backslash CR LF, a line continuation
+                i32 n = readnext(sh, fd, ahead, &aoff, alen, deadline);
+                if (n == '\n') continue;
+                held = n;
             }
-            if (self->timedout) {
-                self->timedout = 0;
+            if (d == -3) {
                 timedout = 1;
                 break;
             }
@@ -2232,6 +2279,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             continue;
         }
         if (!c) continue;  // bash drops null bytes
+        if (nocr && c=='\r') continue;  // igncr: CRs vanish, uncounted
         putbyte(&line, (u8)c);
         putbyte(&esc, 0);
         count += !sh->utf8 || charstart((u8)c, &pend);
@@ -3466,10 +3514,14 @@ static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
             }
             break;
         case CG_SETOPT:
-            for (i32 k = 0; k < O_COUNT; k++) names = push(a, names, setoptions[k].name);
+            for (i32 k = 0; k < O_COUNT; k++) {
+                if (hasoption(sh, k)) names = push(a, names, setoptions[k].name);
+            }
             break;
         case CG_SHOPT:
-            for (i32 k = 0; k < S_COUNT; k++) names = push(a, names, shoptnames[k]);
+            for (i32 k = 0; k < S_COUNT; k++) {
+                if (hasshopt(sh, k)) names = push(a, names, shoptnames[k]);
+            }
             break;
         }
         if (bit!=CG_BUILTIN && bit!=CG_KEYWORD) {

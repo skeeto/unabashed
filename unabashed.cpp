@@ -318,7 +318,7 @@ static void importopts(Shell *sh, Arena scratch, b32 shopt)
             continue;
         }
         for (i32 k = 0; k < S_COUNT; k++) {
-            if (shoptnames[k] != c.head) continue;
+            if (shoptnames[k]!=c.head || !hasshopt(sh, k)) continue;
             sh->shopt[k] = 1;
             if (k==S_ARRAY_EXPAND_ONCE || k==S_ASSOC_EXPAND_ONCE) {
                 sh->shopt[S_ARRAY_EXPAND_ONCE] = sh->shopt[S_ASSOC_EXPAND_ONCE] = 1;
@@ -744,7 +744,9 @@ static b32 fillstdin(void *ctx, Lexer *L)
         if (keep < n) os_seek(sh->os, f->h, keep-n, 1);
         b->len += keep;
     }
-    L->src = {b->data, b->len};
+    Str got = {b->data+start, b->len-start};
+    b->len  = start + squeezecr(got.data, got, crmode(sh));
+    L->src  = {b->data, b->len};
     return b->len > start;
 }
 

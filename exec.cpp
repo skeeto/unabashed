@@ -498,26 +498,35 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     return status;
 }
 
-static Str trimnewlines(Str s)
+// Drop trailing newlines, and with crlf the CR before each of them, as
+// Git Bash and busybox-w32 do: "a\r\r\n" keeps one CR.
+static Str trimnewlines(Str s, b32 crlf)
 {
-    while (s.len && s[s.len-1]=='\n') s.len--;
+    while (s.len && s[s.len-1]=='\n') {
+        s.len--;
+        if (crlf && s.len && s[s.len-1]=='\r') s.len--;
+    }
     return s;
 }
 
 // The result of a substitution from its output: as bash, drop NUL
-// bytes with a warning, then trailing newlines.
+// bytes with a warning (and with igncr every CR), then trailing
+// newlines.
 static Str capresult(Shell *sh, Arena scratch, Str s)
 {
-    iz n = 0;
+    b32 nocr = igncr(sh);
+    iz  n    = 0;
+    iz  nuls = 0;
     for (iz i = 0; i < s.len; i++) {
-        s[n] = s[i];
-        n += s[i] != 0;
+        s[n]  = s[i];
+        nuls += !s[i];
+        n    += s[i] && !(nocr && s[i]=='\r');
     }
-    if (n < s.len) {
+    if (nuls) {
         shellerror(sh, scratch, "warning: command substitution: ignored null byte in input");
     }
     s.len = n;
-    return trimnewlines(s);
+    return trimnewlines(s, sh->pathmode!=PM_POSIX);
 }
 
 static Str readwholefile(Shell *, Arena *, Str, i32 *);
@@ -2556,7 +2565,7 @@ static i32 envoption(void *ctx, Str name)
 {
     Shell *sh = ((TestCtx *)ctx)->sh;
     for (i32 i = 0; i < O_COUNT; i++) {
-        if (setoptions[i].name == name) return sh->opt[i];
+        if (setoptions[i].name==name && hasoption(sh, i)) return sh->opt[i];
     }
     return -1;
 }
@@ -3576,6 +3585,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
 {
     byte *beg = scratch.beg;
     byte *end = scratch.mem ? scratch.mem->limit : scratch.end;
+    src = dropcr(&scratch, src, crmode(sh));
     Lexer *L = newlexer(&scratch, src);
     L->fill          = fill;
     L->fillctx       = fillctx;

@@ -16,7 +16,7 @@
 
 enum : i32 {  // set -o, in listing order
     O_ALLEXPORT, O_BRACEEXPAND, O_EMACS, O_ERREXIT, O_ERRTRACE,
-    O_FUNCTRACE, O_HASHALL, O_HISTEXPAND, O_HISTORY, O_IGNOREEOF,
+    O_FUNCTRACE, O_HASHALL, O_HISTEXPAND, O_HISTORY, O_IGNCR, O_IGNOREEOF,
     O_INTERACTIVECOMMENTS, O_KEYWORD, O_MONITOR, O_NOCLOBBER, O_NOEXEC,
     O_NOGLOB, O_NOLOG, O_NOTIFY, O_NOUNSET, O_ONECMD, O_PHYSICAL,
     O_PIPEFAIL, O_POSIX, O_PRIVILEGED, O_VERBOSE, O_VI, O_XTRACE,
@@ -32,7 +32,7 @@ static SetOption setoptions[O_COUNT] = {
     {"allexport", 'a'},  {"braceexpand", 'B'}, {"emacs", 0},
     {"errexit", 'e'},    {"errtrace", 'E'},    {"functrace", 'T'},
     {"hashall", 'h'},    {"histexpand", 'H'},  {"history", 0},
-    {"ignoreeof", 0},    {"interactive-comments", 0},
+    {"igncr", 0},        {"ignoreeof", 0},     {"interactive-comments", 0},
     {"keyword", 'k'},    {"monitor", 'm'},     {"noclobber", 'C'},
     {"noexec", 'n'},     {"noglob", 'f'},      {"nolog", 0},
     {"notify", 'b'},     {"nounset", 'u'},     {"onecmd", 't'},
@@ -46,7 +46,7 @@ enum : i32 {  // shopt, in listing order
     S_BASH_SOURCE_FULLPATH, S_CDABLE_VARS, S_CDSPELL, S_CHECKHASH,
     S_CHECKJOBS, S_CHECKWINSIZE, S_CMDHIST, S_COMPAT31, S_COMPAT32,
     S_COMPAT40, S_COMPAT41, S_COMPAT42, S_COMPAT43, S_COMPAT44,
-    S_COMPLETE_FULLQUOTE, S_DIREXPAND, S_DIRSPELL, S_DOTGLOB, S_EXECFAIL,
+    S_COMPLETION_STRIP_EXE, S_COMPLETE_FULLQUOTE, S_DIREXPAND, S_DIRSPELL, S_DOTGLOB, S_EXECFAIL,
     S_EXPAND_ALIASES, S_EXTDEBUG, S_EXTGLOB, S_EXTQUOTE, S_FAILGLOB,
     S_FORCE_FIGNORE, S_GLOBASCIIRANGES, S_GLOBSKIPDOTS, S_GLOBSTAR,
     S_GNU_ERRFMT, S_HISTAPPEND, S_HISTREEDIT, S_HISTVERIFY,
@@ -65,7 +65,7 @@ static Str shoptnames[S_COUNT] = {
     "bash_source_fullpath", "cdable_vars", "cdspell", "checkhash",
     "checkjobs", "checkwinsize", "cmdhist", "compat31", "compat32",
     "compat40", "compat41", "compat42", "compat43", "compat44",
-    "complete_fullquote", "direxpand", "dirspell", "dotglob", "execfail",
+    "completion_strip_exe", "complete_fullquote", "direxpand", "dirspell", "dotglob", "execfail",
     "expand_aliases", "extdebug", "extglob", "extquote", "failglob",
     "force_fignore", "globasciiranges", "globskipdots", "globstar",
     "gnu_errfmt", "histappend", "histreedit", "histverify",
@@ -545,6 +545,38 @@ struct Shell {
     b32      errexited;    // set -e is ending this level
     i32      writeerr;     // why the last fdwrite failed
 };
+
+// Cygwin's extra options, set -o igncr and shopt completion_strip_exe,
+// exist only in msys mode, as in Git Bash. Elsewhere the lists, names
+// and SHELLOPTS/BASHOPTS are bash 5.3's.
+static b32 hasoption(Shell *sh, i32 k)
+{
+    return k!=O_IGNCR || sh->pathmode==PM_MSYS;
+}
+
+static b32 hasshopt(Shell *sh, i32 k)
+{
+    return k!=S_COMPLETION_STRIP_EXE || sh->pathmode==PM_MSYS;
+}
+
+// set -o igncr in effect: CRs vanish from command substitution output
+// and from what read splits, as in Cygwin's bash.
+static b32 igncr(Shell *sh)
+{
+    return sh->opt[O_IGNCR] && sh->pathmode==PM_MSYS;
+}
+
+// What the parser drops from its input: every CR in msys mode, each CR
+// of a CRLF pair in native mode, nothing in POSIX mode.
+static i32 crmode(Shell *sh)
+{
+    switch (sh->pathmode) {
+    case PM_MSYS:   return CR_ALL;
+    case PM_NATIVE: return CR_CRLF;
+    case PM_POSIX:  return CR_KEEP;
+    }
+    return CR_KEEP;
+}
 
 
 // Diagnostics

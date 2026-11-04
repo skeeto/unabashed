@@ -448,6 +448,7 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
         Buf b(a, 256);
         for (i32 k = 0; k < n; k++) {
             if (!(shopt ? sh->shopt[k] : sh->opt[k])) continue;
+            if (!(shopt ? hasshopt(sh, k) : hasoption(sh, k))) continue;
             if (b.len) putbyte(&b, ':');
             print(&b, shopt ? shoptnames[k] : setoptions[k].name);
         }
