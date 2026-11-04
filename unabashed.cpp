@@ -359,9 +359,11 @@ static void pathsetup(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
 
     Str root = takehead(sh->exe, sh->exe.len-lastpart(sh->exe).len);
     for (; root.len>3 && root[root.len-1]=='/'; root.len--) {}
+    Str bindir = {};  // the shell's directory when it is root/bin
     if (root.len>8 && equalfold(taketail(root, 8), "/usr/bin")) {
         root.len -= 8;
     } else if (root.len>4 && equalfold(taketail(root, 4), "/bin")) {
+        bindir = root;
         root.len -= 4;
     }
     if (!root.len) root = nativeroot(c->cwd);
@@ -384,6 +386,11 @@ static void pathsetup(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
     initmounts(c, perm, root, fstab);
     if (!fstab.data) {
         c->cygdrive = {};  // no fstab: /c is C:, as in every MSYS2 install
+        if (bindir.data) {
+            // w64devkit's layout has no usr/bin: /bin is the shell's
+            // own directory, so PATH survives a trip through msys form
+            addmount(c, perm, bindir, "/bin", 0, 0);
+        }
     }
     Str argv0    = info->nargs ? info->args[0] : sh->exe;
     sh->pathmode = personaof(argv0.len ? argv0 : Str("bash"), fstab.data!=0);

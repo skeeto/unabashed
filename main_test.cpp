@@ -334,7 +334,10 @@ static void wininfo(Os *os, OsInfo *info, Str exe, Str *env, iz nenv, Str cwd,
 
 // Run the shell with a fresh virtual OS state. The first argument is
 // $0, conventionally "bash".
-static Result runshell(Test *t, Str *args, iz nargs, Str input = {}, i32 pers = PERS_LINUX)
+// A Windows personality may give the raw command line in place of the
+// one quoted from args.
+static Result runshell(Test *t, Str *args, iz nargs, Str input = {},
+                       i32 pers = PERS_LINUX, Str cmdline = {})
 {
     Os *os = t->os;
     startrun(os, pers!=PERS_LINUX, input);
@@ -355,6 +358,7 @@ static Result runshell(Test *t, Str *args, iz nargs, Str input = {}, i32 pers = 
             "ComSpec=C:\\Windows\\System32\\cmd.exe",
             "LANG=C",
             "Path=C:\\w64\\bin;C:\\Windows\\System32",
+            "ProgramFiles(x86)=C:\\Program Files (x86)",
             "SystemRoot=C:\\Windows",
             "TEMP=C:\\Users\\oracle\\AppData\\Local\\Temp",
             "TMP=C:\\Users\\oracle\\AppData\\Local\\Temp",
@@ -372,6 +376,7 @@ static Result runshell(Test *t, Str *args, iz nargs, Str input = {}, i32 pers = 
         // a parent that quotes for Cygwin, so that a script given with
         // -c arrives as written in the msys shell's own split
         wininfo(os, &info, exe, e, countof(env), "C:/work", pers==PERS_MSYS);
+        if (cmdline.data) info.cmdline = cmdline;
     }
     return finishrun(os, &info);
 }
@@ -413,6 +418,31 @@ static void test_fibers(Test *t)
     Result r = runshell(t, args, countof(args));
     expect(t, "fiber selftest", r.out, "fibers: ok\n");
     expectint(t, "fiber selftest status", r.status, 0);
+}
+
+// Path modes at startup: -O/+O with the hidden msyspath, and the msys
+// shell's own split of its raw command line (globbing, quoting).
+static void test_pathmodes(Test *t)
+{
+    Str on[] = {"sh", "-O", "msyspath", "-c", "echo $PATH; shopt -p msyspath"};
+    Result r = runshell(t, on, countof(on), {}, PERS_NATIVE);
+    expect(t, "-O msyspath", r.out,
+        "/bin:/c/Windows/System32\nshopt -s msyspath\n");
+
+    Str off[] = {"bash", "+O", "msyspath", "-c", "echo $PATH $PWD"};
+    r = runshell(t, off, countof(off), {}, PERS_MSYS);
+    expect(t, "+O msyspath", r.out,
+        "C:/msys/usr/bin;C:/w64/bin;C:/Windows/System32 C:/work\n");
+
+    Str quoted[] = {"bash", "-c", "echo \"$@\"", "x", "a\\\\b", "/etc/*", "C:\\x"};
+    r = runshell(t, quoted, countof(quoted), {}, PERS_MSYS);
+    expect(t, "msys args intact", r.out, "a\\\\b /etc/* C:\\x\n");
+
+    Str raw[] = {"bash"};
+    r = runshell(t, raw, countof(raw), {}, PERS_MSYS,
+        "bash -c 'echo \"$@\"' x /etc/f* '/etc/f*' {a,b}c");
+    expect(t, "msys glob", r.out, "/etc/fstab /etc/f* ac bc\n");
+    expect(t, "msys glob err", r.err, "");
 }
 
 static void test_arena(Test *t)
@@ -1338,6 +1368,7 @@ int main(int argc, char **argv)
     test_sched(&t);
     test_sigpipe(&t);
     test_vwin(&t);
+    test_pathmodes(&t);
 
     if (argc>3 && (!strcmp(argv[1], "--oracle") || !strcmp(argv[1], "--oracle-v"))) {
         // --oracle SUITEDIR NAME...: bash test suite runs on the vos
