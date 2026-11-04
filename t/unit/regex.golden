@@ -228,3 +228,54 @@ u	[[.%C3%A9.]]	%C3%A9	err 3
 u	\w+	ab_c	(0,4)
 u	x*	%C3%A9	(0,0)
 u	a*\B	ca.	(2,2)
+
+# Back-references as glibc's get_subexp finds their spans: the initial
+# state takes a back-reference whose group closes in it to match empty,
+# set or not, so the end is reached through the empty alternative where
+# set_regs then cannot place it; only the lowest-numbered close node of
+# a group in a state counts; spans whose way went through a ^ after or
+# a $ before a newline the match consumed do not count; a reference
+# must satisfy what follows it.
+-	(|^())\2	a	nomatch
+-	(|^())\2a	ba	nomatch
+-	(|\b())\2	a	nomatch
+-	(|^(a|))\1	a	(0,0)(0,0)(-1,-1)
+-	(y|^(a|))\2	a	(0,0)(0,0)(0,0)
+i	(|y|||^(a|))\2	a	nomatch
+-	(|^())\1a	aabcd	(0,1)(0,0)(-1,-1)
+-	(a|\b|())\1\|	c|	(1,2)(1,1)(1,1)
+-	(a|\B)\1	%60ab	(0,0)(0,0)
+-	(\B|a)\1	%60ab	(0,0)(0,0)
+-	bcd(a|\b)\1	%60a%0A>bcd	(4,7)(7,7)
+i	a(a|\b|\b)\1	%E0a\(|*)%0Aa	(1,2)(2,2)
+i	(a|\b|\`)\1	%E0a\(d*)%0Aa	nomatch
+-	%80|a(\b)\1	``%ED\(),)%0Ba%80c	(9,10)(10,10)
+-	.^(a)\1	%0Aaa	nomatch
+u	.^(a())\1	%0Aaa%80	nomatch
+-	(.)^\1	%0A%0A	nomatch
+-	(a)$.\1	a%0Aa	nomatch
+-	x.(^a|a)\1	x%0Aaa	(0,4)(2,3)
+-	(|a)$\1|(a)\2	aa	(0,2)(-1,-1)(0,1)
+-	(a)\>\1|(a)\2	aa	(0,2)(-1,-1)(0,1)
+-	(a|\b)()$\1	aab	(3,3)(3,3)(3,3)
+-	(^|\b)aab\1	aa%0Aaab	(3,6)(3,3)
+-	($|)$\1	a	nomatch
+-	(|()$)$\1	a	nomatch
+-	(a|\b)(b|bc|)(a|\b)(b|bc|)(a|\(^^^|||bC_d)()\1	aa|\(^^^|||bC_d)()\1%0Aa	(0,2)(0,0)(0,0)(0,1)(1,1)(1,2)(2,2)
+u	(a|\b|bcka|||||())\1\'	)(c|bcd)(d*A%0AWbcd	nomatch
+i	(|a|%88|a|%88\||w|||Wb%01,B2Uv)$\1|||y|||((a|))\2	aa||aA)%FF%80|||	(0,2)(-1,-1)(0,1)(0,1)
+
+# In UTF-8, matches start inside a character only when glibc runs the
+# pattern byte by byte: no REG_ICASE, word anchors, or brackets with a
+# class, range, negation or multibyte character
+u	%A5x[y]	%C3%A5xy	(1,4)
+u	%A5x[^a]	%C3%A5xy	nomatch
+u	%A5x[a-z]	%C3%A5xy	nomatch
+u	%A5x\w	%C3%A5xy	nomatch
+u	%80x[^a]	%E2%80xy	(1,4)
+u	%80x[^a]	%E2%80%80xy	nomatch
+u	%A5|^	%C3%A5	(0,0)
+u	%A5[[.a.]]?	%C3%A5	(1,2)
+iu	%A5	%C3%A5	nomatch
+u	%A5%20%C3%BC***.*[%C3%A5%BC].	%7F)[%C3%A5%20%C3%BC%C3%A5&%C2d%C3%BC].&%C3	nomatch
+u	%80(||y)?[%7F-%80[%80,].	%E2%80%80%7F^%D1qN%7F%11%04[fW+	nomatch

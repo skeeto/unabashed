@@ -3,6 +3,7 @@
 //       -o regex_diff t/unit/regex_diff.cpp
 // $ ./regex_diff --random [SEED [COUNT]]   compare on generated cases
 // $ ./regex_diff --record <cases >golden   glibc's results for regex_test
+// $ ./regex_diff --show <cases             also ours, where they differ
 // $ ./regex_diff <case                     one case (AFL), trap on a difference
 //
 // Linux only: glibc is the reference. Everything happens in memory; the
@@ -356,7 +357,8 @@ int main(int argc, char **argv)
         return !!bad;
     }
 
-    if (argc>1 && !strcmp(argv[1], "--record")) {
+    b32 show = argc>1 && !strcmp(argv[1], "--show");
+    if (argc>1 && (show || !strcmp(argv[1], "--record"))) {
         Str src = readall(&perm, stdin);
         for (Cut c = cut(src, '\n'); c.head.len || c.tail.len; c = cut(c.tail, '\n')) {
             Str line = c.head;
@@ -371,9 +373,16 @@ int main(int argc, char **argv)
             Cut   f2 = cut(f1.tail, '\t');
             Str   pat = decode(&a, f2.head);
             Str   s   = decode(&a, f2.tail);
-            Str   r   = glibcrun(&a, pat, s, parseflags(f1.head));
+            i32   fl  = parseflags(f1.head);
+            Str   r   = glibcrun(&a, pat, s, fl);
             fwrite(line.data, 1, (uz)line.len, stdout);
-            printf("\t%.*s\n", (int)r.len, r.cdata);
+            printf("\t%.*s", (int)r.len, r.cdata);
+            if (show) {
+                Str o = ourrun(&a, pat, s, fl);
+                if (!o.data) o = "gaveup";
+                if (o != r) printf("\tours: %.*s", (int)o.len, o.cdata);
+            }
+            fputc('\n', stdout);
         }
         return 0;
     }

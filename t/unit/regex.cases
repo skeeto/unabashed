@@ -228,3 +228,54 @@ u	[[.%C3%A9.]]	%C3%A9
 u	\w+	ab_c
 u	x*	%C3%A9
 u	a*\B	ca.
+
+# Back-references as glibc's get_subexp finds their spans: the initial
+# state takes a back-reference whose group closes in it to match empty,
+# set or not, so the end is reached through the empty alternative where
+# set_regs then cannot place it; only the lowest-numbered close node of
+# a group in a state counts; spans whose way went through a ^ after or
+# a $ before a newline the match consumed do not count; a reference
+# must satisfy what follows it.
+-	(|^())\2	a
+-	(|^())\2a	ba
+-	(|\b())\2	a
+-	(|^(a|))\1	a
+-	(y|^(a|))\2	a
+i	(|y|||^(a|))\2	a
+-	(|^())\1a	aabcd
+-	(a|\b|())\1\|	c|
+-	(a|\B)\1	%60ab
+-	(\B|a)\1	%60ab
+-	bcd(a|\b)\1	%60a%0A>bcd
+i	a(a|\b|\b)\1	%E0a\(|*)%0Aa
+i	(a|\b|\`)\1	%E0a\(d*)%0Aa
+-	%80|a(\b)\1	``%ED\(),)%0Ba%80c
+-	.^(a)\1	%0Aaa
+u	.^(a())\1	%0Aaa%80
+-	(.)^\1	%0A%0A
+-	(a)$.\1	a%0Aa
+-	x.(^a|a)\1	x%0Aaa
+-	(|a)$\1|(a)\2	aa
+-	(a)\>\1|(a)\2	aa
+-	(a|\b)()$\1	aab
+-	(^|\b)aab\1	aa%0Aaab
+-	($|)$\1	a
+-	(|()$)$\1	a
+-	(a|\b)(b|bc|)(a|\b)(b|bc|)(a|\(^^^|||bC_d)()\1	aa|\(^^^|||bC_d)()\1%0Aa
+u	(a|\b|bcka|||||())\1\'	)(c|bcd)(d*A%0AWbcd
+i	(|a|%88|a|%88\||w|||Wb%01,B2Uv)$\1|||y|||((a|))\2	aa||aA)%FF%80|||
+
+# In UTF-8, matches start inside a character only when glibc runs the
+# pattern byte by byte: no REG_ICASE, word anchors, or brackets with a
+# class, range, negation or multibyte character
+u	%A5x[y]	%C3%A5xy
+u	%A5x[^a]	%C3%A5xy
+u	%A5x[a-z]	%C3%A5xy
+u	%A5x\w	%C3%A5xy
+u	%80x[^a]	%E2%80xy
+u	%80x[^a]	%E2%80%80xy
+u	%A5|^	%C3%A5
+u	%A5[[.a.]]?	%C3%A5
+iu	%A5	%C3%A5
+u	%A5%20%C3%BC***.*[%C3%A5%BC].	%7F)[%C3%A5%20%C3%BC%C3%A5&%C2d%C3%BC].&%C3
+u	%80(||y)?[%7F-%80[%80,].	%E2%80%80%7F^%D1qN%7F%11%04[fW+

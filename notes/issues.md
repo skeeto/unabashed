@@ -102,17 +102,10 @@ gets checked. Rules:
   back-references), and compiling
   `(()?((\b){1,2}((\')?(){0,1}(()*a*b*|[ab]?))*))+` (found by an
   old-against-new comparison of the regex.cpp memo; both verified to
-  hang bash 5.3 past 60 s too). (m4.md)
-- regex.cpp differs from glibc outside the documented classes, found
-  by a 20-minute `tools/fuzz regex` run (18 saved cases, every one
-  already so before the back-reference memo): a group with an empty
-  or anchor alternative before a back-reference, where glibc takes
-  the empty way (`(a|\b)()$\1` on `aab...` and `(^|\b)aab\1` on
-  `aa\naab`: glibc matches, we do not; `(a|\b)(b|bc|)...()\1` gives
-  other registers); `($|)$\1`, `(|()$)$\1` match at the end where
-  glibc does not; in C.UTF-8, brackets with a range from 0x7f to a
-  lone 0x80 byte (`\x80(||y)?[\x7f-\x80[\x80,].`) match where glibc
-  does not. (m4.md)
+  hang bash 5.3 past 60 s too), and `(\b$){1,}*\>\'` on `x\xFFcAB`
+  (regex_diff --random 4, case 2936180: glibc and ours both still
+  running after 15 s in a few MB; --random has no per-case timeout,
+  so that seed stops there). (m4.md)
 - Job control: `set -m`, fg/bg, stopped jobs, suspend (jobs oracle).
 - dirstack (pushd/popd/dirs), ulimit, help (dirstack, redir, vredir
   oracles).
