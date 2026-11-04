@@ -1,7 +1,8 @@
 // sandbox: run a program so that it can only write inside one directory
 // $ cc -nostartfiles -o sandbox.exe sandbox.cpp -ladvapi32
 //
-// usage: sandbox [-m MIB] [-p COUNT] [-t SECS] DIR -- PROGRAM [ARGS...]
+// usage: sandbox [-L] [-E NAME=VALUE]... [-m MIB] [-p COUNT] [-t SECS]
+//                DIR -- PROGRAM [ARGS...]
 //
 // Creates DIR (with parents) and gives it a Low mandatory integrity label,
 // then runs PROGRAM in DIR with a Low integrity, privilege-stripped copy of
@@ -15,6 +16,13 @@
 // Standard handles are inherited, and the exit status is PROGRAM's, or
 // 124 on timeout, 125 on a sandbox error, 126 if PROGRAM cannot run, 127
 // if it cannot be found. Background processes die when PROGRAM exits.
+//
+// With -E the environment is empty except for the -E variables (sorted,
+// the last of a repeated name winning), so runs are reproducible. -L
+// keeps the caller's integrity level: the token is still restricted and
+// the job, limits and timeout still apply, but writes are no longer
+// confined to DIR. It exists only to record curated scripts with
+// programs that cannot start at Low integrity (MSYS2, see t/msys).
 //
 // Windows XP has no integrity levels, so there it warns and relies on the
 // job object and the restricted token (no Administrators group) alone.
@@ -88,6 +96,7 @@ enum : i32 {
     CP_UTF8                          = 65001,
     CREATE_BREAKAWAY_FROM_JOB        = 0x01000000,
     CREATE_SUSPENDED                 = 0x00000004,
+    CREATE_UNICODE_ENVIRONMENT       = 0x00000400,
     DISABLE_MAX_PRIVILEGE            = 1,
     DUPLICATE_SAME_ACCESS            = 2,
     ERROR_FILE_NOT_FOUND             = 2,
@@ -325,7 +334,10 @@ static void report(Arena scratch, c16 const *msg, c16 const *arg, u32 err)
 [[noreturn]] static void usage(Arena scratch, i32 status)
 {
     static c16 const text[] =
-    u"usage: sandbox [-m MIB] [-p COUNT] [-t SECS] DIR -- PROGRAM [ARGS...]\n"
+    u"usage: sandbox [-L] [-E NAME=VALUE]... [-m MIB] [-p COUNT] [-t SECS]\n"
+    u"               DIR -- PROGRAM [ARGS...]\n"
+    u"  -E N=V    run with an empty environment plus each N=V given\n"
+    u"  -L        keep the caller's integrity level (curated scripts only)\n"
     u"  -m MIB    limit the committed memory of the process tree\n"
     u"  -p COUNT  limit the number of live processes in the tree\n"
     u"  -t SECS   kill the process tree after SECS seconds (status 124)\n"
@@ -417,14 +429,33 @@ static i32 parseint(Str16 s, i32 max)
     return r;
 }
 
-struct Config {
-    c16 *dir     = {};
-    c16 *line    = {};  // PROGRAM and ARGS, raw
-    c16 *program = {};  // unescaped, for messages
-    i32  mib     = {};
-    i32  procs   = {};
-    i32  secs    = {};
+struct EnvVar {
+    EnvVar *next = {};
+    Str16   var  = {};  // NAME=VALUE
 };
+
+struct Config {
+    c16    *dir     = {};
+    c16    *line    = {};  // PROGRAM and ARGS, raw
+    c16    *program = {};  // unescaped, for messages
+    EnvVar *env     = {};  // -E, most recent first
+    b32     setenv  = {};  // any -E: the environment is exactly env
+    b32     medium  = {};  // -L: keep the integrity level
+    i32     mib     = {};
+    i32     procs   = {};
+    i32     secs    = {};
+};
+
+static Str16 copy(Arena *a, Str16 s)
+{
+    Str16 r = {};
+    r.data = alloc<c16>(a, s.len+1);
+    r.len  = s.len;
+    for (iz i = 0; i < s.len; i++) {
+        r.data[i] = s.data[i];
+    }
+    return r;
+}
 
 static Config parseargs(Arena *perm, Arena scratch)
 {
@@ -446,6 +477,21 @@ static Config parseargs(Arena *perm, Arena scratch)
             break;
         } else if (equals(arg.val, u"-h")) {
             usage(scratch, 0);
+        } else if (equals(arg.val, u"-L")) {
+            r.medium = 1;
+        } else if (equals(arg.val, u"-E")) {
+            Arg val = nextarg(&scratch, cmd, i);
+            i = val.end;
+            iz eq = 0;
+            for (; eq<val.val.len && val.val.data[eq]!='='; eq++) {}
+            if (!eq || eq==val.val.len) {
+                fail(scratch, u"-E wants NAME=VALUE", val.val.data, 0);
+            }
+            EnvVar *v = alloc<EnvVar>(perm);
+            v->var  = copy(perm, val.val);
+            v->next = r.env;
+            r.env   = v;
+            r.setenv = 1;
         } else if (equals(arg.val, u"-m") || equals(arg.val, u"-p") ||
                    equals(arg.val, u"-t")) {
             Arg val = nextarg(&scratch, cmd, i);
@@ -541,8 +587,8 @@ static void labeldir(Arena scratch, c16 *path)
 
 // Make a primary token like the caller's, but with no privileges beyond
 // SeChangeNotifyPrivilege, Administrators as deny-only, and Low integrity
-// when available.
-static uz maketoken(Arena scratch)
+// when available, unless medium (-L), which keeps the caller's level.
+static uz maketoken(Arena scratch, b32 medium)
 {
     uz self = 0;
     if (!OpenProcessToken(GetCurrentProcess(),
@@ -564,7 +610,7 @@ static uz maketoken(Arena scratch)
     }
     CloseHandle(self);
 
-    if (hasintegrity()) {
+    if (!medium && hasintegrity()) {
         SidAuthority     ml    = {{0, 0, 0, 0, 0, 16}};
         SidAndAttributes label = {};
         if (!AllocateAndInitializeSid(&ml, 1, 0x1000, 0, 0, 0, 0, 0, 0, 0,
@@ -606,6 +652,59 @@ static uz makejob(Arena scratch, Config *c)
     return job;
 }
 
+// Compare variable names as Windows sorts them: by uppercased code unit.
+static i32 namecmp(Str16 a, Str16 b)
+{
+    for (iz i = 0;; i++) {
+        c16 x = i<a.len && a.data[i]!='=' ? a.data[i] : 0;
+        c16 y = i<b.len && b.data[i]!='=' ? b.data[i] : 0;
+        x = x>='a' && x<='z' ? (c16)(x - 32) : x;
+        y = y>='a' && y<='z' ? (c16)(y - 32) : y;
+        if (x != y) return x<y ? -1 : +1;
+        if (!x) return 0;
+    }
+}
+
+// Build a sorted environment block from the -E variables. For a name
+// given more than once the last one wins.
+static c16 *makeenv(Arena *perm, Arena scratch, EnvVar *env)
+{
+    iz count = 0;
+    iz units = 2;
+    for (EnvVar *v = env; v; v = v->next) {
+        count++;
+        units += v->var.len + 1;
+    }
+    Str16 *vars = alloc<Str16>(&scratch, count);
+    iz     n    = 0;
+    for (EnvVar *v = env; v; v = v->next) {  // most recent first
+        iz i = 0;
+        for (; i<n && namecmp(vars[i], v->var)<0; i++) {}
+        if (i<n && !namecmp(vars[i], v->var)) {
+            continue;  // overridden by a later -E
+        }
+        for (iz k = n; k > i; k--) {
+            vars[k] = vars[k-1];
+        }
+        vars[i] = v->var;
+        n++;
+    }
+
+    c16 *block = alloc<c16>(perm, units);
+    iz   len   = 0;
+    for (iz i = 0; i < n; i++) {
+        for (iz k = 0; k < vars[i].len; k++) {
+            block[len++] = vars[i].data[k];
+        }
+        block[len++] = 0;
+    }
+    if (!n) {
+        block[len++] = 0;  // an empty block still has two terminators
+    }
+    block[len] = 0;
+    return block;
+}
+
 static uz inheritable(i32 which)
 {
     uz h = GetStdHandle(which);
@@ -642,8 +741,9 @@ void mainCRTStartup()
         report(scratch, u"warning: no integrity levels before Vista, "
                         u"confining only the process tree", 0, 0);
     }
-    uz token = maketoken(scratch);
-    uz job   = makejob(scratch, &c);
+    uz   token = maketoken(scratch, c.medium);
+    uz   job   = makejob(scratch, &c);
+    c16 *env   = c.setenv ? makeenv(&perm, scratch, c.env) : 0;
 
     // Crashes should end the test, not open a dialog. Inherited.
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -659,9 +759,9 @@ void mainCRTStartup()
     // anything. Before Windows 8 a process cannot be in two jobs, so if
     // the sandbox itself runs in one, try again outside it.
     ProcessInfo pi    = {};
-    u32         flags = CREATE_SUSPENDED;
+    u32         flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT;
     for (;;) {
-        if (!CreateProcessAsUserW(token, 0, c.line, 0, 0, 1, flags, 0, dir,
+        if (!CreateProcessAsUserW(token, 0, c.line, 0, 0, 1, flags, env, dir,
                                   &si, &pi)) {
             u32 err = GetLastError();
             if (flags & CREATE_BREAKAWAY_FROM_JOB) {
