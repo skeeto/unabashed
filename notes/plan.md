@@ -289,6 +289,10 @@ Research and design reports (about 440 KB, our own summaries with bash source li
 
 ## Milestones (each ends runnable, with exit criteria)
 
+Open issues are tracked in `notes/issues.md`, each assigned to a
+milestone. Every milestone's exit criteria include: each item assigned
+to it is fixed, or moved to a later milestone with a reason.
+
 | | Deliverable | Exit criteria |
 |---|---|---|
 | **M0** Foundation | `git init`; copy reports to `notes/`; base, Mem, API table; the 4 layers plus oracle stub; fibers on all layers; vos skeleton; `Dockerfile.bash53` and `tools/record`; sandbox runner; `-c 'echo hi; exit 3'` | x64 and i686 cross-builds; no CRT imports; PE 5.01; runs on XP; fiber ping-pong on every layer |
