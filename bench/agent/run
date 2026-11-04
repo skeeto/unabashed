@@ -1,0 +1,99 @@
+#!/bin/sh
+# bench/agent/run: time a draft batch of typical agent commands, each run
+# as Claude Code's Bash tool runs it: `SHELL -c WRAPPER` with the command
+# inside the wrapper's eval (notes/research/msys2.md section 7).
+#
+# usage: bench/agent/run [-n RUNS] WORKDIR [SHELL]
+#
+# SHELL defaults to $GITBASH (C:/Users/wellons/git/usr/bin/bash.exe).
+# Everything runs in tools/sandbox (-L: MSYS2 programs cannot start at
+# Low integrity) in WORKDIR, outside the repository, with a fixed
+# environment and a scratch git repository. Each of RUNS rounds (5)
+# times these modes over the batch (bench/agent/batch.txt), one process
+# per command, and the medians are printed in milliseconds:
+#   full   SHELL -c WRAPPER(command): what an agent waits for
+#   noop   SHELL -c WRAPPER(:): shell startup, snapshot and wrapper
+#   exit   SHELL -c exit: bare shell startup
+#   ext    the command's external programs alone, run by busybox sh
+#   empty  the driver loop alone
+# so full-ext estimates the shell's share. BENCH_MODES picks modes; a
+# shell that does not yet understand MSYS2 paths should run only "exit
+# noop", since the batch is meant for one that does (curated commands,
+# writes only in the scratch repository and $TMP). Runs under
+# w64devkit's sh.
+set -u
+bench=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$bench/../.." && pwd)
+. "$root/t/msys/lib.sh"
+runs=5
+if [ "${1-}" = -n ]; then
+    runs=$2
+    shift 2
+fi
+if [ $# -lt 1 ]; then
+    echo "usage: bench/agent/run [-n RUNS] WORKDIR [SHELL]" >&2
+    exit 2
+fi
+work=$(msys_workdir "$1") || exit 2
+shell=${2:-$gitbash}
+case $work in
+"$root"|"$root"/*) echo "$0: WORKDIR must be outside the repository" >&2; exit 2 ;;
+esac
+gitroot=$(msys_abs "$(dirname "$gitbash")/../..") || exit 2
+w64=$(msys_abs "$(dirname "$(command -v cc)")/..") || exit 2
+sysroot=${SYSTEMROOT:-'C:\Windows'}
+# The sandbox labels its directory Low, and a program started from a
+# Low-labelled file runs at Low integrity, so keep bin out of it.
+run=$work/run
+mkdir -p "$work/bin" "$run/home" "$run/tmp" || exit 2
+if [ ! -e "$work/bin/sandbox.exe" ] || [ "$root/tools/sandbox.cpp" -nt "$work/bin/sandbox.exe" ]; then
+    cc -nostartfiles -o "$work/bin/sandbox.exe" "$root/tools/sandbox.cpp" \
+       -ladvapi32 || exit 2
+fi
+cp "$bench/snapshot.sh" "$run/snapshot.sh" || exit 2
+
+posix() { printf '/%s%s' "$(printf '%s' "$1" | cut -c1 | tr A-Z a-z)" "${1#?:}"; }
+win() { printf '%s' "$1" | tr / '\\'; }
+
+# drive MODE: run the driver in the sandbox, print its output
+drive() {
+    path=$(win "$gitroot/mingw64/bin;$gitroot/usr/bin;$w64/bin;$sysroot/System32")
+    "$work/bin/sandbox.exe" -L -t 600 -p 64 \
+        -E "PATH=$path" -E "SYSTEMROOT=$sysroot" \
+        -E "COMSPEC=$sysroot\\System32\\cmd.exe" \
+        -E "HOME=$(win "$run/home")" -E "TEMP=$(win "$run/tmp")" \
+        -E "TMP=$(win "$run/tmp")" -E LANG=C -E TZ=UTC \
+        -E GIT_CONFIG_NOSYSTEM=1 \
+        -E "BENCH=$bench" -E "SHELLEXE=$shell" \
+        -E "U=$gitroot/usr/bin" -E "M=$gitroot/mingw64/bin" \
+        -E "REPO=$run/repo" -E "REPOU=$(posix "$run/repo")" \
+        -E "SNAPU=$(posix "$run/snapshot.sh")" \
+        -E "CWDU=$(posix "$run/tmp/claude-cwd")" \
+        -E "TMPW=$(win "$run/tmp")" \
+        "$run" -- busybox.exe sh "$bench/driver.sh" "$1"
+}
+
+rm -rf "$run/repo"
+drive setup >/dev/null || { echo "$0: setup failed" >&2; exit 1; }
+drive prep || { echo "$0: prep failed" >&2; exit 1; }
+
+modes=${BENCH_MODES:-full noop exit ext empty}
+for m in $modes; do : >"$work/times.$m"; done
+sum=
+r=0
+while [ $r -lt "$runs" ]; do
+    for m in $modes; do
+        drive $m >>"$work/times.$m" || exit 1
+    done
+    s=$( (cksum <"$run/out.full") 2>/dev/null)
+    [ -z "$sum" ] && sum=$s
+    [ "$s" = "$sum" ] || echo "$0: output of round $r differs" >&2
+    r=$((r+1))
+done
+
+n=$(wc -l <"$bench/batch.txt")
+echo "$n commands, $runs rounds, medians in ms ($shell)"
+for m in $modes; do
+    med=$(sort -n "$work/times.$m" | sed -n "$(( (runs+1)/2 ))p")
+    printf '%-6s %6d  %5d per command\n' $m "$med" $((med/n))
+done

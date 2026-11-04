@@ -1,0 +1,52 @@
+ls ### $U/ls.exe
+ls -l src ### $U/ls.exe -l src
+pwd ###
+cd src && ls ### cd src && $U/ls.exe
+cat README.md ### $U/cat.exe README.md
+head -20 src/main.c ### $U/head.exe -20 src/main.c
+tail -5 src/main.c ### $U/tail.exe -5 src/main.c
+wc -l src/*.c ### $U/wc.exe -l src/main.c src/util.c
+grep -rn TODO src ### $U/grep.exe -rn TODO src
+grep -c include src/main.c ### $U/grep.exe -c include src/main.c
+grep -rl static src | sort ### $U/grep.exe -rl static src | $U/sort.exe
+sed -n '1,10p' src/util.c ### $U/sed.exe -n 1,10p src/util.c
+sed 's/foo/bar/g' notes.txt | head -3 ### $U/sed.exe s/foo/bar/g notes.txt | $U/head.exe -3
+find src -name '*.c' | sort ### $U/find.exe src -name '*.c' | $U/sort.exe
+find . -type f -name '*.h' | wc -l ### $U/find.exe . -type f -name '*.h' | $U/wc.exe -l
+[[ -f README.md ]] && echo yes ###
+[[ -d build ]] || echo no ###
+mkdir -p build/out && ls build ### $U/mkdir.exe -p build/out && $U/ls.exe build
+rm -rf build && echo cleaned ### $U/rm.exe -rf build
+echo "$(pwd)" ###
+cd @REPO@/src && pwd ###
+ls /c/Windows/System32/drivers/etc ### $U/ls.exe C:/Windows/System32/drivers/etc
+cat /c/Windows/System32/drivers/etc/hosts | wc -l ### $U/cat.exe C:/Windows/System32/drivers/etc/hosts | $U/wc.exe -l
+git status ### $M/git.exe status
+git status --short ### $M/git.exe status --short
+git log --oneline -5 ### $M/git.exe log --oneline -5
+git diff --stat ### $M/git.exe diff --stat
+git branch ### $M/git.exe branch
+git rev-parse --show-toplevel ### $M/git.exe rev-parse --show-toplevel
+echo hello > tmp.txt && cat tmp.txt && rm tmp.txt ### $U/cat.exe README.md >/dev/null && $U/rm.exe -f nosuch
+printf '%s\n' c a b | sort -r ### $U/sort.exe -r README.md
+for f in src/*.c; do echo "$f"; done ###
+ls src | wc -l ### $U/ls.exe src | $U/wc.exe -l
+cat src/main.c | grep -v '^$' | wc -l ### $U/cat.exe src/main.c | $U/grep.exe -v '^$' | $U/wc.exe -l
+diff src/a.txt src/b.txt || true ### $U/diff.exe src/a.txt src/b.txt
+cp README.md "$TMP/x.md" && rm "$TMP/x.md" ###$U/cp.exe README.md x.md && $U/rm.exe x.md
+test -e package.json || echo missing ###
+which grep ### $U/which.exe grep
+command -v git ###
+echo "$HOME" ###
+uname -s ### $U/uname.exe -s
+basename "$(pwd)" ### $U/basename.exe x/y
+dirname /c/Users/x/y ### $U/dirname.exe C:/Users/x/y
+ls -1 src | head -3 ### $U/ls.exe -1 src | $U/head.exe -3
+stat -c %s README.md ### $U/stat.exe -c %s README.md
+tr a-z A-Z < README.md | head -2 ### $U/tr.exe a-z A-Z <README.md | $U/head.exe -2
+awk '{print $1}' notes.txt | sort | uniq -c ### $U/awk.exe '{print $1}' notes.txt | $U/sort.exe | $U/uniq.exe -c
+cut -d' ' -f1 notes.txt | head ### $U/cut.exe -d' ' -f1 notes.txt | $U/head.exe
+printf 'a\nb\n' | xargs echo ### $U/xargs.exe $U/echo.exe <notes.txt
+sort notes.txt | uniq | wc -l ### $U/sort.exe notes.txt | $U/uniq.exe | $U/wc.exe -l
+cygpath -w "$(pwd)" ### $U/cygpath.exe -w .
+env | grep -c '^PATH=' ### $U/env.exe | $U/grep.exe -c '^PATH='
