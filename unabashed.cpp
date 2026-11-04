@@ -275,16 +275,29 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
 }
 
 // A non-interactive shell first runs the file BASH_ENV names, after
-// expanding it, unless in POSIX mode.
+// expanding it, unless in POSIX mode. A missing file is no error, and
+// others are reported without a line number.
 static void sourcebashenv(Shell *sh, Arena scratch)
 {
     Got g = getvar(sh, &scratch, "BASH_ENV");
     if (sh->opt[O_POSIX] || !g.value.len) return;
-    Str file = expandstring(sh, &scratch, g.value);
-    i32 err;
-    Str src = readwholefile(sh, &scratch, file, &err);
-    if (err) {
-        shellerror(sh, scratch, concat3(&scratch, file, ": ", errtext(err)));
+    Str  file = expandfilename(sh, &scratch, g.value);
+    if (!file.len) return;
+    i32  err;
+    Str  src = readwholefile(sh, &scratch, file, &err);
+    Stat st  = os_stat(sh->os, scratch, absolute(sh, &scratch, file), 1);
+    if (err == E_NOENT) return;
+    Str bad = err ? errtext(err) : Str{};
+    if (!err && !st.err && st.type==FT_DIR) bad = "is a directory";
+    if (bad.data) {
+        Buf b(&scratch, 64);
+        print(&b, errname(sh));
+        print(&b, ": ");
+        print(&b, file);
+        print(&b, ": ");
+        print(&b, bad);
+        putbyte(&b, '\n');
+        fdwrite(sh, 2, finish(&b));
         return;
     }
     runsource(sh, src, file, scratch);

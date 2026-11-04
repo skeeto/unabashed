@@ -98,6 +98,8 @@ gets checked. Rules:
 - `${!c[@]:N}` on an unset `c` expands to nothing; bash reports an
   invalid indirect expansion. `read -t` of 2^31 seconds or more is
   rejected; bash wraps. (review)
+- A `~user` tilde prefix is left as is; bash looks the user's home
+  up (`~root/x` is `/root/x`), in words and in BASH_ENV. (review)
 
 
 ## M8 (performance)

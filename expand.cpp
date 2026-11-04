@@ -2528,6 +2528,21 @@ static Str expandheredoc(Shell *sh, Arena *a, Str body)
     return finish(&x->data);
 }
 
+// Expand a startup file name, such as BASH_ENV: as in double quotes,
+// with " literal, then a leading tilde prefix.
+static Str expandfilename(Shell *sh, Arena *a, Str text)
+{
+    X *x = newx(sh, a);
+    x->nosplit = 1;
+    expandinto(x, text, XC_DQUOTE|XC_PROMPT);
+    Str r = finish(&x->data);
+    if (!r.len || r[0]!='~') return r;
+    Str prefix = cut(cuthead(r, 1), '/').head;
+    b32 ok;
+    Str home = tildeprefix(x, prefix, &ok);
+    return ok ? concat(a, home, cuthead(r, 1+prefix.len)) : r;
+}
+
 
 // Array assignments
 

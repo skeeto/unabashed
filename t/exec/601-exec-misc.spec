@@ -1,4 +1,4 @@
-== stdout 158
+== stdout 279
 st=127
 st=126
 st=126
@@ -22,8 +22,26 @@ sourced
 body
 sourced
 expanded
+dquote
+squote
+procsub
+glob
+backslash
+sourced
+cmdsub
+sourced
+param
+empty
+sourced
+tilde
+notilde
+home
+dir
+st=0
+missing
+st=0
 
-== stderr 383
+== stderr 447
 bash: line 3: exec: nothere: not found
 bash: line 4: exec: dir: cannot execute: Is a directory
 bash: line 5: /home/oracle/dir: Is a directory
@@ -33,8 +51,10 @@ bash: line 17: nothere: command not found
 ./bin: ./bin: cannot execute binary file
 dir: dir: Is a directory
 ./bin: line 1: $'\177ELF': command not found
+bash: /home/oracle: is a directory
+bash: envdir: is a directory
 
-== merged 541
+== merged 726
 bash: line 3: exec: nothere: not found
 st=127
 bash: line 4: exec: dir: cannot execute: Is a directory
@@ -67,5 +87,25 @@ sourced
 body
 sourced
 expanded
+dquote
+squote
+procsub
+glob
+backslash
+sourced
+cmdsub
+sourced
+param
+empty
+sourced
+tilde
+notilde
+bash: /home/oracle: is a directory
+home
+bash: envdir: is a directory
+dir
+st=0
+missing
+st=0
 
 == status 0
