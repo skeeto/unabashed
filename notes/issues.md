@@ -100,20 +100,13 @@ gets checked. Rules:
   rejected; bash wraps. (review)
 - A `~user` tilde prefix is left as is; bash looks the user's home
   up (`~root/x` is `/root/x`), in words and in BASH_ENV. (review)
-- exec run by eval, a function or `${ ...; }` inside a subshell is
-  undone when the enclosing simple command ends:
-  `( eval 'exec 2>/dev/null'; nosuch )` reports the error, bash does
-  not. The command's unwind pops exec's keep records. (fuzz triage)
 - `${ prog & }`, a program started straight in the background (not
   a vproc job, procsub or coprocess), holds up the substitution until
   it closes its output: its pump has no owner to check, so endcapture
   joins it; bash reads the substitution's file at once. In bash that
   file is on the lowest free descriptor from 3, so
   `${ exec 3>/dev/null; echo a; }` is empty there, and fd 3 is closed
-  after it. A fatal error
-  in `${ ...; }` restores stdout before the EXIT trap, as `bash -c`
-  and eval do; reading a script file, bash leaves it on the
-  substitution and the trap's output is lost. (fuzz triage)
+  after it. (fuzz triage)
 
 
 ## M8 (performance)

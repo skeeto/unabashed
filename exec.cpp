@@ -1843,7 +1843,14 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
     sh->loopdepth = loopdepth;
     leaveframe(sh, &f);
     if (cap) {
-        unwind(sh, mark);
+        // As bash, the exit builtin, and anything that ends a subshell,
+        // runs the EXIT trap with the redirections still in place, fd 1
+        // included, so the trap writes nowhere. Their records stay for
+        // the handler, in this depth's scratch, which stays reserved.
+        b32 ends = e.why==ESC_EXIT || e.why==ESC_FATAL || e.why==ESC_DISCARD;
+        b32 keep = escaped && ((e.why==ESC_EXIT && sh->exitcalled) ||
+                               (ends && sh->subshell));
+        if (!keep) unwind(sh, mark);
         endcapture(sh, cap, scratch);
     }
     if (escaped) {
