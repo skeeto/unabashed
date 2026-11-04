@@ -23,7 +23,7 @@ static void     execute(Shell *, Node *, Arena);
 static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i32 line = 1,
                           b32 (*fill)(void *, Lexer *) = 0, void *fillctx = 0,
                           b32 comsub = 0);
-static Str      runfunsub(Shell *, Arena *, Str src, b32 valsub, Arena);
+static Str      runfunsub(Shell *, Arena *, Str src, Capture *, Arena);
 static i32      compatlevel(Shell *);  // builtins.cpp
 static void     joinpsubs(Shell *);
 static void     closeall(Shell *);
@@ -540,6 +540,32 @@ static Word *fileread(Shell *sh, Arena *a, Str src)
     return n->redirs->word;
 }
 
+// Finish a capture once its command is done: wait until every pump
+// has seen EOF, and point the descriptors still on it at /dev/null.
+// Those are what exec left in ${ ...; } (exec 2>&1), which in bash
+// write to the substitution's file after no one reads it.
+static void endcapture(Shell *sh, Capture *c, Arena scratch)
+{
+    Fdtab *fds = sh->fds;
+    for (i32 fd = 0; fd < fds->top; fd++) {
+        File *f = fds->fd[fd];
+        if (!f || f->kind!=F_CAPTURE || f->cap!=&c->b) continue;
+        Opened o = os_open(sh->os, scratch, "/dev/null", OF_WRITE, 0);
+        f->kind = F_OS;  // in place: descriptors sharing it follow
+        f->cap  = 0;
+        f->h    = o.err ? BADHANDLE : o.h;
+        if (o.err) f->flags = 0;  // writes fail
+    }
+    while (c->pumps) {
+        Task *t = c->pumps;
+        c->pumps = t->sib;
+        Pump *p = (Pump *)t->arg;
+        taskjoin(sh->sched, t);
+        p->next = sh->sched->freepumps;
+        sh->sched->freepumps = p;
+    }
+}
+
 // Run a command substitution and return its output, without trailing
 // newlines. kind: 0 $(...), 1 `...`, 2 ${ ...; }.
 static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
@@ -579,18 +605,13 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
     j.comsub = kind == 0;
     if (kind==2 && src.len && src[0]=='|') {
         // ${| cmd; }: the current shell, expanding to a local REPLY
-        Str val = runfunsub(sh, a, cuthead(src, 1), 1, child);
+        Str val = runfunsub(sh, a, cuthead(src, 1), 0, child);
         sh->capdepth = depth - 1;
         sh->current = 0;
         return val;
     } else if (kind == 2) {
         // ${ cmd; }: the current shell, with only fd 1 redirected
-        Undo *mark = sh->undo;
-        File *f = newfile(sh, F_CAPTURE, OF_WRITE);
-        f->cap = cap;
-        fdset(sh, 1, f, 0, &child);
-        runfunsub(sh, a, src, 0, child);
-        unwind(sh, mark);
+        runfunsub(sh, a, src, capture, child);
     } else {
         b32 errexit = sh->opt[O_ERREXIT];
         b32 verbose = sh->opt[O_VERBOSE];
@@ -610,18 +631,10 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
         sh->noreport = noreport;
         sh->opt[O_ERREXIT] = errexit;
         sh->opt[O_VERBOSE] = verbose;
+        endcapture(sh, capture, child);
     }
     sh->capdepth = depth - 1;
     sh->current = 0;
-    // EOF waits for every writer
-    while (capture->pumps) {
-        Task *t = capture->pumps;
-        capture->pumps = t->sib;
-        Pump *p = (Pump *)t->arg;
-        taskjoin(sh->sched, t);
-        p->next = sh->sched->freepumps;
-        sh->sched->freepumps = p;
-    }
     return capresult(sh, *a, finish(cap));
 }
 
@@ -1741,11 +1754,20 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
 
 // Run a ${ cmd; } body in the current shell as bash does: like a
 // function call for local and return, but with the caller's FUNCNAME
-// and positional parameters. With valsub, ${| cmd; }, REPLY is local
-// and its final value, copied to a, is the result.
-static Str runfunsub(Shell *sh, Arena *a, Str src, b32 valsub, Arena scratch)
+// and positional parameters, and its standard output collected in cap.
+// Without cap, ${| cmd; }, REPLY is local and its final value, copied
+// to a, is the result. The capture ends here even when the body
+// escapes, since its memory goes with the caller's frame.
+static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
 {
     checkstack(sh);
+    b32   valsub = !cap;
+    Undo *mark   = sh->undo;
+    if (cap) {
+        File *out = newfile(sh, F_CAPTURE, OF_WRITE);
+        out->cap = &cap->b;
+        fdset(sh, 1, out, 0, &scratch);
+    }
     Frame f = {};
     if (sh->frame) {
         f.name = sh->frame->name;
@@ -1789,6 +1811,10 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, b32 valsub, Arena scratch)
     }
     sh->loopdepth = loopdepth;
     leaveframe(sh, &f);
+    if (cap) {
+        unwind(sh, mark);
+        endcapture(sh, cap, scratch);
+    }
     if (escaped) {
         escape(sh, e.why);
     }
