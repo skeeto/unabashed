@@ -392,6 +392,38 @@ static void test_sched(Test *t)
     freesched(s);
 }
 
+// A stage sent SIGINT dies of it, not of SIGPIPE, even when its reader
+// died first and its next write finds no reader: in bash the terminal
+// signals every stage at once. Not a spec, as bash itself races here
+// when the signal comes from kill. Lines longer than a pipe holds keep
+// the writer inside its write while its reader goes away.
+static void test_sigpipe(Test *t)
+{
+    Str script =
+        "big=x\n"
+        "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do big=$big$big; done\n"
+        "f() { echo $BASHPID; while :; do echo \"$big\"; done; }\n"
+        "f | { read w; kill -INT $w; }\n"
+        "echo \"${PIPESTATUS[*]}\"\n"
+        "f | { read w; kill -INT $w $BASHPID; }\n"
+        "echo \"${PIPESTATUS[*]}\"\n"
+        "g() { echo $BASHPID; while :; do printf '%s\\n' \"$big\" y; done; }\n"
+        "g | { read w; kill -INT $w; exit 3; }\n"
+        "echo \"${PIPESTATUS[*]}\"\n"
+        "(echo $BASHPID; echo \"$big\") | { read w; kill -INT $w; }\n"
+        "echo \"${PIPESTATUS[*]}\"\n"
+        "{ trap '' INT; echo $BASHPID; while :; do echo \"$big\"; done; } |\n"
+        "    { read w; kill -INT $w; }\n"
+        "echo \"${PIPESTATUS[*]}\"\n";
+    for (u64 seed = 0; seed <= 20; seed++) {
+        t->os->chaos = seed;
+        Result r = runc(t, script);
+        expect(t, "sigint before sigpipe", r.merged,
+               "130 0\n130 130\n130 3\n130 0\n141 0\n");
+    }
+    t->os->chaos = 0;
+}
+
 // SpecFile tests: run a script recorded by tools/record and compare all
 // of its outputs. The harness reads the files; the shell never does.
 
@@ -685,6 +717,7 @@ int main(int argc, char **argv)
     test_fibers(&t);
     test_arena(&t);
     test_sched(&t);
+    test_sigpipe(&t);
 
     if (argc>3 && (!strcmp(argv[1], "--oracle") || !strcmp(argv[1], "--oracle-v"))) {
         // --oracle SUITEDIR NAME...: bash test suite runs on the vos

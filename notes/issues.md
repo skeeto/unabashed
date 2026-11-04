@@ -16,12 +16,16 @@ gets checked. Rules:
 
 ## Next (before M5a starts)
 
-- **Ctrl-C into a pipeline races with SIGPIPE** (t/win32/005, fails
-  intermittently under load): a stage notices Ctrl-C only at its next
-  safe point, so it can die of the broken pipe first ("130 141 130"
-  instead of "130 130 130"). Bash's terminal signals every process at
-  once. A level with a pending SIGINT should die of it before a write
-  error. (m3b.md)
+- **t/win32/008 fails under load** ("after 0" instead of "after 130",
+  most runs while WSL fuzzes; seen before and after the SIGPIPE fix):
+  in `g | "$U" -c "cat >/dev/null"` after Ctrl-C the child shell exits
+  0. Likely the shell stage g dies of Ctrl-C at once, cat sees end of
+  file and exits 0 (or busybox's stub exits 0 on Ctrl-C), and the
+  child's cooperative rule drops its Ctrl-C. Not yet diagnosed.
+  Related, unobserved: a single-task shell writing to a native program
+  that dies of Ctrl-C can still see the broken pipe before its control
+  handler thread runs, and die of SIGPIPE (only PIPESTATUS differs; the
+  parent still acts on the failed program stage). (m3b.md)
 - **Fuzz the M4 changes**: the run, chaos and isolate campaigns have not
   seen namerefs, regex.cpp, glob.cpp, float.cpp or mapfile. Rerun them
   (tools/fuzz) and triage.

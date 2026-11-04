@@ -425,6 +425,19 @@ static void checksigs(Shell *sh, Arena scratch)
     if (sh->sig->pending) runsigs(sh, scratch);
 }
 
+// A pending signal whose default action ends this level does so now.
+static void sigfatal(Shell *sh)
+{
+    for (u64 m = sh->sig->pending; m; m &= m-1) {
+        i32 sig = __builtin_ctzll(m) + 1;
+        if (!trapignored(sh, sig) && !trapset(sh, sig) && !signoop(sh, sig)) {
+            sh->sig->pending &= ~sigbit(sig);
+            Arena a = *scratchat(sh, sh->capdepth+1);
+            sigdefault(sh, sig, a);
+        }
+    }
+}
+
 // After a wait that failed, perhaps because a signal interrupted it:
 // a signal that kills this level does so now. True if a signal was
 // the cause.
@@ -435,15 +448,7 @@ static b32 sigtaken(Shell *sh)
     t->intr = 0;
     intr |= ossignals(sh->sched);
     if (!intr) return 0;
-    u64 pend = sh->sig->pending;
-    for (u64 m2 = pend; m2; m2 &= m2-1) {
-        i32 sig = __builtin_ctzll(m2) + 1;
-        if (!trapignored(sh, sig) && !trapset(sh, sig) && !signoop(sh, sig)) {
-            sh->sig->pending &= ~sigbit(sig);
-            Arena a = *scratchat(sh, sh->capdepth+1);
-            sigdefault(sh, sig, a);
-        }
-    }
+    sigfatal(sh);
     return 1;
 }
 

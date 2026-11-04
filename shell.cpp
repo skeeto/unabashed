@@ -567,6 +567,7 @@ static void capturedrain(Sched *s, Capture *c)
 static b32  sigtaken(Shell *);
 static void waitdone(Shell *, u64 died, b32 failed);
 static void takeossigs(Shell *);
+static void sigfatal(Shell *);
 static u64  sigbit(i32);
 static void runsigs(Shell *, Arena);
 static void runexittrap(Shell *, Arena);
@@ -574,8 +575,13 @@ static void runexittrap(Shell *, Arena);
 // A write to a pipe without readers: as a process killed by SIGPIPE,
 // the vproc ends silently with status 141. With a trap the write fails
 // (EPIPE) and the trap runs at the next safe point; ignored, it fails.
+// But a signal already sent to this level that would end it wins: a
+// stage takes Ctrl-C only at a safe point, and its reader may die of
+// it first, where in bash the terminal signals every stage at once.
 static void sigpipe(Shell *sh)
 {
+    takeossigs(sh);
+    sigfatal(sh);
     Str *t = sh->traps;
     if (t && t[13].data) {
         if (t[13].len) sh->sig->pending |= (u64)1 << 12;

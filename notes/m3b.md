@@ -168,6 +168,18 @@ which decides once all stages are joined), and pipelines (any stage
 that died of it, or a failed program stage). Signals taken before the
 wait starts are the level's own.
 
+**Ctrl-C before SIGPIPE** (`sigpipe`, shell.cpp): a stage acts on
+Ctrl-C only at a safe point, so its reader could die of it first and
+leave it to die of the broken pipe on its next write (005 under load:
+"130 141 130"). Bash's terminal signals every stage at once. So before
+a level dies of SIGPIPE it takes the platform's signals, and a pending
+one whose default action ends the level (`sigfatal`) ends it instead.
+A trapped INT does not: the level dies of SIGPIPE as a bash process
+would. Shell-side only; a program's status is its own. The unit test
+`test_sigpipe` (main_test.cpp) reproduces the race on the vos with
+`kill -INT`; it is not a spec, as bash itself races there when the
+signal comes from kill (it gave 141 once in twenty runs under load).
+
 **Interactive shells** (`-i`; the shell is not yet interactive by
 itself on a terminal): PS1 (default `\s-\v\$ `) and PS2 are shown on
 standard error, expanded as `${PS1@P}` (`showprompt`, `Lexer.newunit`
