@@ -52,6 +52,8 @@ struct VPipe {
     i32  readers;
     i32  writers;
     u64  rkey;     // tracing: the last reader's identity, or 0
+    u64  wkey;     // tracing: the last writer's identity, or 0
+    b32  wloose;   // tracing: and whether it was loose (os_tasktag)
 };
 
 struct VFile {      // open file description
@@ -100,6 +102,8 @@ struct VProc {
     u64     lid;      // tracing: identity, the same under every seed
     u64     tag;      // tracing: a shell's running task (os_tasktag)
     iz      ntasks;   // tracing: a shell's task count
+    b32     loose;    // tracing: its running task is loose (os_tasktag)
+    b32     inloose;  // tracing: started by a loose task
     FakeCtx ctx;
     Arena   mem;      // a fixed block: the program's memory
 };
@@ -384,6 +388,19 @@ static void vtraceout(Vos *v, Handle h, u8 *buf, iz len)
     for (iz j = 0; j < len; j++) {
         *hash = (*hash ^ buf[j]) * 0x100000001b3u;
     }
+}
+
+// Tracing: the running process writes a pipe. A loose writer's bytes
+// and another's may arrive in either order (sched.cpp's tracewrite).
+static void vtracewrite(Vos *v, VPipe *p)
+{
+    if (!v->trace) return;
+    VProc *me    = v->procs + v->cur;
+    u64    key   = vkey(v);
+    b32    loose = me->loose || me->inloose;
+    if (p->wkey && p->wkey!=key && (p->wloose || loose)) v->racy = 1;
+    p->wkey   = key;
+    p->wloose = loose;
 }
 
 // Tracing: is more than one task able to run now? A process waiting
@@ -896,6 +913,7 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
     case VK_PIPEWRITE: {
         VPipe *p  = f->pipe;
         VProc *me = v->procs + v->cur;
+        vtracewrite(v, p);
         if (v->chaos && vrand(v)%4==0) vyield(os, v);
         while (len > 0) {
             if (!p->readers) {
@@ -1152,11 +1170,12 @@ static u64 os_siggroup(Os *)
     return 0;  // no terminal sends signals to a group
 }
 
-static void os_tasktag(Os *os, u64 tag, iz ntasks)
+static void os_tasktag(Os *os, u64 tag, iz ntasks, b32 loose)
 {
     Vos *v = osvos(os);
     v->procs[v->cur].tag    = tag;
     v->procs[v->cur].ntasks = ntasks;
+    v->procs[v->cur].loose  = loose;
 }
 
 static void os_racy(Os *os)
@@ -1269,6 +1288,8 @@ static Spawned os_spawn(Os *os, Arena, Spawn *s)
     p->ctx    = ctx;
     p->tag    = 0;
     p->ntasks = 1;
+    p->loose  = 0;
+    p->inloose = v->procs[v->cur].loose || v->procs[v->cur].inloose;
     if (v->trace) {
         // Identified by its starter and how many that task started
         VProc *me  = v->procs + v->cur;
@@ -1339,7 +1360,10 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
                 return 1;
             }
             if (p->len-p->pos == VPIPECAP) return 0;
-            if (perform) io->n = vpipewrite(v, p, io->buf, io->len);
+            if (perform) {
+                vtracewrite(v, p);
+                io->n = vpipewrite(v, p, io->buf, io->len);
+            }
         } else if (perform) {
             // a failure as taskwrite reports it with no other tasks
             io->n = io->len;
@@ -1374,6 +1398,7 @@ static void os_submit(Os *os, Io *io)
     io->done = 0;
     io->next = 0;
     io->plt[0] = me->tag;  // tracing: done later, perhaps for another task
+    io->plt[1] = me->loose;
     if (!v->chaos || vrand(v)%2) {
         if (vio(os, v, io, 1)) {
             io->done = 1;
@@ -1397,10 +1422,13 @@ static Io *os_wait(Os *os, i64 deadline)
         }
         for (Io **p = &me->ios; *p; p = &(*p)->next) {
             Io *io = *p;
-            u64 tag = me->tag;
-            me->tag = io->plt[0];  // tracing: as the task that submitted it
+            u64 tag   = me->tag;
+            b32 loose = me->loose;
+            me->tag   = io->plt[0];  // tracing: as the task that submitted it
+            me->loose = (b32)io->plt[1];
             b32 ok = vio(os, v, io, 1);
-            me->tag = tag;
+            me->tag   = tag;
+            me->loose = loose;
             if (ok) {
                 *p = io->next;
                 io->done = 1;

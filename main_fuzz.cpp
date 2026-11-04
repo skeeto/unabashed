@@ -27,8 +27,9 @@
 //   chaosexempt for the constructs, and vos.cpp's tracing (Vos.racy)
 //   for what is caught as it happens (a write finding its reader gone,
 //   or overflowing the captured output while tasks run concurrently,
-//   readers sharing a pipe, the file system changing while tasks run
-//   concurrently). Replay builds print both runs' output on a mismatch.
+//   readers sharing a pipe, writers taking turns at a pipe or capture
+//   when one is loose, as a procsub or an early pipeline stage, the file
+//   system changing while tasks run concurrently). Replay builds print both runs' output on a mismatch.
 // - FUZZ_ISOLATE: in one shell, the state dump (isolatedump) printed
 //   before "( eval S )" equals the one printed after it, except for
 //   variables that change on their own (isolatenoise).

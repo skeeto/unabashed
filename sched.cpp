@@ -42,9 +42,18 @@ struct Task {
     i64     pid;       // a procsub's BASHPID, for $! and wait
     u64     tag;       // identity: its creator's tag and spawn count
     u64     nspawn;    // tasks it has started
+    b32     loose;     // not waited for in place, or started by such
     void  (*fn)(Task *);
     void   *arg;
     Io      io;        // its pending OS operation
+};
+
+// Chaos tracing: the last writer to a pipe or capture, whose reader
+// sees the bytes of all writers merged (see tracewrite).
+struct Wtrace {
+    u64 tag;
+    b32 loose;
+    b32 set;
 };
 
 // An in-memory pipe between tasks: a ring buffer with counts of open
@@ -64,6 +73,7 @@ struct Pipe {
     b32    pumping;    // the pump still holds a reader reference
     u64    rtag;       // the tag of the last task that read it
     b32    read;       // rtag is set
+    Wtrace wtrace;     // chaos: its last writer
 };
 
 enum : iz {
@@ -144,6 +154,22 @@ static u32 chaosrand(Sched *s)
     x ^= x >> 27;
     s->chaos = x;
     return (u32)((x * 0x2545f4914f6cdd1dull) >> 32);
+}
+
+// Chaos tracing: the running task writes where w last wrote. A loose
+// task is not waited for in place by the one that starts it: a procsub,
+// a pipeline stage before the last (which runs alongside the last), or
+// a pump for such a writer. When it and another task write the same
+// pipe or capture, the reader may see their bytes in either order,
+// unlike writers that take turns.
+static void tracewrite(Sched *s, Wtrace *w)
+{
+    if (!s->chaos) return;
+    Task *t = s->cur;
+    if (w->set && w->tag!=t->tag && (w->loose || t->loose)) os_racy(s->os);
+    w->tag   = t->tag;
+    w->loose = t->loose;
+    w->set   = 1;
 }
 
 static void enqueue(Sched *s, Task *t)
@@ -227,7 +253,7 @@ static void schedule(Sched *s)
             t->state = TS_RUNNING;
             if (t != self) {
                 s->cur = t;
-                os_tasktag(s->os, t->tag, s->ntasks);
+                os_tasktag(s->os, t->tag, s->ntasks, t->loose);
                 os_switch(s->os, t->fiber);
                 // resumed by whichever task switched back here
             }
@@ -393,6 +419,16 @@ static void taskentry(Os *, void *arg)
     }
 }
 
+// Chaos tracing: mark the running task loose (see tracewrite), or not,
+// returning what it was. What it starts meanwhile is loose too.
+static b32 setloose(Sched *s, b32 loose)
+{
+    b32 was = s->cur->loose;
+    s->cur->loose = loose;
+    os_tasktag(s->os, s->cur->tag, s->ntasks, loose);
+    return was;
+}
+
 // Start a task running fn(t) with t->arg. It runs once the current
 // task blocks or yields. Its creator must join it.
 static Task *taskspawn(Sched *s, void (*fn)(Task *), void *arg, iz stack)
@@ -428,8 +464,9 @@ static Task *taskspawn(Sched *s, void (*fn)(Task *), void *arg, iz stack)
     u64 h = (s->cur->tag ^ ++s->cur->nspawn) * 0x9e3779b97f4a7c15u;
     t->tag    = h ^ h>>31;
     t->nspawn = 0;
+    t->loose  = s->cur->loose;
     s->ntasks++;
-    os_tasktag(s->os, s->cur->tag, s->ntasks);
+    os_tasktag(s->os, s->cur->tag, s->ntasks, s->cur->loose);
     wake(s, t);
     return t;
 }
@@ -711,6 +748,7 @@ static i32 pipewrite(Sched *s, Pipe *p, u8 *buf, iz len)
             continue;
         }
         iz n = len<space ? len : space;
+        tracewrite(s, &p->wtrace);
         if (s->chaos && n>1) n = 1 + chaosrand(s)%(u32)n;
         iz tail = (p->head + p->len) & (PIPECAP - 1);
         for (iz i = 0; i < n; i++) {
@@ -761,13 +799,14 @@ static void pipeclose(Sched *s, Pipe *p, b32 writer)
 enum : i32 { PUMP_TOHANDLE, PUMP_FROMHANDLE, PUMP_TEXT, PUMP_TOBUF };
 
 struct Pump {
-    Pump  *next;     // free list
-    i32    kind;
-    Handle h;        // owned: closed when the pump ends
-    Pipe  *pipe;     // owned end: the read end for PUMP_TOHANDLE
-    Str    text;     // PUMP_TEXT: bytes to write
-    Buf   *buf;      // PUMP_TOBUF: where to append what h delivers, or discard
-    i64    owner;    // PUMP_TOBUF: BASHPID of the vproc writing it, or 0
+    Pump   *next;    // free list
+    i32     kind;
+    Handle  h;       // owned: closed when the pump ends
+    Pipe   *pipe;    // owned end: the read end for PUMP_TOHANDLE
+    Str     text;    // PUMP_TEXT: bytes to write
+    Buf    *buf;     // PUMP_TOBUF: where to append what h delivers, or discard
+    i64     owner;   // PUMP_TOBUF: BASHPID of the vproc writing it, or 0
+    Wtrace *wtrace;  // PUMP_TOBUF: the capture's, for tracewrite
 };
 
 // A Pump that outlives the arena of whoever starts it, pooled.
@@ -813,7 +852,10 @@ static void pumpmain(Task *t)
         for (;;) {
             iz n = taskread(s, p->h, buf, countof(buf));
             if (n <= 0) break;
-            if (p->buf) print(p->buf, {buf, n});
+            if (p->buf) {
+                tracewrite(s, p->wtrace);
+                print(p->buf, {buf, n});
+            }
         }
         break;
     }

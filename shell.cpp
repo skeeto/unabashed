@@ -245,8 +245,9 @@ struct File {
 // without waiting, get an OS pipe whose pump appends here; the capture
 // ends once every pump has seen EOF from every writer (capturewriter).
 struct Capture {
-    Buf   b;         // first, so a File's Buf * is the Capture
-    Task *pumps;     // linked by Task.sib
+    Buf    b;        // first, so a File's Buf * is the Capture
+    Task  *pumps;    // linked by Task.sib
+    Wtrace wtrace;   // chaos: its last writer
 };
 
 enum { FDMAX = 1024, FDUSER = 10 };
@@ -612,6 +613,7 @@ static b32 fdwrite(Shell *sh, i32 fd, Str s)
         if (((Capture *)f->cap)->pumps) {
             capturedrain(sh->sched, (Capture *)f->cap);
         }
+        tracewrite(sh->sched, &((Capture *)f->cap)->wtrace);
         print(f->cap, s);
         return 1;
     case F_MEM:

@@ -676,12 +676,14 @@ static Handle capturewriter(Shell *sh, File *f, i64 owner)
     if (p.err) return BADHANDLE;
     Sched   *s  = sh->sched;
     Pump    *pp = newpump(s);
-    pp->kind  = PUMP_TOBUF;
-    pp->h     = p.r;
-    pp->buf   = f->cap;
-    pp->owner = owner;
-    Task    *t  = spawnpump(s, pp);
     Capture *c  = (Capture *)f->cap;
+    pp->kind   = PUMP_TOBUF;
+    pp->h      = p.r;
+    pp->buf    = f->cap;
+    pp->owner  = owner;
+    pp->wtrace = &c->wtrace;
+    Task    *t  = spawnpump(s, pp);
+    t->loose = t->loose || owner;  // tracing: a writer not waited for
     t->sib   = c->pumps;
     c->pumps = t;
     return p.w;

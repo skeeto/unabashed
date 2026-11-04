@@ -773,10 +773,25 @@ schedule, in bash too:
 - runs that did something racy (`Vos.racy`, also `os_racy` from the
   core): a write that found its reader gone (vos pipes and in-memory
   Pipes: whether `true` exited first in `echo x | true`), bytes of one
-  pipe read by two different readers (`{ head -n1; cat; }`), and a file
+  pipe read by two different readers (`{ head -n1; cat; }`), a file
   system change while more than one task could run (`vconcurrent`: the
   sum of every live process's tasks, not counting a task waiting for a
-  program it started).
+  program it started), and a pipe or capture written in turn by two
+  writers of which one is *loose*, not waited for in place by the task
+  that started it: a procsub, a pipeline stage before the last (it
+  runs alongside the last stage, which runs in the creator's task; a
+  program started directly as one is started while its starter is
+  marked, `setloose`), a pump for a procsub writing a capture
+  (`capturewriter` with an owner), or anything they start
+  (`Task.loose`, reported with `os_tasktag`; `VProc.inloose` for
+  programs a loose task started). The reader then
+  sees their bytes in either order, which the per-writer hashes cannot
+  tell from a real reordering: `echo x >(echo sub) | cat`,
+  `y=$(echo >(echo deep))`, `{ echo a >&3 | echo b; } 3>&1 | cat`.
+  Checked in sched.cpp (`tracewrite`, in-memory Pipes and Captures,
+  chaos runs only) and in the vos (`vtracewrite`, vos pipes, every
+  run). A loose writer that is in fact ordered, as in `{ echo a; echo
+  >(echo s) >/dev/null; } | cat`, is flagged too.
 A deadlock under one schedule only is a bug; one under every schedule
 is a script that hangs under bash too (reading a terminal that never
 types: `select ... </dev/tty`), which the vos reports instead.

@@ -173,15 +173,16 @@ gets checked. Rules:
 
 ## Test infrastructure
 
-- The chaos fuzzer cannot tell two writers sharing one pipe or
-  capture from sequential writers, so `(false)|echo >(echo)|cat`,
-  `y=$(echo >(echo deep))` and `cat <(echo x) >(tr a b <<<f) | sh`
-  (the reader sees x and f in either order) are false positives.
-  Telling them apart needs to know, at each write, whether the
-  previous writer may still write: whether it is alive and not waiting
-  (through joins, pumps or vos waits) on the current one. Its
-  exemptions are coarse (a lone `&` exempts an input), so background
-  jobs and file races get little coverage. (m3a.md)
+- The chaos fuzzer's rule for writers taking turns at a pipe or
+  capture (loose writers, m3a.md) flags some ordered runs as racy: a
+  loose writer is flagged even where the order is forced (`{ echo a;
+  echo >(echo s) >/dev/null; } | cat`, a stage before the last
+  writing stderr into `2>&1 |` while the last stage writes nothing
+  there), since it does not know whether the other writer may still
+  write; that needs happens-before tracking (spawns, joins, pipe data,
+  vos waits). No spec in t/exec lost coverage to it. Its exemptions
+  are coarse (a lone `&` exempts an input), so background jobs and
+  file races get little coverage. (m3a.md)
 - Chaos replays at -O0 agree on some inputs (a `\<NUL>&&` background
   job plus overflowing output) where the AFL build at -O1 diverged;
   such inputs are now exempt, but the cause of the -O level mattering
