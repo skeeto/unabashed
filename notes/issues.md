@@ -16,8 +16,9 @@ gets checked. Rules:
 
 ## Next (before M5a starts)
 
-- **t/win32/008 fails under load** ("after 0" instead of "after 130",
-  most runs while WSL fuzzes; seen before and after the SIGPIPE fix):
+- **t/win32/008 fails intermittently** ("after 0" instead of "after
+  130"; often even with no extra load, worse while WSL fuzzes; seen
+  before and after the SIGPIPE fix):
   in `g | "$U" -c "cat >/dev/null"` after Ctrl-C the child shell exits
   0. Likely the shell stage g dies of Ctrl-C at once, cat sees end of
   file and exits 0 (or busybox's stub exits 0 on Ctrl-C), and the

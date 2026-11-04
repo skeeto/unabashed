@@ -415,8 +415,10 @@ static void test_sigpipe(Test *t)
         "{ trap '' INT; echo $BASHPID; while :; do echo \"$big\"; done; } |\n"
         "    { read w; kill -INT $w; }\n"
         "echo \"${PIPESTATUS[*]}\"\n";
-    for (u64 seed = 0; seed <= 20; seed++) {
-        t->os->chaos = seed;
+    // Each run moves megabytes through the vos and every tests.exe run
+    // pays for it, so take only a few seeds, scrambled as specs are
+    for (u64 seed = 0; seed <= 3; seed++) {
+        t->os->chaos = seed * 0x9e3779b97f4a7c15u;
         Result r = runc(t, script);
         expect(t, "sigint before sigpipe", r.merged,
                "130 0\n130 130\n130 3\n130 0\n141 0\n");
