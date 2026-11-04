@@ -142,6 +142,11 @@ gets checked. Rules:
 - `f & kill -9 $!; wait` prints no "Killed" report; bash reports the
   job when wait collects it. (`sleep 1` instead of wait works, spec
   636.) (review)
+- DEBUG before a background simple command (`true &`) or each simple
+  stage of a background pipeline (`a | b &`) does not run: bash runs
+  it in the parent before forking, as for a foreground pipeline's
+  stages (`stagedebug`, spec 858), so it runs even without functrace.
+  Here the job's vproc drops the trap. (review)
 
 
 ## M8 (performance)
@@ -153,7 +158,10 @@ gets checked. Rules:
   cannot see (`i='a[$(cmd)]'; x | prog ${a[i]} | y`, from the
   variable's value) hangs if it waits on a later stage, as through a
   FIFO the later stage writes; bash runs it concurrently. A launcher
-  fiber per such stage fixes this too. (m3a.md, fuzz triage)
+  fiber per such stage fixes this too, and would let a stage with
+  `command_not_found_handle` defined start directly again (now a
+  vproc, so the handler cannot fill the stage's pipe before its
+  reader starts). (m3a.md, fuzz triage, review)
 - Read-ahead for foreign pipes on Windows (Linux peeks with tee(2)).
 - No compile cache for `=~` (bash has none either).
 - **Arenas never decommit**: a scratch arena keeps its peak commit for

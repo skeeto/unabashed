@@ -1995,11 +1995,13 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     // the programs its words or a trap run first: they finish before it
     Spawnto *direct = sh->spawnto;
     sh->spawnto = 0;
+    b32 debugdone = sh->debugdone;  // a pipeline stage's, by its parent
+    sh->debugdone = 0;
     safepoint(sh->sched);
     sh->line    = n->line;
     sh->current = n;
     if (!sh->intrap) sh->cmdnode = n;  // in trap actions, what ran them
-    if (sh->traps) {
+    if (sh->traps && !debugdone) {
         b32 skip = rundebugtrap(sh, scratch);
         sh->line    = n->line;
         sh->current = n;
@@ -2273,6 +2275,12 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             }
             if (!replaced) env = push(a, env, entry);
         }
+        // Also bound in the shell while the program is looked up, as
+        // bash's temporary environment: a PATH there is searched, and
+        // command_not_found_handle sees them all
+        for (iz i = 0; i < nassign; i++) {
+            pushtemp(sh, scratch, as[i].name, tempvalue(sh, &scratch, as[i]));
+        }
         // As bash, a program finds its own path in $_
         Str path = find(name, "/")>=0 ? name : pathlookup(sh, a, name);
         if (path.len) {
@@ -2289,6 +2297,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         sh->childsig = 0;
         sh->spawnto = direct;
         sh->status = runexternal(sh, scratch, argv.data, argv.len, env);
+        for (iz i = nassign-1; i >= 0; i--) poptemp(sh, as[i].name);
         reportchild(sh, scratch, n);
     }
     unwind(sh, mark);

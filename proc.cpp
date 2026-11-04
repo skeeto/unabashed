@@ -651,9 +651,13 @@ static b32 runscode(Str t)
 // expanded, and no descriptor that would need a pump. The words expand
 // before the stages to the right start, so code that waits on them
 // would hang (runpipeline drops the pipe ends of those on the left).
+// So would command_not_found_handle writing more than a pipe holds,
+// should the program not be found after all (PATH=/x prog, or one the
+// words assign), so a defined handler rules this out.
 static b32 directstage(Shell *sh, Arena scratch, Node *n, b32 first)
 {
     if (!likelyexternal(sh, n) || n->redirs) return 0;
+    if (findfunc(sh, "command_not_found_handle")) return 0;
     for (Word *w = n->words; w; w = w->next) {
         if (runscode(w->text)) return 0;
     }
@@ -701,6 +705,26 @@ static Handle spawndirect(Shell *sh, Node *stage, File *in, File *out,
     *retry = sp.retry;
     sh->childpid = sp.pid;  // for a report
     return sp.proc;
+}
+
+// DEBUG for a simple command stage, as bash runs it: here in the parent
+// just before the stage starts, with the parent's descriptors, so that
+// the stage does not run it again (debugdone). Returns whether extdebug
+// skips the stage, which then does not start. If the action returns
+// from a function (sh->flow), no further stage starts either.
+static b32 stagedebug(Shell *sh, Node *stage, i32 before, Arena scratch)
+{
+    if (sh->flow) return 1;
+    if (stage->kind!=N_SIMPLE || !sh->traps || !sh->traps[TRAP_DEBUG].len) {
+        return 0;
+    }
+    sh->status  = before;
+    sh->line    = stage->line;
+    sh->current = stage;
+    if (!sh->intrap) sh->cmdnode = stage;
+    b32 skip = rundebugtrap(sh, scratch);
+    if (!sh->flow) sh->status = before;
+    return skip;
 }
 
 static void runpipeline(Shell *sh, Node *n, Arena scratch)
@@ -755,22 +779,30 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     Handle procs[256];
     i32    statuses[256];
     i64    pids[256] = {};
+    b32    ran[256];
     for (i32 k = 0; k+1 < nstages; k++) {
-        sh->status = before;
+        if (!sh->flow) sh->status = before;
         procs[k] = BADHANDLE;
-        b32 retry = 1;
-        if (ext[k] && directstage(sh, scratch, stages[k], !k)) {
+        statuses[k] = 0;
+        b32 skip  = stagedebug(sh, stages[k], before, scratch);
+        b32 retry = !skip;
+        ran[k] = !skip;
+        sh->debugdone = stages[k]->kind == N_SIMPLE;
+        if (!skip && ext[k] && directstage(sh, scratch, stages[k], !k)) {
             procs[k] = spawndirect(sh, stages[k], in[k], out[k], scratch,
                                    statuses+k, &retry);
             pids[k]  = sh->childpid;
             sh->status = before;
+            sh->debugdone = stages[k]->kind == N_SIMPLE;  // for a retry
         }
         if (retry) {
             b32 newloops = stages[k]->kind != N_SIMPLE;  // as bash: break | x is silent
             tasks[k] = spawnvproc(sh, stages[k], in[k], out[k], newloops);
             pids[k]  = ((Vproc *)tasks[k]->arg)->sh->bashpid;
+            sh->debugdone = 0;
             yield(s);
         }
+        sh->debugdone = 0;
         // Drop the parent's ends at once: a later direct stage whose
         // words read its input expands here (a comsub runscode missed),
         // and would wait forever on a writer held here
@@ -781,6 +813,10 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     // The last stage here, reading the previous stage's output
     i32   last  = nstages - 1;
     Node *stage = stages[last];
+    b32   inhere = sh->shopt[S_LASTPIPE] && !sh->opt[O_MONITOR];
+    b32   skip   = (!inhere || sh->flow) && stagedebug(sh, stage, before, scratch);
+    i32   flowed = sh->flow ? sh->status : -1;  // the action's return
+    ran[last] = !skip;
     Undo *mark  = sh->undo;
     b32   redir = sh->stdinredir;
     sh->stdinredir = 1;
@@ -791,7 +827,11 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     i32   status;
     b32   escaped = 0;
     i32   why     = 0;
-    if (sh->shopt[S_LASTPIPE] && !sh->opt[O_MONITOR]) {
+    if (skip) {
+        status = 0;
+        sh->childsig = 0;
+        sh->childpid = 0;
+    } else if (inhere) {
         // In this shell: stages still running must be joined even if
         // it exits
         Escape e = {};
@@ -829,7 +869,9 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         sh->childsig  = 0;
         takeossigs(sh);  // those from before are this level's own
         sh->sig->fgwait = 1;
+        sh->debugdone = stage->kind == N_SIMPLE;
         status = subshell(sh, &j, child, 0);
+        sh->debugdone = 0;
         sh->tailnode  = 0;
         sh->taillevel = 0;
         sh->simplestages -= stage->kind == N_SIMPLE;
@@ -863,9 +905,20 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     }
     waitdone(sh, died, extbad);
     if (lastsig) reportpipeline(sh, scratch, stages, nstages, statuses, pids, n);
-    for (i32 k = 0; k < nstages; k++) statuses[k] &= 255;
+    // As bash, stages extdebug skipped are left out of PIPESTATUS, and
+    // $? is the last started one's
+    i32 nran = 0;
+    for (i32 k = 0; k < nstages; k++) {
+        if (ran[k]) statuses[nran++] = statuses[k] & 255;
+    }
+    if (!ran[last]) status = nran ? statuses[nran-1] : 0;
+    if (flowed >= 0) status = flowed;
+    if (!nran || flowed>=0) {
+        statuses[0] = status;  // just the one, as bash
+        nran = 1;
+    }
     sh->status = status;
-    setpstat(sh, statuses, nstages);
+    setpstat(sh, statuses, nran);
     if (escaped) {
         escape(sh, why);
     }

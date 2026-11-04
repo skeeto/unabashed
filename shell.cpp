@@ -521,6 +521,7 @@ struct Shell {
                            // unless trapped, as bash without job control
     i32      intrap;       // running trap actions
     i32      trapbusy;     // DEBUG, ERR, RETURN actions running: not again
+    b32      debugdone;    // the parent ran DEBUG for this stage's command
     i32      trapstatus;   // $? before the running trap, for its exit
     i32      trapfuncs;    // funcdepth where it runs, for its return
     i32      killsig;      // this level is dying by this signal

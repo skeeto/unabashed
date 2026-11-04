@@ -225,7 +225,10 @@ reports `subshell - simplestages`.
 3. For every stage but the last, in order: a **direct** external
    (`directstage`: a likely external with no redirections, no `$(`,
    backquote, procsub, funsub or `@P` in its words (`runscode`), found
-   on PATH, and no inherited descriptor needing a pump) expands in a
+   on PATH, no `command_not_found_handle` defined (should the program
+   not be found after all, as with `PATH=/x prog`, the handler would
+   run here, before any reader of its output starts), and no inherited
+   descriptor needing a pump) expands in a
    synchronous subshell with the stage's descriptors and starts
    without waiting (`Shell.spawnto`, which `runsimple1` hands only to
    the command's own `runexternal`, makes `runprogram` return the
@@ -237,6 +240,7 @@ reports `subshell - simplestages`.
    stage's pipes at once: words that run code `runscode` misses
    (`i='a[$(cat)]'; ${a[i]}`) may read the next stage's input while it
    expands, and must see EOF when the writers on its left finish.
+   Before each simple stage starts, DEBUG runs here (see Traps).
 4. Run the last stage on the current stack: in a synchronous subshell,
    or in the shell itself under lastpipe (without monitor mode).
 5. Close the last stage's input, join the stages right to left (fibers
@@ -439,7 +443,15 @@ ERR 66, RETURN 67, as bash 5.3). ERR runs from `checkerrexit` where set
 function or a sourced file. In a function they run only if the function
 set them (`Frame.trapat` records them at the call) or with functrace
 (errtrace for ERR); `pseudotrap`. None of these runs inside its own
-action (`Shell.trapbusy`); DEBUG does run inside other actions.
+action (`Shell.trapbusy`); DEBUG does run inside other actions. For a
+simple command pipeline stage, bash runs DEBUG in the parent before
+forking, so `runpipeline` does too (`stagedebug`, with the parent's
+descriptors, so a reading action does not take the pipeline's data),
+and `Shell.debugdone` keeps the stage's `runsimple1` from running it
+again under functrace. A stage extdebug skips does not start and is
+left out of PIPESTATUS; `$?` is then the last started stage's, and a
+`return` from the action (2 in a function) starts no further stage
+and becomes the pipeline's status and only PIPESTATUS entry.
 
 **EXIT** (`runexittrap`): at `sh_main`'s end, at the end of a sync
 subshell or vproc whose own table has one, and from `sigdie`. Not after
