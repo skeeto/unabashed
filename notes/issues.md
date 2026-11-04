@@ -138,7 +138,11 @@ gets checked. Rules:
 - Chaos replays at -O0 agree on some inputs (a `\<NUL>&&` background
   job plus overflowing output) where the AFL build at -O1 diverged;
   such inputs are now exempt, but the cause of the -O level mattering
-  was not traced.
+  was not traced. It is deterministic per build: with the exemptions
+  off, the campaign's 50 such inputs never trap, and every run gives
+  the same verdicts, all "same" at -O0 and 11 "racy" at -O1 (e.g.
+  m/id_000040). Only the plain schedule's racy flag differs. A guess:
+  checkstack's limit, which depends on frame sizes.
 - The test harness runs out of memory with more than about a dozen
   live vprocs or arrays of more than about 50,000 elements. (m3a.md,
   m4.md)
