@@ -22,10 +22,6 @@ gets checked. Rules:
   instead of "130 130 130"). Bash's terminal signals every process at
   once. A level with a pending SIGINT should die of it before a write
   error. (m3b.md)
-- **Exponential back-reference matching** in regex.cpp:
-  `((a|aa)*)\1\1c` against 40 a's takes about a minute (glibc: 300 a's
-  in a second). `condregex` passes no budget to `rxexec`; needs a step
-  budget or a better algorithm. (m4.md, review)
 - **Spec 213-trailing-backslash** has failed since M2 (the "line -1"
   quirk). Fix it or record why it is accepted.
 - **Fuzz the M4 changes**: the run, chaos and isolate campaigns have not
@@ -78,6 +74,13 @@ gets checked. Rules:
   read in progress; Ctrl-C during CreateProcess counts against the
   shell even if the program handled it. (m3b.md)
 - Globbing does not check for Ctrl-C between directory entries.
+- `[[ =~ ]]` does not check for Ctrl-C (signals act only at safe points
+  between commands). Some patterns run for minutes or more here and in
+  glibc alike: `(.{,2}\>a*{1,})*` on `a` (the walk, no
+  back-references), and compiling
+  `(()?((\b){1,2}((\')?(){0,1}(()*a*b*|[ab]?))*))+` (found by an
+  old-against-new comparison of the regex.cpp memo; both verified to
+  hang bash 5.3 past 60 s too). (m4.md)
 - Job control: `set -m`, fg/bg, stopped jobs, suspend (jobs oracle).
 - dirstack (pushd/popd/dirs), ulimit, help (dirstack, redir, vredir
   oracles).

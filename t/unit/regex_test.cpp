@@ -212,6 +212,26 @@ static void hostile(Arena perm)
         expect(r=="(0,3000)", "3000 literals", r);
     }
     {
+        // Back-references after repetition: exponentially many paths,
+        // searched in polynomial time (each took minutes at 40 a's)
+        Arena  a = perm;
+        Str    s = repeat(&a, "a", 300);
+        double t = seconds();
+        Str    r = run(&a, "((a|aa)*)\\1\\1c", cat(&a, s, "c"), 0);
+        expect(r=="(0,301)(0,100)(99,100)", "((a|aa)*)\\1\\1c", r);
+        r = run(&a, "((a|aa)*)\\1\\1c", s, 0);
+        expect(r=="nomatch", "((a|aa)*)\\1\\1c without c", r);
+        r = run(&a, "((a|aa)*)\\1\\1", cuthead(s, 1), 0);
+        expect(r=="(0,297)(0,99)(98,99)", "((a|aa)*)\\1\\1", r);
+        r = run(&a, "^(a|aa)+\\1$", cat(&a, s, "b"), 0);
+        expect(r=="nomatch", "^(a|aa)+\\1$", r);
+        r = run(&a, "(a|b)*\\1\\1x", repeat(&a, "ab", 300), 0);
+        expect(r=="nomatch", "(a|b)*\\1\\1x", r);
+        r = run(&a, "(a*)*\\1b", cuthead(s, 200), 0);
+        expect(r=="nomatch", "(a*)*\\1b", r);
+        expect(seconds()-t < 5, "back-reference paths take polynomial time", {});
+    }
+    {
         // Back-references search every path: a budget stops it
         Arena a = perm;
         Str   s = repeat(&a, "a", 30);

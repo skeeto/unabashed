@@ -170,11 +170,13 @@ struct Regex {
     i32    *predbeg;
     i32    *consume;   // the consuming nodes
     i32    *map;       // group i reports group map[i] (merged groups)
+    i32    *refs;      // the groups back-references refer to
     u32    *init;      // epsilon closure of the start, ignoring constraints
     i32     nnodes;
     i32     nconsume;
     i32     start;
     i32     nsub;
+    i32     nrefs;
     i32     flags;
     b32     backrefs;
     b32     plural;    // any fork
@@ -1273,9 +1275,13 @@ static RxComp rxcompile(Str pat, i32 flags, Arena *a)
         }
     }
 
+    re->refs = alloc<i32>(a, p.nsub);
     for (i32 i = 0; i < count; i++) {
         RxNode *x = re->nodes + i;
         if (x->type != RT_BACKREF) continue;
+        i32 k = 0;
+        while (k<re->nrefs && re->refs[k]!=x->arg) k++;
+        if (k == re->nrefs) re->refs[re->nrefs++] = x->arg;
         i32 closes = 0;
         for (i32 j = 0; j < count; j++) {
             closes += re->nodes[j].type==RT_CLOSE && re->nodes[j].arg==x->arg;
@@ -1304,6 +1310,7 @@ struct RxCtx {
     i64    budget;  // steps left for back-references, negative for no limit
     b32    gaveup;
     i32    words;   // u32 words in a node bitset
+    iz     memomax; // bytes for each back-reference search's RxMemo
 };
 
 static u8 rxtr(RxCtx *c, u8 b)
@@ -1679,6 +1686,79 @@ static b32 rxspend(RxCtx *c)
     return 1;
 }
 
+// The states a back-reference search has visited after a character,
+// keyed by everything its future depends on, in a 4-ary hash trie.
+// Coming back to one adds nothing new, which makes the searches
+// polynomial where the paths are exponential, as with ((a|aa)*)\1\1c,
+// at a cost in memory: records come from the search's own arena, up to
+// memomax bytes, after which states are not recorded. Positions in keys
+// are 32-bit, so longer subjects get none.
+enum : i32 { RS_OPEN, RS_DEAD, RS_UNCLOSED };
+
+struct RxSeen {
+    RxSeen  *child[4];
+    RxSeen  *up;     // the walk's unfinished states, latest first
+    RxMatch *regs;   // RS_UNCLOSED: the registers there
+    i32     *key;
+    i32      depth;  // the walk's fail stack when it got here
+    i32      how;    // how the walk's search from here ended
+};
+
+struct RxMemo {
+    RxSeen *root;
+    Arena  *a;
+    iz      left;  // bytes it may still take
+    i32     len;   // values in a key
+};
+
+static RxMemo newmemo(RxCtx *c, Arena *a, i32 len)
+{
+    RxMemo m = {};
+    m.a    = a;
+    m.left = c->memomax;
+    m.len  = len;
+    return m;
+}
+
+// Whether the memo may take size more bytes; takes them if so.
+static b32 rxroom(RxMemo *m, iz size)
+{
+    Arena *a     = m->a;
+    iz     avail = (a->mem ? a->mem->limit : a->end) - a->beg;
+    size += 16;  // alignment
+    if (size>m->left || size>avail/2) return 0;
+    m->left -= size;
+    return 1;
+}
+
+// The record of state key, null if there is no room. Sets *old when it
+// was visited before.
+static RxSeen *rxvisit(RxMemo *m, i32 *key, b32 *old)
+{
+    u64 h = 0x100;
+    for (i32 i = 0; i < m->len; i++) {
+        h ^= (u32)key[i];
+        h *= 1111111111111111111u;
+    }
+    *old = 0;
+    RxSeen **e = &m->root;
+    for (; *e; h <<= 2) {
+        i32 i = 0;
+        while (i<m->len && (*e)->key[i]==key[i]) i++;
+        if (i == m->len) {
+            *old = 1;
+            return *e;
+        }
+        e = &(*e)->child[h>>62];
+    }
+    if (rxroom(m, (iz)sizeof(RxSeen) + m->len*(iz)sizeof(i32))) {
+        *e = alloc<RxSeen>(m->a);
+        (*e)->key = alloc<i32>(m->a, m->len);
+        copybytes((*e)->key, key, m->len*(iz)sizeof(i32));
+    }
+    return *e;
+}
+
 struct RxFail {
     RxFail  *next;
     RxMatch *regs;  // registers, then the previous registers
@@ -1698,6 +1778,10 @@ struct RxWalk {
     iz       idx;
     RxFail  *fails;
     RxFail  *free;
+    i32      nfails;
+    RxMemo   seen;
+    RxSeen  *open;   // states whose searches have not ended
+    i32     *key;
     b32      fs;     // backtracking
     Arena   *a;
 };
@@ -1726,6 +1810,7 @@ static void rxpush(RxWalk *w, i32 node)
     copybytes(f->eps, w->eps, nw*(iz)sizeof(u32));
     f->next  = w->fails;
     w->fails = f;
+    w->nfails++;
 }
 
 static i32 rxpop(RxWalk *w)
@@ -1734,6 +1819,7 @@ static i32 rxpop(RxWalk *w)
     if (!f) return -1;
     i32 ng = w->c->re->nsub + 1;
     w->fails = f->next;
+    w->nfails--;
     w->idx   = f->idx;
     copybytes(w->regs, f->regs, ng*(iz)sizeof(RxMatch));
     copybytes(w->prev, f->regs+ng, ng*(iz)sizeof(RxMatch));
@@ -1793,8 +1879,62 @@ static i32 rxproceed(RxWalk *w, i32 x)
     return n->next;
 }
 
+// Backtrack from a dead end, or from an end with an unclosed group whose
+// registers were end: the node to go on from, or -1. A state's search
+// ended when the walk goes back past the fail stack it found, the last
+// way it ended being this one.
+static i32 rxfail(RxWalk *w, i32 how, RxMatch *end)
+{
+    i32      ng   = w->c->re->nsub + 1;
+    iz       size = ng * (iz)sizeof(RxMatch);
+    RxMatch *copy = end==w->regs ? 0 : end;
+    for (; w->open && w->open->depth>=w->nfails && w->fails; w->open = w->open->up) {
+        RxSeen *st = w->open;
+        st->how = how;
+        if (how==RS_UNCLOSED && !copy && rxroom(&w->seen, size)) {
+            copy = alloc<RxMatch>(w->a, ng);
+            copybytes(copy, end, size);
+        }
+        st->regs = copy;
+        if (how==RS_UNCLOSED && !copy) st->how = RS_OPEN;
+    }
+    return rxpop(w);
+}
+
+// The state the walk reached after a character, at node x: its record
+// if a search from there already ended, else null.
+static RxSeen *rxended(RxWalk *w, i32 x)
+{
+    RxMatch *regs = w->regs;
+    RxMatch *prev = w->prev;
+    i32      ng   = w->c->re->nsub + 1;
+    i32     *key  = w->key;
+    key[0] = x;
+    key[1] = (i32)w->idx;
+    for (i32 i = 0; i < ng; i++) {
+        key[2+4*i] = (i32)regs[i].so;
+        key[3+4*i] = (i32)regs[i].eo;
+        key[4+4*i] = (i32)prev[i].so;
+        key[5+4*i] = (i32)prev[i].eo;
+    }
+    b32     old = 0;
+    RxSeen *st  = rxvisit(&w->seen, key, &old);
+    if (st && !old) {
+        st->depth = w->nfails;
+        st->up    = w->open;
+        w->open   = st;
+    }
+    return old && st->how!=RS_OPEN ? st : 0;
+}
+
 // glibc's set_regs: fill the registers for the match [s, e], arriving
 // at end node last.
+//
+// With backtracking, the walk's path from a state after a character
+// depends on that state alone, and it cannot come back to it (it would
+// loop). Reaching it again means its search ended before, so the walk
+// backtracks as that search last did, from a dead end or from an end
+// with an unclosed group, which succeeds when nothing is left to try.
 static b32 rxwalk(RxCtx *c, u32 *v, i32 last, iz s, iz e, RxMatch *regs, Arena scratch)
 {
     Regex *re = c->re;
@@ -1810,6 +1950,8 @@ static b32 rxwalk(RxCtx *c, u32 *v, i32 last, iz s, iz e, RxMatch *regs, Arena s
     w.idx  = s;
     w.fs   = re->plural && re->backrefs;
     w.a    = &scratch;
+    w.seen = newmemo(c, &scratch, 2 + 4*ng);
+    w.key  = alloc<i32>(&scratch, w.seen.len);
     for (i32 i = 0; i < ng; i++) regs[i].so = regs[i].eo = -1;
     regs[0].so = s;
     regs[0].eo = e;
@@ -1824,7 +1966,7 @@ static b32 rxwalk(RxCtx *c, u32 *v, i32 last, iz s, iz e, RxMatch *regs, Arena s
             if (w.fs) {
                 for (i32 i = 0; i < ng; i++) {
                     if (regs[i].so>-1 && regs[i].eo==-1) {
-                        next = rxpop(&w);
+                        next = rxfail(&w, RS_UNCLOSED, regs);
                         break;
                     }
                 }
@@ -1832,10 +1974,23 @@ static b32 rxwalk(RxCtx *c, u32 *v, i32 last, iz s, iz e, RxMatch *regs, Arena s
             if (next < 0) return 1;
             cur = next;
         }
-        cur = rxproceed(&w, cur);
-        if (cur < 0) {
-            cur = rxpop(&w);
-            if (cur < 0) return 0;
+        for (;;) {
+            iz      at = w.idx;
+            RxSeen *st = 0;
+            cur = rxproceed(&w, cur);
+            if (cur>=0 && w.fs && w.idx>at) st = rxended(&w, cur);
+            if (cur<0 || (st && st->how==RS_DEAD)) {
+                cur = rxfail(&w, RS_DEAD, 0);
+                if (cur < 0) return 0;
+            } else if (st) {
+                cur = rxfail(&w, RS_UNCLOSED, st->regs);
+                if (cur < 0) {
+                    copybytes(regs, st->regs, ng*(iz)sizeof(RxMatch));
+                    return 1;
+                }
+                continue;
+            }
+            break;
         }
     }
     return 1;
@@ -1871,6 +2026,8 @@ static iz rxlongest(RxCtx *c, iz s, i32 *last, u32 *closes, b32 record, Arena sc
     iz       best  = -1;
     RxFrame *stack = 0;
     RxFrame *free  = 0;
+    RxMemo   seen  = newmemo(c, &scratch, 3 + 3*re->nrefs);
+    i32     *key   = alloc<i32>(&scratch, seen.len);
 
     RxFrame *f = alloc<RxFrame>(&scratch);
     f->regs   = alloc<RxMatch>(&scratch, ng);
@@ -1971,6 +2128,20 @@ static iz rxlongest(RxCtx *c, iz s, i32 *last, u32 *closes, b32 record, Arena sc
             steps = 0;
             for (i32 i = 0; i < nw; i++) eps[i] = 0;
             cur = x->next;
+
+            // Only the registers back-references read matter ahead
+            key[0] = cur;
+            key[1] = (i32)idx;
+            key[2] = ref;
+            for (i32 i = 0; i < re->nrefs; i++) {
+                i32 g = re->refs[i] + 1;
+                key[3+3*i] = (i32)regs[g].so;
+                key[4+3*i] = (i32)regs[g].eo;
+                key[5+3*i] = closes && !record && ok[g];
+            }
+            b32 old = 0;
+            rxvisit(&seen, key, &old);
+            if (old) break;
         }
         f->next = free;
         free    = f;
@@ -1988,6 +2159,12 @@ static i32 rxexec(Regex *re, Str s, RxMatch *m, Arena scratch, i64 budget = -1)
     c.s      = s;
     c.budget = budget;
     c.words  = (re->nnodes + 31) / 32;
+    if (re->backrefs && s.len<0x7fffffff) {
+        // Up to 256 MiB, and half of what remains
+        iz avail = (scratch.mem ? scratch.mem->limit : scratch.end) - scratch.beg;
+        c.memomax = (iz)1 << 28;
+        c.memomax = c.memomax<avail/2 ? c.memomax : avail/2;
+    }
     if ((re->flags & REX_UTF8) && !allascii(s)) {
         c.ulen = alloc<u8>(&scratch, s.len);
         for (iz i = 0; i < s.len;) {
