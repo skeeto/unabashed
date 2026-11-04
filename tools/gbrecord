@@ -23,8 +23,7 @@ if [ $# -lt 2 ]; then
     echo "usage: tools/gbrecord WORKDIR SCRIPT..." >&2
     exit 2
 fi
-mkdir -p "$1" || exit 2
-work=$(msys_abs "$1") || exit 2
+work=$(msys_workdir "$1") || exit 2
 shift
 msys_init "$gitbash"
 

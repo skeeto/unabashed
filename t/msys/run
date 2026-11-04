@@ -34,8 +34,7 @@ if [ $# -lt 1 ]; then
     echo "usage: t/msys/run [-s SHELL] [-x] WORKDIR [TEST.sh...]" >&2
     exit 2
 fi
-mkdir -p "$1" || exit 2
-work=$(msys_abs "$1") || exit 2
+work=$(msys_workdir "$1") || exit 2
 shift
 [ $# -gt 0 ] || set -- "$here"/*.sh
 msys_init "$shell"

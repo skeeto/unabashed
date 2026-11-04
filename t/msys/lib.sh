@@ -17,6 +17,17 @@ msys_abs() {
     printf '%s%s\n' "$(printf '%s' "$p" | cut -c1 | tr a-z A-Z)" "${p#?}"
 }
 
+# msys_workdir DIR: create WORKDIR and print it as C:/x. Refuses /c/x:
+# w64devkit's sh would take it as C:/c/x and create that.
+msys_workdir() {
+    case $1 in
+    /[a-zA-Z]|/[a-zA-Z]/*)
+        echo "$0: write WORKDIR as C:/..., not $1" >&2; exit 2 ;;
+    esac
+    mkdir -p "$1" || exit 2
+    msys_abs "$1" || exit 2
+}
+
 # msys_init SHELL: build WORK/bin and the scratch install WORK/inst
 msys_init() {
     case $work in
