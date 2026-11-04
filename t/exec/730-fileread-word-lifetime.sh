@@ -1,0 +1,10 @@
+echo content > only.txt
+echo "[$(< o*.txt)] $?"
+echo "[$(< oooooooooooooooooooooooooo*.txt)] $?"
+echo "[$(< oooooooooooooooooooooooooooo*.txt)] $?"
+echo "[$(< oooooooooooooooooooooooooooooo*.txt)] $?"
+echo "[$(< oooooooooooooooooooooooooooooooo*.txt)] $?"
+echo "[$(< oooooooooooooooooooooooooooooooooooooooo*.txt)] $?"
+x=$(< oooooooooooooooooooooooooooooo*.txt); echo "[$x] $?"
+x=$(< "only".txt); echo "[$x] $?"
+x=$(< ${HOME+o}nly.txt); echo "[$x] $?"

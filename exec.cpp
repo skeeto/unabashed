@@ -511,6 +511,7 @@ static Word *fileread(Shell *sh, Arena *a, Str src)
             parseunit(L).status!=PARSE_EOF) {
         return 0;
     }
+    *a = tmp;  // keep the word: the caller allocates past it
     return n->redirs->word;
 }
 
