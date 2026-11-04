@@ -447,13 +447,14 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     Str path = file;
     b32 slash = 0;
     for (iz k = 0; k < file.len; k++) slash |= file[k]=='/';
+    slash |= sh->pathmode!=PM_POSIX && haspath(sh, file);
     if (!slash && (only || sh->shopt[S_SOURCEPATH])) {
         if (!only) g = getvar(sh, &scratch, "PATH");
         b32 found = 0;
         for (Str rest = g.value; g.set;) {
-            Cut c = cut(rest, ':');
+            Cut c = cut(rest, listsep(sh));
             Str cand = joinpath(&scratch, c.head.len ? c.head : Str("."), file);
-            Stat st = os_stat(sh->os, scratch, absolute(sh, &scratch, cand), 1);
+            Stat st = pathstat(sh, scratch, cand, 1);
             if (!st.err && st.type==FT_FILE) {
                 path  = cand;
                 found = 1;
@@ -467,7 +468,7 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
             return 1;
         }
     }
-    Stat st = os_stat(sh->os, scratch, absolute(sh, &scratch, path), 1);
+    Stat st = pathstat(sh, scratch, path, 1);
     if (!st.err && st.type==FT_DIR) {
         builtinerror(sh, scratch, name, concat(&scratch, file, ": is a directory"));
         return 1;
@@ -1561,6 +1562,45 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
     return 0;
 }
 
+// The hidden shopt msyspath, on Windows only: msys mode when set,
+// native when unset. It is in neither shopt's listings nor BASHOPTS.
+static b32 msysshopt(Shell *sh, Str name)
+{
+    return sh->win32 && name=="msyspath";
+}
+
+// Switch between msys and native mode. The mode decides what "/x"
+// means, PATH's separator and the form paths print in, so PATH and
+// PWD are rendered again in the new form (msys2.md, "Coexistence").
+static void setpathmode(Shell *sh, Arena scratch, PathMode mode)
+{
+    if (!sh->win32 || mode==sh->pathmode) return;
+    PathCtx c    = pathctx(sh, &scratch, {});
+    Got     path = getvar(sh, &scratch, "PATH");
+    if (path.set) {
+        Str p = mode==PM_MSYS ? toposixlist(&c, &scratch, path.value)
+                              : towinlist(&c, &scratch, path.value, 0);
+        setvar(sh, scratch, "PATH", p.data ? p : Str(""), SV_FORCE);
+    }
+    Str ncwd = spawncwd(sh, &scratch);
+    Str wd   = mode==PM_MSYS ? toposix(&c, &scratch, ncwd) : ncwd;
+    sh->pathmode = mode;
+    sh->cwd = sclone(sh->store, ncwd);
+    sh->wd  = sclone(sh->store, wd);
+    setvar(sh, scratch, "PWD", wd, SV_FORCE);
+    sh->cmdhash = 0;
+}
+
+static i32 b_shopt(Shell *, Str *, iz, Arena);
+
+// shopt -s or -u by name, as the -O and +O options give it, reporting
+// an unknown name.
+static void setshoptbyname(Shell *sh, Arena scratch, Str name, b32 on)
+{
+    Str args[] = {"shopt", on ? Str("-s") : Str("-u"), name};
+    b_shopt(sh, args, countof(args), scratch);
+}
+
 static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     b32 set = 0, unset = 0, print = 0, quiet = 0, oflag = 0;
@@ -1605,17 +1645,21 @@ static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     i32 status = 0;
     for (; i < nargs; i++) {
-        i32 idx = -1;
+        i32 idx    = -1;
+        b32 msys   = sh->pathmode == PM_MSYS;
+        b32 hidden = !oflag && msysshopt(sh, args[i]);
         for (i32 k = 0; k < count; k++) {
             if ((oflag ? setoptions[k].name : shoptnames[k]) == args[i]) idx = k;
         }
-        if (idx < 0) {
+        if (idx<0 && !hidden) {
             builtinerror(sh, scratch, "shopt", concat(&scratch, args[i], oflag ? Str(": invalid option name") : Str(": invalid shell option name")));
             status = 1;
             continue;
         }
-        b32 *slot = oflag ? &sh->opt[idx] : &sh->shopt[idx];
-        if (set || unset) {
+        b32 *slot = hidden ? &msys : oflag ? &sh->opt[idx] : &sh->shopt[idx];
+        if (hidden && (set || unset)) {
+            setpathmode(sh, scratch, set ? PM_MSYS : PM_NATIVE);
+        } else if (set || unset) {
             *slot = set;
             if (!oflag && (idx==S_ARRAY_EXPAND_ONCE || idx==S_ASSOC_EXPAND_ONCE)) {
                 // two names for one option
@@ -1696,6 +1740,62 @@ static Str canonpath(Arena *a, Str path)
     return finish(&b);
 }
 
+// A directory for cd in msys mode, in POSIX form: Windows spellings
+// through the mount table ("C:\x" is /c/x), backslashes as slashes.
+static Str msysdir(Shell *sh, Arena *a, Str dir)
+{
+    if (dir.len && dir[0]=='/') {
+        return find(dir, "\\")<0 ? dir : slashify(a, dir, '/');
+    }
+    PathCtx c = pathctx(sh, a, dir);
+    Str     r = toposix(&c, a, dir);
+    return r.data ? r : dir;
+}
+
+// The canonical form of cd's absolute target in the mode: textual in
+// POSIX and msys mode (an msys // keeps naming a server), and the
+// native path in native mode.
+static Str cdcanon(Shell *sh, Arena *a, Str path)
+{
+    switch (sh->pathmode) {
+    case PM_POSIX:
+        break;
+    case PM_MSYS:
+        if (startswith(path, "//") && !startswith(path, "///")) {
+            return concat(a, "/", canonpath(a, cuthead(path, 1)));
+        }
+        break;
+    case PM_NATIVE: {
+        PathRes r = resolve(sh, a, path);
+        Str     n = r.native;
+        if (!r.ok || !n.data) return path;
+        if (startswith(n, "//?/") && hasdrive(cuthead(n, 4))) n = cuthead(n, 4);
+        for (; n.len>1 && n[n.len-1]=='/' && !(n.len==3 && hasdrive(n)); n.len--) {}
+        return n;
+    }
+    }
+    return canonpath(a, path);
+}
+
+// Make dir, canonical in the mode's form, the working directory: PWD
+// and OLDPWD, the native directory the platform sees (none for a
+// virtual msys directory such as /proc), and its drive's =X: entry.
+static void setcwd(Shell *sh, Arena scratch, Str dir, Str old)
+{
+    Str ncwd = dir;
+    if (sh->pathmode == PM_MSYS) {
+        PathRes r = resolve(sh, &scratch, dir);
+        ncwd = r.ok && r.kind==PK_FILE ? r.native : Str{};
+        if (startswith(ncwd, "//?/") && hasdrive(cuthead(ncwd, 4))) ncwd = cuthead(ncwd, 4);
+        for (; ncwd.len>1 && ncwd[ncwd.len-1]=='/' && !(ncwd.len==3 && hasdrive(ncwd)); ncwd.len--) {}
+    }
+    setvar(sh, scratch, "OLDPWD", old, SV_FORCE);
+    setvar(sh, scratch, "PWD", dir, SV_FORCE);
+    sh->wd  = sclone(sh->store, dir);
+    sh->cwd = ncwd.data==dir.data ? sh->wd : sclone(sh->store, ncwd);
+    if (sh->pathmode != PM_POSIX) setdrivecwd(sh, scratch, ncwd);
+}
+
 static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     b32 physical = sh->opt[O_PHYSICAL];
@@ -1735,23 +1835,37 @@ static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
         printdir = 1;
     } else {
         dir = args[i];
+        if (!dir.len) {
+            builtinerror(sh, scratch, "cd", "null directory");
+            return 1;
+        }
     }
     if (!dir.len) {
         return 0;
     }
-    Got pwd = getvar(sh, &scratch, "PWD");
-    Str base = pwd.set && isabsolute(sh, pwd.value) ? pwd.value : sh->cwd;
-    Str target = isabsolute(sh, dir) ? dir : joinpath(&scratch, base, dir);
+    Str typed = dir;
+    b32 msys  = sh->pathmode == PM_MSYS;
+    if (msys) dir = msysdir(sh, &scratch, dir);
+
+    // Relative to bash's the_current_working_directory, not $PWD; a
+    // native path resolves through the drives' directories (topath)
+    Got pwd    = getvar(sh, &scratch, "PWD");
+    Str old    = pwd.set ? pwd.value : sh->wd;
+    Str base   = sh->wd;
+    if (msys && !startswith(base, "/")) base = msysdir(sh, &scratch, base);
+    b32 native = sh->pathmode == PM_NATIVE;
+    Str target = isabsolute(sh, dir) || native ? dir : joinpath(&scratch, base, dir);
 
     // CDPATH for relative names not starting with . or ..
     Got cdpath = getvar(sh, &scratch, "CDPATH");
     if (cdpath.set && !isabsolute(sh, dir) && dir[0]!='.') {
         for (Str rest = cdpath.value;;) {
-            Cut c = cut(rest, ':');
+            Cut c = cut(rest, listsep(sh));
             Str cand = c.head.len ? joinpath(&scratch, c.head, dir) : Str{};
             if (cand.len) {
-                Str abs = isabsolute(sh, cand) ? cand : joinpath(&scratch, base, cand);
-                Stat st = os_stat(sh->os, scratch, canonpath(&scratch, abs), 1);
+                if (msys) cand = msysdir(sh, &scratch, cand);
+                Str abs = isabsolute(sh, cand) || native ? cand : joinpath(&scratch, base, cand);
+                Stat st = pathstat(sh, scratch, cdcanon(sh, &scratch, abs), 1);
                 if (!st.err && st.type==FT_DIR) {
                     target = abs;
                     printdir = 1;
@@ -1763,19 +1877,16 @@ static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
     }
 
-    Str logical = canonpath(&scratch, target);
-    Stat st = os_stat(sh->os, scratch, physical ? target : logical, 1);
+    Str logical = cdcanon(sh, &scratch, target);
+    Stat st = pathstat(sh, scratch, physical ? target : logical, 1);
     if (st.err || st.type!=FT_DIR) {
         i32 err = st.err ? st.err : E_NOTDIR;
-        builtinerror(sh, scratch, "cd", concat3(&scratch, dir, Str(": "), errtext(err)));
+        builtinerror(sh, scratch, "cd", concat3(&scratch, typed, Str(": "), errtext(err)));
         return 1;
     }
-    Str newcwd = physical ? canonpath(&scratch, target) : logical;
-    setvar(sh, scratch, "OLDPWD", base, SV_FORCE);
-    setvar(sh, scratch, "PWD", newcwd, SV_FORCE);
-    sh->cwd = sclone(sh->store, newcwd);
+    setcwd(sh, scratch, physical ? cdcanon(sh, &scratch, target) : logical, old);
     if (printdir) {
-        bprint(sh, newcwd);
+        bprint(sh, sh->wd);
         bprint(sh, "\n");
     }
     return 0;
@@ -1783,18 +1894,32 @@ static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 b_pwd(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
-    b32 physical = sh->opt[O_PHYSICAL];
-    for (iz i = 1; i < nargs; i++) {
-        if (args[i] == "-P") physical = 1;
-        else if (args[i] == "-L") physical = 0;
-        else if (args[i] == "--") break;
-        else if (args[i].len>1 && args[i][0]=='-') {
-            invalidoption(sh, scratch, "pwd", takehead(args[i], 2));
-            return 2;
+    b32 win = 0;
+    for (iz i = 1; i<nargs && args[i].len>1 && args[i][0]=='-'; i++) {
+        if (args[i] == "--") break;
+        for (iz k = 1; k < args[i].len; k++) {
+            switch (args[i][k]) {
+            case 'L': case 'P': break;  // the logical path holds no links
+            case 'W':
+                if (sh->pathmode != PM_POSIX) {
+                    win = 1;
+                    break;
+                }
+                [[fallthrough]];
+            default:
+                invalidoption(sh, scratch, "pwd", span(args[i].data+k-1, args[i].data+k+1));
+                return 2;
+            }
         }
     }
-    Got g = getvar(sh, &scratch, "PWD");
-    bprint(sh, !physical && g.set && g.value.len ? g.value : sh->cwd);
+    Str wd = sh->wd;
+    if (win && sh->pathmode==PM_MSYS) {
+        // MSYS2's pwd -W: the Windows form with forward slashes
+        PathCtx c = pathctx(sh, &scratch, {});
+        wd = towin(&c, &scratch, wd, 0);
+        if (wd.len>1 && wd[wd.len-1]=='/' && !(wd.len==3 && hasdrive(wd))) wd.len--;
+    }
+    bprint(sh, wd);
     bprint(sh, "\n");
     return 0;
 }
@@ -2622,7 +2747,7 @@ static b32 describe(Shell *sh, Arena *a, Str name, u8 mode, b32 all, b32 nofuncs
                        : pathlookup(sh, a, name, nth);
             if (path.data && !haspath(sh, path)) {
                 // found with PATH unset: shown in full
-                path = joinpath(a, sh->cwd, path);
+                path = joinpath(a, sh->wd, path);
             }
         }
         if (!path.data) break;
@@ -2780,7 +2905,7 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
     b32 failed = 1;
     b32 tried  = 0;  // found: a failure ends the shell as a failed execve
     if (!haspath(sh, name) && !(found = pathlookup(sh, &scratch, name)).data) {
-        Stat st = os_stat(sh->os, scratch, absolute(sh, &scratch, name), 1);
+        Stat st = pathstat(sh, scratch, name, 1);
         if (!st.err && st.type==FT_DIR) {
             builtinerror(sh, scratch, "exec", concat(&scratch, name, ": cannot execute: Is a directory"));
             status = 126;

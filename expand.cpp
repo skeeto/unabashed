@@ -603,6 +603,18 @@ static Str basename(Str path)
     return cuthead(path, i);
 }
 
+// How much of path is HOME, which a prompt or a job's directory shows
+// as ~: all of home up to a slash, ignoring case in the Windows modes
+// (msys2.md, pitfall 9), or -1 if not there.
+static iz homeprefix(Shell *sh, Str path, Str home)
+{
+    if (!home.len || path.len<home.len) return -1;
+    Str head = takehead(path, home.len);
+    b32 same = sh->pathmode==PM_POSIX ? head==home : equalfold(head, home);
+    if (!same || (path.len>home.len && path[home.len]!='/')) return -1;
+    return home.len;
+}
+
 // Prompt text from outside the prompt (names, directories): control
 // characters made visible as ^X, then, when the prompt will be expanded,
 // backslash-quoted for double quotes, as bash does.
@@ -682,12 +694,12 @@ static Str promptdecode(X *x, Str s)
         case 'W': {
             Str pwd  = getvar(sh, a, "PWD").value;
             Got home = getvar(sh, a, "HOME");
-            b32 athome = home.set && home.value==pwd;
+            iz  n    = home.set ? homeprefix(sh, pwd, home.value) : -1;
+            b32 athome = home.set && n==pwd.len;
             if (c=='W' && !athome) {
                 if (pwd!="/" && pwd!="//") pwd = basename(pwd);
-            } else if (home.set && home.value.len && startswith(pwd, home.value) &&
-                       (pwd.len==home.value.len || pwd[home.value.len]=='/')) {
-                pwd = concat(a, "~", cuthead(pwd, home.value.len));
+            } else if (n >= 0) {
+                pwd = concat(a, "~", cuthead(pwd, n));
             }
             promptput(&b, pwd, 1, expand);
         } break;
@@ -1757,7 +1769,7 @@ static Str tildeprefix(X *x, Str prefix, b32 *ok)
         for (iz i = 0; i < n.len; i++) zero &= n[i] == '0';
         if (zero) {
             Got g = getvar(sh, x->a, "PWD");
-            return g.set ? g.value : sh->cwd;
+            return g.set ? g.value : sh->wd;
         }
     }
     *ok = 0;
@@ -2245,29 +2257,137 @@ static Str joinpath(Arena *a, Str dir, Str name)
     return finish(&b);
 }
 
+// Is a path absolute as cd and PWD take it? In the Windows modes, as
+// in Cygwin's bash, a drive ("C:", even "C:x") or either separator.
 static b32 isabsolute(Shell *sh, Str path)
 {
     if (path.len && path[0]=='/') return 1;
-    if (sh->windows) {
-        if (path.len && path[0]=='\\') return 1;
-        if (path.len>1 && letter(path[0]) && path[1]==':') return 1;
+    if (sh->pathmode != PM_POSIX) {
+        return (path.len && path[0]=='\\') || hasdrive(path);
     }
     return 0;
+}
+
+// The separator of PATH, CDPATH and the like: ';' in native mode,
+// where ':' follows a drive letter.
+static u8 listsep(Shell *sh)
+{
+    return sh->pathmode==PM_NATIVE ? ';' : ':';
 }
 
 // Does a command name contain a directory part, so PATH is not used?
 static b32 haspath(Shell *sh, Str name)
 {
+    b32 win = sh->pathmode != PM_POSIX;
     for (iz i = 0; i < name.len; i++) {
-        if (name[i]=='/' || (sh->windows && name[i]=='\\')) return 1;
+        if (name[i]=='/' || (win && name[i]=='\\')) return 1;
     }
-    return sh->windows && name.len>1 && letter(name[0]) && name[1]==':';
+    return win && hasdrive(name);
 }
 
+// The drives' working directories in the =X: entries a parent passed
+// (cmd.exe's convention), which cd keeps up to date: canonical, null
+// where unknown.
+static void drivecwds(Shell *sh, Arena *a, Str *dirs)
+{
+    for (iz i = 0; i < sh->nbadenv; i++) {
+        Str e = sh->badenv[i];
+        if (e.len>4 && e[0]=='=' && letter(e[1]) && e[2]==':' && e[3]=='=') {
+            Str d = winnorm(a, cuthead(e, 4), "C:/");
+            if (d.data && hasdrive(d)) dirs[upcase(e[1])-'A'] = d;
+        }
+    }
+}
+
+// The path context now: the startup mount table with the shell's mode
+// and native working directory, and for a drive-relative path ("C:x",
+// native mode) the drives' directories.
+static PathCtx pathctx(Shell *sh, Arena *a, Str path)
+{
+    PathCtx c = *sh->paths;
+    c.mode = sh->pathmode;
+    c.cwd  = sh->cwd;
+    if (c.mode==PM_NATIVE && hasdrive(path) && (path.len==2 || !pathsep(path[2]))) {
+        drivecwds(sh, a, c.drivecwd);
+    }
+    return c;
+}
+
+// Resolve a path as the platform will see it (paths.cpp's topath). In
+// msys mode a relative path starts from the logical directory, so that
+// "dev" in / and "self" in /proc find the virtual files. An msys name
+// Win32 would alter (a trailing dot) is made literal with //?/.
+static PathRes resolve(Shell *sh, Arena *a, Str path)
+{
+    PathCtx c = pathctx(sh, a, path);
+    if (c.mode==PM_MSYS && path.len && !pathsep(path[0]) && !hasdrive(path)
+            && startswith(sh->wd, "/")) {
+        path = joinposix(a, sh->wd, slashify(a, path, '/'));
+    }
+    PathRes r = topath(&c, a, path);
+    if (c.mode==PM_MSYS && r.ok && r.kind==PK_FILE && find(path, "dev")>=0
+            && pathsep(path[0])) {
+        Str p = posixnorm(a, slashify(a, path, '/'));
+        if (p=="/dev" || p=="/dev/") {
+            r = {};  // the virtual /dev directory
+            r.ok   = 1;
+            r.kind = PK_DEV;
+        }
+    }
+    if (r.literal && hasdrive(r.native)) {
+        r.native = concat(a, "//?/", r.native);
+    }
+    return r;
+}
+
+// The path to give the platform for a file the shell opens or runs:
+// absolute, and canonical and native in the Windows modes. A virtual
+// file that has no native path comes back as typed, which the platform
+// will not find.
 static Str absolute(Shell *sh, Arena *a, Str path)
 {
-    if (isabsolute(sh, path)) return path;
-    return joinpath(a, sh->cwd, path.len ? path : Str("."));
+    if (sh->pathmode == PM_POSIX) {
+        if (isabsolute(sh, path)) return path;
+        return joinpath(a, sh->cwd, path.len ? path : Str("."));
+    }
+    PathRes r = resolve(sh, a, path.len ? path : Str("."));
+    return r.native.data ? r.native : path;
+}
+
+static Stat pathstat(Shell *, Arena, Str, b32);  // exec.cpp
+
+// The working directory a program starts in: in a virtual msys
+// directory (/proc), the root.
+static Str spawncwd(Shell *sh, Arena *a)
+{
+    if (sh->cwd.len) return sh->cwd;
+    Str root = rootnative(sh->paths);
+    return root.len==2 ? concat(a, root, "/") : root;
+}
+
+// Record a native directory as its drive's working directory, in the
+// =X: entry children inherit.
+static void setdrivecwd(Shell *sh, Arena scratch, Str dir)
+{
+    if (!hasdrive(dir)) return;
+    Buf b(&scratch, dir.len+5);
+    putbyte(&b, '=');
+    putbyte(&b, upcase(dir[0]));
+    print(&b, ":=");
+    print(&b, slashify(&scratch, dir, '\\'));
+    Str e = finish(&b);
+    iz  n = sh->nbadenv;
+    iz  k = n;
+    for (iz i = 0; i < n; i++) {
+        Str o = sh->badenv[i];
+        if (o.len>3 && o[0]=='=' && upcase(o[1])==e[1] && o[2]==':' && o[3]=='=') k = i;
+    }
+    if (k<n && sh->badenv[k]==e) return;
+    Str *v = (Str *)salloc(sh->store, (n+1)*(iz)sizeof(Str));
+    for (iz i = 0; i < n; i++) v[i] = sh->badenv[i];
+    v[k] = sclone(sh->store, e);
+    sh->badenv  = v;
+    sh->nbadenv = k<n ? n : n+1;
 }
 
 

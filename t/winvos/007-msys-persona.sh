@@ -1,8 +1,8 @@
 # personality: msys
-# Hand-checked baseline of today's minimal Windows layer, not recorded
-# from an oracle (M5a step 4); step 5 gives the msys persona its mount
-# table and POSIX paths, changing this on purpose.
-# The shell as C:/msys/usr/bin/bash.exe: the same native paths as sh.
+# Hand-checked baseline, not recorded from an oracle (M5a steps 4, 5);
+# step 7 strips .exe from type's answers.
+# The shell as C:/msys/usr/bin/bash.exe: the mount table of the
+# install's etc/fstab, PWD and PATH in POSIX form.
 pwd
 echo "$PATH"
 type bash ls

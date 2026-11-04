@@ -1,8 +1,8 @@
-== stdout 215
-C:/work
-C:\msys\usr\bin;C:\w64\bin;C:\Windows\System32
-bash is C:\msys\usr\bin/bash.exe
-ls is C:\msys\usr\bin/ls.exe
+== stdout 194
+/c/work
+/usr/bin:/c/w64/bin:/c/Windows/System32
+bash is /usr/bin/bash.exe
+ls is /usr/bin/ls.exe
 /
 fstab
 none / cygdrive binary,posix=0,noacl,user 0 0
@@ -10,11 +10,11 @@ none /tmp usertemp binary,posix=0,noacl 0 0
 
 == stderr 0
 
-== merged 215
-C:/work
-C:\msys\usr\bin;C:\w64\bin;C:\Windows\System32
-bash is C:\msys\usr\bin/bash.exe
-ls is C:\msys\usr\bin/ls.exe
+== merged 194
+/c/work
+/usr/bin:/c/w64/bin:/c/Windows/System32
+bash is /usr/bin/bash.exe
+ls is /usr/bin/ls.exe
 /
 fstab
 none / cygdrive binary,posix=0,noacl,user 0 0

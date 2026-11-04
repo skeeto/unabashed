@@ -728,6 +728,60 @@ static i32 devfdnum(Str name)
     return -1;
 }
 
+static Str  procfile(Shell *, Arena *, PathRes);
+
+// openfile in the Windows modes, where the shell resolves the virtual
+// files: /dev/fd/N and /proc/self/fd/N are its own descriptors, /dev/tty
+// the console, and the /proc files it knows are text.
+static File *openwin(Shell *sh, Arena *a, Str name, i32 flags)
+{
+    PathRes r    = resolve(sh, a, name);
+    Str     path = r.native;
+    i32     err  = 0;
+    if (!r.ok) {
+        err = r.kind==PK_DEV ? E_NOTDIR : E_NOENT;
+    } else if (r.kind == PK_FD) {
+        File *f = r.num<FDMAX ? sh->fds->fd[r.num] : 0;
+        if (!f) {
+            shellerror(sh, *a, concat(a, name, ": Bad file descriptor"));
+            return 0;
+        }
+        f->refs++;
+        return f;
+    } else if (r.kind == PK_TTY) {
+        path = flags==OF_READ ? Str("//./CONIN$") : Str("//./CONOUT$");
+    } else if (r.kind == PK_DEV) {
+        // zero, random and the like: only a sink here
+        b32 dir = !r.sub.len || r.sub=="fd";
+        err  = dir ? E_ISDIR : flags&OF_WRITE ? 0 : E_NOENT;
+        path = "//./NUL";
+    } else if (r.kind == PK_PROC) {
+        Str text = procfile(sh, a, r);
+        if (text.data && !(flags & OF_WRITE)) {
+            File *f = newfile(sh, F_MEM, OF_READ);
+            f->mem    = sclone(sh->store, text);
+            f->ownmem = 1;
+            return f;
+        }
+        Stat st = pathstat(sh, *a, name, 1);
+        err = st.err ? st.err : st.type==FT_DIR ? E_ISDIR : E_ACCES;
+    } else if (r.kind == PK_CYGDRIVE) {
+        err = E_ISDIR;
+    }
+    if (err) {
+        shellerror(sh, *a, concat3(a, name, Str(": "), errtext(err)));
+        return 0;
+    }
+    Opened o = os_open(sh->os, *a, path, flags, 0666);
+    if (o.err) {
+        shellerror(sh, *a, concat3(a, name, Str(": "), errtext(o.err)));
+        return 0;
+    }
+    File *f = newfile(sh, F_OS, flags);
+    f->h = o.h;
+    return f;
+}
+
 static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
 {
     if (!name.len) {
@@ -735,6 +789,7 @@ static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
         shellerror(sh, *a, concat(a, name, ": No such file or directory"));
         return 0;
     }
+    if (sh->pathmode != PM_POSIX) return openwin(sh, a, name, flags);
     Str path = absolute(sh, a, name);
     i32 dupfd = devfdnum(name);
     if (dupfd >= 0) {
@@ -771,7 +826,7 @@ static i32 parsefd(Str s)
 static b32 clobbers(Shell *sh, Arena *a, Str name)
 {
     if (!sh->opt[O_NOCLOBBER]) return 0;
-    Stat st = os_stat(sh->os, *a, absolute(sh, a, name), 1);
+    Stat st = pathstat(sh, *a, name, 1);
     if (!st.err && st.type==FT_FILE) {
         shellerror(sh, *a, concat(a, name, ": cannot overwrite existing file"));
         return 1;
@@ -1100,12 +1155,14 @@ static b32 canexec(Shell *sh, Stat st)
     return (bits & 1) || (!sh->euid && (st.mode & 0111));
 }
 
-// Search a path list for the nth match of an executable name.
+// Search a path list for the nth match of an executable name. Native
+// mode also tries Windows' executable extensions, msys mode only .exe.
+// (Step 7 of M5a replaces this with the per-mode rules.)
 static Str pathsearch(Shell *sh, Arena *a, Str path, Str name, iz nth = 0)
 {
     static Str exts[] = {"", ".exe", ".com", ".bat", ".cmd"};
-    u8  sep  = sh->windows ? ';' : ':';
-    iz  next = sh->windows ? countof(exts) : 1;
+    u8  sep  = listsep(sh);
+    iz  next = sh->pathmode==PM_NATIVE ? countof(exts) : sh->pathmode==PM_MSYS ? 2 : 1;
     for (Str rest = path;;) {
         Cut c = cut(rest, sep);
         Str dir = c.head.len ? c.head : Str(".");
@@ -1138,7 +1195,16 @@ static Str pathlookup(Shell *sh, Arena *a, Str name, iz nth = 0)
 // The path that command -p searches, which finds the standard utilities.
 static Str stdpath(Shell *sh)
 {
-    return sh->windows ? Str("/usr/bin;/bin") : Str("/bin:/usr/bin");
+    switch (sh->pathmode) {
+    case PM_POSIX:  break;
+    case PM_MSYS:   return "/usr/bin:/bin";
+    case PM_NATIVE: {
+        // the shell's own directory, where w64devkit keeps its tools
+        Str dir = takehead(sh->exe, sh->exe.len-lastpart(sh->exe).len);
+        return dir.len>3 ? cuttail(dir, 1) : dir;
+    }
+    }
+    return "/bin:/usr/bin";
 }
 
 // Remembered command paths
@@ -1247,6 +1313,118 @@ static i32 memfiletype(Shell *sh, File *f)
     iz cap = os_pipecap(sh->os);
     cap = cap<HEREDOCPIPE ? cap : HEREDOCPIPE;
     return !f->mem.len ? FT_CHAR : f->mem.len<=cap ? FT_PIPE : FT_FILE;
+}
+
+// The status of one of the shell's descriptors, as /dev/fd/N shows it.
+static Stat fdstat(Shell *sh, i64 fd)
+{
+    Stat  s = {};
+    File *f = fd>=0 && fd<FDMAX ? sh->fds->fd[fd] : 0;
+    if (!f) {
+        s.err = E_NOENT;  // bash: EBADF from fstat, reported false
+    } else if (f->kind == F_OS) {
+        s = os_fstat(sh->os, f->h);
+    } else {
+        // What a program would find there (materialize)
+        s.type  = f->kind==F_MEM ? memfiletype(sh, f) : FT_PIPE;
+        s.mode  = s.type==FT_FILE ? 0400 : s.type==FT_CHAR ? 0666 : 0600;
+        s.size  = s.type==FT_FILE ? f->mem.len : 0;
+        s.nlink = 1;
+        s.uid   = sh->euid;
+        s.gid   = sh->egid;
+    }
+    return s;
+}
+
+// Is a resolved /proc entry ours: /proc/self or /proc/$$?
+static b32 procself(Shell *sh, PathRes r)
+{
+    return r.num<0 || r.num==sh->pid || r.num==sh->bashpid;
+}
+
+// The contents of a file under /proc/self, or null if there is none:
+// the few Cygwin files an agent reads (no comm in msys2-runtime 3.6).
+static Str procfile(Shell *sh, Arena *a, PathRes r)
+{
+    if (r.kind!=PK_PROC || !procself(sh, r)) return {};
+    PathCtx c = pathctx(sh, a, {});
+    if (r.sub == "exename") {
+        Str p = toposix(&c, a, sh->exe);
+        if (endswith(p, ".exe")) p = cuttail(p, 4);
+        return concat(a, p, "\n");
+    } else if (r.sub == "winexename") {
+        return concat(a, slashify(a, sh->exe, '\\'), "\n");
+    }
+    return {};
+}
+
+static Stat dirstat(Shell *sh)
+{
+    Stat s = {};
+    s.type  = FT_DIR;
+    s.mode  = 0555;
+    s.nlink = 1;
+    s.uid   = sh->euid;
+    s.gid   = sh->egid;
+    return s;
+}
+
+// os_stat for a path the shell was given. The Windows modes resolve it
+// through the mount table and answer for the virtual files themselves.
+// In msys mode, as Cygwin's stat, "foo" finds "foo.exe".
+static Stat pathstat(Shell *sh, Arena a, Str path, b32 follow)
+{
+    if (sh->pathmode == PM_POSIX) {
+        return os_stat(sh->os, a, absolute(sh, &a, path), follow);
+    }
+    Stat    s = {};
+    PathRes r = resolve(sh, &a, path.len ? path : Str("."));
+    if (!r.ok) {
+        s.err = r.kind==PK_DEV ? E_NOTDIR : E_NOENT;
+        return s;
+    }
+    switch (r.kind) {
+    case PK_FILE:
+        s = os_stat(sh->os, a, r.native, follow);
+        if (s.err==E_NOENT && sh->pathmode==PM_MSYS && !endswith(r.native, ".exe")) {
+            Stat x = os_stat(sh->os, a, concat(&a, r.native, ".exe"), follow);
+            if (!x.err && x.type==FT_FILE) s = x;
+        }
+        return s;
+    case PK_NULL:
+    case PK_TTY:
+    case PK_DEVICE:
+        s.type = FT_CHAR;
+        s.mode = 0666;
+        break;
+    case PK_FD:
+        return fdstat(sh, r.num);
+    case PK_DEV:
+        if (!r.sub.len || r.sub=="fd") return dirstat(sh);
+        s.type = FT_CHAR;
+        s.mode = 0666;
+        break;
+    case PK_PROC:
+        if (!r.num && !r.sub.len) return dirstat(sh);
+        if (!r.num || !procself(sh, r)) {
+            s.err = E_NOENT;
+            return s;
+        }
+        if (!r.sub.len || r.sub=="fd") return dirstat(sh);
+        if (!procfile(sh, &a, r).data) {
+            s.err = E_NOENT;
+            return s;
+        }
+        s.type = FT_FILE;
+        s.mode = 0444;
+        break;
+    case PK_CYGDRIVE:
+        return dirstat(sh);
+    }
+    s.nlink = 1;
+    s.uid   = sh->euid;
+    s.gid   = sh->egid;
+    return s;
 }
 
 // Turn a here-document an external is given into its OS form, in
@@ -1384,7 +1562,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     sp.argc  = argc;
     sp.env   = env.data;
     sp.nenv  = env.len;
-    sp.cwd   = sh->cwd;
+    sp.cwd   = spawncwd(sh, &a);
     sp.fds   = fds;
     sp.nfds  = nfds;
     sp.sigign = ignoredsigs(sh);
@@ -1642,7 +1820,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         if (sh->sig->waitsig) waitdone(sh, killed ? sigbit(killed) : 0, 0);
         return status;
     }
-    Stat s = os_stat(sh->os, a, absolute(sh, &a, path), 1);
+    Stat s = pathstat(sh, a, path, 1);
     if (!s.err && s.type==FT_DIR) {
         err = E_ISDIR;
     }
@@ -2339,37 +2517,21 @@ static Stat envstat(void *ctx, Str path, b32 follow)
     Arena    a  = *t->a;
 
     // As bash, /dev/fd/N and /dev/std* name the shell's own descriptors
-    i64 fd = -1;
-    if (path == "/dev/stdin") {
+    // (the Windows modes resolve them with the other virtual files)
+    b32 posix = sh->pathmode == PM_POSIX;
+    i64 fd    = -1;
+    if (posix && path=="/dev/stdin") {
         fd = 0;
-    } else if (path == "/dev/stdout") {
+    } else if (posix && path=="/dev/stdout") {
         fd = 1;
-    } else if (path == "/dev/stderr") {
+    } else if (posix && path=="/dev/stderr") {
         fd = 2;
-    } else if (startswith(path, "/dev/fd/")) {
+    } else if (posix && startswith(path, "/dev/fd/")) {
         TestNum n = testparseint(cuthead(path, 8));
         fd = n.ok && n.value>=0 ? n.value : (i64)FDMAX;
     }
-    if (fd >= 0) {
-        Stat  s = {};
-        File *f = fd<FDMAX ? sh->fds->fd[fd] : 0;
-        if (!f) {
-            s.err = E_NOENT;  // bash: EBADF from fstat, reported false
-        } else if (f->kind == F_OS) {
-            s = os_fstat(sh->os, f->h);
-        } else {
-            // What a program would find there (materialize)
-            s.type  = f->kind==F_MEM ? memfiletype(sh, f) : FT_PIPE;
-            s.mode  = s.type==FT_FILE ? 0400 : s.type==FT_CHAR ? 0666 : 0600;
-            s.size  = s.type==FT_FILE ? f->mem.len : 0;
-            s.nlink = 1;
-            s.uid   = sh->euid;
-            s.gid   = sh->egid;
-        }
-        return s;
-    }
-
-    return os_stat(sh->os, a, absolute(sh, &a, path), follow);
+    if (fd >= 0) return fdstat(sh, fd);
+    return pathstat(sh, a, path, follow);
 }
 
 static b32 envaccess(void *ctx, Str path, i32 mode)

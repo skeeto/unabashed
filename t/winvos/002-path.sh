@@ -1,8 +1,9 @@
 # personality: native
-# Hand-checked baseline of today's minimal Windows layer, not recorded
-# from an oracle (M5a step 4); step 7's spawner changes it on purpose.
-# PATH is ;-separated and its search tries "" .exe .com .bat .cmd; a
-# native program gets an MSVCRT-quoted command line built from argv.
+# Hand-checked baseline, not recorded from an oracle (M5a steps 4, 5);
+# step 7's spawner changes it on purpose.
+# PATH is ;-separated, imported with forward slashes (busybox-w32), and
+# its search tries "" .exe .com .bat .cmd; a native program gets an
+# MSVCRT-quoted command line built from argv.
 echo "$PATH"
 type argv sh cmd busybox
 command -v ls

@@ -465,6 +465,54 @@ static Slice<CygArg> splitcygwin(Arena *a, Str cmd, b32 program)
     return args;
 }
 
+// GLOB_BRACE on a CYG_GLOB pattern: every alternative of the first
+// brace group, recursively ("{}" stays). At most limit results, since
+// a command line can ask for 2^5000 of them.
+static Slice<Str> cygbraces(Arena *a, Slice<Str> out, Str p, iz limit)
+{
+    if (out.len >= limit) return out;
+    iz open = -1, close = -1, depth = 0;
+    for (iz i = 0; i < p.len; i++) {
+        if (p[i] == '\\') {
+            i++;
+        } else if (p[i]=='{' && !(i+1<p.len && p[i+1]=='}')) {
+            if (!depth++ && open<0) open = i;
+        } else if (p[i]=='}' && depth && !--depth && close<0) {
+            close = i;
+        }
+    }
+    if (open<0 || close<0) {
+        return push(a, out, p);
+    }
+    Str head = takehead(p, open);
+    Str tail = cuthead(p, close+1);
+    iz  beg  = open + 1;
+    depth = 0;
+    for (iz i = beg; i <= close; i++) {
+        if (p[i] == '\\') {
+            i++;
+        } else if (p[i] == '{') {
+            depth++;
+        } else if (i==close || (p[i]==',' && !depth)) {
+            Str alt = span(p.data+beg, p.data+i);
+            out = cygbraces(a, out, concat(a, concat(a, head, alt), tail), limit);
+            beg = i + 1;
+        } else if (p[i] == '}') {
+            depth--;
+        }
+    }
+    return out;
+}
+
+static Str cygunquote(Arena *a, Str s)  // backslash escapes removed
+{
+    Buf b(a, s.len);
+    for (iz i = 0; i < s.len; i++) {
+        putbyte(&b, s[i]=='\\' && i+1<s.len ? s[++i] : s[i]);
+    }
+    return finish(&b);
+}
+
 // Append an argument quoted for splitcygwin, which gives it back
 // unchanged, never globbed nor read as a response file. Command lines
 // cannot carry NUL.

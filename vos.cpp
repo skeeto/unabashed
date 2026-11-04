@@ -1630,15 +1630,6 @@ static b32 vwild(Str part)  // an unescaped wildcard
     return 0;
 }
 
-static Str vunquote(Arena *a, Str s)  // backslash escapes removed
-{
-    Buf b(a, s.len);
-    for (iz i = 0; i < s.len; i++) {
-        putbyte(&b, s[i]=='\\' && i+1<s.len ? s[++i] : s[i]);
-    }
-    return finish(&b);
-}
-
 static b32 vstrless(Str *a, Str *b)
 {
     return compare(*a, *b) < 0;
@@ -1657,7 +1648,7 @@ static Slice<Str> vglobpart(Vos *v, Arena *a, Slice<Str> out, Str cwd, Str shown
     Cut c   = cut(rest, '/');
     Str sep = c.ok ? Str("/") : Str("");
     if (!vwild(c.head)) {
-        Str next = concat(a, concat(a, shown, vunquote(a, c.head)), sep);
+        Str next = concat(a, concat(a, shown, cygunquote(a, c.head)), sep);
         return vglobpart(v, a, out, cwd, next, c.tail);
     }
     VResolved d = vresolve(v, a, vabs(a, cwd, shown), 1);
@@ -1676,48 +1667,12 @@ static Slice<Str> vglobpart(Vos *v, Arena *a, Slice<Str> out, Str cwd, Str shown
     return out;
 }
 
-// GLOB_BRACE: every alternative of the first brace group, recursively.
-static Slice<Str> vbraces(Arena *a, Slice<Str> out, Str p)
-{
-    iz open = -1, close = -1, depth = 0;
-    for (iz i = 0; i < p.len; i++) {
-        if (p[i] == '\\') {
-            i++;
-        } else if (p[i]=='{' && !(i+1<p.len && p[i+1]=='}')) {
-            if (!depth++ && open<0) open = i;
-        } else if (p[i]=='}' && depth && !--depth && close<0) {
-            close = i;
-        }
-    }
-    if (open<0 || close<0) {
-        return push(a, out, p);
-    }
-    Str head = takehead(p, open);
-    Str tail = cuthead(p, close+1);
-    iz  beg  = open + 1;
-    depth = 0;
-    for (iz i = beg; i <= close; i++) {
-        if (p[i] == '\\') {
-            i++;
-        } else if (p[i] == '{') {
-            depth++;
-        } else if (i==close || (p[i]==',' && !depth)) {
-            Str alt = span(p.data+beg, p.data+i);
-            out = vbraces(a, out, concat(a, concat(a, head, alt), tail));
-            beg = i + 1;
-        } else if (p[i] == '}') {
-            depth--;
-        }
-    }
-    return out;
-}
-
 // Cygwin's glob for a CYG_GLOB word: braces, a leading ~ (HOME, when
 // it names a directory), wildcards over the tree, and the unquoted
 // pattern when nothing matches (GLOB_NOCHECK).
 static Slice<Str> vcygglob(Vos *v, Arena *a, Slice<Str> out, Str pat, Str cwd, Str home)
 {
-    Slice<Str> alts = vbraces(a, {}, pat);
+    Slice<Str> alts = cygbraces(a, {}, pat, (iz)1<<12);
     for (iz k = 0; k < alts.len; k++) {
         Str p = alts[k];
         if (p.len && p[0]=='~' && (p.len==1 || p[1]=='/') && home.len) {
@@ -1735,7 +1690,7 @@ static Slice<Str> vcygglob(Vos *v, Arena *a, Slice<Str> out, Str pat, Str cwd, S
         iz before = out.len;
         out = vglobpart(v, a, out, cwd, {}, p);
         if (out.len == before) {
-            out = push(a, out, vunquote(a, p));
+            out = push(a, out, cygunquote(a, p));
         }
     }
     return out;

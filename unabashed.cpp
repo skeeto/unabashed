@@ -287,7 +287,7 @@ static void sourcebashenv(Shell *sh, Arena scratch)
     if (!file.len) return;
     i32  err;
     Str  src = readwholefile(sh, &scratch, file, &err);
-    Stat st  = os_stat(sh->os, scratch, absolute(sh, &scratch, file), 1);
+    Stat st  = pathstat(sh, scratch, file, 1);
     if (err == E_NOENT) return;
     Str bad = err ? errtext(err) : Str{};
     if (!err && !st.err && st.type==FT_DIR) bad = "is a directory";
@@ -327,10 +327,174 @@ static void importopts(Shell *sh, Arena scratch, b32 shopt)
     }
 }
 
+static void addbadenv(Shell *sh, Str entry)
+{
+    Str *n = (Str *)salloc(sh->store, (sh->nbadenv+1)*(iz)sizeof(Str));
+    for (iz k = 0; k < sh->nbadenv; k++) n[k] = sh->badenv[k];
+    n[sh->nbadenv++] = sclone(sh->store, entry);
+    sh->badenv = n;
+}
+
+// The path mode and mount table, before the environment is imported.
+// On Windows the persona comes from argv[0] and whether the install
+// root (the shell's directory, less usr/bin or bin) has an etc/fstab,
+// which also gives the mounts (paths.cpp's personaof and initmounts).
+static void pathsetup(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
+{
+    PathCtx *c = alloc<PathCtx>(perm);
+    sh->paths    = c;
+    sh->win32    = info->windows;
+    sh->pathmode = PM_POSIX;
+    if (!info->windows) return;
+
+    Slice<Str> env = {info->env, info->nenv};
+    Str cwd = winnorm(perm, info->cwd, "C:/");
+    Str exe = winnorm(perm, info->exe, cwd.data ? cwd : Str("C:/"));
+    c->pid  = info->pid;
+    c->cwd  = cwd.data ? cwd : Str("C:/");
+    sh->exe = exe.data ? exe : Str{};
+    Str temp = envlookup(env, "TEMP", 1);
+    temp = temp.data ? temp : envlookup(env, "TMP", 1);
+    c->temp = temp.data ? winnorm(perm, temp, c->cwd) : Str{};
+
+    Str root = takehead(sh->exe, sh->exe.len-lastpart(sh->exe).len);
+    for (; root.len>3 && root[root.len-1]=='/'; root.len--) {}
+    if (root.len>8 && equalfold(taketail(root, 8), "/usr/bin")) {
+        root.len -= 8;
+    } else if (root.len>4 && equalfold(taketail(root, 4), "/bin")) {
+        root.len -= 4;
+    }
+    if (!root.len) root = nativeroot(c->cwd);
+    root = clone(perm, root);
+
+    // fstab, read whole if it is there
+    Str    fstab = {};
+    Opened o     = os_open(sh->os, scratch, concat(&scratch, root, "/etc/fstab"), OF_READ, 0);
+    if (!o.err) {
+        Buf b(&scratch, 4096);
+        for (;;) {
+            reserve(&b, 4096);
+            iz n = os_read(sh->os, o.h, b.data+b.len, b.cap-b.len);
+            if (n <= 0) break;
+            b.len += n;
+        }
+        os_close(sh->os, o.h);
+        fstab = clone(perm, finish(&b));
+    }
+    initmounts(c, perm, root, fstab);
+    if (!fstab.data) {
+        c->cygdrive = {};  // no fstab: /c is C:, as in every MSYS2 install
+    }
+    Str argv0    = info->nargs ? info->args[0] : sh->exe;
+    sh->pathmode = personaof(argv0.len ? argv0 : Str("bash"), fstab.data!=0);
+}
+
+// Import one Windows environment variable in msys mode, as the MSYS2
+// runtime does before bash starts (environ.cc): its names in uppercase
+// (renv_arr), the path variables in POSIX form. False to drop it.
+static b32 importmsys(Shell *sh, Arena *a, Str *name, Str *value)
+{
+    static Str upper[] = {
+        "COMMONPROGRAMFILES", "COMSPEC", "PATH", "PROGRAMFILES",
+        "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "WINDIR", "MSYSTEM",
+    };
+    for (iz i = 0; i < countof(upper); i++) {
+        if (equalfold(*name, upper[i])) *name = upper[i];
+    }
+    if (*name=="TERM" && *value=="msys") return 0;
+    PathCtx c = pathctx(sh, a, {});
+    *value = envtoposix(&c, a, *name, *value);
+    return 1;
+}
+
+// Import the environment in native mode, as busybox-w32's ash does when
+// a Windows parent started it (a mixed-case Path, ComSpec or
+// ProgramData): names in uppercase, an invalid name also as a variable
+// with _ for its bad characters, and values with forward slashes except
+// COMSPEC and SYSTEMROOT. Returns whether it did.
+static b32 importnative(Shell *sh, OsInfo *info, Arena scratch)
+{
+    b32 winenv = 0;
+    for (iz i = 0; i < info->nenv; i++) {
+        Str n = cut(info->env[i], '=').head;
+        winenv |= n=="Path" || n=="ComSpec" || n=="ProgramData";
+    }
+    if (!winenv) return 0;
+    for (iz i = 0; i < info->nenv; i++) {
+        Cut c = cut(info->env[i], '=');
+        if (!c.ok) {
+            continue;
+        } else if (!c.head.len) {
+            addbadenv(sh, info->env[i]);  // =C:=C:\x and the like
+            continue;
+        } else if (startswith(c.head, "BASH_FUNC_") && endswith(c.head, "%%")) {
+            importfunc(sh, scratch, c.head, c.tail);
+            continue;
+        }
+        Str name = clone(&scratch, c.head);
+        if (!validvarname(name)) {
+            addbadenv(sh, info->env[i]);
+            for (iz k = 0; k < name.len; k++) {
+                if (!alnum(name[k]) && name[k]!='_') name[k] = '_';
+            }
+            if (digit(name[0])) continue;
+        }
+        for (iz k = 0; k < name.len; k++) name[k] = upcase(name[k]);
+        Str value = c.tail;
+        if (name!="COMSPEC" && name!="SYSTEMROOT") value = slashify(&scratch, value, '/');
+        setvar(sh, scratch, name, value, SV_FORCE);
+        setattrs(sh, name, V_EXPORT, 0);
+    }
+    return 1;
+}
+
+// Defaults the Windows parents leave out. msys: HOME from USERPROFILE
+// and TERM as the MSYS2 runtime sets them, PATH its /usr/bin. Native:
+// HOME, USER and LOGNAME as busybox-w32 sets them (not exported), PATH
+// the shell's own directory.
+static void initwinvars(Shell *sh, Arena scratch)
+{
+    Arena *a    = &scratch;
+    b32    msys = sh->pathmode == PM_MSYS;
+    Got    home = getvar(sh, a, "HOME");
+    Got    prof = getvar(sh, a, "USERPROFILE");
+    if (!home.set && prof.value.len) {
+        PathCtx c = pathctx(sh, a, {});
+        Str     h = msys ? envtoposix(&c, a, "HOME", prof.value)
+                         : slashify(a, prof.value, '/');
+        setvar(sh, scratch, "HOME", h);
+        if (msys) setattrs(sh, "HOME", V_EXPORT, 0);
+    }
+    if (msys) {
+        if (!getvar(sh, a, "TERM").set) {
+            setvar(sh, scratch, "TERM", "xterm-256color");
+            setattrs(sh, "TERM", V_EXPORT, 0);
+        }
+        if (!getvar(sh, a, "PATH").set) {
+            setvar(sh, scratch, "PATH", "/usr/bin");
+            setattrs(sh, "PATH", V_EXPORT, 0);
+        }
+        return;
+    }
+    Got user = getvar(sh, a, "USERNAME");
+    if (user.value.len && !getvar(sh, a, "USER").set) {
+        setvar(sh, scratch, "USER", user.value);
+    }
+    if (user.value.len && !getvar(sh, a, "LOGNAME").set) {
+        setvar(sh, scratch, "LOGNAME", user.value);
+    }
+    if (!getvar(sh, a, "PATH").set) {
+        Str dir = takehead(sh->exe, sh->exe.len-lastpart(sh->exe).len);
+        setvar(sh, scratch, "PATH", dir.len>3 ? cuttail(dir, 1) : dir);
+    }
+}
+
 static void initvars(Shell *sh, OsInfo *info, Arena scratch)
 {
     // The environment: exported variables
-    for (iz i = 0; i < info->nenv; i++) {
+    b32 msys = sh->pathmode == PM_MSYS;
+    b32 done = sh->pathmode==PM_NATIVE && importnative(sh, info, scratch);
+    for (iz i = 0; !done && i < info->nenv; i++) {
         Cut c = cut(info->env[i], '=');
         if (c.ok && startswith(c.head, "BASH_FUNC_") && endswith(c.head, "%%")) {
             importfunc(sh, scratch, c.head, c.tail);
@@ -338,24 +502,42 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
         }
         if (c.ok && !validvarname(c.head)) {
             // not a variable, but passed on to programs, as bash does
-            Str *n = (Str *)salloc(sh->store, (sh->nbadenv+1)*(iz)sizeof(Str));
-            for (iz k = 0; k < sh->nbadenv; k++) n[k] = sh->badenv[k];
-            n[sh->nbadenv++] = sclone(sh->store, info->env[i]);
-            sh->badenv = n;
+            addbadenv(sh, info->env[i]);
             continue;
         }
         if (!c.ok) continue;
+        if (msys && !importmsys(sh, &scratch, &c.head, &c.tail)) continue;
         setvar(sh, scratch, c.head, c.tail, SV_FORCE);
         setattrs(sh, c.head, V_EXPORT, 0);
     }
     Arena *a = &scratch;
     Got g;
 
-    setvar(sh, scratch, "BASH", info->args && info->nargs ? Str("/usr/local/bin/bash") : Str("bash"));
+    // Identity: Linux as the oracle's, msys as Git Bash's, native as a
+    // MinGW build's
+    Str host = sizeof(void *)==4 ? Str("i686") : Str("x86_64");
+    Str mach = "x86_64-pc-linux-gnu";
+    Str bash = info->args && info->nargs ? Str("/usr/local/bin/bash") : Str("bash");
+    Str os   = "linux-gnu";
+    Str shell = "/usr/local/bin/bash";
+    if (sh->pathmode == PM_MSYS) {
+        PathCtx c = pathctx(sh, a, {});
+        mach  = concat(a, host, "-pc-cygwin");
+        os    = "cygwin";
+        bash  = sh->exe.len ? toposix(&c, a, sh->exe) : Str("/usr/bin/bash");
+        if (endswith(bash, ".exe")) bash = cuttail(bash, 4);
+        shell = "/usr/bin/bash";  // the account's shell in MSYS2's passwd
+    } else if (sh->pathmode == PM_NATIVE) {
+        mach  = concat(a, host, "-w64-mingw32");
+        os    = "win32";
+        bash  = sh->exe.len ? sh->exe : Str("sh");
+        shell = bash;
+    }
+    setvar(sh, scratch, "BASH", bash);
     setvar(sh, scratch, "BASH_VERSION", "5.3.0(1)-release");
-    setvar(sh, scratch, "HOSTTYPE", "x86_64");
-    setvar(sh, scratch, "MACHTYPE", "x86_64-pc-linux-gnu");
-    setvar(sh, scratch, "OSTYPE", "linux-gnu");
+    setvar(sh, scratch, "HOSTTYPE", sh->pathmode==PM_POSIX ? Str("x86_64") : host);
+    setvar(sh, scratch, "MACHTYPE", mach);
+    setvar(sh, scratch, "OSTYPE", os);
     setvar(sh, scratch, "OPTERR", "1");
     setvar(sh, scratch, "OPTIND", "1");
     setattrs(sh, "OPTIND", V_INTEGER, 0);
@@ -368,10 +550,13 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     setattrs(sh, "UID", V_INTEGER|V_READONLY, 0);
     setvar(sh, scratch, "EUID", fmti64(a, info->euid));
     setattrs(sh, "EUID", V_INTEGER|V_READONLY, 0);
+    if (sh->pathmode != PM_POSIX) {
+        initwinvars(sh, scratch);
+    }
     g = getvar(sh, a, "TERM");
     if (!g.set) setvar(sh, scratch, "TERM", "dumb");
     g = getvar(sh, a, "SHELL");
-    if (!g.set) setvar(sh, scratch, "SHELL", "/usr/local/bin/bash");
+    if (!g.set) setvar(sh, scratch, "SHELL", shell);
     g = getvar(sh, a, "PATH");
     if (!g.set) {
         setvar(sh, scratch, "PATH",
@@ -381,14 +566,24 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     // PWD: inherited if it names the working directory
     g = getvar(sh, a, "PWD");
     Str pwd = info->cwd.len ? info->cwd : Str("/");
-    if (g.set && isabsolute(sh, g.value)) {
-        Stat x = os_stat(sh->os, scratch, g.value, 1);
-        Stat y = os_stat(sh->os, scratch, pwd, 1);
+    Str cwd = pwd;
+    if (sh->pathmode != PM_POSIX) {
+        cwd = sh->paths->cwd;
+        pwd = cwd;
+        if (sh->pathmode == PM_MSYS) {
+            PathCtx c = pathctx(sh, a, {});
+            pwd = toposix(&c, a, cwd);
+        }
+    }
+    if (g.set && isabsolute(sh, g.value) && sh->pathmode!=PM_NATIVE) {
+        Stat x = os_stat(sh->os, scratch, absolute(sh, a, g.value), 1);
+        Stat y = os_stat(sh->os, scratch, cwd, 1);
         if (!x.err && !y.err && x.ino==y.ino && x.dev==y.dev) pwd = g.value;
     }
     setvar(sh, scratch, "PWD", pwd);
     setattrs(sh, "PWD", V_EXPORT, 0);
-    sh->cwd = sclone(sh->store, info->cwd.len ? info->cwd : Str("/"));
+    sh->cwd = sclone(sh->store, cwd);
+    sh->wd  = pwd==cwd ? sh->cwd : sclone(sh->store, pwd);
     g = getvar(sh, a, "OLDPWD");
     if (!g.set) setattrs(sh, "OLDPWD", V_EXPORT, 0);
 
@@ -425,7 +620,7 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     dynamic(sh, "BASH_ALIASES", DYN_BASH_ALIASES, V_ASSOC);
     dynamic(sh, "BASH_CMDS", DYN_BASH_CMDS, V_ASSOC);
     dynamic(sh, "_", DYN_UNDERSCORE);
-    static Str versinfo[] = {"5", "3", "0", "1", "release", "x86_64-pc-linux-gnu"};
+    Str versinfo[] = {"5", "3", "0", "1", "release", mach};
     for (iz i = 0; i < countof(versinfo); i++) {
         setelem(sh, scratch, "BASH_VERSINFO", i, {}, versinfo[i]);
     }
@@ -546,8 +741,115 @@ static b32 fillstdin(void *ctx, Lexer *L)
     return b->len > start;
 }
 
-static i32 sh_main(Os *os, OsInfo *info)
+// Cygwin's glob for a CYG_GLOB argument: braces, a leading ~ when HOME
+// names a directory, then the shell's own globbing, and the unquoted
+// pattern for an alternative nothing matches (GLOB_NOCHECK).
+static Slice<Str> cygexpand(Shell *sh, Arena *a, Slice<Str> out, Str pat)
 {
+    Slice<Str> alts = cygbraces(a, {}, pat, (iz)1<<12);
+    Str home = getvar(sh, a, "HOME").value;
+    Stat st  = home.len ? pathstat(sh, *a, home, 1) : Stat{};
+    b32 dir  = home.len && !st.err && st.type==FT_DIR;
+    for (iz k = 0; k < alts.len; k++) {
+        Str p = alts[k];
+        if (dir && p.len && p[0]=='~' && (p.len==1 || p[1]=='/')) {
+            Buf b(a);
+            for (iz i = 0; i < home.len; i++) {
+                if (find("\\*?[{}", {home.data+i, 1}) >= 0) putbyte(&b, '\\');
+                putbyte(&b, home[i]);
+            }
+            print(&b, cuthead(p, 1));
+            p = finish(&b);
+        }
+        Slice<Str> m = glob(sh, a, p);
+        if (!m.len) {
+            out = push(a, out, cygunquote(a, p));
+        }
+        for (iz i = 0; i < m.len; i++) {
+            out = push(a, out, m[i]);
+        }
+    }
+    return out;
+}
+
+// In msys mode, split the raw command line again as the MSYS2 runtime
+// does for a native parent (dcrt0.cc's build_argv and globify), which
+// is what Git Bash's scripts and agents' wrappers count on: Cygwin's
+// quotes, then response files (@file, at most 10) and globbing, which
+// splitcygwin leaves to its caller. argv[0] with a ':' or '\' is made
+// POSIX, and an empty command line is the program's own path. False,
+// after a message, for an 11th response file.
+static b32 msysargv(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
+{
+    Str cmd = info->cmdline;
+    if (!sh->win32 || (!cmd.len && info->nargs)) return 1;
+    PathCtx c = pathctx(sh, &scratch, {});
+    Slice<Str> out = {};
+    if (!cmd.len) {
+        Str self = toposix(&c, perm, sh->exe);
+        out = push(perm, out, self.data ? self : Str("bash"));
+    }
+    i32 nfiles  = 0;
+    b32 program = 1;
+    while (cmd.len) {
+        Slice<CygArg> args = splitcygwin(&scratch, cmd, program);
+        Str more = {};
+        for (iz i = 0; !more.data && i < args.len; i++) {
+            CygArg r = args[i];
+            if (program && !i) {
+                Str arg0 = r.arg;
+                if (find(arg0, ":")>=0 || find(arg0, "\\")>=0) {
+                    Str p = toposix(&c, &scratch, arg0);
+                    arg0 = p.data ? p : arg0;
+                }
+                out = push(perm, out, clone(perm, arg0));
+                continue;
+            }
+            if (r.flags & CYG_ATFILE) {
+                Stat st = pathstat(sh, scratch, r.file, 1);
+                i32  err = st.err ? st.err : st.type!=FT_FILE ? E_ISDIR : 0;
+                Str  text = err ? Str{} : readwholefile(sh, &scratch, r.file, &err);
+                if (!err) {
+                    if (++nfiles > 10) {
+                        Buf b(&scratch);
+                        print(&b, out.len ? out[0] : Str("bash"));
+                        print(&b, ": @");
+                        print(&b, r.file);
+                        print(&b, ": too many levels of response files\n");
+                        fdwrite(sh, 2, finish(&b));
+                        return 0;
+                    }
+                    Buf b(&scratch, text.len + cmd.len);
+                    print(&b, text);
+                    putbyte(&b, ' ');
+                    print(&b, cuthead(cmd, r.end));
+                    more = finish(&b);
+                    continue;
+                }
+            }
+            if (r.flags & CYG_GLOB) {
+                Slice<Str> m = cygexpand(sh, &scratch, {}, r.pat);
+                for (iz k = 0; k < m.len; k++) out = push(perm, out, clone(perm, m[k]));
+            } else {
+                out = push(perm, out, clone(perm, r.arg));
+            }
+        }
+        cmd     = more;
+        program = 0;
+    }
+    if (program && !out.len) return 1;  // a blank line: keep the platform's
+    info->args  = out.data;
+    info->nargs = out.len;
+    sh->name      = out.len ? out[0] : Str("bash");
+    sh->shellname = sh->name;
+    sh->iname     = sh->name;
+    return 1;
+}
+
+static i32 sh_main(Os *os, OsInfo *osinfo)
+{
+    OsInfo copy = *osinfo;  // msys mode replaces its arguments
+    OsInfo *info = &copy;
     Arena perm    = newarena(os, info->reserve);
     Arena scratch = newarena(os, info->reserve);
 
@@ -573,7 +875,6 @@ static i32 sh_main(Os *os, OsInfo *info)
     sh->gid     = info->gid;
     sh->egid    = info->egid;
     sh->umask   = 022;
-    sh->windows = info->windows;
     sh->start   = os_now(os);
     sh->seed    = (u32)(sh->start ^ info->pid);
 
@@ -607,8 +908,13 @@ static i32 sh_main(Os *os, OsInfo *info)
     }
 
     if (!__builtin_setjmp(top.jmp)) {
+        pathsetup(sh, info, &perm, scratch);
         initvars(sh, info, scratch);
         entrytraps(sh);
+        if (sh->pathmode==PM_MSYS && !msysargv(sh, info, &perm, scratch)) {
+            sh->status = 1;
+            escape(sh, ESC_FATAL);
+        }
 
         // Options before the command string or script
         iz  i = 1;
@@ -642,7 +948,9 @@ static i32 sh_main(Os *os, OsInfo *info)
                     sh->interactive = 1;
                 } else if (c == 'o') {
                     if (i+1 < info->nargs) setoptionbyname(sh, info->args[++i], on);
-                } else if (c=='l' || c=='r' || c=='O' || c=='D') {
+                } else if (c == 'O') {
+                    if (i+1 < info->nargs) setshoptbyname(sh, scratch, info->args[++i], on);
+                } else if (c=='l' || c=='r' || c=='D') {
                     // login, restricted: accepted
                 } else {
                     for (i32 o = 0; o < O_COUNT; o++) {
@@ -690,7 +998,7 @@ static i32 sh_main(Os *os, OsInfo *info)
             sh->args.n = info->nargs - i;
             i32  err;
             Str  src = readwholefile(sh, &scratch, file, &err);
-            Stat st  = os_stat(os, scratch, absolute(sh, &scratch, file), 1);
+            Stat st  = pathstat(sh, scratch, file, 1);
             Str  bad = {};
             if (!err && !st.err && st.type==FT_DIR) {
                 bad = errtext(E_ISDIR);

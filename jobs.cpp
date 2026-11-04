@@ -310,7 +310,7 @@ static Job *newjob(Shell *sh, Arena scratch, Node *n, Task *t, i64 pid, b32 copr
     if (coproc) put(p, "coproc ");
     printcmd(p, &c);
     j->text  = sclone(sh->store, finish(&p->b));
-    j->wd    = sclone(sh->store, sh->cwd);
+    j->wd    = sclone(sh->store, sh->wd);
     j->next  = sh->jobs;
     sh->jobs = j;
     resetcurrent(sh);
@@ -386,15 +386,15 @@ static void printjob(Shell *sh, Arena a, Job *j, i32 form)
     for (iz i = st.len; i < 27; i++) putbyte(&b, ' ');
     print(&b, j->text);
     if (jobrunning(j)) print(&b, " &");
-    if (!(j->wd == sh->cwd)) {
+    if (!(j->wd == sh->wd)) {
         // As bash's polite form: HOME as ~
         Str wd   = j->wd;
         Got home = getvar(sh, &a, "HOME");
         print(&b, "  (wd: ");
-        if (home.value.len && startswith(wd, home.value) &&
-                (wd.len==home.value.len || wd[home.value.len]=='/')) {
+        iz  n    = homeprefix(sh, wd, home.value);
+        if (n >= 0) {
             print(&b, "~");
-            wd = cuthead(wd, home.value.len);
+            wd = cuthead(wd, n);
         }
         print(&b, wd);
         print(&b, ")");

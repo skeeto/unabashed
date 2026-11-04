@@ -1,10 +1,9 @@
-== stdout 113
+== stdout 101
 C:/work
 C:/work
-/c/Windows
 C:/Windows/System32
-C:/\Windows
-c:/WORK
+C:/Windows
+C:/WORK
 D:/
 status 1
 D:/
@@ -12,22 +11,23 @@ status 1
 C:/work/sub
 C:/work
 
-== stderr 111
-bash: line 12: cd: E:/: No such file or directory
-bash: line 15: cd: C:/work/nosuch: No such file or directory
+== stderr 167
+bash: line 8: cd: /c/Windows: No such file or directory
+bash: line 13: cd: E:/: No such file or directory
+bash: line 16: cd: C:/work/nosuch: No such file or directory
 
-== merged 224
+== merged 268
 C:/work
 C:/work
-/c/Windows
+bash: line 8: cd: /c/Windows: No such file or directory
 C:/Windows/System32
-C:/\Windows
-c:/WORK
+C:/Windows
+C:/WORK
 D:/
-bash: line 12: cd: E:/: No such file or directory
+bash: line 13: cd: E:/: No such file or directory
 status 1
 D:/
-bash: line 15: cd: C:/work/nosuch: No such file or directory
+bash: line 16: cd: C:/work/nosuch: No such file or directory
 status 1
 C:/work/sub
 C:/work

@@ -761,7 +761,7 @@ static Array *tablearray(Shell *sh, Arena *a, i32 d)
     if (d == DYN_DIRSTACK) {
         r = newarray(&st);
         Value *pwd = rawlookup(sh, "PWD");
-        if (!sh->listing) aput(&st, r, 0, pwd && pwd->str.data ? pwd->str : sh->cwd);
+        if (!sh->listing) aput(&st, r, 0, pwd && pwd->str.data ? pwd->str : sh->wd);
     } else if (d == DYN_BASH_CMDS) {
         r = newassoc(&st, NHASHCMD);
         for (iz b = 0; sh->cmdhash && !sh->listing && b < NHASHCMD; b++) {

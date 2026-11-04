@@ -11,9 +11,9 @@ argv[1] = <here>
 C:/work/sub
 cmdline = <argv>
 argv[0] = <argv>
-PATH=C:\w64\bin;C:\Windows\System32
-Path=C:\w64\bin;C:\Windows\System32
-TEMP=C:\Users\oracle\AppData\Local\Temp
+PATH=C:/w64/bin;C:/Windows/System32
+Path=C:/w64/bin;C:/Windows/System32
+TEMP=C:/Users/oracle/AppData/Local/Temp
 nosuch unset
 cmdline = <argv>
 argv[0] = <argv>
@@ -42,9 +42,9 @@ argv[1] = <here>
 C:/work/sub
 cmdline = <argv>
 argv[0] = <argv>
-PATH=C:\w64\bin;C:\Windows\System32
-Path=C:\w64\bin;C:\Windows\System32
-TEMP=C:\Users\oracle\AppData\Local\Temp
+PATH=C:/w64/bin;C:/Windows/System32
+Path=C:/w64/bin;C:/Windows/System32
+TEMP=C:/Users/oracle/AppData/Local/Temp
 nosuch unset
 cmdline = <argv>
 argv[0] = <argv>

@@ -1,8 +1,7 @@
 # personality: native
-# Hand-checked baseline of today's minimal Windows layer, not recorded
-# from an oracle (M5a step 4); step 5 changes it on purpose.
+# Hand-checked baseline, not recorded from an oracle (M5a steps 4, 5).
 # Names ignore case, reserved DOS names are the null device in every
-# directory, and /dev/null is NUL.
+# directory, /dev/null is NUL and /dev/tty the console.
 echo hi >Foo.TXT
 cat foo.txt
 [ -f FOO.txt ] && echo found

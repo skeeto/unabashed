@@ -1,4 +1,4 @@
-== stdout 99
+== stdout 92
 hi
 found
 hi
@@ -8,7 +8,6 @@ status 0
 char
 con
 devnull
-no-tty
 Foo.TXT
 C:/work/dir
 Dir Foo.TXT
@@ -16,7 +15,7 @@ Foo.TXT
 
 == stderr 0
 
-== merged 99
+== merged 92
 hi
 found
 hi
@@ -26,7 +25,6 @@ status 0
 char
 con
 devnull
-no-tty
 Foo.TXT
 C:/work/dir
 Dir Foo.TXT

@@ -122,7 +122,7 @@ static i32 testdir(Glob *g, Str path, i32 type, b32 nofollow)
     if (type==FT_LINK && nofollow) return -2;
     if (type!=FT_NONE && type!=FT_LINK) return -1;
     Arena scratch = *g->a;
-    Stat  st = os_stat(g->sh->os, scratch, absolute(g->sh, &scratch, path), !nofollow);
+    Stat  st = pathstat(g->sh, scratch, path, !nofollow);
     if (st.err) return -1;
     return st.type==FT_DIR ? 0 : st.type==FT_LINK ? -2 : -1;
 }
@@ -181,7 +181,7 @@ static GlobRes globvector(Glob *g, Str pat, Str dir, i32 dtype, i32 flags)
         Str   name = unquoteglob(a, pat);
         Arena scratch = *a;
         Str   path = concat3(&scratch, dir, "/", name);
-        Stat  st   = os_stat(g->sh->os, scratch, absolute(g->sh, &scratch, path), 0);
+        Stat  st   = pathstat(g->sh, scratch, path, 0);
         if (!st.err) {
             r.v = push(a, r.v, GlobName{name, st.type});
         }
@@ -522,7 +522,7 @@ static void sortglob(Shell *sh, Arena scratch, Slice<Str> m)
             k[i].key = v;
         } else if (how != GS_NAME && how != GS_NONE) {
             Arena t  = scratch;
-            Stat  st = os_stat(sh->os, t, absolute(sh, &t, m[i]), 1);
+            Stat  st = pathstat(sh, t, m[i], 1);
             i64   v  = -1;
             if (!st.err) {
                 switch (how) {

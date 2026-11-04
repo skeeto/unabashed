@@ -459,7 +459,10 @@ struct Shell {
     b32      exiting;
     b32      interactive;
     b32      utf8;         // UTF-8 locale, else bytes
-    b32      windows;      // native Windows paths (M2's minimal layer)
+    b32      win32;        // on Windows: platform facts, not paths
+    PathMode pathmode;     // how paths read and print (paths.cpp)
+    PathCtx *paths;        // the mount table and the rest, from startup
+    Str      exe;          // the shell's own image, native (OsInfo.exe)
 
     // Options
     b32      opt[O_COUNT];
@@ -484,7 +487,10 @@ struct Shell {
     i64      egid;
     i64      start;        // ns since the epoch
     u32      seed;         // RANDOM
-    Str      cwd;          // physical working directory
+    Str      cwd;          // native working directory, for the platform
+                           // (empty: a virtual msys directory, as /proc)
+    Str      wd;           // logical working directory (bash's
+                           // the_current_working_directory), as PWD shows
     Str      host;
     i32      umask;
     u64      exportgen;

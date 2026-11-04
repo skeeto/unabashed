@@ -412,7 +412,7 @@ static void waitdone(Shell *sh, u64 died, b32 failed)
 {
     Sigproc *p = sh->sig;
     takeossigs(sh);  // those that came during the wait were noted
-    if (failed && sh->windows) died |= sigbit(2);
+    if (failed && sh->win32) died |= sigbit(2);
     p->pending |= p->waitsig & died;
     p->waitsig  = 0;
     p->fgwait   = 0;
