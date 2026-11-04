@@ -27,6 +27,21 @@ gets checked. Rules:
 - **Time zones**: TZ unset or unexported means UTC, on Windows too; use
   the system zone. Zone names glibc reads from zoneinfo files are read
   as POSIX strings (DST before 2007 can differ). (m4.md)
+- **lpReserved2 slot width unverified** (step 8): `encodecrtfds` and
+  `decodecrtfds` are only checked against the documented layout. Check
+  with real msvcrt and UCRT children, x64 to i686 and back, that the
+  width follows the child's PE32/PE32+ and that 0-2 entries agree
+  with hStd*. (m5a.md, step 2)
+- **splitcygwin gaps** (step 5's msys re-split): it assumes Cygwin's
+  globbing is on (with `MSYS`/`CYGWIN=noglob` Cygwin keeps the quotes);
+  the program name, a non-ASCII byte before `:` as a drive word, and
+  tilde with an existing HOME were not recorded; the caller still has
+  to glob, read response files (dying on the 11th) and map an empty
+  command line to the program's path. (m5a.md, step 2)
+- **pesniff ignores** delay-load imports, the loader's rounding of
+  PointerToRawData to 512 bytes and DLL names over 63 bytes; reads at
+  most 1024 section headers. None matters for the binaries tried.
+  (m5a.md, step 2)
 
 
 ## M5b (real background processes)

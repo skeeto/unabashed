@@ -179,3 +179,72 @@ For the user, when they come up:
    PE 5.01, FUZZ_WIN campaigns clean, Claude Code's Bash tool works
    with CLAUDE_CODE_GIT_BASH_PATH pointing at a scratch install.
 6. No M5a items left in issues.md.
+
+
+## Implementation
+
+### Step 2: wide.cpp codecs and the PE sniffer
+
+wide.cpp is now part of the core (included by unabashed.cpp before
+parse.cpp), so the vos and the POSIX build compile it too. New API:
+- `splitcmdline(a, cmd, parser)`: `ARGV_SHELL32` (the default, as
+  before), `ARGV_MSVCRT`, `ARGV_UCRT`.
+- `splitcygwin(a, cmd, program)` returns `CygArg {arg, pat, file, end,
+  flags}`; the caller globs `CYG_GLOB` words (`pat`, GLOB_NOCHECK
+  giving `arg`) and reads `CYG_ATFILE` ones (`file`), re-splitting
+  "contents + ' ' + cmd[end:]" without a program name.
+- `quotecygwin(b, arg)`; `quoteprogram` now also quotes `'`, CR and LF
+  (Cygwin's program name).
+- `encodecrtfds(a, fds, n, width)`, `decodecrtfds(a, blob, width)` over
+  `CrtFd {handle, flags}` with `CRTFD_OPEN/PIPE/DEV`.
+- `pesniff(read, ctx, scratch)` returns `PeInfo {machine, subsystem,
+  width, crt, posix, dll, ours, ok}`: `CRT_NONE/MSVCRT/UCRT`,
+  `POSIX_CYGWIN/MSYS`. Our marker is a `.unabash` section holding
+  "unabashed" (`[[gnu::used, gnu::section]]`, Windows builds only);
+  it survives `-O2 -s` in unabashed.exe and unabashed32.exe.
+
+Tests: t/unit/wide_test.cpp (build line in its header) replays
+t/unit/wide.golden, round-trips 20000 random argument lists through
+both quoters and every parser, checks the descriptor codec and pesniff
+on synthetic, truncated and randomly damaged images; `--real [DIR]`
+sniffs cmd.exe, Git's ls.exe, w64devkit's busybox.exe and echo.exe
+stub, and unabashed{,32}.exe. t/unit/wide_record.sh (Windows only)
+records the golden from wide.cases with throwaway programs built in a
+scratch directory: a native printer that splits its own command line
+with CommandLineToArgvW, msvcrt.dll's `__wgetmainargs` and ucrtbase's
+`_configure_wide_argv`, and a driver that starts it and Git's msys
+printf through CreateProcess with fixed command lines.
+
+What the recording showed (Windows 11, msys2-runtime 3.6.9):
+- System msvcrt.dll follows the pre-2008 rule: `""` inside quotes is a
+  literal quote that ends the quoting, like CommandLineToArgvW. Only
+  UCRT keeps the quoting (`"a""b c"` is `a"b c`, else `a"b`, `c`).
+- The program name: CommandLineToArgvW takes up to the closing quote
+  and starts the next argument right there (`"p q"r s` gives `p q`,
+  `r`, `s`); both CRTs toggle quotes until an unquoted blank (`p qr`,
+  `s`) with backslashes literal. A leading blank gives an empty
+  program name in all three. An empty command line gives the
+  program's own path (not recorded: machine-specific).
+- Cygwin separators are space, tab, LF and CR (not VT, FF). Inside
+  either quote `\` and `\<quote>` escape, even in a drive-letter word
+  (contradicting the source reading that `C:` disables them); a drive
+  word (`C:x` or `"C:`, no slash needed) only keeps its unquoted
+  backslashes literal. Outside quotes a backslash escapes only when the
+  word goes through glob (it has `?*["'(){}` or a leading `~`):
+  `a\b` stays, `a\b(c)` gives `ab(c)`, `a\"b` gives `a\b`.
+- Single quotes and the scanner disagree: the scanner ends `'a\'` at
+  the second quote, but glob's unquoting reads `\'` as an escape, so
+  `'a\'b' c` is the single argument `a'b c`.
+- `@file`: the name's quotes are removed without escapes, and if the
+  file cannot be read the word goes through glob unquoted (`@"*"` globs
+  `@*`). The contents are split like the command line, CR and LF
+  separating, followed by a space and the rest of the line, so an
+  unterminated quote in the file swallows the rest. At most 10
+  response files per command line, nested or not; the 11th kills the
+  process ("Too many levels of nesting").
+- glob: `{a,b}` and `a{b,c}d` expand even without matches, `{}` stays;
+  `~` and `~/x` stay as typed when HOME does not exist; long quoted
+  arguments (5000 bytes) are not truncated.
+- cmd.exe on Windows 11 imports UCRT (api-ms-win-crt-*), not msvcrt;
+  Git's msys tools import msys-2.0.dll and no CRT; w64devkit's
+  busybox imports msvcrt.dll and its alias stubs only kernel32.

@@ -1,0 +1,165 @@
+# Command lines for wide_record.sh: see there and wide_test.cpp
+# Separators
+tail a b c
+tail  a  b
+tail a^tb
+tail a^nb
+tail a^rb
+tail a^vb
+tail a^fb
+tail a^n b
+# Double quotes
+tail "a b" c
+tail ""
+tail "" ""
+tail a""b
+tail "a"b"c"
+tail "a b
+tail "a b" "
+# Backslashes
+tail a\b c\\d
+tail a\"b
+tail a\\"b c"
+tail a\\\"b
+tail a\\\\"b c"
+tail "a\\" b
+tail "a\" b"
+tail "a\\\" b"
+tail \\server\share
+tail C:\x\ y
+tail "C:\x\\" y
+tail a\
+tail "a\
+tail "a\b"
+tail "a\\b"
+tail "a\\\\b"
+tail "\\"
+# Doubled quotes
+tail "a""b"
+tail "a""b c"
+tail """"
+tail """ a"
+tail """"""
+tail a"""b c
+tail "a"" b" c
+tail """a b"""
+tail a""""b c
+tail """ ""
+# Single quotes
+tail 'a b'
+tail 'a\'
+tail 'a\\b'
+tail 'a\'b' c
+tail 'a"b'
+tail "a'b"
+tail 'a''b'
+tail '' x
+tail 'a b
+tail 'a""b'
+tail '\"'
+# Wildcards and brace expansion, in an empty directory
+tail *
+tail a*b
+tail "*"
+tail '*'
+tail \*
+tail a\*
+tail a\\*
+tail ?
+tail [ab]
+tail [
+tail ]
+tail {a,b}
+tail "{a,b}"
+tail a{b,c}d
+tail {}
+tail (x)
+tail a\(b
+tail a\b(c)
+tail a\b"c"
+tail a\b'c'\d
+tail a\
+tail "a"\
+# Tilde
+tail ~
+tail ~/x
+tail "~"
+tail \~
+tail a~
+tail x ~/*
+# Drive-letter words
+tail C:\a\b
+tail C:\a*
+tail C:\a\*
+tail "C:\a\\b"
+tail "C:\a\"b c"
+tail C:"\a\\b"
+tail "C:\x"'"'y
+tail c:"x\\y"
+tail 1:\a"b"
+tail C:'\a\\b'
+tail C:
+tail "C:"
+tail "C:"\a*
+tail "C:"\a\b(
+tail C:\a"\\b"(
+tail 'C:'\x(
+tail C:a\*
+tail C:\a(
+tail c:\a\b{,}
+tail C:/a\*
+tail a:\b*
+tail "C:\a"\\b(
+# Response files (none exist yet)
+tail @nosuch
+tail @"no such"
+tail @'a b'
+tail "@x"
+tail a@b
+tail @"*"
+tail @"a\\b"
+tail @
+tail x @"a""b"
+# Long and non-ASCII arguments
+tail "^l5000; b"
+tail ^l5000;*
+tail é "ü x" '€'
+# The program name
+full p a
+full "p q" a
+full "p q"r s
+full "p"q r
+full  p a
+full ^tp a
+full "p a
+full p\"q r
+full p"q r"s t
+full "" a
+full p a\\"b c"
+full p\ q
+full "p\" q
+# Files for the Cygwin parser to find
+file rsp a "b c"^nd^re  f'g h'
+cyg @rsp
+cyg @rsp x @rsp
+cyg x @"rsp"
+cyg x @rs*
+cyg x @./rsp
+file rsp2 @rsp ^t"*"
+cyg x @rsp2
+file rsp3 "a b
+cyg @rsp3 c d
+cyg x @rsp3
+file rsp4 x\
+cyg @rsp4 "y z"
+file empty ^l0;
+cyg x @empty y
+# (An 11th response file in one command line, nested or not, is fatal:
+# "Too many levels of nesting", a message with a pid: not recorded)
+file ab z
+cyg a*
+cyg "a"*
+cyg a\*
+cyg [a]b
+cyg a{b,c}
+cyg ./a*

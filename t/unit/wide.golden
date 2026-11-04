@@ -1,0 +1,680 @@
+# Command lines for wide_record.sh: see there and wide_test.cpp
+# Separators
+tail a b c
+shell32 <p> <a> <b> <c>
+msvcrt <p> <a> <b> <c>
+ucrt <p> <a> <b> <c>
+cygwin <a>^n<b>^n<c>^n
+tail  a  b
+shell32 <p> <a> <b>
+msvcrt <p> <a> <b>
+ucrt <p> <a> <b>
+cygwin <a>^n<b>^n
+tail a^tb
+shell32 <p> <a> <b>
+msvcrt <p> <a> <b>
+ucrt <p> <a> <b>
+cygwin <a>^n<b>^n
+tail a^nb
+shell32 <p> <a^nb>
+msvcrt <p> <a^nb>
+ucrt <p> <a^nb>
+cygwin <a>^n<b>^n
+tail a^rb
+shell32 <p> <a^rb>
+msvcrt <p> <a^rb>
+ucrt <p> <a^rb>
+cygwin <a>^n<b>^n
+tail a^vb
+shell32 <p> <a^vb>
+msvcrt <p> <a^vb>
+ucrt <p> <a^vb>
+cygwin <a^vb>^n
+tail a^fb
+shell32 <p> <a^fb>
+msvcrt <p> <a^fb>
+ucrt <p> <a^fb>
+cygwin <a^fb>^n
+tail a^n b
+shell32 <p> <a^n> <b>
+msvcrt <p> <a^n> <b>
+ucrt <p> <a^n> <b>
+cygwin <a>^n<b>^n
+# Double quotes
+tail "a b" c
+shell32 <p> <a b> <c>
+msvcrt <p> <a b> <c>
+ucrt <p> <a b> <c>
+cygwin <a b>^n<c>^n
+tail ""
+shell32 <p> <>
+msvcrt <p> <>
+ucrt <p> <>
+cygwin <>^n
+tail "" ""
+shell32 <p> <> <>
+msvcrt <p> <> <>
+ucrt <p> <> <>
+cygwin <>^n<>^n
+tail a""b
+shell32 <p> <ab>
+msvcrt <p> <ab>
+ucrt <p> <ab>
+cygwin <ab>^n
+tail "a"b"c"
+shell32 <p> <abc>
+msvcrt <p> <abc>
+ucrt <p> <abc>
+cygwin <abc>^n
+tail "a b
+shell32 <p> <a b>
+msvcrt <p> <a b>
+ucrt <p> <a b>
+cygwin <a b>^n
+tail "a b" "
+shell32 <p> <a b> <>
+msvcrt <p> <a b> <>
+ucrt <p> <a b> <>
+cygwin <a b>^n<>^n
+# Backslashes
+tail a\b c\\d
+shell32 <p> <a\b> <c\\d>
+msvcrt <p> <a\b> <c\\d>
+ucrt <p> <a\b> <c\\d>
+cygwin <a\b>^n<c\\d>^n
+tail a\"b
+shell32 <p> <a"b>
+msvcrt <p> <a"b>
+ucrt <p> <a"b>
+cygwin <a\b>^n
+tail a\\"b c"
+shell32 <p> <a\b c>
+msvcrt <p> <a\b c>
+ucrt <p> <a\b c>
+cygwin <a\b c>^n
+tail a\\\"b
+shell32 <p> <a\"b>
+msvcrt <p> <a\"b>
+ucrt <p> <a\"b>
+cygwin <a\\b>^n
+tail a\\\\"b c"
+shell32 <p> <a\\b c>
+msvcrt <p> <a\\b c>
+ucrt <p> <a\\b c>
+cygwin <a\\b c>^n
+tail "a\\" b
+shell32 <p> <a\> <b>
+msvcrt <p> <a\> <b>
+ucrt <p> <a\> <b>
+cygwin <a\>^n<b>^n
+tail "a\" b"
+shell32 <p> <a" b>
+msvcrt <p> <a" b>
+ucrt <p> <a" b>
+cygwin <a" b>^n
+tail "a\\\" b"
+shell32 <p> <a\" b>
+msvcrt <p> <a\" b>
+ucrt <p> <a\" b>
+cygwin <a\" b>^n
+tail \\server\share
+shell32 <p> <\\server\share>
+msvcrt <p> <\\server\share>
+ucrt <p> <\\server\share>
+cygwin <\\server\share>^n
+tail C:\x\ y
+shell32 <p> <C:\x\> <y>
+msvcrt <p> <C:\x\> <y>
+ucrt <p> <C:\x\> <y>
+cygwin <C:\x\>^n<y>^n
+tail "C:\x\\" y
+shell32 <p> <C:\x\> <y>
+msvcrt <p> <C:\x\> <y>
+ucrt <p> <C:\x\> <y>
+cygwin <C:\x\>^n<y>^n
+tail a\
+shell32 <p> <a\>
+msvcrt <p> <a\>
+ucrt <p> <a\>
+cygwin <a\>^n
+tail "a\
+shell32 <p> <a\>
+msvcrt <p> <a\>
+ucrt <p> <a\>
+cygwin <a\>^n
+tail "a\b"
+shell32 <p> <a\b>
+msvcrt <p> <a\b>
+ucrt <p> <a\b>
+cygwin <a\b>^n
+tail "a\\b"
+shell32 <p> <a\\b>
+msvcrt <p> <a\\b>
+ucrt <p> <a\\b>
+cygwin <a\b>^n
+tail "a\\\\b"
+shell32 <p> <a\\\\b>
+msvcrt <p> <a\\\\b>
+ucrt <p> <a\\\\b>
+cygwin <a\\b>^n
+tail "\\"
+shell32 <p> <\>
+msvcrt <p> <\>
+ucrt <p> <\>
+cygwin <\>^n
+# Doubled quotes
+tail "a""b"
+shell32 <p> <a"b>
+msvcrt <p> <a"b>
+ucrt <p> <a"b>
+cygwin <a"b>^n
+tail "a""b c"
+shell32 <p> <a"b> <c>
+msvcrt <p> <a"b> <c>
+ucrt <p> <a"b c>
+cygwin <a"b c>^n
+tail """"
+shell32 <p> <">
+msvcrt <p> <">
+ucrt <p> <">
+cygwin <">^n
+tail """ a"
+shell32 <p> <"> <a>
+msvcrt <p> <"> <a>
+ucrt <p> <" a>
+cygwin <" a>^n
+tail """"""
+shell32 <p> <"">
+msvcrt <p> <"">
+ucrt <p> <"">
+cygwin <"">^n
+tail a"""b c
+shell32 <p> <a"b> <c>
+msvcrt <p> <a"b> <c>
+ucrt <p> <a"b c>
+cygwin <a"b c>^n
+tail "a"" b" c
+shell32 <p> <a"> <b c>
+msvcrt <p> <a"> <b c>
+ucrt <p> <a" b> <c>
+cygwin <a" b>^n<c>^n
+tail """a b"""
+shell32 <p> <"a> <b">
+msvcrt <p> <"a> <b">
+ucrt <p> <"a b">
+cygwin <"a b">^n
+tail a""""b c
+shell32 <p> <a"b c>
+msvcrt <p> <a"b c>
+ucrt <p> <a"b> <c>
+cygwin <a"b>^n<c>^n
+tail """ ""
+shell32 <p> <"> <>
+msvcrt <p> <"> <>
+ucrt <p> <" ">
+cygwin <" ">^n
+# Single quotes
+tail 'a b'
+shell32 <p> <'a> <b'>
+msvcrt <p> <'a> <b'>
+ucrt <p> <'a> <b'>
+cygwin <a b>^n
+tail 'a\'
+shell32 <p> <'a\'>
+msvcrt <p> <'a\'>
+ucrt <p> <'a\'>
+cygwin <a'>^n
+tail 'a\\b'
+shell32 <p> <'a\\b'>
+msvcrt <p> <'a\\b'>
+ucrt <p> <'a\\b'>
+cygwin <a\b>^n
+tail 'a\'b' c
+shell32 <p> <'a\'b'> <c>
+msvcrt <p> <'a\'b'> <c>
+ucrt <p> <'a\'b'> <c>
+cygwin <a'b c>^n
+tail 'a"b'
+shell32 <p> <'ab'>
+msvcrt <p> <'ab'>
+ucrt <p> <'ab'>
+cygwin <a"b>^n
+tail "a'b"
+shell32 <p> <a'b>
+msvcrt <p> <a'b>
+ucrt <p> <a'b>
+cygwin <a'b>^n
+tail 'a''b'
+shell32 <p> <'a''b'>
+msvcrt <p> <'a''b'>
+ucrt <p> <'a''b'>
+cygwin <ab>^n
+tail '' x
+shell32 <p> <''> <x>
+msvcrt <p> <''> <x>
+ucrt <p> <''> <x>
+cygwin <>^n<x>^n
+tail 'a b
+shell32 <p> <'a> <b>
+msvcrt <p> <'a> <b>
+ucrt <p> <'a> <b>
+cygwin <a b>^n
+tail 'a""b'
+shell32 <p> <'ab'>
+msvcrt <p> <'ab'>
+ucrt <p> <'ab'>
+cygwin <a""b>^n
+tail '\"'
+shell32 <p> <'"'>
+msvcrt <p> <'"'>
+ucrt <p> <'"'>
+cygwin <\">^n
+# Wildcards and brace expansion, in an empty directory
+tail *
+shell32 <p> <*>
+msvcrt <p> <*>
+ucrt <p> <*>
+cygwin <*>^n
+tail a*b
+shell32 <p> <a*b>
+msvcrt <p> <a*b>
+ucrt <p> <a*b>
+cygwin <a*b>^n
+tail "*"
+shell32 <p> <*>
+msvcrt <p> <*>
+ucrt <p> <*>
+cygwin <*>^n
+tail '*'
+shell32 <p> <'*'>
+msvcrt <p> <'*'>
+ucrt <p> <'*'>
+cygwin <*>^n
+tail \*
+shell32 <p> <\*>
+msvcrt <p> <\*>
+ucrt <p> <\*>
+cygwin <*>^n
+tail a\*
+shell32 <p> <a\*>
+msvcrt <p> <a\*>
+ucrt <p> <a\*>
+cygwin <a*>^n
+tail a\\*
+shell32 <p> <a\\*>
+msvcrt <p> <a\\*>
+ucrt <p> <a\\*>
+cygwin <a\*>^n
+tail ?
+shell32 <p> <?>
+msvcrt <p> <?>
+ucrt <p> <?>
+cygwin <?>^n
+tail [ab]
+shell32 <p> <[ab]>
+msvcrt <p> <[ab]>
+ucrt <p> <[ab]>
+cygwin <[ab]>^n
+tail [
+shell32 <p> <[>
+msvcrt <p> <[>
+ucrt <p> <[>
+cygwin <[>^n
+tail ]
+shell32 <p> <]>
+msvcrt <p> <]>
+ucrt <p> <]>
+cygwin <]>^n
+tail {a,b}
+shell32 <p> <{a,b}>
+msvcrt <p> <{a,b}>
+ucrt <p> <{a,b}>
+cygwin <a>^n<b>^n
+tail "{a,b}"
+shell32 <p> <{a,b}>
+msvcrt <p> <{a,b}>
+ucrt <p> <{a,b}>
+cygwin <{a,b}>^n
+tail a{b,c}d
+shell32 <p> <a{b,c}d>
+msvcrt <p> <a{b,c}d>
+ucrt <p> <a{b,c}d>
+cygwin <abd>^n<acd>^n
+tail {}
+shell32 <p> <{}>
+msvcrt <p> <{}>
+ucrt <p> <{}>
+cygwin <{}>^n
+tail (x)
+shell32 <p> <(x)>
+msvcrt <p> <(x)>
+ucrt <p> <(x)>
+cygwin <(x)>^n
+tail a\(b
+shell32 <p> <a\(b>
+msvcrt <p> <a\(b>
+ucrt <p> <a\(b>
+cygwin <a(b>^n
+tail a\b(c)
+shell32 <p> <a\b(c)>
+msvcrt <p> <a\b(c)>
+ucrt <p> <a\b(c)>
+cygwin <ab(c)>^n
+tail a\b"c"
+shell32 <p> <a\bc>
+msvcrt <p> <a\bc>
+ucrt <p> <a\bc>
+cygwin <abc>^n
+tail a\b'c'\d
+shell32 <p> <a\b'c'\d>
+msvcrt <p> <a\b'c'\d>
+ucrt <p> <a\b'c'\d>
+cygwin <abcd>^n
+tail a\
+shell32 <p> <a\>
+msvcrt <p> <a\>
+ucrt <p> <a\>
+cygwin <a\>^n
+tail "a"\
+shell32 <p> <a\>
+msvcrt <p> <a\>
+ucrt <p> <a\>
+cygwin <a\>^n
+# Tilde
+tail ~
+shell32 <p> <~>
+msvcrt <p> <~>
+ucrt <p> <~>
+cygwin <~>^n
+tail ~/x
+shell32 <p> <~/x>
+msvcrt <p> <~/x>
+ucrt <p> <~/x>
+cygwin <~/x>^n
+tail "~"
+shell32 <p> <~>
+msvcrt <p> <~>
+ucrt <p> <~>
+cygwin <~>^n
+tail \~
+shell32 <p> <\~>
+msvcrt <p> <\~>
+ucrt <p> <\~>
+cygwin <\~>^n
+tail a~
+shell32 <p> <a~>
+msvcrt <p> <a~>
+ucrt <p> <a~>
+cygwin <a~>^n
+tail x ~/*
+shell32 <p> <x> <~/*>
+msvcrt <p> <x> <~/*>
+ucrt <p> <x> <~/*>
+cygwin <x>^n<~/*>^n
+# Drive-letter words
+tail C:\a\b
+shell32 <p> <C:\a\b>
+msvcrt <p> <C:\a\b>
+ucrt <p> <C:\a\b>
+cygwin <C:\a\b>^n
+tail C:\a*
+shell32 <p> <C:\a*>
+msvcrt <p> <C:\a*>
+ucrt <p> <C:\a*>
+cygwin <C:\a*>^n
+tail C:\a\*
+shell32 <p> <C:\a\*>
+msvcrt <p> <C:\a\*>
+ucrt <p> <C:\a\*>
+cygwin <C:\a\*>^n
+tail "C:\a\\b"
+shell32 <p> <C:\a\\b>
+msvcrt <p> <C:\a\\b>
+ucrt <p> <C:\a\\b>
+cygwin <C:\a\b>^n
+tail "C:\a\"b c"
+shell32 <p> <C:\a"b c>
+msvcrt <p> <C:\a"b c>
+ucrt <p> <C:\a"b c>
+cygwin <C:\a"b c>^n
+tail C:"\a\\b"
+shell32 <p> <C:\a\\b>
+msvcrt <p> <C:\a\\b>
+ucrt <p> <C:\a\\b>
+cygwin <C:\a\b>^n
+tail "C:\x"'"'y
+shell32 <p> <C:\x''y>
+msvcrt <p> <C:\x''y>
+ucrt <p> <C:\x''y>
+cygwin <C:\x"y>^n
+tail c:"x\\y"
+shell32 <p> <c:x\\y>
+msvcrt <p> <c:x\\y>
+ucrt <p> <c:x\\y>
+cygwin <c:x\y>^n
+tail 1:\a"b"
+shell32 <p> <1:\ab>
+msvcrt <p> <1:\ab>
+ucrt <p> <1:\ab>
+cygwin <1:ab>^n
+tail C:'\a\\b'
+shell32 <p> <C:'\a\\b'>
+msvcrt <p> <C:'\a\\b'>
+ucrt <p> <C:'\a\\b'>
+cygwin <C:\a\b>^n
+tail C:
+shell32 <p> <C:>
+msvcrt <p> <C:>
+ucrt <p> <C:>
+cygwin <C:>^n
+tail "C:"
+shell32 <p> <C:>
+msvcrt <p> <C:>
+ucrt <p> <C:>
+cygwin <C:>^n
+tail "C:"\a*
+shell32 <p> <C:\a*>
+msvcrt <p> <C:\a*>
+ucrt <p> <C:\a*>
+cygwin <C:\a*>^n
+tail "C:"\a\b(
+shell32 <p> <C:\a\b(>
+msvcrt <p> <C:\a\b(>
+ucrt <p> <C:\a\b(>
+cygwin <C:\a\b(>^n
+tail C:\a"\\b"(
+shell32 <p> <C:\a\\b(>
+msvcrt <p> <C:\a\\b(>
+ucrt <p> <C:\a\\b(>
+cygwin <C:\a\b(>^n
+tail 'C:'\x(
+shell32 <p> <'C:'\x(>
+msvcrt <p> <'C:'\x(>
+ucrt <p> <'C:'\x(>
+cygwin <C:\x(>^n
+tail C:a\*
+shell32 <p> <C:a\*>
+msvcrt <p> <C:a\*>
+ucrt <p> <C:a\*>
+cygwin <C:a\*>^n
+tail C:\a(
+shell32 <p> <C:\a(>
+msvcrt <p> <C:\a(>
+ucrt <p> <C:\a(>
+cygwin <C:\a(>^n
+tail c:\a\b{,}
+shell32 <p> <c:\a\b{,}>
+msvcrt <p> <c:\a\b{,}>
+ucrt <p> <c:\a\b{,}>
+cygwin <c:\a\b>^n<c:\a\b>^n
+tail C:/a\*
+shell32 <p> <C:/a\*>
+msvcrt <p> <C:/a\*>
+ucrt <p> <C:/a\*>
+cygwin <C:/a\*>^n
+tail a:\b*
+shell32 <p> <a:\b*>
+msvcrt <p> <a:\b*>
+ucrt <p> <a:\b*>
+cygwin <a:\b*>^n
+tail "C:\a"\\b(
+shell32 <p> <C:\a\\b(>
+msvcrt <p> <C:\a\\b(>
+ucrt <p> <C:\a\\b(>
+cygwin <C:\a\\b(>^n
+# Response files (none exist yet)
+tail @nosuch
+shell32 <p> <@nosuch>
+msvcrt <p> <@nosuch>
+ucrt <p> <@nosuch>
+cygwin <@nosuch>^n
+tail @"no such"
+shell32 <p> <@no such>
+msvcrt <p> <@no such>
+ucrt <p> <@no such>
+cygwin <@no such>^n
+tail @'a b'
+shell32 <p> <@'a> <b'>
+msvcrt <p> <@'a> <b'>
+ucrt <p> <@'a> <b'>
+cygwin <@a b>^n
+tail "@x"
+shell32 <p> <@x>
+msvcrt <p> <@x>
+ucrt <p> <@x>
+cygwin <@x>^n
+tail a@b
+shell32 <p> <a@b>
+msvcrt <p> <a@b>
+ucrt <p> <a@b>
+cygwin <a@b>^n
+tail @"*"
+shell32 <p> <@*>
+msvcrt <p> <@*>
+ucrt <p> <@*>
+cygwin <@*>^n
+tail @"a\\b"
+shell32 <p> <@a\\b>
+msvcrt <p> <@a\\b>
+ucrt <p> <@a\\b>
+cygwin <@a\\b>^n
+tail @
+shell32 <p> <@>
+msvcrt <p> <@>
+ucrt <p> <@>
+cygwin <@>^n
+tail x @"a""b"
+shell32 <p> <x> <@a"b>
+msvcrt <p> <x> <@a"b>
+ucrt <p> <x> <@a"b>
+cygwin <x>^n<@ab>^n
+# Long and non-ASCII arguments
+tail "^l5000; b"
+shell32 <p> <^l5000; b>
+msvcrt <p> <^l5000; b>
+ucrt <p> <^l5000; b>
+cygwin <^l5000; b>^n
+tail ^l5000;*
+shell32 <p> <^l5000;*>
+msvcrt <p> <^l5000;*>
+ucrt <p> <^l5000;*>
+cygwin <^l5000;*>^n
+tail é "ü x" '€'
+shell32 <p> <é> <ü x> <'€'>
+msvcrt <p> <é> <ü x> <'€'>
+ucrt <p> <é> <ü x> <'€'>
+cygwin <é>^n<ü x>^n<€>^n
+# The program name
+full p a
+shell32 <p> <a>
+msvcrt <p> <a>
+ucrt <p> <a>
+full "p q" a
+shell32 <p q> <a>
+msvcrt <p q> <a>
+ucrt <p q> <a>
+full "p q"r s
+shell32 <p q> <r> <s>
+msvcrt <p qr> <s>
+ucrt <p qr> <s>
+full "p"q r
+shell32 <p> <q> <r>
+msvcrt <pq> <r>
+ucrt <pq> <r>
+full  p a
+shell32 <> <p> <a>
+msvcrt <> <p> <a>
+ucrt <> <p> <a>
+full ^tp a
+shell32 <> <p> <a>
+msvcrt <> <p> <a>
+ucrt <> <p> <a>
+full "p a
+shell32 <p a>
+msvcrt <p a>
+ucrt <p a>
+full p\"q r
+shell32 <p\"q> <r>
+msvcrt <p\q r>
+ucrt <p\q r>
+full p"q r"s t
+shell32 <p"q> <rs t>
+msvcrt <pq rs> <t>
+ucrt <pq rs> <t>
+full "" a
+shell32 <> <a>
+msvcrt <> <a>
+ucrt <> <a>
+full p a\\"b c"
+shell32 <p> <a\b c>
+msvcrt <p> <a\b c>
+ucrt <p> <a\b c>
+full p\ q
+shell32 <p\> <q>
+msvcrt <p\> <q>
+ucrt <p\> <q>
+full "p\" q
+shell32 <p\> <q>
+msvcrt <p\> <q>
+ucrt <p\> <q>
+# Files for the Cygwin parser to find
+file rsp a "b c"^nd^re  f'g h'
+cyg @rsp
+cygwin <a>^n<b c>^n<d>^n<e>^n<fg h>^n
+cyg @rsp x @rsp
+cygwin <a>^n<b c>^n<d>^n<e>^n<fg h>^n<x>^n<a>^n<b c>^n<d>^n<e>^n<fg h>^n
+cyg x @"rsp"
+cygwin <x>^n<a>^n<b c>^n<d>^n<e>^n<fg h>^n
+cyg x @rs*
+cygwin <x>^n<@rs*>^n
+cyg x @./rsp
+cygwin <x>^n<a>^n<b c>^n<d>^n<e>^n<fg h>^n
+file rsp2 @rsp ^t"*"
+cyg x @rsp2
+cygwin <x>^n<a>^n<b c>^n<d>^n<e>^n<fg h>^n<*>^n
+file rsp3 "a b
+cyg @rsp3 c d
+cygwin <a b c d>^n
+cyg x @rsp3
+cygwin <x>^n<a b >^n
+file rsp4 x\
+cyg @rsp4 "y z"
+cygwin <x\>^n<y z>^n
+file empty ^l0;
+cyg x @empty y
+cygwin <x>^n<y>^n
+# (An 11th response file in one command line, nested or not, is fatal:
+# "Too many levels of nesting", a message with a pid: not recorded)
+file ab z
+cyg a*
+cygwin <ab>^n
+cyg "a"*
+cygwin <ab>^n
+cyg a\*
+cygwin <a*>^n
+cyg [a]b
+cygwin <ab>^n
+cyg a{b,c}
+cygwin <ab>^n<ac>^n
+cyg ./a*
+cygwin <./ab>^n

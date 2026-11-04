@@ -22,7 +22,7 @@ the Makefile is only a convenience.
 |------------------|-------------------------------------------------|
 | `base.cpp`       | types, arenas, strings, slices, maps            |
 | `unabashed.cpp`  | platform API table and the shell core           |
-| `wide.cpp`       | UTF-16/WTF-8, command line splitting            |
+| `wide.cpp`       | UTF-16/WTF-8, command lines, CRT fds, PE sniff  |
 | `fibers.cpp`     | fibers for the platform layers                  |
 | `main_win32.cpp` | Win32 layer                                     |
 | `main_posix.cpp` | POSIX layer                                     |
