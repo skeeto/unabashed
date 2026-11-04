@@ -32,23 +32,40 @@ gets checked. Rules:
 ## M5b (real background processes)
 
 - **Win32 Ctrl-C a starting program can still miss** (m3b.md, "Programs
-  that miss a Ctrl-C"): one listed as attached when the handler reads
-  the console's process list that still never acts on the event runs
-  on unnoticed. t/win32/008 hits this in 1 to 2 runs in 100 (`-x`,
-  idle Windows 11; 3 of 500 traced runs, 5 of 280 untraced): busybox,
-  created about 3 ms before the event by a cat stub 5 ms old, is in
-  the list read 0.2 to 0.3 ms after conrun sent the event, yet exits 0
-  at end of file 5 ms later. Either it attached between the event and
-  the read, or the event came too early in its startup to act; the
-  list cannot tell, and telling it by age would be a guess. Also
-  unnoticed: one over 100 ms old and still not attached, and the real
-  program of a wrapper that starts it more than 50 ms after the event.
-  Only the Windows tests cover it: vos has no group signals
-  (`os_siggroup` is 0), so the core's `WMISSED` handling (the fallback
-  when a missed program cannot be ended) has no tests.exe coverage;
-  the job objects (Windows 8 and later) are untested on Windows 8 and
-  10, where disassociating a job's completion port may fail (handled:
-  later messages are ignored); not run on the XP laptop.
+  that miss a Ctrl-C"): unnoticed are one over 100 ms old and still
+  not attached; the real program of a wrapper that starts it more than
+  50 ms after the event; one in a job of over 64 live processes (only
+  64 are listed; such a program is not watched either); and every
+  descendant when the program's job could not be made (it is taken to
+  have had it, with all it started). A process that came and went
+  between listing a job and binding its port counts as missed even if
+  it was spared or ended. Only the Windows tests cover it: vos has no
+  group signals (`os_siggroup` is 0), so the core's `WMISSED` handling
+  (the fallback when a missed program cannot be ended) has no tests.exe
+  coverage; untested on Windows 8 and 10 (disassociating a job's port
+  may fail there: handled, later messages are ignored); not run on the
+  XP laptop. A 32-bit shell reading a 64-bit child's PEB (console
+  image, Ctrl-C ignored, initializing, same image) gets "unknown".
+- **Win32: a foreign program's Ctrl-C handler that starts a program is
+  taken for a wrapper**: a young program, attached and childless at a
+  Ctrl-C, is watched for 50 ms, since w64devkit's aliases ignore Ctrl-C
+  with a handler function and only then start busybox, which missed it.
+  A program that handles Ctrl-C by starting another (another shell's
+  trap, a cleanup tool) looks the same: what it starts within 50 ms is
+  ended, or, if it exits normally first, the parent takes SIGINT. bash
+  would run the cleanup and go on. A child running this shell's own
+  image is exempt (it judges its own children), as are programs
+  started with Ctrl-C ignored; the image path is compared, so another
+  copy or build of unabashed is foreign.
+- **Win32: every program runs in a job of its own** (Windows 8 and
+  later, see judge): `IsProcessInJob` is always true;
+  `QueryInformationJobObject(NULL)` describes that job, not the shell's,
+  so runtimes that size themselves by the job's memory limit (.NET) see
+  none; breakaway is allowed only as the shell's own job allows it
+  (`JOB_OBJECT_LIMIT_BREAKAWAY_OK`, or always when the shell is in no
+  job), and a descendant that breaks away is no longer judged; under a
+  shell job with silent breakaway, children that were in no job are
+  now in ours, and their children stay in it.
 - **Win32 Ctrl-C before SIGPIPE, single-task shell** (unobserved): a
   shell process writing to a native program that dies of Ctrl-C can
   see the broken pipe before its own control handler thread runs, and

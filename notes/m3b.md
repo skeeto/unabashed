@@ -206,16 +206,27 @@ old:
 - Not attached, a console image (the PE subsystem read through its
   PEB): it cannot have had the event and has run none of its own
   code, so it is ended with `0xC000013A`, as the event would have.
+- Attached but still in its loader's initialization (the
+  `ProcessInitializing` bit of `PEB.CrossProcessFlags`): ended the
+  same way. It has run none of its own code, so its handling is still
+  the default and the event could only end it; and it may not act on
+  it (below).
 - Attached: its descendants created before the event that are not
-  attached are ended the same way, once their initial thread runs
-  (`PEB.Ldr` set; earlier, the stub's `CreateProcess` fails). Another
-  level may end the same one, which is fine. The descendants are its
-  job's processes (below).
+  attached, or still initializing, are ended the same way, once their
+  initial thread runs (`PEB.Ldr` set; earlier, the stub's
+  `CreateProcess` fails). Another level may end the same one, which is
+  fine. The descendants are its job's processes (below).
 - Attached and childless: perhaps a stub caught before starting
-  busybox, so it is watched: for 50 ms after the event, or until it
-  exits, anything it starts is ended, and if one exits by itself first
-  (it could not be ended), the stub is reported as having missed the
-  event. procexit waits for the watch.
+  busybox, so it is watched: whatever it starts within 50 ms of the
+  event is ended, and if one exits by itself first (it could not be
+  ended), the stub is reported as having missed the event. The
+  watch ends when it exits, or 50 ms after the event. procexit waits
+  for the watch. Not watched: a program running this very shell's
+  image (it judges its own children by these rules), so that a trap
+  in a child shell can start programs.
+- Spared everywhere: a process started with Ctrl-C ignored (the
+  inherited `ConsoleFlags` bit of its process parameters), which the
+  event would not have touched.
 - A missed one that cannot be ended (exited first, never started) is
   reported by `os_waitproc` with `WMISSED`, and the core takes the
   signals noted during that wait as the level's own: in `runprogram`,
@@ -229,32 +240,63 @@ runs failed before (`-x`, 30 times), 0 of 60 after; 012 covers a
 handled early Ctrl-C and a missed `sleep 5` ended at once.
 
 008 kept failing in about 1 run in 10 (21 of 200, `-x`, idle
-machine). Traces
-(spawns, the console list, each judgement, kills, job messages and
-exits per process, `QueryPerformanceCounter` times) of five failures
-showed one case: the cat stub was 1.3 to 2.2 ms old, attached and
-childless, so watched; busybox was created 0.2 to 1.4 ms after the
-event; the watch, polling the process tree (Toolhelp) after `Sleep(1)`,
-first looked 14 to 15 ms after posting the signal (the default timer
-resolution), by which time g had died, busybox had read end of file
-and exited 0, and so had the stub: an exited childless stub "had it".
-Polling faster only narrows that. So since Windows 8 each program the
-shell starts runs in a job object of its own, created suspended and
-assigned before it runs (allowing breakaway, as no job would): the
-job's process list is exactly its live descendants, without pid reuse
-to rule out, and a watch associates the job with an I/O completion
-port, which reports every process the job gains (`NEW_PROCESS`, also
-for the ones already in it) and how each exits (`EXIT_PROCESS` for an
-exit status, `ABNORMAL_EXIT_PROCESS` for an exception code, which
-includes `0xC000013A`). The control handler waits on the port: a new
-process is ended, one that exits normally was missed and could not be,
-and the program's own exit ends the watch at once. Settling
+machine). Traces (spawns, the console list, each judgement, kills, job
+messages and exits per process, `QueryPerformanceCounter` times) of
+five failures showed one case: the cat stub was 1.3 to 2.2 ms old,
+attached and childless, so watched; busybox was created 0.2 to 1.4 ms
+after the event; the watch, polling the process tree (Toolhelp) after
+`Sleep(1)`, first looked 14 to 15 ms after posting the signal (the
+default timer resolution), by which time g had died, busybox had read
+end of file and exited 0, and so had the stub: an exited childless
+stub "had it". Polling faster only narrows that. So since Windows 8
+each program the shell starts runs in a job object of its own, created
+suspended and assigned before it runs: the job's process list is
+exactly its live descendants, without pid reuse to rule out, and a
+watch associates the job with an I/O completion port, which reports
+every process the job gains (`NEW_PROCESS`, also for the ones already
+in it) and how each exits (`EXIT_PROCESS` for an exit status,
+`ABNORMAL_EXIT_PROCESS` for an exception code, which includes
+`0xC000013A`). The handler reads the port, queued messages first (it
+may come to it late, after waking a blocked read): a new process
+created within 50 ms of the event (its creation time, not when it is
+seen) is ended; one gone before it could be opened is judged by its
+exit message; one that exits normally was missed and could not be
+ended; the program's own exit ends the watch. A process that came and
+went between listing the job and binding the port shows in the job's
+accounting (exited processes grew) and counts as missed. Settling
 disassociates the job (Windows 11 allows it; where it fails, the
-messages carry a key no later watch uses). Per spawn: a job object, an
-assignment and a resume, besides the lock. After this, 008 failed in
-3 of 500 runs traced with a memory buffer (heavier tracing hid it: 0
-of 440) and 5 of 280 untraced, all "after 0"; the traced three were
-all another case (notes/issues.md, M5b).
+messages carry the program's unique key, which no watch matches once
+it is settled). Per spawn: a job object, an assignment and a resume,
+besides the lock.
+
+A review of that found, and this round fixed:
+- A young child shell that had the Ctrl-C and ran a trap starting a
+  program (`trap "cmd /c echo cleanup ran; exit 0" INT`) was watched,
+  so the cleanup was ended, or seen exiting and the parent took SIGINT
+  (4 of 8 runs each way; bash always prints the cleanup and goes on).
+  A shell running this same image is no longer watched: it judges its
+  own children. The same trap in a foreign program (another shell)
+  still cannot be told from w64devkit's wrapper (notes/issues.md).
+- Programs started with Ctrl-C ignored (`trap "" INT` in a child
+  shell running `cmd /c rem`) were ended, or marked missed: now
+  spared, by the flag in their process parameters.
+- Every program's job allowed breakaway even where the shell's own job
+  does not; now it copies `JOB_OBJECT_LIMIT_BREAKAWAY_OK` from the
+  shell's job (allowed when the shell is in none).
+- The spin lock was held across `endmissed`'s waits (its 50 tries of
+  `Sleep(1)` took about 780 ms) while the main thread spun on it, with
+  a new program left suspended. Now a program is resumed before it is
+  recorded, judging and ending run unlocked (the entry is kept by a
+  busy count that procexit waits for), and `endmissed` gives up after
+  50 ms by the clock.
+- The watch could lose queued messages when it started over 50 ms
+  after the event (settling before reading the port).
+Remaining 012 and 008 failures were then one case: busybox about 3 ms
+old, listed as attached, yet untouched by the event (`sleep 5` ran to
+its end; cat read to end of file). A probe of busybox starting (PEB
+polled against the console list) showed it attaches about 0.9 ms into
+its loader's initialization and stays initializing about 3 ms more:
+that is where the failures were. Hence the initializing rule above.
 
 **Ctrl-C before SIGPIPE** (`sigpipe`, shell.cpp): a stage acts on
 Ctrl-C only at a safe point, so its reader could die of it first and
@@ -369,10 +411,13 @@ ping sees a typed Ctrl-C at all (an M6 item in notes/issues.md).
   report Ctrl-C deaths inconsistently (busybox's applet stubs exit 0 or
   130, MSVCRT programs `0xC000013A`).
 - **Programs that missed a Ctrl-C are ended**: a program that is not
-  yet attached, a descendant of a young one, or anything a young
-  childless program starts within 50 ms (meant for a wrapper's real
-  program, but a cleanup program that an early handler starts is ended
-  too). The guesses are confined to programs under 100 ms old.
+  yet attached or still initializing, a descendant of a young one, or
+  anything a young childless program starts within 50 ms (meant for a
+  wrapper's real program, but a cleanup program that an early handler
+  of a foreign program starts is ended too; a child running this shell
+  is not watched). Programs started with Ctrl-C ignored are spared.
+  The guesses are confined to programs under 100 ms old. Since
+  Windows 8 every program runs in a job of its own (notes/issues.md).
 - **Ctrl-Break is SIGQUIT** (the terminal's `^\`): it kills a script and
   does nothing at an interactive prompt.
 - **Exit code `0xC000013A`** for a shell killed by SIGINT, rather than

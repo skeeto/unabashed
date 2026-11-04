@@ -58,6 +58,7 @@ enum : i32 {
     JOB_OBJECT_MSG_EXIT_PROCESS  = 7,  // an exit status not an exception's
     JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS = 8,  // 0xC000013A among them
     JobObjectAssociateCompletionPortInformation = 7,
+    JobObjectBasicAccountingInformation = 1,
     JobObjectBasicProcessIdList  = 3,
     JobObjectExtendedLimitInformation = 9,
     MEM_COMMIT                   = 0x1000,
@@ -159,8 +160,17 @@ struct JobPort {  // JOBOBJECT_ASSOCIATE_COMPLETION_PORT
 struct JobPids {  // JOBOBJECT_BASIC_PROCESS_ID_LIST
     u32 assigned;
     u32 listed;
-    uz  pids[256];
+    uz  pids[64];
 };
+
+struct JobCounts {  // JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+    i64 utime, ktime, putime, pktime;
+    u32 faults;
+    u32 total;   // processes ever in the job
+    u32 active;
+    u32 terminated;
+};
+static_assert(sizeof(JobCounts) == 48);
 
 struct ProcessInfo {  // PROCESS_INFORMATION
     uz  process;
@@ -415,13 +425,17 @@ struct Hent {  // handle registration
 
 struct Recent {  // a program started lately (see judge)
     uz  proc;
-    uz  job;     // its own job, holding its descendants (Windows 8)
-    uz  key;     // the job's completion key while watched, unique
-    i64 time;    // started, in QueryPerformanceCounter ticks
-    i64 until;   // watched until, likewise
+    uz  job;        // its own job, holding its descendants (Windows 8)
+    uz  key;        // the job's completion key, unique
+    u64 at;         // watched: the Ctrl-C (creation times)
+    i64 time;       // started, in QueryPerformanceCounter ticks
+    i64 until;      // watched until, likewise
     i32 pid;
-    i32 state;   // R_*, after a Ctrl-C
-    b32 late;    // watched: a program it started exited by itself
+    i32 state;      // R_*, after a Ctrl-C
+    i32 busy;       // handler threads judging it unlocked: kept till 0
+    b32 bound;      // the job reports to Os.jobport
+    b32 late;       // watched: a program it started exited by itself
+    i32 unseen[4];  // watched: started, gone before it could be opened
 };
 enum : i32 { R_MISSED = 1, R_WATCHED };
 
@@ -489,11 +503,14 @@ struct Os {
     i32        nctrl;      // atomic: Ctrl-C events so far
     i32        recentlock; // atomic: guards recent
     b32        lateattach; // Windows 8: attach after CreateProcess
+    i64        freq;       // QueryPerformanceCounter ticks per second
     i64        youngticks; // 100 ms: programs judged at a Ctrl-C
     Recent     recent[32];
     uz         jobport;    // job messages for watched programs
     uz         jobkeys;    // completion keys handed out
-    JobPids    jobpids;    // guarded by recentlock (see judge)
+    u32        jobflags;   // limits of each program's job (see newjob)
+    c16        self[512];  // this program's image path (see sameimage)
+    i32        selflen;
 };
 
 enum : i32 { MAXHELPERS = 64 };
@@ -1473,14 +1490,89 @@ static b32 consoleimage(Os *os, uz proc)
     return subsystem == 3;  // IMAGE_SUBSYSTEM_WINDOWS_CUI
 }
 
+// Offsets in RTL_USER_PROCESS_PARAMETERS
+enum : iz {
+    PARAMS_FLAGS        = 8,
+    PARAMS_CONSOLEFLAGS = 16 + sizeof(uz),
+    PARAMS_IMAGEPATH    = sizeof(uz)==8 ? 0x60 : 0x38,
+};
+
+struct Ustr {  // UNICODE_STRING
+    c16  len;  // bytes
+    c16  cap;
+    c16 *data;
+};
+
+// Was the process started with Ctrl-C ignored (the inherited flag that
+// ctrlcignored reads for this process)? A Ctrl-C did nothing to it,
+// missed or not. False if unknown.
+static b32 ignoresctrlc(Os *os, uz proc)
+{
+    byte *params = pebslot(os, proc, 4);  // ProcessParameters
+    u32   flags  = 0;
+    iz    n      = 0;
+    return params &&
+           ReadProcessMemory(proc, params+PARAMS_CONSOLEFLAGS, &flags, 4, &n) &&
+           flags&1;
+}
+
+static i32 foldpath(c16 c)
+{
+    c = c=='/' ? '\\' : c;
+    return c>='A' && c<='Z' ? c+32 : c;
+}
+
+// Does the process run this very program (its image path is Os.self)?
+// Then it judges what it starts by these same rules. False if unknown.
+static b32 sameimage(Os *os, uz proc)
+{
+    byte *params = pebslot(os, proc, 4);  // ProcessParameters
+    u32   flags  = 0;
+    Ustr  path   = {};
+    iz    n      = 0;
+    if (!os->selflen || !params) return 0;
+    if (!ReadProcessMemory(proc, params+PARAMS_FLAGS, &flags, 4, &n) ||
+        !ReadProcessMemory(proc, params+PARAMS_IMAGEPATH, &path, sizeof(path), &n) ||
+        path.len/2!=os->selflen) {
+        return 0;
+    }
+    if (!(flags & 1)) {  // not yet normalized: an offset from params
+        path.data = (c16 *)(params + (uz)path.data);
+    }
+    for (i32 i = 0; i < os->selflen; i += 64) {
+        c16 buf[64];
+        i32 len = os->selflen-i<64 ? os->selflen-i : 64;
+        if (!ReadProcessMemory(proc, path.data+i, buf, 2*len, &n)) return 0;
+        for (i32 k = 0; k < len; k++) {
+            if (foldpath(buf[k]) != foldpath(os->self[i+k])) return 0;
+        }
+    }
+    return 1;
+}
+
+// Is the process still in its loader's initialization (the
+// ProcessInitializing bit of PEB.CrossProcessFlags)? It has run none of
+// its own code. False if unknown.
+static b32 starting(Os *os, uz proc)
+{
+    uz flags = (uz)pebslot(os, proc, 10);  // CrossProcessFlags
+    return flags>>1 & 1;
+}
+
+enum : i32 { END_DONE, END_SPARED, END_FAILED };  // endmissed
+
 // End, as a Ctrl-C would have, a process that missed one, once its
 // initial thread runs (the loader has set PEB.Ldr): ended earlier, its
-// parent's CreateProcess would fail. Another level may be ending it
-// too. False if it exited otherwise, or does not start soon.
-static b32 endmissed(Os *os, uz proc)
+// parent's CreateProcess would fail. One started with Ctrl-C ignored is
+// spared. END_DONE also if another level ended it, END_FAILED if it
+// exited otherwise, or did not start within 50 ms. It waits, so call it
+// without the lock.
+static i32 endmissed(Os *os, uz proc)
 {
-    for (i32 i = 0; i<50 && !exited(proc); i++) {
+    if (ignoresctrlc(os, proc)) return END_SPARED;
+    for (i64 end = ticks() + os->youngticks/2; !exited(proc) && ticks()<end;) {
         if (pebslot(os, proc, 3)) {
+            if (ignoresctrlc(os, proc)) return END_SPARED;
             TerminateProcess(proc, 0xc000013a);
             WaitForSingleObject(proc, 1000);
             break;
@@ -1488,19 +1580,22 @@ static b32 endmissed(Os *os, uz proc)
         Sleep(1);
     }
     i32 code = 0;
-    return exited(proc) && GetExitCodeProcess(proc, &code) &&
-           (u32)code==0xc000013au;
+    b32 done = exited(proc) && GetExitCodeProcess(proc, &code) &&
+               (u32)code==0xc000013au;
+    return done ? END_DONE : END_FAILED;
 }
 
 // A job of its own for a program just created suspended, so that its
 // descendants can be told at a Ctrl-C (see judge). Breaking away from
-// it is allowed, as it would be without it. 0 if unavailable.
-static uz newjob(uz proc)
+// it is allowed if the shell is in no job, or its own job allows it
+// (Os.jobflags): what a program could do without this job. 0 if
+// unavailable.
+static uz newjob(Os *os, uz proc)
 {
     uz job = CreateJobObjectW(0, 0);
     if (!job) return 0;
     JobLimits l = {};
-    l.flags = JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+    l.flags = os->jobflags;
     i32 info = JobObjectExtendedLimitInformation;
     if (!SetInformationJobObject(job, info, &l, sizeof(l)) ||
         !AssignProcessToJobObject(job, proc)) {
@@ -1510,70 +1605,107 @@ static uz newjob(uz proc)
     return job;
 }
 
-// Stop a watch (see watchjob): the program missed the Ctrl-C if
+// Prepare for jobs (Windows 8): the port, the breakaway rule and this
+// program's image path.
+static void setupjobs(Os *os)
+{
+    os->jobport = CreateIoCompletionPort(INVALID_HANDLE_VALUE, 0, 0, 1);
+
+    JobLimits own  = {};
+    i32       info = JobObjectExtendedLimitInformation;
+    os->jobflags = JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+    if (QueryInformationJobObject(0, info, &own, sizeof(own), 0)) {
+        os->jobflags &= own.flags;  // the shell's own job
+    }
+
+    byte *params = pebslot(os, GetCurrentProcess(), 4);
+    Ustr  path   = {};
+    if (params) __builtin_memcpy(&path, params+PARAMS_IMAGEPATH, sizeof(path));
+    if (path.data && path.len/2<=countof(os->self)) {
+        __builtin_memcpy(os->self, path.data, path.len);
+        os->selflen = path.len / 2;
+    }
+}
+
+// Stop reporting a job's processes to the port. Where that fails, they
+// go on reporting under a key that matches no watch (see notejob).
+static void unbind(Recent *r)
+{
+    JobPort none = {};
+    i32     info = JobObjectAssociateCompletionPortInformation;
+    b32     done = SetInformationJobObject(r->job, info, &none, sizeof(none));
+    r->bound = r->bound && !done;
+}
+
+// End a watch (see watchjob): the program missed the Ctrl-C if
 // something it started exited by itself meanwhile.
 static void settle(Recent *r)
 {
     r->state = r->late ? R_MISSED : 0;
     r->late  = 0;
-    JobPort none = {};
-    i32     info = JobObjectAssociateCompletionPortInformation;
-    if (SetInformationJobObject(r->job, info, &none, sizeof(none))) {
-        r->key = 0;  // else still associated, its messages ignored
-    }
+    __builtin_memset(r->unseen, 0, sizeof(r->unseen));
+    unbind(r);
 }
 
 static void dropjob(Recent *r)
 {
-    if (r->state == R_WATCHED) settle(r);
+    if (r->bound) unbind(r);
     if (r->job) CloseHandle(r->job);
 }
 
-// Note a program just started with Ctrl-C enabled, and its job (or 0).
-// procexit removes the entry before the handle closes, so a handle here
-// is live.
+// Note a program just started with Ctrl-C enabled, and its job (or 0),
+// in place of the oldest entry not in use. procexit removes the entry
+// before the handle closes, so a handle here is live.
 static void addrecent(Os *os, uz proc, i32 pid, uz job)
 {
     i64 now = ticks();
     lockrecent(os);
-    Recent *r = os->recent;
+    Recent *r = 0;
     for (i32 i = 0; i < countof(os->recent); i++) {
         Recent *c = os->recent + i;
         if (!c->proc) {
             r = c;
             break;
         }
-        r = c->time<r->time ? c : r;  // else the oldest
+        if (!c->busy && c->state!=R_WATCHED && (!r || c->time<r->time)) {
+            r = c;
+        }
+    }
+    if (!r) {
+        unlockrecent(os);
+        if (job) CloseHandle(job);  // all 32 judged right now
+        return;
     }
     dropjob(r);
     *r = {};
     r->proc = proc;
     r->job  = job;
+    r->key  = ++os->jobkeys;
     r->pid  = pid;
     r->time = now;
     unlockrecent(os);
 }
 
 // Forget a process. True if a Ctrl-C came that it may have missed,
-// which waits for a watch on it (watchjob) to settle.
+// which waits for any judging or watch of it to settle.
 static b32 takemissed(Os *os, uz proc)
 {
     for (i32 n = 0;; n++) {
-        b32 r = 0;
-        b32 watched = 0;
+        b32 r    = 0;
+        b32 wait = 0;
         lockrecent(os);
         for (i32 i = 0; i < countof(os->recent); i++) {
             Recent *e = os->recent + i;
             if (e->proc != proc) continue;
-            watched = e->state==R_WATCHED && n<1000;
-            if (!watched) {
+            wait = (e->busy || e->state==R_WATCHED) && n<1000;
+            if (!wait) {
                 r  = e->state == R_MISSED;
                 dropjob(e);
                 *e = {};
             }
         }
         unlockrecent(os);
-        if (!watched) return r;
+        if (!wait) return r;
         Sleep(1);
     }
 }
@@ -1587,65 +1719,113 @@ static b32 attached(Judging *j, i32 pid)
     return r;
 }
 
+struct Verdict {  // see judge
+    JobCounts before;  // the job's counts before its processes were listed
+    b32       known;   // the job was listed
+    b32       kids;    // it had descendants at the Ctrl-C
+    b32       missed;  // one missed it and could not be ended
+    b32       self;    // it runs this very program
+};
+
 // A Ctrl-C reaches only the processes attached to the console when it
 // is sent, and since Windows 8 a process attaches in its own startup,
 // after CreateProcess returns, so a program started just before can
 // miss it, where bash's forked child would have it. Judge a young
-// program (lock held) by the console's process list, read as soon as
-// the event reached this process:
+// program by the console's process list, read as soon as the event
+// reached this process:
 // * Not attached, a console program: it cannot have had it, and has run
 //   none of its own code, so it is ended as the Ctrl-C would have.
+// * Attached but still in its loader's initialization (about 3 ms for
+//   busybox): it may not act on the event, and has run none of its own
+//   code, so the event could only end it. It is ended likewise.
 // * Attached: it had it, and so did its descendants (its job's other
-//   processes) created before the event and attached; the others are
-//   ended likewise, once started. One without any may be a wrapper that
+//   processes) created before the event and attached; the others, and
+//   those still initializing, are ended likewise, once started, unless
+//   started with Ctrl-C ignored. One without any may be a wrapper that
 //   ignores Ctrl-C and waits for the real program (w64devkit's command
-//   aliases for busybox), caught before starting it, so it is watched.
+//   aliases for busybox), caught before starting it, so it is watched
+//   (see decide).
 // A missed program that cannot be ended is reported by os_waitproc
 // (WMISSED), and the level waiting for it takes the signal as its own.
-static void judge(Os *os, Judging *j, Recent *r)
+// Called unlocked, with the entry kept (Recent.busy).
+static Verdict judge(Os *os, Judging *j, Recent *r)
 {
+    Verdict v = {};
     if (!attached(j, r->pid)) {
         if (consoleimage(os, r->proc)) TerminateProcess(r->proc, 0xc000013a);
-        return;
+        return v;
     }
-    if (!r->job) return;  // before Windows 8: it had it with all it started
+    if (!os->lateattach) return v;  // XP: it had it with all it started
+    if (starting(os, r->proc)) {
+        v.missed = endmissed(os, r->proc) == END_FAILED;
+        return v;
+    }
+    if (!r->job) return v;  // it had it, with all it started
 
-    JobPids *l  = &os->jobpids;
-    b32      ok = QueryInformationJobObject(r->job, JobObjectBasicProcessIdList,
-                                            l, sizeof(*l), 0);
-    if (!ok && GetLastError()!=ERROR_MORE_DATA) return;
-    b32 kids = l->listed < l->assigned;
-    for (u32 i = 0; i < l->listed; i++) {
-        i32 pid = (i32)l->pids[i];
+    i32 info = JobObjectBasicAccountingInformation;
+    if (!QueryInformationJobObject(r->job, info, &v.before, sizeof(v.before), 0)) {
+        return v;
+    }
+    JobPids l  = {};
+    b32     ok = QueryInformationJobObject(r->job, JobObjectBasicProcessIdList,
+                                           &l, sizeof(l), 0);
+    if (!ok && GetLastError()!=ERROR_MORE_DATA) return v;
+    v.known = 1;
+    v.kids  = l.listed < l.assigned;
+    for (u32 i = 0; i < l.listed; i++) {
+        i32 pid = (i32)l.pids[i];
         if (pid == r->pid) continue;
         uz h = OpenProcess(0x100411, 0, pid);  // query, read, end, wait
         if (!h) continue;
         if (bornat(h) < j->at) {
-            kids = 1;
-            if (!attached(j, pid) && consoleimage(os, h) && !endmissed(os, h)) {
-                if (r->state == R_WATCHED) {
-                    r->late = 1;  // watched since an earlier Ctrl-C
-                } else {
-                    r->state = R_MISSED;
-                }
+            v.kids = 1;
+            b32 had = attached(j, pid) && !starting(os, h);
+            if (!had && consoleimage(os, h)) {
+                v.missed |= endmissed(os, h) == END_FAILED;
             }
         }
         CloseHandle(h);
     }
+    v.self = sameimage(os, r->proc);
+    return v;
+}
 
-    if (!kids && !r->state && os->jobport) {
-        JobPort p = {};
-        p.key  = ++os->jobkeys;  // unique: messages may outlive a watch
-        p.port = os->jobport;
-        i32 info = JobObjectAssociateCompletionPortInformation;
-        if (!r->key && SetInformationJobObject(r->job, info, &p, sizeof(p))) {
-            r->key = p.key;
+// Take a verdict (lock held). A program childless at the Ctrl-C is
+// watched, unless it runs this very program (it judges its own): its
+// job is bound to the port, and a process that exited between the
+// listing and the binding went unseen, so was missed.
+static void decide(Os *os, Judging *j, Recent *r, Verdict v)
+{
+    if (v.missed) {
+        if (r->state == R_WATCHED) {
+            r->late = 1;  // watched since an earlier Ctrl-C
+        } else {
+            r->state = R_MISSED;
         }
-        r->state = r->key ? R_WATCHED : 0;
     }
-    if (r->state == R_WATCHED) {
-        r->until = j->now + os->youngticks/2;
+    b32 watch = v.known && !v.kids && !v.self && os->jobport;
+    if (!watch || r->state==R_MISSED) return;
+
+    if (!r->bound) {
+        JobPort p = {};
+        p.key    = r->key;
+        p.port   = os->jobport;
+        i32 info = JobObjectAssociateCompletionPortInformation;
+        r->bound = SetInformationJobObject(r->job, info, &p, sizeof(p));
+        if (!r->bound) return;
     }
+    JobCounts after = {};
+    i32       info  = JobObjectBasicAccountingInformation;
+    QueryInformationJobObject(r->job, info, &after, sizeof(after), 0);
+    if (exited(r->proc)) {  // it had it
+        if (r->state != R_WATCHED) unbind(r);
+        return;
+    }
+    u32 gone  = v.before.total - v.before.active;
+    r->late  |= after.total-after.active > gone;
+    r->state  = R_WATCHED;
+    r->at     = j->at;
+    r->until  = j->now + os->youngticks/2;
 }
 
 // Judge the young programs (see judge), on the control handler's thread
@@ -1661,83 +1841,128 @@ static b32 notemissed(Os *os)
     GetThreadTimes(GetCurrentThread(), ft, ft+1, ft+2, ft+3);
     j.at  = (u64)ft[0].hi<<32 | ft[0].lo;
     j.now = ticks();
-    b32 watch = 0;
+
+    Recent *young[countof(os->recent)];
+    i32     n = 0;
     lockrecent(os);
     for (i32 i = 0; i < countof(os->recent); i++) {
         Recent *r = os->recent + i;
         if (r->proc && j.now-r->time<os->youngticks) {
-            judge(os, &j, r);
-            watch |= r->state == R_WATCHED;
+            r->busy++;
+            young[n++] = r;
         }
     }
     unlockrecent(os);
+
+    b32 watch = 0;
+    for (i32 i = 0; i < n; i++) {
+        Recent *r = young[i];
+        Verdict v = judge(os, &j, r);
+        lockrecent(os);
+        decide(os, &j, r, v);
+        r->busy--;
+        watch |= r->state == R_WATCHED;
+        unlockrecent(os);
+    }
     return watch;
 }
 
-// A message from a watched program's job (lock held): whatever the
-// program starts missed the Ctrl-C, and is ended. One that exits by
-// itself first cannot be, and the program is taken to have missed it.
-// Its own exit ends the watch.
+// A message from a watched program's job: whatever the program starts
+// within 50 ms of the Ctrl-C missed it and is ended, unless started
+// with Ctrl-C ignored. One that exits by itself first cannot be, and
+// the program is taken to have missed it. Its own exit ends the watch.
 static void notejob(Os *os, i32 msg, uz key, i32 pid)
 {
+    lockrecent(os);
     Recent *r = 0;
     for (i32 i = 0; i < countof(os->recent); i++) {
         Recent *c = os->recent + i;
         r = c->state==R_WATCHED && c->key==key ? c : r;
     }
-    if (!r) return;  // stale
+    if (!r) {
+        unlockrecent(os);  // stale
+        return;
+    }
 
     switch (msg) {
     case JOB_OBJECT_MSG_NEW_PROCESS:
         if (pid != r->pid) {
-            uz h = OpenProcess(0x100411, 0, pid);  // query, read, end, wait
-            if (h) {
-                endmissed(os, h);  // its exit tells how it went
-                CloseHandle(h);
+            u64 at = r->at;
+            r->busy++;
+            unlockrecent(os);
+            uz  h    = OpenProcess(0x100411, 0, pid);  // query, read, end, wait
+            u64 born = h ? bornat(h) : 0;
+            b32 late = 0;
+            if (h && born>=at && born-at<500000) {  // 50 ms
+                late = endmissed(os, h) == END_FAILED;
+            }
+            if (h) CloseHandle(h);
+            lockrecent(os);
+            r->busy--;
+            if (r->state == R_WATCHED) {
+                r->late |= late;
+                if (!h) {  // gone already: its exit message tells
+                    i32 i = 0;
+                    for (; i<countof(r->unseen) && r->unseen[i]; i++) {}
+                    if (i < countof(r->unseen)) {
+                        r->unseen[i] = pid;
+                    } else {
+                        r->late = 1;
+                    }
+                }
             }
         }
         break;
     case JOB_OBJECT_MSG_EXIT_PROCESS:
     case JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS:
         if (pid == r->pid) {
-            settle(r);
-        } else if (msg == JOB_OBJECT_MSG_EXIT_PROCESS) {
-            r->late = 1;
+            r->until = 0;  // settled now, or once judging it is done
+            if (!r->busy) settle(r);
+        } else {
+            for (i32 i = 0; i < countof(r->unseen); i++) {
+                if (r->unseen[i] != pid) continue;
+                r->unseen[i] = 0;
+                r->late |= msg == JOB_OBJECT_MSG_EXIT_PROCESS;
+            }
         }
         break;
     }
+    unlockrecent(os);
 }
 
 // For 50 ms after a Ctrl-C, or until it exits, a watched program is
-// taken to be a wrapper, and anything it starts missed the Ctrl-C. Its
-// job reports each process as it is created and as it exits, so none
-// goes unseen, however briefly it runs.
+// taken to be a wrapper, and what it starts missed the Ctrl-C. Its job
+// reports each process as it is created and as it exits, so none goes
+// unseen, however briefly it runs, nor however late this starts.
 static void watchjob(Os *os)
 {
     for (;;) {
+        i32   msg = 0;
+        uz    key = 0;
+        void *pid = 0;
+        while (GetQueuedCompletionStatus(os->jobport, &msg, &key, &pid, 0)) {
+            notejob(os, msg, key, (i32)(uz)pid);
+        }
+
         i64 now  = ticks();
         i64 next = 0;
         lockrecent(os);
         for (i32 i = 0; i < countof(os->recent); i++) {
             Recent *r = os->recent + i;
             if (r->state != R_WATCHED) continue;
-            if (r->until <= now) {
+            if (r->until<=now && !r->busy) {
                 settle(r);
             } else {
-                next = !next || r->until<next ? r->until : next;
+                i64 until = r->until>now ? r->until : now+1;
+                next = !next || until<next ? until : next;
             }
         }
         unlockrecent(os);
         if (!next) return;
 
-        i32   ms  = (i32)((next - now)*100/os->youngticks) + 1;
-        i32   msg = 0;
-        uz    key = 0;
-        void *pid = 0;
+        i32 ms = (i32)((next - now)*1000/os->freq) + 1;
         if (GetQueuedCompletionStatus(os->jobport, &msg, &key, &pid, ms)) {
-            lockrecent(os);
             notejob(os, msg, key, (i32)(uz)pid);
-            unlockrecent(os);
         }
     }
 }
@@ -2394,8 +2619,9 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     }
     if (noint) SetConsoleCtrlHandler(0, 0);
     if (ok && !noint) {
-        addrecent(os, pi.process, pi.pid, tojob ? newjob(pi.process) : 0);
+        uz job = tojob ? newjob(os, pi.process) : 0;
         if (tojob) ResumeThread(pi.thread);
+        addrecent(os, pi.process, pi.pid, job);
         if (__atomic_load_n(&os->nctrl, __ATOMIC_SEQ_CST) != nctrl) {
             notemissedspawn(os, pi.process, pi.pid);
         }
@@ -2733,10 +2959,9 @@ void mainCRTStartup()
     os.queryproc = (NtQueryInformationProcessFn)dynamic(u"ntdll.dll", "NtQueryInformationProcess");
     i64 freq = 0;
     QueryPerformanceFrequency(&freq);
+    os.freq       = freq;
     os.youngticks = freq / 10;
-    if (os.lateattach) {
-        os.jobport = CreateIoCompletionPort(INVALID_HANDLE_VALUE, 0, 0, 1);
-    }
+    if (os.lateattach) setupjobs(&os);
     os.cancelsync = (b32 (__stdcall *)(uz))dynamic(u"kernel32.dll", "CancelSynchronousIo");
     os.perm     = newarena(&os, (iz)1<<24);
     os.wake     = CreateEventW(0, 0, 0, 0);
