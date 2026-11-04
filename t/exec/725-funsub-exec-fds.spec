@@ -1,4 +1,4 @@
-== stdout 164
+== stdout 186
 [in]
 back
 f [a
@@ -9,11 +9,13 @@ to stderr
 bg2
 fg]
 [bash: line 21: 1/0: division by 0 (error token is "0")]
+[in] [new]
+[in] [new]
 trap out
 
 == stderr 0
 
-== merged 164
+== merged 186
 [in]
 back
 f [a
@@ -24,6 +26,8 @@ to stderr
 bg2
 fg]
 [bash: line 21: 1/0: division by 0 (error token is "0")]
+[in] [new]
+[in] [new]
 trap out
 
 == status 127

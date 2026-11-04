@@ -22,5 +22,13 @@ w=${ exec 2>&1; echo $((1/0)); }
 echo "[$w]"
 echo "${ exec 2>&1; echo $((1/0)); }" >&2
 for i in 1 2 3; do : ${ exec 2>&1; echo $i; }; nosuch$i; exec 2>&1; done
+x=${ exec 2>&1; echo in; }
+y=${ echo new; echo lost >&2; }
+exec 2>&1
+echo "[$x] [$y]"
+x=${ exec 2>&1; echo in; }
+y=$(echo new; echo lost >&2)
+exec 2>&1
+echo "[$x] [$y]"
 echo "${ exec 2>&1; : ${u?unset}; echo no; }"
 echo unreached
