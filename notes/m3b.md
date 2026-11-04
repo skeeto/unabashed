@@ -250,9 +250,11 @@ with winctl in XP's console window (`winctl run unabashed.exe -i`,
 while read l; do :; done` then Ctrl-C gives the prompt and `$?` 130;
 Ctrl-C in `read v` gives the prompt and 130; Ctrl-C after typing part
 of a line gives a new prompt and 130; Ctrl-C during `sleep 5` gives the
-prompt and 130. Not done on Windows 11's conhost: the desktop was in use
-by a fullscreen program, and winctl brings the window to the
-foreground for every key.
+prompt and 130. The same four checks pass on Windows 11's conhost
+(after M4), with the shell started from Explorer through a batch file:
+a shell started by winctl from Claude Code's shell inherits the
+"ignore Ctrl-C" console flag, under which neither unabashed nor cmd's
+ping sees a typed Ctrl-C at all (an M6 item in notes/issues.md).
 
 ## Numbers at the end of M3b
 

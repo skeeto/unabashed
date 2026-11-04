@@ -30,8 +30,6 @@ gets checked. Rules:
 - **Fuzz the M4 changes**: the run, chaos and isolate campaigns have not
   seen namerefs, regex.cpp, glob.cpp, float.cpp or mapfile. Rerun them
   (tools/fuzz) and triage.
-- **Win11 keyboard Ctrl-C check with winctl** (typed into conhost),
-  skipped in M3b because the desktop was busy; passed on XP.
 
 
 ## M5a (Windows paths and spawning)
@@ -62,6 +60,13 @@ gets checked. Rules:
 ## M6 (editor)
 
 - `read -p/-s/-e/-i` do nothing yet (need the terminal layer). (m4.md)
+- An interactive shell started with Ctrl-C ignored (Win32: the
+  inherited ConsoleFlags bit, from a parent's SetConsoleCtrlHandler(0,
+  1); POSIX: SIGINT ignored on entry) never sees Ctrl-C, so typing it
+  does nothing. bash catches SIGINT whenever it is interactive, even if
+  ignored on entry (its programs still start ignoring it). Win32 needs
+  SetConsoleCtrlHandler(0, 0) at startup when interactive; anything
+  run from Claude Code's shell starts that way. (m3b.md)
 - history and histexpand oracles.
 
 
