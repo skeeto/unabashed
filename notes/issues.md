@@ -27,7 +27,6 @@ gets checked. Rules:
 - **Time zones**: TZ unset or unexported means UTC, on Windows too; use
   the system zone. Zone names glibc reads from zoneinfo files are read
   as POSIX strings (DST before 2007 can differ). (m4.md)
-<<<<<<< HEAD
 - **lpReserved2 slot width unverified** (step 8): `encodecrtfds` and
   `decodecrtfds` are only checked against the documented layout. Check
   with real msvcrt and UCRT children, x64 to i686 and back, that the
