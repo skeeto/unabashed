@@ -2,6 +2,7 @@
 # command; see the header of each main_*.cpp.
 #
 # Windows (w64devkit):  make unabashed.exe unabashed32.exe debug.exe tests.exe
+#                       argv.exe argv32.exe (tools/argv.cpp, for t/msys)
 # Linux:                make unabashed debug tests
 # Fuzzing (AFL++):      make fuzz
 
@@ -37,6 +38,14 @@ debug.exe: main_win32.cpp $(SOURCES)
 tests.exe: main_test.cpp $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -Wl,--stack,0x2000000 -o $@ main_test.cpp
 
+# tools/argv.cpp keeps the CRT startup on purpose: it shows how msvcrt.dll
+# splits a command line (tools/README.md).
+argv.exe: tools/argv.cpp
+	$(CXX) -std=c++20 -municode $(WARN) $(RELEASE) -o $@ tools/argv.cpp
+
+argv32.exe: tools/argv.cpp
+	$(CXX32) -std=c++20 -municode $(WARN) $(RELEASE) -o $@ tools/argv.cpp
+
 unabashed: main_posix.cpp $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) $(RELEASE) -o $@ main_posix.cpp
 
@@ -54,6 +63,6 @@ check: tests
 
 clean:
 	rm -f unabashed unabashed.exe unabashed32.exe debug debug.exe \
-	      tests tests.exe fuzz
+	      tests tests.exe fuzz argv.exe argv32.exe
 
 .PHONY: default check clean
