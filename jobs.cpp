@@ -548,7 +548,7 @@ static void detachcaptures(Shell *sh, Shell *c)
     for (i32 fd = 0; fd < t->top; fd++) {
         File *f = t->fd[fd];
         if (!f || f->kind!=F_CAPTURE) continue;
-        Handle h = capturewriter(sh, f);
+        Handle h = capturewriter(sh, f, c->bashpid);
         f->kind = F_OS;  // in place: descriptors sharing it follow
         f->cap  = 0;
         f->h    = h;

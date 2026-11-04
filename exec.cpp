@@ -540,10 +540,23 @@ static Word *fileread(Shell *sh, Arena *a, Str src)
     return n->redirs->word;
 }
 
+// Is the procsub or job with this BASHPID still running?
+static b32 pidrunning(Shell *sh, i64 pid)
+{
+    for (Task *t = sh->psubs; t; t = t->sib) {
+        if (t->pid == pid) return t->state != TS_DONE;
+    }
+    for (Job *j = sh->jobs; j; j = j->next) {
+        if (j->pid == pid) return j->task && j->task->state!=TS_DONE;
+    }
+    return 0;
+}
+
 // Finish a capture once its command is done: wait until every pump
 // has seen EOF, and point the descriptors still on it at /dev/null.
 // Those are what exec left in ${ ...; } (exec 2>&1), which in bash
-// write to the substitution's file after no one reads it.
+// write to the substitution's file after no one reads it. So do the
+// procsubs and jobs it started that still run: their pumps discard.
 static void endcapture(Shell *sh, Capture *c, Arena scratch)
 {
     Fdtab *fds = sh->fds;
@@ -556,13 +569,25 @@ static void endcapture(Shell *sh, Capture *c, Arena scratch)
         f->h    = o.err ? BADHANDLE : o.h;
         if (o.err) f->flags = 0;  // writes fail
     }
-    while (c->pumps) {
-        Task *t = c->pumps;
-        c->pumps = t->sib;
-        Pump *p = (Pump *)t->arg;
-        taskjoin(sh->sched, t);
-        p->next = sh->sched->freepumps;
-        sh->sched->freepumps = p;
+    Sched *s = sh->sched;
+    for (i32 pass = 0; pass < 2; pass++) {
+        // Owned pumps last, giving their writers the longest time
+        for (Task **pt = &c->pumps; *pt;) {
+            Task *t = *pt;
+            Pump *p = (Pump *)t->arg;
+            if (!pass && p->owner) {
+                pt = &t->sib;
+                continue;
+            }
+            *pt = t->sib;
+            if (p->owner && pidrunning(sh, p->owner)) {
+                p->buf = 0;
+                t->sib = s->orphans;
+                s->orphans = t;
+            } else {
+                joinpump(s, t);
+            }
+        }
     }
 }
 
@@ -640,16 +665,18 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
 
 // An OS handle writing into a capture, for a writer the shell does not
 // wait for in place: a pump appends what it delivers, and the capture
-// waits for the pump. The caller owns the handle.
-static Handle capturewriter(Shell *sh, File *f)
+// waits for the pump, or with owner, the procsub or job writing it, for
+// as long as that runs. The caller owns the handle.
+static Handle capturewriter(Shell *sh, File *f, i64 owner)
 {
     OsPipe p = os_pipe(sh->os);
     if (p.err) return BADHANDLE;
     Sched   *s  = sh->sched;
     Pump    *pp = newpump(s);
-    pp->kind = PUMP_TOBUF;
-    pp->h    = p.r;
-    pp->buf  = f->cap;
+    pp->kind  = PUMP_TOBUF;
+    pp->h     = p.r;
+    pp->buf   = f->cap;
+    pp->owner = owner;
     Task    *t  = spawnpump(s, pp);
     Capture *c  = (Capture *)f->cap;
     t->sib   = c->pumps;
@@ -1312,7 +1339,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         case F_CAPTURE: {
             if (sh->spawnto) {
                 // Not waited for here: a pump fills the capture
-                sf.h = capturewriter(sh, f);
+                sf.h = capturewriter(sh, f, 0);
                 if (sf.h == BADHANDLE) continue;
                 closeafter[nclose++] = sf.h;
                 break;

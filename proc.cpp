@@ -34,6 +34,7 @@ static void copytraps(Shell *c, Shell *sh);
 static Job *copyjobs(Store *, Job *);  // jobs.cpp
 static void closecoproc(Shell *);
 static void orphanjobs(Shell *);
+static void detachcaptures(Shell *, Shell *);  // jobs.cpp
 static void reportpipeline(Shell *, Arena, Node **stages, i32 n, i32 *statuses,
                            i64 *pids, Node *job);
 
@@ -594,6 +595,7 @@ static Str procsubst(Shell *sh, Arena *a, Str body, b32 output)
 
     Vproc *m = vprocwith(sh, output ? theirs : 0, output ? 0 : theirs);
     fileunref(sh, theirs);
+    detachcaptures(sh, m->sh);  // it outlives a ${ ...; } capture
     m->src = clone(&m->perm, body);
     m->sh->noreport = 1;  // nothing it runs is reported, as in bash
     Task *task = taskspawn(sh->sched, vprocmain, m, BIGSTACK);

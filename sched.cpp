@@ -766,7 +766,8 @@ struct Pump {
     Handle h;        // owned: closed when the pump ends
     Pipe  *pipe;     // owned end: the read end for PUMP_TOHANDLE
     Str    text;     // PUMP_TEXT: bytes to write
-    Buf   *buf;      // PUMP_TOBUF: where to append what h delivers
+    Buf   *buf;      // PUMP_TOBUF: where to append what h delivers, or discard
+    i64    owner;    // PUMP_TOBUF: BASHPID of the vproc writing it, or 0
 };
 
 // A Pump that outlives the arena of whoever starts it, pooled.
@@ -812,7 +813,7 @@ static void pumpmain(Task *t)
         for (;;) {
             iz n = taskread(s, p->h, buf, countof(buf));
             if (n <= 0) break;
-            print(p->buf, {buf, n});
+            if (p->buf) print(p->buf, {buf, n});
         }
         break;
     }
