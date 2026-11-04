@@ -429,3 +429,89 @@ applets) the agent's spawn of the shell bounds it at 50.8/19.4 = 2.6x.
 could hold for the shell's own time (startup, snapshot, wrapper and
 builtins: 11 ms vs about 1 ms), for a batch run inside one shell, or
 in vos instruction counts. For the user to decide (Decisions).
+
+
+### Step 4: the vos's Windows personality
+
+API (api.cpp), the only core-facing change:
+- `OsInfo.exe`: the shell's own image, native form (`C:/x/sh.exe`).
+  main_win32.cpp fills it from GetModuleFileNameW (`\\?\` stripped,
+  slashes forward), main_posix.cpp from /proc/self/exe (empty
+  elsewhere).
+- `OsInfo.cmdline`: the raw Windows command line in WTF-8, the input
+  main_win32.cpp already split; empty on POSIX.
+- `Spawn.cmdline`: when set, the platform passes it verbatim (step 7
+  builds it in the core); empty keeps today's quoting of argv.
+- `Spawn.crtslot`: 4 or 8, the lpReserved2 slot width for fds ≥3; 0
+  passes only 0-2. Only the vos reads it so far.
+
+Vos (vos.cpp, `Vos.win`, set by `vreset(..., win=1)`). Linux mode is
+unchanged: the whole Linux suite passes byte for byte.
+- Paths go through `vpath`: `/c/x` and `/dev/null` are accepted (the
+  shell still produces them), everything else goes through paths.cpp's
+  `winnorm` against `C:/`. Kinds: a file (internally `/C:/x` in the
+  same node tree), the null device (`//./NUL` and a reserved DOS name
+  as the last component in any directory, with or without an
+  extension), a named pipe (`//./pipe/NAME`, a table of 64 VPipes), or
+  nothing (any other `//` UNC path: ENOENT).
+- Lookup folds ASCII case; listing sorts in NTFS order. `os_stat`
+  synthesizes Windows modes: directories 0755, files 0644, read-only
+  files lose the write bits, and `.exe .com .bat .cmd .sh` names or
+  `MZ`/`#!` content add 0111 (the noacl rule plus `.sh`).
+- Fakes are installed as synthetic PE images (`vpeimage`: the machine,
+  one import, and for our own shell an `.unabash` section) that the
+  real `pesniff` classifies, with a marker naming the fake; the image
+  maps back to its fake, so a copied `.exe` still runs.
+- `os_spawn` in win mode: the command line is `Spawn.cmdline`, or else
+  argv quoted the way main_win32.cpp does (batch files through
+  `%ComSpec% /d /e:on /v:off /s /c "..."`); over 32766 UTF-16 units is
+  E2BIG. The child's argv is that command line split by the target's
+  parser: `splitcmdline` with the CRT's variant for native images,
+  `splitcygwin` for msys-2.0.dll ones (globbing against the vos, `~`,
+  `@file` up to ten deep), the raw argv for our own shell. Fds ≥3 reach
+  the child only with `crtslot`. A child sees the native cwd
+  (`C:/work`), or `/c/work` if it is an msys program.
+
+Windows tree (`vwintree`): `C:/w64/bin` holds `sh.exe` (our shell),
+`argv.exe` (x64) and `argv32.exe` (i386, both msvcrt; output in
+tools/argv.cpp's format, with ARGV_SHOW and ARGV_FD), `busybox.exe`
+(msvcrt; the Linux fakes as applets) and one alias stub per Linux fake
+(`ls.exe` runs `busybox ls`, as w64devkit's do). `C:/msys/usr/bin`
+holds `bash.exe` (our shell) and the Linux fakes as MSYS2 programs;
+`C:/msys/etc/fstab` is MSYS2's default and `C:/msys/tmp` exists.
+`C:/Windows/System32/cmd.exe` (ucrt) is a small cmd model: `/d /s /c`
+quote stripping, `%VAR%` (case-insensitive, `%cd%`, `:~N,M`), `^`,
+echo/rem/set/exit [/b], batch files line by line, programs in the cwd
+and PATH with .COM .EXE .BAT .CMD, 9009 when not found. Also `C:/work`
+(the cwd), `D:` and `C:/Users/oracle/AppData/Local/Temp`.
+
+Harness (main_test.cpp):
+- `# personality: native|msys` runs a spec with Windows OsInfo: exe
+  `C:/w64/bin/sh.exe` or `C:/msys/usr/bin/bash.exe`, cwd `C:/work`, a
+  Windows environment (`=C:`, ComSpec, LANG, Path, SystemRoot, TEMP,
+  TMP, TZ, USERPROFILE) and a command line built from argv. `--run
+  [--personality NAME] [--spec] SCRIPT` does the same by hand.
+- `./tests.exe t/msys/*.sh` runs the `# vos` scripts in the vos with
+  t/msys's layout (C:/git for Git's usr/bin, C:/work/bin/argv.exe,
+  C:/work/NAME as the script's directory, `# shell:` with $D $DW $DU)
+  and tools/README.md's normalization in C, then reports `N t/msys vos
+  specs, P passed, F failed (S not # vos)`; `--msys-diff` shows the
+  differences. It is a separate invocation, so the default suites stay
+  green while t/msys is red.
+- `test_vwin` checks stat, case, modes, pesniff on the images, copied
+  images, named pipes and each spawn kind.
+- t/winvos/ (6 native specs, 1 msys): a hand-checked baseline of
+  today's minimal Windows behavior, not oracle output. Each script
+  says so; steps 5 and 7 change them on purpose. `.gitattributes`
+  keeps their CRs.
+- main_fuzz.cpp `-DFUZZ_WIN` runs any mode in the Windows vos, the
+  shell as sh.exe in C:/work.
+
+Results: tests.exe 144/0; t/exec 654/0, also with --chaos 20; t/parse
+594/0; t/unit 10/0; t/winvos 7/0, also with --chaos 20; paths_test
+923855/0; wide_test 100581/0; FUZZ_WIN run, chaos and isolate replay
+t/exec and t/winvos (661 files) clean; unabashed.exe, unabashed32.exe
+and the WSL POSIX build without warnings (tests.exe 144/0 there).
+t/msys in the vos: 41 `# vos` specs, 1 passed (057), 40 failed, 20 not
+`# vos`; the failures have step 3's baseline causes (no mount table,
+`C:/\`, bare argv[0], CRs kept).

@@ -18,11 +18,17 @@ struct FakeCtx {
     Str     cwd;
     Handle  fd[64];  // BADHANDLE when closed; procsubs use up to 63
     Arena   scratch;
+    // The vos's Windows mode (Vos.win): the raw command line, the
+    // image's own native path, and that drive paths are absolute
+    Str     cmdline;
+    Str     exe;
+    b32     win;
 };
 
 struct Fake {
     Str  name;
     i32 (*main)(Os *, FakeCtx *);
+    b32  win = 0;  // a Windows program, only in the vos's Windows tree
 };
 
 
@@ -763,6 +769,9 @@ enum { FK_PATHMAX = 4096 };
 static Str fkpath(FkProg *p, Str name)
 {
     if (!name.len || name[0]=='/') return name;
+    if (p->ctx->win && (name[0]=='\\' ||(name.len>1 && name[1]==':'))) {
+        return name;
+    }
     Str cwd = p->ctx->cwd;
     b32 sep = !cwd.len || cwd[cwd.len-1]!='/';
     Str r   = {allocbytes(p->a, cwd.len+sep+name.len), 0};

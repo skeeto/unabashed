@@ -18,6 +18,12 @@
 // bash's test helpers in /usr/local/bin and the other fake programs in
 // /opt/fakes/bin, with PATH=/usr/local/bin:/opt/fakes/bin.
 //
+// Windows mode (Vos.win, see "Windows personality" below) replaces it
+// with drives C: and D:, names looked up ignoring case, reserved DOS
+// names as the null device, a //./pipe/ namespace, and fakes installed
+// as synthetic PE images that split their command lines as the real
+// programs would.
+//
 // This is free and unencumbered software released into the public domain.
 
 struct Vos;
@@ -53,6 +59,11 @@ struct VPipe {
     i32  writers;
     u64  rkey;     // tracing: the last reader's identity, or 0
     u64  wgroup;   // tracing: the last writer's group (vgroup), or 0
+};
+
+struct VNamedPipe {  // Windows mode: //./pipe/NAME
+    Str    name;
+    VPipe *pipe;
 };
 
 struct VFile {      // open file description
@@ -140,6 +151,10 @@ struct Vos {
     i32     nwriters;
     VCount  spawns[256];   // programs started per (process, task)
     i32     nspawns;
+    // Windows mode
+    b32        win;
+    VNamedPipe npipes[64];
+    i32        nnpipes;
 };
 
 static VNode *vnew(Vos *v, VNode *dir, Str name, i32 type, i32 mode)
@@ -162,12 +177,12 @@ static VNode *vnew(Vos *v, VNode *dir, Str name, i32 type, i32 mode)
     return n;
 }
 
-static VNode *vlookup(VNode *dir, Str name)
+static VNode *vlookup(Vos *v, VNode *dir, Str name)
 {
     if (name == ".") return dir;
     if (name == "..") return dir->parent;
     for (VNode *n = dir->child; n; n = n->next) {
-        if (n->name == name) return n;
+        if (v->win ? equalfold(n->name, name) : n->name==name) return n;
     }
     return 0;
 }
@@ -186,9 +201,10 @@ struct VResolved {
     i32    err;
 };
 
-// Resolve an absolute path. Symbolic links are followed in every
+// Resolve an absolute path in the tree's own form (in Windows mode
+// "/C:/x", from vpath). Symbolic links are followed in every
 // component, and in the last one only when follow is set.
-static VResolved vresolve(Vos *v, Str path, b32 follow, i32 depth = 0)
+static VResolved vwalk(Vos *v, Str path, b32 follow, i32 depth = 0)
 {
     VResolved r = {};
     if (!path.len || path[0]!='/') {
@@ -218,7 +234,7 @@ static VResolved vresolve(Vos *v, Str path, b32 follow, i32 depth = 0)
             r.err = E_ACCES;  // a name looked up needs search permission
             return r;
         }
-        VNode *n = vlookup(cur, c.head);
+        VNode *n = vlookup(v, cur, c.head);
         b32 last = 1;
         for (iz i = 0; i < c.tail.len; i++) {
             if (c.tail[i] != '/') last = 0;
@@ -236,7 +252,10 @@ static VResolved vresolve(Vos *v, Str path, b32 follow, i32 depth = 0)
             // Splice the target in front of the remaining components
             Arena *a = &v->a;
             Buf b(a, n->data.len + c.tail.len + 64);
-            if (n->data.len && n->data[0]!='/') {
+            b32 drive = v->win && hasdrive(n->data);
+            if (drive) {
+                putbyte(&b, '/');  // a Windows link target: "C:/x"
+            } else if (n->data.len && n->data[0]!='/') {
                 // relative to the link's directory
                 Buf d(a);
                 for (VNode *p = cur; p != v->root; p = p->parent) {
@@ -254,7 +273,7 @@ static VResolved vresolve(Vos *v, Str path, b32 follow, i32 depth = 0)
                 print(&b, "/");
                 print(&b, c.tail);
             }
-            return vresolve(v, finish(&b), follow, depth+1);
+            return vwalk(v, finish(&b), follow, depth+1);
         }
         if (last && c.ok && n->type!=FT_DIR) {
             r.err = E_NOTDIR;
@@ -271,6 +290,87 @@ static VResolved vresolve(Vos *v, Str path, b32 follow, i32 depth = 0)
     }
 }
 
+enum : i32 {  // VPath kinds
+    VN_FILE,  // path names a node in the tree
+    VN_NULL,  // the null device
+    VN_PIPE,  // a named pipe: path is its name
+    VN_NONE,  // nothing can exist there (relative, UNC, other devices)
+};
+
+struct VPath {
+    Str path;    // for VN_FILE, the tree's own form
+    Str native;  // Windows mode: the canonical native path
+    i32 kind;
+};
+
+// The tree's form of a path given to the platform. In Linux mode that
+// is the path itself. In Windows mode it is what the Win32 layer makes
+// of it (main_win32.cpp's widepath): /dev/null is NUL, MSYS-style /c/x
+// is C:/x, the rest is made absolute lexically as GetFullPathName does,
+// on drive C:, and reserved DOS names in any directory are the null
+// device. Drive paths become "/C:/x" in the tree, whose root holds the
+// drives.
+static VPath vpath(Vos *v, Arena *a, Str path)
+{
+    VPath r = {};
+    r.path   = path;
+    r.native = path;
+    if (!v->win) return r;
+    if (path == "/dev/null") {
+        r.kind   = VN_NULL;
+        r.native = "//./NUL";
+        return r;
+    }
+    Str p = path;
+    if (p.len>=2 && p[0]=='/' && letter(p[1]) && (p.len==2 || p[2]=='/')) {
+        Buf b(a, p.len+2);
+        putbyte(&b, upcase(p[1]));
+        putbyte(&b, ':');
+        print(&b, p.len==2 ? Str("/") : cuthead(p, 2));
+        p = finish(&b);
+    }
+    Str n = winnorm(a, p, "C:/");
+    r.native = n;
+    if (!n.data) {
+        r.kind = VN_NONE;
+        return r;
+    }
+    if (startswith(n, "//./")) {
+        Cut c = cut(cuthead(n, 4), '/');
+        if (c.ok && c.tail.len && equalfold(c.head, "pipe")) {
+            r.kind = VN_PIPE;
+            r.path = c.tail;
+        } else {
+            r.kind = !c.ok && reservedname(c.head, 0).data ? VN_NULL : VN_NONE;
+        }
+        return r;
+    }
+    if (!hasdrive(n)) {
+        r.kind = VN_NONE;  // a share on a server, or //?/ without a drive
+        return r;
+    }
+    if (reservedname(lastpart(n), 1).data) {
+        r.kind   = VN_NULL;
+        r.native = "//./NUL";
+        return r;
+    }
+    r.path = concat(a, "/", n);
+    return r;
+}
+
+// Resolve a path as given to the platform (see vpath and vwalk). What
+// is not a node in the tree resolves to nothing.
+static VResolved vresolve(Vos *v, Arena *a, Str path, b32 follow)
+{
+    VPath p = vpath(v, a, path);
+    if (p.kind != VN_FILE) {
+        VResolved r = {};
+        r.err = E_NOENT;
+        return r;
+    }
+    return vwalk(v, p.path, follow);
+}
+
 static VNode *vmkdirs(Vos *v, Str path)
 {
     VNode *cur = v->root;
@@ -278,7 +378,7 @@ static VNode *vmkdirs(Vos *v, Str path)
         Cut c = cut(rest, '/');
         rest = c.tail;
         if (!c.head.len) continue;
-        VNode *n = vlookup(cur, c.head);
+        VNode *n = vlookup(v, cur, c.head);
         cur = n ? n : vnew(v, cur, c.head, FT_DIR, 0755);
     }
     return cur;
@@ -716,13 +816,23 @@ static b32 vistty(Vos *v, Handle h)
     return f && f->kind==VK_TTY;
 }
 
-static Opened os_open(Os *os, Arena, Str path, i32 flags, i32 mode)
+static Opened vnpopen(Vos *, Str name, i32 flags);
+
+static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
     Vos   *v = osvos(os);
     Opened r = {};
     r.h = BADHANDLE;
     v->clock += 1000;
-    i32 fd = vdevfd(path);
+    if (v->win) {
+        VPath p = vpath(v, &scratch, path);
+        switch (p.kind) {
+        case VN_NULL: path = "/dev/null"; break;
+        case VN_PIPE: return vnpopen(v, p.path, flags);
+        case VN_NONE: r.err = E_NOENT; return r;
+        }
+    }
+    i32 fd = v->win ? -1 : vdevfd(path);
     if (fd>=0 && v->cur) {
         // As Linux, /dev/fd/N reopens the process's descriptor: a pipe
         // end as a duplicate, a file as a new description of it
@@ -756,7 +866,7 @@ static Opened os_open(Os *os, Arena, Str path, i32 flags, i32 mode)
         r.h = n;
         return r;
     }
-    if (path=="/dev/null" || path=="/dev/tty") {
+    if (path=="/dev/null" || (path=="/dev/tty" && !v->win)) {
         Handle h = vnewhandle(v);
         if (h == BADHANDLE) { r.err = E_MFILE; return r; }
         v->files[h].kind  = path=="/dev/tty" ? VK_TTY : VK_NULL;
@@ -764,7 +874,7 @@ static Opened os_open(Os *os, Arena, Str path, i32 flags, i32 mode)
         r.h = h;
         return r;
     }
-    VResolved res = vresolve(v, path, 1);
+    VResolved res = vresolve(v, &scratch, path, 1);
     VNode *n = res.node;
     if (flags & (OF_WRITE|OF_CREATE|OF_TRUNC)) vmutate(v);
     if (!n) {
@@ -1020,7 +1130,19 @@ static i64 os_seek(Os *os, Handle h, i64 off, i32 whence)
     return f->pos;
 }
 
-static Stat vstat(VNode *n)
+// Windows mode: names the Win32 layer marks executable by extension.
+static b32 vexename(Str name)
+{
+    static Str exts[] = {".exe", ".com", ".bat", ".cmd", ".sh"};
+    for (iz i = 0; i < countof(exts); i++) {
+        if (name.len>=exts[i].len && equalfold(taketail(name, exts[i].len), exts[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static Stat vstat(Vos *v, VNode *n)
 {
     Stat r = {};
     r.type  = n->type;
@@ -1035,13 +1157,50 @@ static Stat vstat(VNode *n)
     r.ino   = n->ino;
     r.uid   = n->uid;
     r.gid   = n->uid;
+    if (v->win && (n->type==FT_FILE || n->type==FT_DIR)) {
+        // Synthesized as the Win32 layer does (fromattrs, os_stat): a
+        // read-only file loses its write bits, and an executable
+        // extension or a leading MZ or #! makes a file executable
+        r.mode = n->type==FT_DIR ? 0755 : 0644;
+        if (n->type == FT_FILE) {
+            Str d = n->data;
+            b32 magic = d.len>=2 && ((d[0]=='M' && d[1]=='Z') || (d[0]=='#' && d[1]=='!'));
+            r.mode &= n->mode&0200 ? 0777 : ~0222;
+            r.mode |= vexename(n->name) || magic ? 0111 : 0;
+        }
+        r.uid = r.gid = 1000;
+    }
     return r;
 }
 
-static Stat os_stat(Os *os, Arena, Str path, b32 follow)
+static Stat os_stat(Os *os, Arena scratch, Str path, b32 follow)
 {
     Vos *v = osvos(os);
-    i32 fd = vdevfd(path);
+    if (v->win) {
+        VPath p = vpath(v, &scratch, path);
+        Stat  r = {};
+        switch (p.kind) {
+        case VN_NULL:
+            path = "/dev/null";
+            break;
+        case VN_PIPE:
+            r.err = E_NOENT;
+            for (i32 i = 0; i < v->nnpipes; i++) {
+                VPipe *q = v->npipes[i].pipe;
+                if (equalfold(v->npipes[i].name, p.path) && (q->readers || q->writers)) {
+                    r = {};
+                    r.type = FT_PIPE;
+                    r.mode = 0600;
+                    r.uid  = r.gid = 1000;
+                }
+            }
+            return r;
+        case VN_NONE:
+            r.err = E_NOENT;
+            return r;
+        }
+    }
+    i32 fd = v->win ? -1 : vdevfd(path);
     if (fd>=0 && v->cur) {
         Handle h = fd<countof(v->procs[0].ctx.fd) ? v->procs[v->cur].ctx.fd[fd] : BADHANDLE;
         if (h<3 || vfile(v, h)) return os_fstat(os, h);
@@ -1049,7 +1208,7 @@ static Stat os_stat(Os *os, Arena, Str path, b32 follow)
         r.err = E_NOENT;
         return r;
     }
-    if (path=="/dev/null" || path=="/dev/tty") {
+    if (path=="/dev/null" || (path=="/dev/tty" && !v->win)) {
         Stat r = {};
         r.type = FT_CHAR;
         r.mode = 0666;
@@ -1057,13 +1216,13 @@ static Stat os_stat(Os *os, Arena, Str path, b32 follow)
         r.ino  = path=="/dev/tty" ? 2 : 1;
         return r;
     }
-    VResolved res = vresolve(v, path, follow);
+    VResolved res = vresolve(v, &scratch, path, follow);
     if (!res.node) {
         Stat r = {};
         r.err = res.err;
         return r;
     }
-    return vstat(res.node);
+    return vstat(v, res.node);
 }
 
 static b32 os_isatty(Os *os, Handle h)
@@ -1085,7 +1244,7 @@ static Stat os_fstat(Os *os, Handle h)
     if (!f) {
         r.err = E_BADF;
     } else if (f->node) {
-        r = vstat(f->node);
+        r = vstat(v, f->node);
     } else if (f->kind==VK_NULL || f->kind==VK_TTY) {
         r.type = FT_CHAR;
         r.mode = 0666;
@@ -1097,11 +1256,25 @@ static Stat os_fstat(Os *os, Handle h)
     return r;
 }
 
-// Directory entries in creation order, as a fresh tmpfs lists them.
+// NTFS order: by name, ignoring case as upper case.
+static b32 vntfsless(Dirent **a, Dirent **b)
+{
+    Str x = (*a)->name;
+    Str y = (*b)->name;
+    for (iz i = 0; i<x.len && i<y.len; i++) {
+        u8 c = upcase(x[i]);
+        u8 d = upcase(y[i]);
+        if (c != d) return c < d;
+    }
+    return x.len < y.len;
+}
+
+// Directory entries in creation order, as a fresh tmpfs lists them, or
+// in Windows mode in NTFS's order.
 static Dirent *os_list(Os *os, Arena *a, Str dir, i32 *err)
 {
     Vos *v = osvos(os);
-    VResolved res = vresolve(v, dir, 1);
+    VResolved res = vresolve(v, a, dir, 1);
     *err = res.err;
     if (!res.node) return 0;
     if (res.node->type != FT_DIR) {
@@ -1121,6 +1294,16 @@ static Dirent *os_list(Os *os, Arena *a, Str dir, i32 *err)
         d->type = n->type;
         *tail = d;
         tail  = &d->next;
+    }
+    if (v->win && head) {
+        iz n = 0;
+        for (Dirent *d = head; d; d = d->next) n++;
+        Dirent **all = alloc<Dirent *>(a, n);
+        n = 0;
+        for (Dirent *d = head; d; d = d->next) all[n++] = d;
+        sort(all, n, vntfsless, *a);
+        for (iz i = 0; i < n; i++) all[i]->next = i+1<n ? all[i+1] : 0;
+        head = all[0];
     }
     return head;
 }
@@ -1196,11 +1379,25 @@ static void os_sigmode(Os *, i32, i32)
 enum { VIMAGE = 1024 };  // size of a fake program's file, mostly NULs
 static u8 const vmagic[12] = {0x7f, 'E', 'L', 'F', 2, 1, 1, 0, 'f', 'a', 'k', 'e'};
 
+// Windows mode: a fake's file is a PE image (vpeimage) whose .text
+// section starts with this mark and the program's number.
+enum { VPEIMAGE = 0xc00, VPEMARK = 0x400 };
+static u8 const vpemagic[8] = {'v', 'o', 's', 'f', 'a', 'k', 'e', 0};
+
 // The program a file holds: installed as such, or a copy of one.
 static i32 vimageprog(Vos *v, VNode *n)
 {
     if (n->prog) return n->prog;
     Str  d = n->data;
+    if (v->win) {
+        Str mark = {(u8 *)vpemagic, countof(vpemagic)};
+        if (d.len<VPEMARK+10 || d[0]!='M' || d[1]!='Z' ||
+                !(Str{d.data+VPEMARK, mark.len} == mark)) {
+            return 0;
+        }
+        i32 prog = d[VPEMARK+8] | d[VPEMARK+9]<<8;
+        return prog<=v->nfakes ? prog : 0;
+    }
     if (d.len<14 || !(takehead(d, 12) == Str((u8 *)vmagic, 12))) {
         return 0;
     }
@@ -1208,41 +1405,476 @@ static i32 vimageprog(Vos *v, VNode *n)
     return prog<=v->nfakes ? prog : 0;
 }
 
+struct VProgram {
+    i32    prog;    // index into the program table, or -1
+    i32    err;
+    VNode *node;
+    Str    native;  // Windows mode: the image's canonical path
+};
+
 // Look up a program by its path's final component when the path names
-// an executable fake in the tree.
-static i32 vprogram(Vos *v, Str path, i32 *err)
+// an executable fake in the tree. Windows has no execute bit: any
+// image runs.
+static VProgram vprogram(Vos *v, Arena *a, Str path)
 {
-    VResolved res = vresolve(v, path, 1);
+    VProgram  r   = {};
+    r.prog = -1;
+    VResolved res = vresolve(v, a, path, 1);
     if (!res.node) {
-        *err = res.err;
-        return -1;
+        r.err = res.err;
+        return r;
     }
     VNode *n = res.node;
     if (n->type == FT_DIR) {
-        *err = E_ACCES;
-        return -1;
+        r.err = E_ACCES;
+        return r;
     }
-    if (!(n->mode & 0100)) {
-        *err = E_ACCES;
-        return -1;
+    if (!v->win && !(n->mode & 0100)) {
+        r.err = E_ACCES;
+        return r;
     }
     i32 prog = vimageprog(v, n);
     if (!prog) {
-        *err = E_NOEXEC;
-        return -1;
+        r.err = E_NOEXEC;
+        return r;
     }
-    return prog - 1;
+    r.prog   = prog - 1;
+    r.node   = n;
+    r.native = v->win ? vpath(v, a, path).native : path;
+    return r;
+}
+
+
+// Windows personality: images, command lines and named pipes
+
+static void vput(u8 *p, u64 x, i32 n)
+{
+    for (i32 i = 0; i < n; i++) {
+        p[i] = (u8)(x >> (8*i));
+    }
+}
+
+// A minimal PE image for a fake, as pesniff reads them: headers, a
+// .text section holding the vos mark and the program number, .idata
+// importing one DLL, and our own .unabash section when ours is set.
+// Machine 0x14c makes a PE32 image, others PE32+.
+static Str vpeimage(Arena *a, i32 machine, Str dll, b32 ours, i32 prog)
+{
+    u8 *img = alloc<u8>(a, VPEIMAGE);
+    b32 pe64 = machine != 0x14c;
+    img[0] = 'M';
+    img[1] = 'Z';
+    iz pe = 0x80;
+    vput(img+0x3c, pe, 4);
+    vput(img+pe, 0x4550, 4);
+    i32 nsect   = ours ? 3 : 2;
+    i32 optsize = pe64 ? 240 : 224;
+    vput(img+pe+4,  (u64)machine, 2);
+    vput(img+pe+6,  (u64)nsect, 2);
+    vput(img+pe+20, (u64)optsize, 2);
+    vput(img+pe+22, 0x0102, 2);  // executable, 32-bit words
+    iz opt  = pe + 24;
+    iz dirs = opt + (pe64 ? 112 : 96);
+    vput(img+opt, pe64 ? 0x20b : 0x10b, 2);
+    vput(img+opt+60, 0x400, 4);  // SizeOfHeaders
+    vput(img+opt+68, 3, 2);      // console subsystem
+    vput(img+dirs-4, 16, 4);     // NumberOfRvaAndSizes
+
+    struct { Str name; u32 va, vsize, rawsize, rawptr; } sects[] = {
+        {".text",    0x1000, 0x200, 0x200, 0x400},
+        {".idata",   0x2000, 0x300, 0x400, 0x600},
+        {".unabash", 0x3000, 0x10,  0x200, 0xa00},
+    };
+    iz sect = opt + optsize;
+    for (i32 i = 0; i < nsect; i++) {
+        u8 *s = img + sect + 40*i;
+        copybytes(s, sects[i].name.data, sects[i].name.len);
+        vput(s+ 8, sects[i].vsize, 4);
+        vput(s+12, sects[i].va, 4);
+        vput(s+16, sects[i].rawsize, 4);
+        vput(s+20, sects[i].rawptr, 4);
+    }
+
+    // One import descriptor and a null one, then the DLL's name
+    vput(img+dirs+8,  0x2000, 4);
+    vput(img+dirs+12, 40, 4);
+    vput(img+0x600+12, 0x2000+40, 4);
+    copybytes(img+0x600+40, dll.data, dll.len<200 ? dll.len : 200);
+
+    copybytes(img+VPEMARK, (u8 *)vpemagic, countof(vpemagic));
+    vput(img+VPEMARK+8, (u64)prog, 2);
+    if (ours) {
+        copybytes(img+0xa00, (u8 *)"unabashed", 9);
+    }
+    Str r = {img, VPEIMAGE};
+    return r;
+}
+
+static iz vperead(void *ctx, i64 off, u8 *buf, iz len)
+{
+    Str *s = (Str *)ctx;
+    if (off<0 || off>=s->len) return 0;
+    iz n = s->len-off<len ? s->len-(iz)off : len;
+    copybytes(buf, s->data+off, n);
+    return n;
+}
+
+static PeInfo vpesniff(VNode *n, Arena scratch)
+{
+    Str data = n->data;
+    return pesniff(vperead, &data, scratch);
+}
+
+// The value of a variable in "NAME=value" strings, its name compared
+// as Windows does (ignoring case), or null data.
+static Str venvget(Str *env, iz nenv, Str name)
+{
+    for (iz i = 0; i < nenv; i++) {
+        Str n = envname(env[i]);
+        if (equalfold(n, name) && n.len<env[i].len) {
+            return cuthead(env[i], n.len+1);
+        }
+    }
+    return {};
+}
+
+static b32 vbatch(Str path)
+{
+    Str exts[] = {".bat", ".cmd"};
+    for (iz i = 0; i < countof(exts); i++) {
+        if (path.len>=4 && equalfold(taketail(path, 4), exts[i])) return 1;
+    }
+    return 0;
+}
+
+// Windows mode: the command line a spawned program gets, and the image
+// that runs it.
+struct VWinCmd {
+    Str path;     // the program: ComSpec for a batch file
+    Str cmdline;
+    b32 split;    // the target splits cmdline, else it takes Spawn's argv
+    i32 err;
+};
+
+// With Spawn.cmdline, that line verbatim. Without, as the Win32 layer
+// builds one today (main_win32.cpp's os_spawn): batch files through
+// ComSpec with BatBadBut quoting, others with MSVCRT quoting.
+static VWinCmd vwincmd(Vos *v, Arena *a, Spawn *s)
+{
+    VWinCmd r = {};
+    r.path = s->path;
+    if (s->cmdline.len) {
+        r.cmdline = s->cmdline;
+        r.split   = 1;
+    } else if (vbatch(s->path)) {
+        Str comspec = venvget(s->env, s->nenv, "comspec");
+        if (!comspec.len) {
+            comspec = "C:\\Windows\\System32\\cmd.exe";  // GetSystemDirectory
+        }
+        // cmd would report a missing script itself, with status 1
+        VResolved res = vresolve(v, a, s->path, 1);
+        if (!res.node) {
+            r.err = res.err;
+            return r;
+        } else if (res.node->type == FT_DIR) {
+            r.err = E_ACCES;
+            return r;
+        }
+        Str script = slashify(a, vpath(v, a, s->path).native, '\\');
+        Buf b(a);
+        quoteprogram(&b, comspec);
+        print(&b, " /d /e:on /v:off /s /c \"");
+        quotebatarg(&b, script, 1);
+        for (iz i = 1; i < s->argc; i++) {
+            putbyte(&b, ' ');
+            if (!quotebatarg(&b, s->argv[i], 0)) {
+                r.err = E_INVAL;
+                return r;
+            }
+        }
+        putbyte(&b, '"');
+        r.cmdline = finish(&b);
+        r.path    = comspec;
+        r.split   = 1;
+    } else {
+        Buf b(a);
+        quoteprogram(&b, s->argc ? s->argv[0] : s->path);
+        for (iz i = 1; i < s->argc; i++) {
+            putbyte(&b, ' ');
+            quotearg(&b, s->argv[i]);
+        }
+        r.cmdline = finish(&b);
+    }
+    if (towide(a, r.cmdline).len > 32766) {
+        r.err = E_2BIG;
+    }
+    return r;
+}
+
+// A relative name made absolute against a native working directory.
+static Str vabs(Arena *a, Str cwd, Str name)
+{
+    if (name.len && (pathsep(name[0]) || hasdrive(name))) return name;
+    return concat(a, concat(a, cwd, "/"), name.len ? name : Str("."));
+}
+
+static b32 vwild(Str part)  // an unescaped wildcard
+{
+    for (iz i = 0; i < part.len; i++) {
+        if (part[i] == '\\') {
+            i++;
+        } else if (part[i]=='*' || part[i]=='?' || part[i]=='[') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static Str vunquote(Arena *a, Str s)  // backslash escapes removed
+{
+    Buf b(a, s.len);
+    for (iz i = 0; i < s.len; i++) {
+        putbyte(&b, s[i]=='\\' && i+1<s.len ? s[++i] : s[i]);
+    }
+    return finish(&b);
+}
+
+static b32 vstrless(Str *a, Str *b)
+{
+    return compare(*a, *b) < 0;
+}
+
+// glob(3) below shown, the names as typed so far, for the rest of the
+// pattern: each match in order. A match must exist.
+static Slice<Str> vglobpart(Vos *v, Arena *a, Slice<Str> out, Str cwd, Str shown, Str rest)
+{
+    if (!rest.len) {
+        if (vresolve(v, a, vabs(a, cwd, shown), 0).node) {
+            out = push(a, out, shown);
+        }
+        return out;
+    }
+    Cut c   = cut(rest, '/');
+    Str sep = c.ok ? Str("/") : Str("");
+    if (!vwild(c.head)) {
+        Str next = concat(a, concat(a, shown, vunquote(a, c.head)), sep);
+        return vglobpart(v, a, out, cwd, next, c.tail);
+    }
+    VResolved d = vresolve(v, a, vabs(a, cwd, shown), 1);
+    if (!d.node || d.node->type!=FT_DIR) return out;
+    Slice<Str> names = {};
+    for (VNode *n = d.node->child; n; n = n->next) {
+        if (patmatch(c.head, n->name, PM_PERIOD, *a)) {
+            names = push(a, names, n->name);
+        }
+    }
+    sort(names.data, names.len, vstrless, *a);
+    for (iz i = 0; i < names.len; i++) {
+        Str next = concat(a, concat(a, shown, names[i]), sep);
+        out = vglobpart(v, a, out, cwd, next, c.tail);
+    }
+    return out;
+}
+
+// GLOB_BRACE: every alternative of the first brace group, recursively.
+static Slice<Str> vbraces(Arena *a, Slice<Str> out, Str p)
+{
+    iz open = -1, close = -1, depth = 0;
+    for (iz i = 0; i < p.len; i++) {
+        if (p[i] == '\\') {
+            i++;
+        } else if (p[i]=='{' && !(i+1<p.len && p[i+1]=='}')) {
+            if (!depth++ && open<0) open = i;
+        } else if (p[i]=='}' && depth && !--depth && close<0) {
+            close = i;
+        }
+    }
+    if (open<0 || close<0) {
+        return push(a, out, p);
+    }
+    Str head = takehead(p, open);
+    Str tail = cuthead(p, close+1);
+    iz  beg  = open + 1;
+    depth = 0;
+    for (iz i = beg; i <= close; i++) {
+        if (p[i] == '\\') {
+            i++;
+        } else if (p[i] == '{') {
+            depth++;
+        } else if (i==close || (p[i]==',' && !depth)) {
+            Str alt = span(p.data+beg, p.data+i);
+            out = vbraces(a, out, concat(a, concat(a, head, alt), tail));
+            beg = i + 1;
+        } else if (p[i] == '}') {
+            depth--;
+        }
+    }
+    return out;
+}
+
+// Cygwin's glob for a CYG_GLOB word: braces, a leading ~ (HOME, when
+// it names a directory), wildcards over the tree, and the unquoted
+// pattern when nothing matches (GLOB_NOCHECK).
+static Slice<Str> vcygglob(Vos *v, Arena *a, Slice<Str> out, Str pat, Str cwd, Str home)
+{
+    Slice<Str> alts = vbraces(a, {}, pat);
+    for (iz k = 0; k < alts.len; k++) {
+        Str p = alts[k];
+        if (p.len && p[0]=='~' && (p.len==1 || p[1]=='/') && home.len) {
+            VResolved h = vresolve(v, a, home, 1);
+            if (h.node && h.node->type==FT_DIR) {
+                Buf b(a);
+                for (iz i = 0; i < home.len; i++) {
+                    if (find("\\*?[{}", {home.data+i, 1}) >= 0) putbyte(&b, '\\');
+                    putbyte(&b, home[i]);
+                }
+                print(&b, cuthead(p, 1));
+                p = finish(&b);
+            }
+        }
+        iz before = out.len;
+        out = vglobpart(v, a, out, cwd, {}, p);
+        if (out.len == before) {
+            out = push(a, out, vunquote(a, p));
+        }
+    }
+    return out;
+}
+
+// The arguments a Cygwin program makes of its command line: response
+// files read from the tree (up to 10), then globbing.
+static Slice<Str> vcygargs(Vos *v, Arena *a, Slice<Str> out, Str cmd, b32 program,
+                           Str cwd, Str home, i32 *nfiles)
+{
+    Slice<CygArg> args = splitcygwin(a, cmd, program);
+    for (iz i = 0; i < args.len; i++) {
+        CygArg r = args[i];
+        if (r.flags & CYG_ATFILE) {
+            VResolved f = vresolve(v, a, vabs(a, cwd, r.file), 1);
+            if (f.node && f.node->type==FT_FILE && (f.node->mode&0400) && ++*nfiles<=10) {
+                Str more = concat(a, concat(a, f.node->data, " "), cuthead(cmd, r.end));
+                return vcygargs(v, a, out, more, 0, cwd, home, nfiles);
+            }
+        }
+        if (r.flags & CYG_GLOB) {
+            out = vcygglob(v, a, out, r.pat, cwd, home);
+        } else {
+            out = push(a, out, r.arg);
+        }
+    }
+    return out;
+}
+
+// What a Windows program sees: its command line, image path, working
+// directory (POSIX for an MSYS2 program, where C:/x is /c/x) and its
+// arguments, split by its own startup code when the command line is
+// what it gets. Everything goes into the program's memory.
+static void vwinctx(Vos *v, Arena *mem, FakeCtx *ctx, Spawn *s, VWinCmd *wc, VProgram *g)
+{
+    PeInfo pe = vpesniff(g->node, *mem);
+    ctx->win     = 1;
+    ctx->cmdline = clone(mem, wc->cmdline);
+    ctx->exe     = clone(mem, g->native);
+    VPath cwd = vpath(v, mem, s->cwd);
+    Str   dir = cwd.kind==VN_FILE ? cwd.native : clone(mem, s->cwd);
+    if (dir.len>3 && dir[dir.len-1]=='/') dir.len--;
+    if (pe.posix && hasdrive(dir)) {
+        Buf b(mem, dir.len+1);
+        putbyte(&b, '/');
+        putbyte(&b, lowercase(dir[0]));
+        print(&b, dir.len>3 ? cuthead(dir, 2) : Str(""));
+        ctx->cwd = finish(&b);
+    } else {
+        ctx->cwd = dir;
+    }
+
+    Slice<Str> argv = {};
+    if (!wc->split) {
+        for (iz i = 0; i < s->argc; i++) argv = push(mem, argv, clone(mem, s->argv[i]));
+    } else if (pe.posix) {
+        Str home   = venvget(s->env, s->nenv, "HOME");
+        i32 nfiles = 0;
+        argv = vcygargs(v, mem, argv, ctx->cmdline, 1, dir, home, &nfiles);
+    } else {
+        i32 parser = pe.crt==CRT_UCRT ? ARGV_UCRT : pe.crt==CRT_MSVCRT ? ARGV_MSVCRT : ARGV_SHELL32;
+        argv = splitcmdline(mem, clone(mem, ctx->cmdline), parser);
+    }
+    ctx->argc = argv.len;
+    ctx->argv = alloc<Str>(mem, argv.len+1);
+    for (iz i = 0; i < argv.len; i++) ctx->argv[i] = argv[i];
+}
+
+// A pipe in the //./pipe/ namespace, both ends held by the caller (the
+// server). Clients open it by name, ignoring case, while it has ends.
+static OsPipe vnamedpipe(Os *os, Str name)
+{
+    Vos   *v = osvos(os);
+    OsPipe r = {};
+    if (v->nnpipes == countof(v->npipes)) {
+        r.r = r.w = BADHANDLE;
+        r.err = E_NFILE;
+        return r;
+    }
+    r = os_pipe(os);
+    if (!r.err) {
+        VNamedPipe *n = v->npipes + v->nnpipes++;
+        n->name = clone(&v->a, name);
+        n->pipe = v->files[r.r].pipe;
+    }
+    return r;
+}
+
+static Opened vnpopen(Vos *v, Str name, i32 flags)
+{
+    Opened r = {};
+    r.h   = BADHANDLE;
+    r.err = E_NOENT;
+    for (i32 i = v->nnpipes-1; i >= 0; i--) {
+        VPipe *p = v->npipes[i].pipe;
+        if (!equalfold(v->npipes[i].name, name) || (!p->readers && !p->writers)) {
+            continue;
+        }
+        r.h = vnewhandle(v);
+        if (r.h == BADHANDLE) {
+            r.err = E_MFILE;
+            return r;
+        }
+        r.err = 0;
+        VFile *f = v->files + r.h;
+        f->kind  = flags&OF_WRITE ? VK_PIPEWRITE : VK_PIPEREAD;
+        f->flags = flags;
+        f->pipe  = p;
+        if (flags & OF_WRITE) {
+            p->writers++;
+        } else {
+            p->readers++;
+        }
+        return r;
+    }
+    return r;
 }
 
 // Spawn a fake program as a process of its own, runnable at once. Its
 // arguments are copied into its memory, since it outlives the call.
-static Spawned os_spawn(Os *os, Arena, Spawn *s)
+static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 {
     Vos    *v = osvos(os);
     Spawned r = {};
     r.proc = BADHANDLE;
-    i32 prog = vprogram(v, s->path, &r.err);
+    VWinCmd wc   = {};
+    Str     path = s->path;
+    if (v->win) {
+        wc = vwincmd(v, &scratch, s);
+        if (wc.err) {
+            r.err = wc.err;
+            return r;
+        }
+        path = wc.path;
+    }
+    VProgram g = vprogram(v, &scratch, path);
+    i32 prog = g.prog;
     if (prog < 0) {
+        r.err = g.err;
         return r;
     }
     i32 id = 1;
@@ -1262,18 +1894,26 @@ static Spawned os_spawn(Os *os, Arena, Spawn *s)
     mem.beg = p->mem.beg;
     mem.end = p->mem.end;
     FakeCtx ctx = {};
-    ctx.argc = s->argc;
-    ctx.argv = alloc<Str>(&mem, s->argc+1);
-    for (iz i = 0; i < s->argc; i++) ctx.argv[i] = clone(&mem, s->argv[i]);
+    if (v->win) {
+        vwinctx(v, &mem, &ctx, s, &wc, &g);
+    } else {
+        ctx.argc = s->argc;
+        ctx.argv = alloc<Str>(&mem, s->argc+1);
+        for (iz i = 0; i < s->argc; i++) ctx.argv[i] = clone(&mem, s->argv[i]);
+    }
     ctx.nenv = s->nenv;
     ctx.env  = alloc<Str>(&mem, s->nenv+1);
     for (iz i = 0; i < s->nenv; i++) ctx.env[i] = clone(&mem, s->env[i]);
-    ctx.cwd  = clone(&mem, s->cwd);
+    if (!v->win) {
+        ctx.cwd = clone(&mem, s->cwd);
+    }
     for (iz i = 0; i < countof(ctx.fd); i++) {
         ctx.fd[i] = BADHANDLE;
     }
     for (iz i = 0; i < s->nfds; i++) {
-        if (s->fds[i].fd < countof(ctx.fd)) {
+        // Windows passes descriptors past 2 only through the CRT's blob
+        b32 pass = !v->win || s->fds[i].fd<3 || s->crtslot;
+        if (s->fds[i].fd<countof(ctx.fd) && pass) {
             ctx.fd[s->fds[i].fd] = os_dup(os, s->fds[i].h);
         }
     }
@@ -1483,6 +2123,534 @@ static b32 os_cancel(Os *os, Io *io)
 }
 
 
+// Windows programs: vos-only fakes installed in the Windows tree
+
+// The applet a program name stands for: its final component without
+// an .exe suffix.
+static Str vappletname(Str path)
+{
+    iz i = path.len;
+    for (; i>0 && !pathsep(path[i-1]) && path[i-1]!=':'; i--) {}
+    Str name = cuthead(path, i);
+    if (name.len>4 && equalfold(taketail(name, 4), ".exe")) {
+        name = cuttail(name, 4);
+    }
+    return name;
+}
+
+// argv: tools/argv.cpp's output, for the same probes (its header and
+// tools/README.md have the format).
+static i32 vfake_argv(Os *os, FakeCtx *ctx)
+{
+    FkProg p = fkprog(os, ctx);
+    FkOut *o = &p.out;
+    print(o, "cmdline = <");
+    print(o, ctx->cmdline);
+    print(o, ">\n");
+    for (iz i = 0; i < ctx->argc; i++) {
+        print(o, "argv[");
+        print(o, i);
+        print(o, "] = <");
+        print(o, ctx->argv[i]);
+        print(o, ">\n");
+    }
+
+    Str show = venvget(ctx->env, ctx->nenv, "ARGV_SHOW");
+    for (iz i = 0; i < show.len;) {
+        for (; i<show.len && (show[i]==' ' || show[i]==','); i++) {}
+        iz beg = i;
+        for (; i<show.len && show[i]!=' ' && show[i]!=','; i++) {}
+        Str name = span(show.data+beg, show.data+i);
+        if (!name.len) continue;
+        Str value = venvget(ctx->env, ctx->nenv, name);
+        print(o, name);
+        if (value.data) {
+            print(o, "=");
+            print(o, value);
+            print(o, "\n");
+        } else {
+            print(o, " unset\n");
+        }
+    }
+
+    Str fdv = venvget(ctx->env, ctx->nenv, "ARGV_FD");
+    if (fdv.len) {
+        i64 fd = 0;
+        for (iz i = 0; i<fdv.len && digit(fdv[i]) && fd<1000000; i++) {
+            fd = fd*10 + (fdv[i] - '0');
+        }
+        print(o, "fd ");
+        print(o, fd);
+        Handle h = fd<countof(ctx->fd) ? ctx->fd[fd] : BADHANDLE;
+        if (h == BADHANDLE) {
+            print(o, " closed\n");
+        } else {
+            print(o, " open\n");
+            flush(o);
+            Buf b(p.a);
+            print(&b, "argv: fd ");
+            print(&b, fd);
+            putbyte(&b, '\n');
+            Str msg = finish(&b);
+            os_write(os, h, msg.data, msg.len);
+        }
+    }
+    flush(o);
+    return o->err;
+}
+
+// The fake for a busybox applet name, ignoring case, or -1.
+static i32 vapplet(Vos *v, Str name)
+{
+    for (iz i = 0; i < v->nfakes; i++) {
+        Fake *f = v->fakes + i;
+        if (!f->win && f->name!="bash" && equalfold(f->name, name)) return (i32)i;
+    }
+    return -1;
+}
+
+// busybox: busybox-w32's multi-call binary, whose applets are the
+// fakes: the one argv[0] names (a copy's name), else argv[1].
+static i32 vfake_busybox(Os *os, FakeCtx *ctx)
+{
+    Vos *v    = osvos(os);
+    Str  name = vappletname(ctx->argc ? ctx->argv[0] : Str("busybox"));
+    iz   skip = 0;
+    if (equalfold(name, "busybox")) {
+        if (ctx->argc < 2) {
+            FkProg p = fkprog(os, ctx);
+            print(&p.out, "BusyBox (vos) multi-call binary.\n");
+            return fkexit(&p, 0);
+        }
+        skip = 1;
+        name = ctx->argv[1];
+    }
+    i32 i = vapplet(v, name);
+    if (i < 0) {
+        FkProg p = fkprog(os, ctx);
+        print(&p.err, name);
+        print(&p.err, ": applet not found\n");
+        flush(&p.err);
+        return 127;
+    }
+    FakeCtx sub = *ctx;
+    sub.argv = ctx->argv + skip;
+    sub.argc = ctx->argc - skip;
+    return v->fakes[i].main(os, &sub);
+}
+
+// The descriptors 0-2 of a program for its child.
+static void vstdfds(FakeCtx *ctx, Spawn *s, Arena *a)
+{
+    s->fds = alloc<SpawnFd>(a, 3);
+    for (i32 i = 0; i < 3; i++) {
+        if (ctx->fd[i] != BADHANDLE) {
+            s->fds[s->nfds].fd  = i;
+            s->fds[s->nfds++].h = ctx->fd[i];
+        }
+    }
+}
+
+// The rest of a command line after its program name, which the CRTs
+// end at the first blank outside quotes.
+static Str vcmdrest(Str cmd)
+{
+    iz  i = 0;
+    b32 q = 0;
+    for (; i<cmd.len && (q || (cmd[i]!=' ' && cmd[i]!='\t')); i++) {
+        q ^= cmd[i] == '"';
+    }
+    return cuthead(cmd, i);
+}
+
+// An alias stub, as w64devkit's: runs busybox.exe from its own
+// directory as the applet named after itself, with the rest of its
+// command line verbatim, and exits with its status.
+static i32 vfake_alias(Os *os, FakeCtx *ctx)
+{
+    Arena *a   = &ctx->scratch;
+    Str    exe = ctx->exe;
+    iz     dir = exe.len;
+    for (; dir>0 && !pathsep(exe[dir-1]); dir--) {}
+    Str busybox = concat(a, takehead(exe, dir), "busybox.exe");
+    Buf b(a);
+    quoteprogram(&b, busybox);
+    putbyte(&b, ' ');
+    print(&b, vappletname(exe));
+    print(&b, vcmdrest(ctx->cmdline));
+    Spawn s = {};
+    s.path    = busybox;
+    s.cmdline = finish(&b);
+    s.argv    = &busybox;
+    s.argc    = 1;
+    s.env     = ctx->env;
+    s.nenv    = ctx->nenv;
+    s.cwd     = ctx->cwd;
+    vstdfds(ctx, &s, a);
+    Spawned r = os_spawn(os, *a, &s);
+    if (r.err) {
+        FkProg p = fkprog(os, ctx);
+        print(&p.err, "alias: cannot run busybox.exe\n");
+        flush(&p.err);
+        return 1;
+    }
+    return os_waitproc(os, r.proc);
+}
+
+// cmd.exe, as far as command lines and batch files need it: /c with
+// /s quote stripping, %VAR% expansion (substrings %X:~N,M% included)
+// and ^ escapes; echo, exit, set and rem; programs and batch files by
+// PATH and PATHEXT. Batch lines take %0-%9, %~N, %* and %%. Operators
+// (& | < > and parentheses), ECHO ON and setlocal are not modelled.
+struct VCmd {
+    Os        *os;
+    FakeCtx   *ctx;
+    FkProg     p;
+    Arena     *a;
+    Slice<Str> env;     // its own copy: set changes it
+    i32        status;  // ERRORLEVEL
+    b32        done;    // exit ran
+};
+
+static b32 vcmdblank(u8 c)
+{
+    return c==' ' || c=='\t';
+}
+
+static i64 vcmdint(Str s)
+{
+    s = trim(s);
+    b32 neg = s.len && s[0]=='-';
+    i64 n   = 0;
+    for (iz i = neg; i<s.len && digit(s[i]) && n<1<<24; i++) n = n*10 + (s[i] - '0');
+    return neg ? -n : n;
+}
+
+// %NAME% or %NAME:~N,M%, or null data if undefined.
+static Str vcmdvalue(VCmd *c, Str name)
+{
+    Cut sub = cut(name, ':');
+    Str val = {};
+    if (equalfold(sub.head, "cd")) {
+        val = slashify(c->a, c->ctx->cwd, '\\');
+    } else {
+        val = venvget(c->env.data, c->env.len, sub.head);
+    }
+    if (!val.data || !sub.ok || !startswith(sub.tail, "~")) return val;
+
+    // ~N,M: from N (from the end if negative), M characters (all but
+    // the last -M if negative, the rest if absent); empty numbers are 0
+    Cut f   = cut(cuthead(sub.tail, 1), ',');
+    iz  len = val.len;
+    i64 n   = vcmdint(f.head);
+    iz  beg = n<0 ? len+n : n;
+    beg = beg<0 ? 0 : beg>len ? len : beg;
+    i64 m   = vcmdint(f.tail);
+    iz  end = !f.ok ? len : m<0 ? len+m : beg+m;
+    end = end<beg ? beg : end>len ? len : end;
+    return span(val.data+beg, val.data+end);
+}
+
+// Expand % references: on the command line (params null) an undefined
+// variable stays as written; in a batch file it vanishes, %% is %, and
+// %0-%9, %~N and %* are its parameters.
+static Str vcmdexpand(VCmd *c, Str s, Slice<Str> *params, Str all)
+{
+    Buf b(c->a);
+    for (iz i = 0; i < s.len; i++) {
+        if (s[i] != '%') {
+            putbyte(&b, s[i]);
+            continue;
+        }
+        u8 next = byteat(s, i+1);
+        if (params) {
+            if (next == '%') {
+                putbyte(&b, '%');
+                i++;
+                continue;
+            } else if (digit(next)) {
+                iz k = next - '0';
+                if (k < params->len) print(&b, (*params)[k]);
+                i++;
+                continue;
+            } else if (next=='~' && digit(byteat(s, i+2))) {
+                iz  k = byteat(s, i+2) - '0';
+                Str v = k<params->len ? (*params)[k] : Str("");
+                if (v.len>=2 && v[0]=='"' && v[v.len-1]=='"') v = span(v.data+1, v.data+v.len-1);
+                print(&b, v);
+                i += 2;
+                continue;
+            } else if (next == '*') {
+                print(&b, all);
+                i++;
+                continue;
+            }
+        }
+        iz j = i + 1;
+        for (; j<s.len && s[j]!='%'; j++) {}
+        if (j == s.len) {
+            if (!params) putbyte(&b, '%');  // a lone % stays, or vanishes
+            continue;
+        }
+        Str name = span(s.data+i+1, s.data+j);
+        if (!name.len) {
+            putbyte(&b, '%');  // the second % may start a reference
+            continue;
+        }
+        Str val = vcmdvalue(c, name);
+        if (val.data) {
+            print(&b, val);
+        } else if (!params) {
+            print(&b, span(s.data+i, s.data+j+1));
+        }
+        i = j;
+    }
+    return finish(&b);
+}
+
+// Phase two of cmd's parsing: ^ escapes the next character outside
+// quotes, and quotes stay.
+static Str vcmdcaret(Arena *a, Str s)
+{
+    Buf b(a, s.len);
+    b32 q = 0;
+    for (iz i = 0; i < s.len; i++) {
+        if (s[i] == '"') {
+            q = !q;
+        } else if (!q && s[i]=='^') {
+            if (++i == s.len) break;
+        }
+        putbyte(&b, s[i]);
+    }
+    return finish(&b);
+}
+
+static Str vcmdunquote(Arena *a, Str s)
+{
+    Buf b(a, s.len);
+    for (iz i = 0; i < s.len; i++) {
+        if (s[i] != '"') putbyte(&b, s[i]);
+    }
+    return finish(&b);
+}
+
+static b32 vcmdisfile(VCmd *c, Str path)
+{
+    Stat st = os_stat(c->os, *c->a, path, 1);
+    return !st.err && st.type==FT_FILE;
+}
+
+// A program as cmd finds it: by its path, else in the working
+// directory and then each PATH entry, as named or with each PATHEXT
+// extension. Null data if not found.
+static Str vcmdfind(VCmd *c, Str name)
+{
+    static Str exts[] = {".COM", ".EXE", ".BAT", ".CMD"};
+    Str  last  = lastpart(name);
+    b32  ext   = cut(last, '.').ok;
+    b32  where = last.len != name.len || hasdrive(name);
+    Str  path  = venvget(c->env.data, c->env.len, "PATH");
+    Str  dirs  = where ? Str("") : concat(c->a, concat(c->a, c->ctx->cwd, ";"), path);
+    for (Cut d = {{}, dirs, 1}; d.ok;) {
+        d = cut(d.tail, ';');
+        if (!where && !d.head.len) continue;
+        Str base = where ? fkpath(&c->p, name) : concat(c->a, concat(c->a, d.head, "/"), name);
+        if (ext && vcmdisfile(c, base)) return base;
+        for (iz i = 0; i < countof(exts); i++) {
+            Str cand = concat(c->a, base, exts[i]);
+            if (vcmdisfile(c, cand)) return cand;
+        }
+        if (where) break;
+    }
+    return {};
+}
+
+static void vcmdline(VCmd *c, Str line);
+
+// Run a batch file: each line expanded with the parameters, which are
+// split at blanks, commas, semicolons and equals signs outside quotes.
+static void vcmdbatch(VCmd *c, Str path, Str arg0, Str rest)
+{
+    Str src = fkslurp(&c->p, path);
+    if (!src.data) {
+        c->status = 1;
+        return;
+    }
+    Slice<Str> params = {};
+    params = push(c->a, params, arg0);
+    iz i = 0;
+    for (;;) {
+        for (; i<rest.len && find(" \t,;=", Str{rest.data+i, 1})>=0; i++) {}
+        if (i == rest.len) break;
+        iz  beg = i;
+        b32 q   = 0;
+        for (; i<rest.len && (q || find(" \t,;=", Str{rest.data+i, 1})<0); i++) {
+            q ^= rest[i] == '"';
+        }
+        params = push(c->a, params, span(rest.data+beg, rest.data+i));
+    }
+    Str all = trimleft(rest);
+    for (; all.len && find(",;=", Str{all.data, 1})>=0; all = trimleft(cuthead(all, 1))) {}
+
+    for (Cut l = {{}, src, 1}; l.ok && !c->done;) {
+        l = cut(l.tail, '\n');
+        Str line = l.head;
+        if (line.len && line[line.len-1]=='\r') line.len--;
+        line = vcmdcaret(c->a, vcmdexpand(c, line, &params, all));
+        vcmdline(c, line);
+    }
+    c->done = 0;  // exit /b leaves the batch file only
+}
+
+// Run one command after expansion.
+static void vcmdline(VCmd *c, Str line)
+{
+    for (; line.len && (vcmdblank(line[0]) || line[0]=='@'); line = cuthead(line, 1)) {}
+    if (!line.len || line[0]==':') return;
+
+    iz  i = 0;
+    b32 q = 0;
+    for (; i<line.len && (q || (!vcmdblank(line[i]) && line[i]!='.' && line[i]!='/')); i++) {
+        q ^= line[i] == '"';
+    }
+    Str word = takehead(line, i);
+    Str rest = cuthead(line, i);
+    FkOut *o = &c->p.out;
+    if (equalfold(word, "echo")) {
+        Str text = rest.len ? cuthead(rest, 1) : rest;
+        if (!rest.len || (!trim(text).len && rest[0]!='.' && rest[0]!='/')) {
+            print(o, "ECHO is off.\r\n");
+        } else if (!equalfold(trim(text), "off") && !equalfold(trim(text), "on")) {
+            print(o, text);
+            print(o, "\r\n");
+        }
+        return;
+    } else if (equalfold(word, "rem")) {
+        return;
+    } else if (equalfold(word, "exit")) {
+        Str arg = trim(rest);
+        if (startswith(arg, "/b") || startswith(arg, "/B")) arg = trim(cuthead(arg, 2));
+        i32 n = 0;
+        for (iz k = 0; k<arg.len && digit(arg[k]) && n<100000000; k++) n = n*10 + arg[k]-'0';
+        c->status = arg.len ? n : c->status;
+        c->done   = 1;
+        return;
+    } else if (equalfold(word, "set") && trim(rest).len) {
+        Str def  = trim(rest);
+        Cut nv   = cut(def, '=');
+        Str name = nv.head;
+        for (iz k = 0; k < c->env.len; k++) {
+            if (equalfold(envname(c->env[k]), name)) {
+                c->env[k] = c->env[--c->env.len];
+                break;
+            }
+        }
+        if (nv.tail.len) c->env = push(c->a, c->env, def);
+        return;
+    }
+
+    // A program, its rest of the line verbatim
+    for (; i<line.len && !vcmdblank(line[i]); i++) {
+        q ^= line[i] == '"';
+    }
+    word = vcmdunquote(c->a, takehead(line, i));
+    rest = cuthead(line, i);
+    Str path = vcmdfind(c, word);
+    if (!path.data) {
+        print(&c->p.err, "'");
+        print(&c->p.err, word);
+        print(&c->p.err, "' is not recognized as an internal or external command,\r\n"
+                         "operable program or batch file.\r\n");
+        flush(&c->p.err);
+        c->status = 9009;
+        return;
+    }
+    if (vbatch(path)) {
+        vcmdbatch(c, path, takehead(line, i), rest);
+        return;
+    }
+    flush(o);
+    Spawn s = {};
+    s.path    = path;
+    s.cmdline = line;
+    s.argv    = &word;
+    s.argc    = 1;
+    s.env     = c->env.data;
+    s.nenv    = c->env.len;
+    s.cwd     = c->ctx->cwd;
+    vstdfds(c->ctx, &s, c->a);
+    Spawned r = os_spawn(c->os, *c->a, &s);
+    c->status = r.err ? 1 : os_waitproc(c->os, r.proc) & 255;
+}
+
+static i32 vfake_cmd(Os *os, FakeCtx *ctx)
+{
+    VCmd c = {};
+    c.os  = os;
+    c.ctx = ctx;
+    c.p   = fkprog(os, ctx);
+    c.a   = &ctx->scratch;
+    for (iz i = 0; i < ctx->nenv; i++) c.env = push(c.a, c.env, ctx->env[i]);
+
+    Str cmd = vcmdrest(ctx->cmdline);
+    b32 run = 0;
+    for (;;) {
+        cmd = trimleft(cmd);
+        if (cmd.len<2 || cmd[0]!='/') break;
+        u8 sw = lowercase(cmd[1]);
+        if (sw=='c' || sw=='k') {
+            run = 1;
+            cmd = cuthead(cmd, 2);
+            break;
+        }
+        iz i = 1;  // /d /s /q /e:on /v:off ...
+        for (; i<cmd.len && !vcmdblank(cmd[i]) && cmd[i]!='/'; i++) {}
+        cmd = cuthead(cmd, i);
+    }
+    if (!run) {
+        return fkexit(&c.p, 0);  // interactive, with no console to read
+    }
+
+    // The first quote and the last go: always with /s, and the old
+    // rules' exceptions without it are not modelled
+    cmd = trimleft(cmd);
+    if (cmd.len && cmd[0]=='"') {
+        iz last = cmd.len - 1;
+        for (; last>0 && cmd[last]!='"'; last--) {}
+        if (last > 0) {
+            Buf b(c.a, cmd.len);
+            print(&b, span(cmd.data+1, cmd.data+last));
+            print(&b, cuthead(cmd, last+1));
+            cmd = finish(&b);
+        }
+    }
+    vcmdline(&c, vcmdcaret(c.a, vcmdexpand(&c, cmd, 0, {})));
+    return fkexit(&c.p, c.status);
+}
+
+static Fake vwinfakes[] = {
+    {"alias",   vfake_alias,   1},
+    {"argv",    vfake_argv,    1},
+    {"busybox", vfake_busybox, 1},
+    {"cmd",     vfake_cmd,     1},
+};
+
+// Windows mode: the environment as the Win32 layer hands it to the
+// shell at startup (main_win32.cpp), Path renamed PATH.
+static Str *vwinenv(Arena *a, Str *env, iz nenv)
+{
+    Str *r = alloc<Str>(a, nenv+1);
+    for (iz i = 0; i < nenv; i++) {
+        Str name = envname(env[i]);
+        r[i] = env[i];
+        if (name.len==4 && equalfold(name, "path")) {
+            r[i] = concat(a, "PATH", cuthead(env[i], 4));
+        }
+    }
+    return r;
+}
+
+
 // Setup
 
 static void vinstall(Vos *v, Str dir, Str name, i32 prog)
@@ -1501,8 +2669,67 @@ static void vinstall(Vos *v, Str dir, Str name, i32 prog)
     n->cap  = VIMAGE;
 }
 
-// Reset the vos to the oracle container's initial state.
-static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes)
+static void vinstallpe(Vos *v, Str dir, Str name, i32 prog, i32 machine, Str dll, b32 ours)
+{
+    VNode *d = vmkdirs(v, dir);
+    VNode *n = vnew(v, d, name, FT_FILE, 0755);
+    n->prog = prog + 1;
+    n->data = vpeimage(&v->a, machine, dll, ours, prog+1);
+    n->cap  = n->data.len;
+}
+
+static VNode *vputfile(Vos *v, Str dir, Str name, Str data)
+{
+    VNode *n = vnew(v, vmkdirs(v, dir), name, FT_FILE, 0644);
+    vwritenode(v, n, 0, data.data, data.len);
+    return n;
+}
+
+// The Windows tree: drives C: and D:, cmd.exe in C:/Windows/System32,
+// w64devkit in C:/w64 (busybox, its alias stubs, argv and argv32, and
+// the shell as sh.exe), an MSYS2 install in C:/msys (the shell as
+// bash.exe, the other fakes as MSYS2 programs), a profile with TEMP in
+// C:/Users/oracle, and the working directory C:/work.
+static void vwintree(Vos *v)
+{
+    enum { X64 = 0x8664, I386 = 0x14c };
+    vmkdirs(v, "D:");
+    vmkdirs(v, "C:/work");
+    vmkdirs(v, "C:/Users/oracle/AppData/Local/Temp");
+    vmkdirs(v, "C:/msys/tmp");
+    vputfile(v, "C:/msys/etc", "fstab",
+        "none / cygdrive binary,posix=0,noacl,user 0 0\n"
+        "none /tmp usertemp binary,posix=0,noacl 0 0\n");
+    i32 alias = -1;
+    for (iz i = 0; i < v->nfakes; i++) {
+        alias = v->fakes[i].name=="alias" ? (i32)i : alias;
+    }
+    for (i32 i = 0; i < v->nfakes; i++) {
+        Str name = v->fakes[i].name;
+        Str exe  = concat(&v->a, name, ".exe");
+        if (name == "bash") {
+            vinstallpe(v, "C:/msys/usr/bin", "bash.exe", i, X64, "kernel32.dll", 1);
+            vinstallpe(v, "C:/w64/bin", "sh.exe", i, X64, "kernel32.dll", 1);
+        } else if (name == "argv") {
+            vinstallpe(v, "C:/w64/bin", "argv.exe", i, X64, "msvcrt.dll", 0);
+            vinstallpe(v, "C:/w64/bin", "argv32.exe", i, I386, "msvcrt.dll", 0);
+        } else if (name == "busybox") {
+            vinstallpe(v, "C:/w64/bin", "busybox.exe", i, X64, "msvcrt.dll", 0);
+        } else if (name == "cmd") {
+            vinstallpe(v, "C:/Windows/System32", "cmd.exe", i, X64, "ucrtbase.dll", 0);
+        } else if (!v->fakes[i].win && name!="recho" && name!="zecho"
+                   && name!="printenv" && name!="xcase") {
+            vinstallpe(v, "C:/msys/usr/bin", exe, i, X64, "msys-2.0.dll", 0);
+            if (alias >= 0) {
+                vinstallpe(v, "C:/w64/bin", exe, alias, X64, "kernel32.dll", 0);
+            }
+        }
+    }
+}
+
+// Reset the vos to the oracle container's initial state, or with win
+// to the Windows tree (vwintree).
+static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes, b32 win = 0)
 {
     Str out    = v->out;
     Str err    = v->err;
@@ -1528,6 +2755,12 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes)
     v->procs[0].ingroup = 1;  // tracing: vgroup is never 0
 
     v->root = vnew(v, 0, "", FT_DIR, 0755);
+    if (win) {
+        v->win = 1;
+        vwintree(v);
+        v->user = 1000;
+        return;
+    }
     vmkdirs(v, "home/oracle")->uid = 1000;
     VNode *tmp = vmkdirs(v, "tmp");
     tmp->mode = 01777;
@@ -1538,6 +2771,7 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes)
     VNode *bin = vnew(v, v->root, "bin", FT_LINK, 0777);
     bin->data = "usr/bin";
     for (iz i = 0; i < nfakes; i++) {
+        if (fakes[i].win) continue;
         Str  name = fakes[i].name;
         b32  local = name=="bash" || name=="recho" || name=="zecho"
                   || name=="printenv" || name=="xcase";
@@ -1561,9 +2795,9 @@ static void vdetach(VNode *n)
 }
 
 // Check that a new name can be made, returning its directory.
-static VNode *vcreatable(Vos *v, Str path, VResolved *r, i32 *err)
+static VNode *vcreatable(Vos *v, Arena *a, Str path, VResolved *r, i32 *err)
 {
-    *r = vresolve(v, path, 0);
+    *r = vresolve(v, a, path, 0);
     v->clock += 1000;
     if (r->node) {
         *err = E_EXIST;
@@ -1578,37 +2812,37 @@ static VNode *vcreatable(Vos *v, Str path, VResolved *r, i32 *err)
     return 0;
 }
 
-static i32 os_mkdir(Os *os, Arena, Str path, i32 mode)
+static i32 os_mkdir(Os *os, Arena scratch, Str path, i32 mode)
 {
     Vos      *v = osvos(os);
     vmutate(v);
     VResolved r;
     i32       err;
-    VNode    *dir = vcreatable(v, path, &r, &err);
+    VNode    *dir = vcreatable(v, &scratch, path, &r, &err);
     if (!dir) return err;
     vnew(v, dir, r.base, FT_DIR, mode & 07777 & ~022)->nlink = 2;
     return 0;
 }
 
-static i32 os_mkfifo(Os *os, Arena, Str path, i32 mode)
+static i32 os_mkfifo(Os *os, Arena scratch, Str path, i32 mode)
 {
     Vos      *v = osvos(os);
     vmutate(v);
     VResolved r;
     i32       err;
-    VNode    *dir = vcreatable(v, path, &r, &err);
+    VNode    *dir = vcreatable(v, &scratch, path, &r, &err);
     if (!dir) return err;
     vnew(v, dir, r.base, FT_FIFO, mode & 07777 & ~022);
     return 0;
 }
 
-static i32 os_symlink(Os *os, Arena, Str target, Str path)
+static i32 os_symlink(Os *os, Arena scratch, Str target, Str path)
 {
     Vos      *v = osvos(os);
     vmutate(v);
     VResolved r;
     i32       err;
-    VNode    *dir = vcreatable(v, path, &r, &err);
+    VNode    *dir = vcreatable(v, &scratch, path, &r, &err);
     if (!dir) return err;
     vnew(v, dir, r.base, FT_LINK, 0777)->data = clone(&v->a, target);
     return 0;
@@ -1616,16 +2850,16 @@ static i32 os_symlink(Os *os, Arena, Str target, Str path)
 
 // A hard link is a copy sharing the inode number: later writes to one
 // do not show in the other.
-static i32 os_link(Os *os, Arena, Str from, Str to)
+static i32 os_link(Os *os, Arena scratch, Str from, Str to)
 {
     Vos      *v = osvos(os);
     vmutate(v);
-    VResolved s = vresolve(v, from, 0);
+    VResolved s = vresolve(v, &scratch, from, 0);
     if (!s.node) return s.err;
     if (s.node->type == FT_DIR) return E_PERM;
     VResolved r;
     i32       err;
-    VNode    *dir = vcreatable(v, to, &r, &err);
+    VNode    *dir = vcreatable(v, &scratch, to, &r, &err);
     if (!dir) return err;
     VNode *n = vnew(v, dir, r.base, s.node->type, s.node->mode);
     n->ino   = s.node->ino;
@@ -1639,11 +2873,11 @@ static i32 os_link(Os *os, Arena, Str from, Str to)
     return 0;
 }
 
-static i32 os_unlink(Os *os, Arena, Str path)
+static i32 os_unlink(Os *os, Arena scratch, Str path)
 {
     Vos      *v = osvos(os);
     vmutate(v);
-    VResolved r = vresolve(v, path, 0);
+    VResolved r = vresolve(v, &scratch, path, 0);
     v->clock += 1000;
     if (!r.node) return r.err;
     if (r.node->type == FT_DIR) return E_ISDIR;
@@ -1652,11 +2886,11 @@ static i32 os_unlink(Os *os, Arena, Str path)
     return 0;
 }
 
-static i32 os_rmdir(Os *os, Arena, Str path)
+static i32 os_rmdir(Os *os, Arena scratch, Str path)
 {
     Vos      *v = osvos(os);
     vmutate(v);
-    VResolved r = vresolve(v, path, 0);
+    VResolved r = vresolve(v, &scratch, path, 0);
     v->clock += 1000;
     if (!r.node) return r.err;
     VNode *n = r.node;
@@ -1670,12 +2904,12 @@ static i32 os_rmdir(Os *os, Arena, Str path)
     return 0;
 }
 
-static i32 os_rename(Os *os, Arena, Str from, Str to)
+static i32 os_rename(Os *os, Arena scratch, Str from, Str to)
 {
     Vos      *v = osvos(os);
     vmutate(v);
-    VResolved a = vresolve(v, from, 0);
-    VResolved b = vresolve(v, to, 0);
+    VResolved a = vresolve(v, &scratch, from, 0);
+    VResolved b = vresolve(v, &scratch, to, 0);
     v->clock += 1000;
     if (!a.node) return a.err;
     if (!b.node && (b.err!=E_NOENT || !b.dir)) return b.err;
@@ -1708,22 +2942,22 @@ static i32 os_rename(Os *os, Arena, Str from, Str to)
     return 0;
 }
 
-static i32 os_chmod(Os *os, Arena, Str path, i32 mode)
+static i32 os_chmod(Os *os, Arena scratch, Str path, i32 mode)
 {
     Vos      *v = osvos(os);
     vmutate(v);
-    VResolved r = vresolve(v, path, 1);
+    VResolved r = vresolve(v, &scratch, path, 1);
     if (!r.node) return r.err;
     r.node->mode  = mode & 07777;
     r.node->ctime = v->clock;
     return 0;
 }
 
-static i32 os_utime(Os *os, Arena, Str path, i64 mtime)
+static i32 os_utime(Os *os, Arena scratch, Str path, i64 mtime)
 {
     Vos      *v = osvos(os);
     vmutate(v);
-    VResolved r = vresolve(v, path, 1);
+    VResolved r = vresolve(v, &scratch, path, 1);
     if (!r.node) return r.err;
     r.node->mtime = mtime;
     r.node->atime = mtime;
@@ -1734,7 +2968,7 @@ static i32 os_utime(Os *os, Arena, Str path, i64 mtime)
 static Str os_readlink(Os *os, Arena *a, Str path)
 {
     Vos      *v = osvos(os);
-    VResolved r = vresolve(v, path, 0);
+    VResolved r = vresolve(v, a, path, 0);
     if (!r.node || r.node->type!=FT_LINK) return {};
     return clone(a, r.node->data);
 }

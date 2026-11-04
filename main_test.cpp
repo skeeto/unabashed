@@ -12,6 +12,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include "unabashed.cpp"
 #include "fibers.cpp"
 #include "check.cpp"
@@ -192,6 +196,13 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.env     = ctx->env;
     info.nenv    = ctx->nenv;
     info.cwd     = ctx->cwd;
+    if (ctx->win) {
+        // As main_win32.cpp's startup sees a Windows process
+        info.windows = 1;
+        info.exe     = ctx->exe;
+        info.cmdline = ctx->cmdline;
+        info.env     = vwinenv(&ctx->scratch, ctx->env, ctx->nenv);
+    }
     info.pid     = osvos(os)->procs[osvos(os)->cur].pid;
     info.sigign  = osvos(os)->procs[osvos(os)->cur].sigign;
     info.ppid    = 2;
@@ -221,35 +232,46 @@ static void initfakes()
     for (iz i = 0; i < countof(fakes) && ntestfakes < countof(testfakes); i++) {
         testfakes[ntestfakes++] = fakes[i];
     }
+    for (iz i = 0; i < countof(vwinfakes) && ntestfakes < countof(testfakes); i++) {
+        testfakes[ntestfakes++] = vwinfakes[i];
+    }
 }
 
-// Run the shell with a fresh virtual OS state. The first argument is
-// $0, conventionally "bash".
-static Result runshell(Test *t, Str *args, iz nargs, Str input = {})
+// Personalities: the system a run's shell finds itself on.
+enum : i32 {
+    PERS_LINUX,   // the oracle container
+    PERS_NATIVE,  // Windows, the shell as w64devkit's sh.exe
+    PERS_MSYS,    // Windows, the shell as an MSYS2 install's bash.exe
+};
+
+static i32 personality(Str name)  // -1 if unknown
 {
-    Os *os = t->os;
+    if (name == "linux")  return PERS_LINUX;
+    if (name == "native") return PERS_NATIVE;
+    if (name == "msys")   return PERS_MSYS;
+    return -1;
+}
+
+// A fresh heap and vos for a run: the vos in the upper half of the
+// heap, the shell below.
+static void startrun(Os *os, b32 win, Str input)
+{
     os->heapused = 0;
     os->pinned   = 0;
     os->nmarks   = 0;
-
-    // The vos lives in the upper half of the heap, the shell below
     Arena va = {};
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
-    vreset(&os->vos, va, testfakes, ntestfakes);
+    vreset(&os->vos, va, testfakes, ntestfakes, win);
     os->vos.in    = input;
     os->vos.chaos = os->chaos;
+}
 
-    static Str env[] = {
-        "LANG=C", "TZ=UTC", "HOME=/home/oracle",
-        "PATH=/usr/local/bin:/opt/fakes/bin",
-    };
+static OsInfo baseinfo(Os *os, Str *args, iz nargs)
+{
     OsInfo info = {};
     info.args    = args;
     info.nargs   = nargs;
-    info.env     = env;
-    info.nenv    = countof(env);
-    info.cwd     = "/home/oracle";
     info.pid     = 2;
     info.ppid    = 1;
     info.uid     = info.euid = 1000;
@@ -261,14 +283,89 @@ static Result runshell(Test *t, Str *args, iz nargs, Str input = {})
     info.reserve = (iz)1<<22;
     info.stack   = (iz)1<<20;
     info.chaos   = os->chaos;
+    return info;
+}
 
+static Result finishrun(Os *os, OsInfo *info)
+{
     Result r = {};
-    r.status = sh_main(os, &info) & 255;
+    r.status = sh_main(os, info) & 255;
     vfinish(os);
     r.out    = os->vos.out;
     r.err    = os->vos.err;
     r.merged = os->vos.merged;
     return r;
+}
+
+// The command line a native parent gives a program: MSVCRT quoting.
+static Str wincmdline(Arena *a, Str *args, iz nargs)
+{
+    Buf b(a);
+    for (iz i = 0; i < nargs; i++) {
+        if (i) {
+            putbyte(&b, ' ');
+            quotearg(&b, args[i]);
+        } else {
+            quoteprogram(&b, args[i]);
+        }
+    }
+    return finish(&b);
+}
+
+// The Windows half of an OsInfo, as main_win32.cpp's startup fills it
+// in (vwinenv renames Path), for a shell at exe with the given
+// environment and working directory.
+static void wininfo(Os *os, OsInfo *info, Str exe, Str *env, iz nenv, Str cwd)
+{
+    Arena *a = &os->vos.a;
+    info->windows = 1;
+    info->exe     = exe;
+    info->cmdline = wincmdline(a, info->args, info->nargs);
+    info->env     = vwinenv(a, env, nenv);
+    info->nenv    = nenv;
+    info->cwd     = cwd;
+}
+
+// Run the shell with a fresh virtual OS state. The first argument is
+// $0, conventionally "bash".
+static Result runshell(Test *t, Str *args, iz nargs, Str input = {}, i32 pers = PERS_LINUX)
+{
+    Os *os = t->os;
+    startrun(os, pers!=PERS_LINUX, input);
+    OsInfo info = baseinfo(os, args, nargs);
+    if (pers == PERS_LINUX) {
+        static Str env[] = {
+            "LANG=C", "TZ=UTC", "HOME=/home/oracle",
+            "PATH=/usr/local/bin:/opt/fakes/bin",
+        };
+        info.env  = env;
+        info.nenv = countof(env);
+        info.cwd  = "/home/oracle";
+    } else {
+        // As a Windows parent hands it over, sorted, with LANG and TZ
+        // pinned as for the oracle
+        static Str env[] = {
+            "=C:=C:\\work",
+            "ComSpec=C:\\Windows\\System32\\cmd.exe",
+            "LANG=C",
+            "Path=C:\\w64\\bin;C:\\Windows\\System32",
+            "SystemRoot=C:\\Windows",
+            "TEMP=C:\\Users\\oracle\\AppData\\Local\\Temp",
+            "TMP=C:\\Users\\oracle\\AppData\\Local\\Temp",
+            "TZ=UTC",
+            "USERPROFILE=C:\\Users\\oracle",
+        };
+        static Str msysenv[countof(env)];
+        Str *e = env;
+        if (pers == PERS_MSYS) {
+            for (iz i = 0; i < countof(env); i++) msysenv[i] = env[i];
+            msysenv[3] = "Path=C:\\msys\\usr\\bin;C:\\w64\\bin;C:\\Windows\\System32";
+            e = msysenv;
+        }
+        Str exe = pers==PERS_MSYS ? Str("C:/msys/usr/bin/bash.exe") : Str("C:/w64/bin/sh.exe");
+        wininfo(os, &info, exe, e, countof(env), "C:/work");
+    }
+    return finishrun(os, &info);
 }
 
 static Result runc(Test *t, Str script)
@@ -481,6 +578,20 @@ static SpecFile parsespec(Str s)
 
 static i32 chaosruns;  // --chaos N: also run each spec with seeds 1..N
 
+// A script's "# personality: NAME" line, else PERS_LINUX (-1 if the
+// name is unknown).
+static i32 scriptpersona(Str script)
+{
+    Str key = "# personality: ";
+    for (Cut c = {{}, script, 1}; c.ok;) {
+        c = cut(c.tail, '\n');
+        if (startswith(c.head, key)) {
+            return personality(trim(cuthead(c.head, key.len)));
+        }
+    }
+    return PERS_LINUX;
+}
+
 static b32 test_spec(Test *t, char *path)
 {
     Str  p        = {(u8 *)path, (iz)strlen(path)};
@@ -500,9 +611,16 @@ static b32 test_spec(Test *t, char *path)
         fprintf(stderr, "SKIP: %s (bad spec)\n", path);
         return 1;
     }
+    i32 pers = scriptpersona(script);
+    if (pers < 0) {
+        fprintf(stderr, "SKIP: %s (unknown personality)\n", path);
+        return 1;
+    }
 
-    Str    args[] = {"bash", "-c", script, "bash"};
-    Result r      = runshell(t, args, countof(args));
+    // A Windows personality runs as w64devkit's sh or MSYS2's bash
+    Str    argv0  = pers==PERS_NATIVE ? Str("sh") : Str("bash");
+    Str    args[] = {argv0, "-c", script, "bash"};
+    Result r      = runshell(t, args, countof(args), {}, pers);
     b32    ok     = 1;
     ok &= expect(t, p, r.out, want.out);
     ok &= expect(t, p, r.err, want.err);
@@ -514,7 +632,7 @@ static b32 test_spec(Test *t, char *path)
     i32 nchaos = find(script, "# nochaos")<0 ? chaosruns : 0;
     for (i32 seed = 1; ok && seed <= nchaos; seed++) {
         t->os->chaos = (u64)seed * 0x9e3779b97f4a7c15u;
-        r = runshell(t, args, countof(args));
+        r = runshell(t, args, countof(args), {}, pers);
         t->os->chaos = 0;
         char name[1200];
         snprintf(name, sizeof(name), "%s (chaos seed %d)", path, seed);
@@ -545,6 +663,496 @@ static b32 test_spec(Test *t, char *path)
     free(script.data);
     free(spec.data);
     return ok;
+}
+
+// Git Bash differential specs (t/msys): its "# vos" scripts, run as
+// t/msys/run runs them (tools/README.md, "Git Bash differential
+// tests") but on the vos's Windows tree laid out like its scratch
+// install: WORKDIR is C:/work, the install root C:/msys (@ROOT@) holds
+// only usr/bin/bash.exe (the shell) and etc/fstab, Git's programs are
+// in C:/git (@GIT@), w64devkit in C:/w64 (@W64@), argv and argv32 in
+// C:/work/bin, and the test in C:/work/NAME. Outputs are normalized as
+// the runner normalizes them, then compared with Git Bash's recording.
+
+struct NormPair {
+    Str spelling;
+    Str token;
+};
+
+// Longest spelling first, ties by the bytes of "TOKEN SPELLING" (no
+// token is a prefix of another, so by token, then by spelling).
+static b32 normless(NormPair *a, NormPair *b)
+{
+    if (a->spelling.len != b->spelling.len) return a->spelling.len > b->spelling.len;
+    i32 c = compare(a->token, b->token);
+    return c ? c<0 : compare(a->spelling, b->spelling)<0;
+}
+
+// The 24 (spelling, token) pairs: for each directory X:R, the forms
+// X:R x:R X:B x:B /xR /XR, B being R with backslashes.
+static Slice<NormPair> normpairs(Arena *a)
+{
+    static Str dirs[][2] = {
+        {"@ROOT@", "C:/msys"}, {"@WORK@", "C:/work"},
+        {"@GIT@",  "C:/git"},  {"@W64@",  "C:/w64"},
+    };
+    Slice<NormPair> r = {};
+    for (iz i = 0; i < countof(dirs); i++) {
+        Str dir  = dirs[i][1];
+        u8  up   = upcase(dir[0]);
+        u8  lo   = lowercase(dir[0]);
+        Str rest = cuthead(dir, 2);
+        Str back = slashify(a, rest, '\\');
+        Str forms[6] = {};
+        for (i32 k = 0; k < 6; k++) {
+            Buf b(a);
+            if (k < 4) {
+                putbyte(&b, k&1 ? lo : up);
+                putbyte(&b, ':');
+                print(&b, k<2 ? rest : back);
+            } else {
+                putbyte(&b, '/');
+                putbyte(&b, k==4 ? lo : up);
+                print(&b, rest);
+            }
+            forms[k] = finish(&b);
+        }
+        for (i32 k = 0; k < 6; k++) {
+            NormPair p = {forms[k], dirs[i][0]};
+            r = push(a, r, p);
+        }
+    }
+    sort(r.data, r.len, normless, *a);
+    return r;
+}
+
+// Replace each pair's spelling by its token, pair by pair, left to
+// right without overlaps, byte-exact.
+static Str normalize(Arena *a, Str s, Slice<NormPair> pairs)
+{
+    for (iz k = 0; k < pairs.len; k++) {
+        Str from = pairs[k].spelling;
+        Buf b(a, s.len);
+        for (iz i = 0; i < s.len;) {
+            if (startswith(cuthead(s, i), from)) {
+                print(&b, pairs[k].token);
+                i += from.len;
+            } else {
+                putbyte(&b, s[i++]);
+            }
+        }
+        s = finish(&b);
+    }
+    return s;
+}
+
+static b32 varchar(u8 c)
+{
+    return alnum(c) || c=='_';
+}
+
+// The words of a "# shell:" line as t/msys/lib.sh's eval reads them,
+// with $D, $DW and $DU the test directory as C:/x, C:\x and /c/x.
+static Slice<Str> shellwords(Arena *a, Str line, Str *vars)
+{
+    static Str names[] = {"D", "DW", "DU"};
+    Slice<Str> words = {};
+    for (iz i = 0;;) {
+        for (; i<line.len && (line[i]==' ' || line[i]=='\t'); i++) {}
+        if (i == line.len) break;
+        Buf w(a);
+        b32 dq = 0;
+        while (i<line.len && (dq || (line[i]!=' ' && line[i]!='\t'))) {
+            u8 c = line[i];
+            if (c=='\'' && !dq) {
+                for (i++; i<line.len && line[i]!='\''; i++) putbyte(&w, line[i]);
+                i++;
+            } else if (c == '"') {
+                dq = !dq;
+                i++;
+            } else if (c=='\\' && i+1<line.len && (!dq || find("\\\"$`", {line.data+i+1, 1})>=0)) {
+                putbyte(&w, line[i+1]);
+                i += 2;
+            } else if (c=='$' && i+1<line.len && varchar(line[i+1])) {
+                iz beg = ++i;
+                for (; i<line.len && varchar(line[i]); i++) {}
+                Str name = span(line.data+beg, line.data+i);
+                for (iz k = 0; k < countof(names); k++) {
+                    if (name == names[k]) print(&w, vars[k]);
+                }
+            } else {
+                putbyte(&w, c);
+                i++;
+            }
+        }
+        words = push(a, words, finish(&w));
+    }
+    return words;
+}
+
+static void vdetachname(Vos *v, Str path)
+{
+    VNode *n = vwalk(v, path, 0).node;
+    if (n) vdetach(n);
+}
+
+// Run a t/msys script on the vos as test.sh in C:/work/NAME.
+static Result runmsys(Test *t, Str name, Str script)
+{
+    enum { X64 = 0x8664, I386 = 0x14c };
+    Os *os = t->os;
+    startrun(os, 1, {});
+    Vos   *v = &os->vos;
+    Arena *a = &v->a;
+
+    // Git's install: its programs (MSYS2 builds of the fakes) and etc
+    for (i32 i = 0; i < v->nfakes; i++) {
+        Str fake = v->fakes[i].name;
+        if (v->fakes[i].win || fake=="recho" || fake=="zecho" || fake=="printenv" || fake=="xcase") {
+            continue;
+        }
+        vinstallpe(v, "C:/git/usr/bin", concat(a, fake, ".exe"), i, X64, "msys-2.0.dll", 0);
+    }
+    vputfile(v, "C:/git/etc", "fstab",
+        "none / cygdrive binary,posix=0,noacl,user 0 0\n"
+        "none /tmp usertemp binary,posix=0,noacl 0 0\n");
+
+    // The scratch install: the shell and an fstab lending it Git's
+    VNode *bin  = vwalk(v, "/C:/msys/usr/bin", 1).node;
+    VNode *bash = vlookup(v, bin, "bash.exe");
+    bin->child  = bash;
+    bash->next  = 0;
+    vdetachname(v, "/C:/msys/tmp");
+    VNode *fstab = vwalk(v, "/C:/msys/etc/fstab", 1).node;
+    fstab->data.len = 0;
+    Str tab =
+        "# t/msys scratch install: Git's programs, the shell under test\n"
+        "C:/git/usr/bin /usr/bin ntfs binary,noacl,auto 0 0\n"
+        "C:/git/usr/bin /bin ntfs binary,noacl,auto 0 0\n"
+        "C:/git/etc /etc ntfs binary,noacl,auto 0 0\n"
+        "none / cygdrive binary,posix=0,noacl,user 0 0\n"
+        "none /tmp usertemp binary,posix=0,noacl 0 0\n";
+    vwritenode(v, fstab, 0, tab.data, tab.len);
+
+    // argv and argv32 in WORKDIR/bin, not w64devkit's
+    vdetachname(v, "/C:/w64/bin/argv.exe");
+    vdetachname(v, "/C:/w64/bin/argv32.exe");
+    i32 argv = -1;
+    for (i32 i = 0; i < v->nfakes; i++) argv = v->fakes[i].name=="argv" ? i : argv;
+    vinstallpe(v, "C:/work/bin", "argv.exe", argv, X64, "msvcrt.dll", 0);
+    vinstallpe(v, "C:/work/bin", "argv32.exe", argv, I386, "msvcrt.dll", 0);
+
+    Str dir = concat(a, "C:/work/", name);
+    vmkdirs(v, concat(a, dir, "/home"));
+    vmkdirs(v, concat(a, dir, "/tmp"));
+    vputfile(v, dir, "test.sh", script);
+
+    Str dw = slashify(a, dir, '\\');
+    Str du = concat(a, "/c", cuthead(dir, 2));
+    Str env[] = {
+        "COMSPEC=C:\\Windows\\System32\\cmd.exe",
+        concat(a, concat(a, "HOME=", dw), "\\home"),
+        "LANG=C",
+        "PATH=C:\\git\\usr\\bin;C:\\w64\\bin;C:\\Windows\\System32;C:\\work\\bin",
+        "SYSTEMROOT=C:\\Windows",
+        concat(a, concat(a, "TEMP=", dw), "\\tmp"),
+        concat(a, concat(a, "TMP=", dw), "\\tmp"),
+        "TZ=UTC",
+    };
+    Str *envs = alloc<Str>(a, countof(env));
+    for (iz i = 0; i < countof(env); i++) envs[i] = env[i];
+
+    Str exe = "C:/msys/usr/bin/bash.exe";
+    Slice<Str> args = {};
+    args = push(a, args, exe);
+    Str key = "# shell: ";
+    Str shell = {};
+    for (Cut c = {{}, script, 1}; c.ok;) {
+        c = cut(c.tail, '\n');
+        if (startswith(c.head, key)) shell = cuthead(c.head, key.len);
+    }
+    if (shell.data) {
+        if (shell.len && shell[shell.len-1]=='\r') shell.len--;
+        Str vars[] = {dir, dw, du};
+        Slice<Str> w = shellwords(a, shell, vars);
+        for (iz i = 0; i < w.len; i++) args = push(a, args, w[i]);
+    } else {
+        args = push(a, args, Str("--norc"));
+        args = push(a, args, Str("--noprofile"));
+        args = push(a, args, Str("test.sh"));
+    }
+
+    OsInfo info = baseinfo(os, args.data, args.len);
+    wininfo(os, &info, exe, envs, countof(env), dir);
+    return finishrun(os, &info);
+}
+
+static b32 hasline(Str s, Str line)
+{
+    for (Cut c = {{}, s, 1}; c.ok;) {
+        c = cut(c.tail, '\n');
+        Str h = c.head;
+        if (h.len && h[h.len-1]=='\r') h.len--;
+        if (h == line) return 1;
+    }
+    return 0;
+}
+
+static i32  msyspass;
+static i32  msysfail;
+static i32  msysskip;    // scripts the vos cannot run (no "# vos")
+static b32  msysdiff;    // --msys-diff: show what differs
+
+static void test_msys(Test *t, char *path)
+{
+    Str p = {(u8 *)path, (iz)strlen(path)};
+    char specpath[1024];
+    if (p.len+3 > countof(specpath)) return;
+    memcpy(specpath, path, (uz)p.len - 3);
+    strcpy(specpath + p.len - 3, ".spec");
+    Str script = readfile(path);
+    Str spec   = readfile(specpath);
+    if (!script.data || !spec.data) {
+        fprintf(stderr, "SKIP: %s (missing script or spec)\n", path);
+        msysskip++;
+        return;
+    }
+    SpecFile want = parsespec(spec);
+    if (!want.ok || !hasline(script, "# vos")) {
+        msysskip++;
+        free(script.data);
+        free(spec.data);
+        return;
+    }
+
+    iz  slash = p.len;
+    for (; slash>0 && p[slash-1]!='/' && p[slash-1]!='\\'; slash--) {}
+    Str name = span(p.data+slash, p.data+p.len-3);
+    Result r = runmsys(t, name, script);
+
+    Arena a = t->os->vos.a;
+    Slice<NormPair> pairs = normpairs(&a);
+    Str out    = normalize(&a, r.out, pairs);
+    Str err    = normalize(&a, r.err, pairs);
+    Str merged = normalize(&a, r.merged, pairs);
+    b32 ok = out==want.out && err==want.err && merged==want.merged && r.status==want.status;
+    msyspass += ok;
+    msysfail += !ok;
+    if (!ok) {
+        printf("FAIL %.*s\n", (int)name.len, (char *)name.data);
+        if (msysdiff) {
+            printf("  want (status %d): [", want.status);
+            printstr(stdout, want.merged);
+            printf("]\n  got  (status %d): [", r.status);
+            printstr(stdout, merged);
+            printf("]\n");
+        }
+    }
+    free(script.data);
+    free(spec.data);
+}
+
+// The vos's Windows mode on its own: path resolution, case folding,
+// reserved names, named pipes, the PE images through pesniff, and
+// command lines split by each kind of target.
+
+static Str runspawn(Os *os, Arena a, Spawn *s, i32 *status)
+{
+    Vos *v = &os->vos;
+    v->out.len = v->err.len = v->merged.len = 0;
+    static SpawnFd fds[] = {{1, 1}, {2, 2}};
+    s->fds  = fds;
+    s->nfds = countof(fds);
+    s->cwd  = s->cwd.len ? s->cwd : Str("C:/work");
+    Spawned r = os_spawn(os, a, s);
+    *status = r.err ? -r.err : os_waitproc(os, r.proc);
+    return v->merged;
+}
+
+static void putvfile(Os *os, Arena a, Str path, Str data)
+{
+    Opened o = os_open(os, a, path, OF_WRITE|OF_CREATE|OF_TRUNC, 0644);
+    os_write(os, o.h, data.data, data.len);
+    os_close(os, o.h);
+}
+
+static void test_vwin(Test *t)
+{
+    Os  *os = t->os;
+    startrun(os, 1, {});
+    Vos  *v = &os->vos;
+    Arena a = newarena(os, (iz)1<<22);
+
+    // Resolution: drive roots, MSYS-style drives, both separators, case,
+    // dot-dot, rooted paths on C:, and what cannot exist
+    struct { Str path; i32 type; i32 err; } paths[] = {
+        {"C:/",                      FT_DIR,  0},
+        {"c:",                       FT_DIR,  0},
+        {"D:\\",                     FT_DIR,  0},
+        {"E:/",                      0,       E_NOENT},
+        {"C:/work",                  FT_DIR,  0},
+        {"c:\\WORK\\",               FT_DIR,  0},
+        {"/c/Work",                  FT_DIR,  0},
+        {"/C",                       FT_DIR,  0},
+        {"C:/work/../WINDOWS/system32/CMD.EXE", FT_FILE, 0},
+        {"/Windows/System32/cmd.exe", FT_FILE, 0},
+        {"\\\\?\\C:\\w64\\bin\\argv.exe", FT_FILE, 0},
+        {"work",                     0,       E_NOENT},
+        {"//srv/share/x",            0,       E_NOENT},
+        {"\\\\srv\\share",           0,       E_NOENT},
+        {"C:/work/x/",               0,       E_NOENT},
+        {"C:/w64/bin/argv.exe/",     0,       E_NOTDIR},
+        {"/dev/null",                FT_CHAR, 0},
+        {"/dev/tty",                 0,       E_NOENT},
+        {"//./NUL",                  FT_CHAR, 0},
+        {"\\\\.\\nul",               FT_CHAR, 0},
+        {"C:/work/nul",              FT_CHAR, 0},
+        {"C:/nowhere/Con.txt",       FT_CHAR, 0},
+        {"D:/aux.c.d. ",             FT_CHAR, 0},
+        {"C:/work/nul/x",            0,       E_NOENT},
+        {"C:/work/null",             0,       E_NOENT},
+        {"//./foo",                  0,       E_NOENT},
+        {"//./pipe/none",            0,       E_NOENT},
+    };
+    for (iz i = 0; i < countof(paths); i++) {
+        Stat st = os_stat(os, a, paths[i].path, 1);
+        Str  name = concat(&a, "vwin stat ", paths[i].path);
+        expectint(t, name, st.err, paths[i].err);
+        if (!paths[i].err) expectint(t, name, st.type, paths[i].type);
+    }
+
+    // Names keep their case and are found in any case, listed in NTFS
+    // order; modes are synthesized as by the Win32 layer
+    putvfile(os, a, "C:/work/Foo.TXT", "hi");
+    putvfile(os, a, "c:/WORK/bar", "#!/bin/sh\n");
+    putvfile(os, a, "C:/work/Baz.BAT", "");
+    os_mkdir(os, a, "C:/work/dir", 0755);
+    expectint(t, "vwin case size", os_stat(os, a, "c:/WORK/FOO.txt", 1).size, 2);
+    Opened o = os_open(os, a, "C:/WORK/foo.txt", OF_WRITE|OF_CREATE|OF_EXCL, 0644);
+    expectint(t, "vwin case exists", o.err, E_EXIST);
+    o = os_open(os, a, "C:/work/NUL.txt", OF_WRITE|OF_CREATE, 0644);
+    expectint(t, "vwin nul write", o.err || !os_write(os, o.h, (u8 *)"x", 1), 0);
+    os_close(os, o.h);
+    i32 err = 0;
+    Buf names(&a);
+    for (Dirent *d = os_list(os, &a, "C:/work", &err); d; d = d->next) {
+        print(&names, d->name);
+        putbyte(&names, ' ');
+    }
+    expect(t, "vwin list", finish(&names), "bar Baz.BAT dir Foo.TXT ");
+    expectint(t, "vwin mode file", os_stat(os, a, "C:/work/Foo.TXT", 1).mode, 0644);
+    expectint(t, "vwin mode #!", os_stat(os, a, "C:/work/bar", 1).mode, 0755);
+    expectint(t, "vwin mode .bat", os_stat(os, a, "C:/work/baz.bat", 1).mode, 0755);
+    expectint(t, "vwin mode dir", os_stat(os, a, "C:/work/dir", 1).mode, 0755);
+    os_chmod(os, a, "C:/work/Foo.TXT", 0444);
+    expectint(t, "vwin mode read-only", os_stat(os, a, "C:/work/Foo.TXT", 1).mode, 0444);
+
+    // PE images, as pesniff classifies them
+    struct { Str path; i32 machine, width, crt, posix; b32 ours; } pes[] = {
+        {"C:/w64/bin/argv.exe",         0x8664, 8, CRT_MSVCRT, 0,          0},
+        {"C:/w64/bin/argv32.exe",       0x14c,  4, CRT_MSVCRT, 0,          0},
+        {"C:/w64/bin/busybox.exe",      0x8664, 8, CRT_MSVCRT, 0,          0},
+        {"C:/w64/bin/ls.exe",           0x8664, 8, CRT_NONE,   0,          0},
+        {"C:/w64/bin/sh.exe",           0x8664, 8, CRT_NONE,   0,          1},
+        {"C:/msys/usr/bin/cat.exe",     0x8664, 8, CRT_NONE,   POSIX_MSYS, 0},
+        {"C:/msys/usr/bin/bash.exe",    0x8664, 8, CRT_NONE,   0,          1},
+        {"C:/Windows/System32/cmd.exe", 0x8664, 8, CRT_UCRT,   0,          0},
+    };
+    for (iz i = 0; i < countof(pes); i++) {
+        VNode *n    = vresolve(v, &a, pes[i].path, 1).node;
+        PeInfo pe   = vpesniff(n, a);
+        Str    name = concat(&a, "vwin pe ", pes[i].path);
+        expectint(t, name, pe.ok, 1);
+        expectint(t, name, pe.machine, pes[i].machine);
+        expectint(t, name, pe.width, pes[i].width);
+        expectint(t, name, pe.subsystem, 3);
+        expectint(t, name, pe.crt, pes[i].crt);
+        expectint(t, name, pe.posix, pes[i].posix);
+        expectint(t, name, pe.ours, pes[i].ours);
+    }
+
+    // A copy of an image runs the same program; an ELF-like fake does not
+    VNode *argv = vresolve(v, &a, "C:/w64/bin/argv.exe", 1).node;
+    putvfile(os, a, "C:/work/copy.exe", argv->data);
+    putvfile(os, a, "C:/work/elf.exe", {(u8 *)vmagic, countof(vmagic)});
+    expectint(t, "vwin copy", vprogram(v, &a, "c:\\work\\COPY.exe").prog, argv->prog-1);
+    expectint(t, "vwin elf", vprogram(v, &a, "C:/work/elf.exe").err, E_NOEXEC);
+
+    // Named pipes
+    OsPipe np = vnamedpipe(os, "Test");
+    expectint(t, "vwin pipe stat", os_stat(os, a, "//./pipe/test", 1).type, FT_PIPE);
+    o = os_open(os, a, "\\\\.\\PIPE\\TEST", OF_WRITE, 0);
+    expectint(t, "vwin pipe open", o.err, 0);
+    os_write(os, o.h, (u8 *)"hi", 2);
+    os_close(os, o.h);
+    u8 buf[8] = {};
+    expectint(t, "vwin pipe read", os_read(os, np.r, buf, countof(buf)), 2);
+    os_close(os, np.r);
+    os_close(os, np.w);
+    expectint(t, "vwin pipe gone", os_stat(os, a, "//./pipe/test", 1).err, E_NOENT);
+
+    // Command lines: MSVCRT splitting for argv, Cygwin's (globs and
+    // response files) for an MSYS2 program, an alias stub through
+    // busybox, cmd's expansion, and a batch file through ComSpec
+    i32 status = 0;
+    Spawn s = {};
+    s.path    = "C:/w64/bin/argv.exe";
+    s.cmdline = "argv \"a b\" c\\\"d e\\\\f \"\"";
+    expect(t, "vwin argv", runspawn(os, a, &s, &status),
+           "cmdline = <argv \"a b\" c\\\"d e\\\\f \"\">\n"
+           "argv[0] = <argv>\nargv[1] = <a b>\nargv[2] = <c\"d>\n"
+           "argv[3] = <e\\\\f>\nargv[4] = <>\n");
+
+    s = {};
+    s.path = "C:/w64/bin/argv32.exe";
+    Str args[] = {"argv32", "a b", ""};
+    s.argv = args;
+    s.argc = countof(args);
+    expect(t, "vwin argv without cmdline", runspawn(os, a, &s, &status),
+           "cmdline = <argv32 \"a b\" \"\">\n"
+           "argv[0] = <argv32>\nargv[1] = <a b>\nargv[2] = <>\n");
+
+    putvfile(os, a, "C:/work/a.txt", "");
+    putvfile(os, a, "C:/work/b.txt", "");
+    putvfile(os, a, "C:/work/resp", "r1 'r 2'");
+    static Str home[] = {"HOME=C:\\work"};
+    s = {};
+    s.path    = "C:/msys/usr/bin/echo.exe";
+    s.cmdline = "echo *.txt \"*.txt\" {x,y} '{x,y}' @resp ~ C:\\x";
+    s.env     = home;
+    s.nenv    = countof(home);
+    expect(t, "vwin msys", runspawn(os, a, &s, &status),
+           "a.txt b.txt *.txt x y {x,y} r1 r 2 C:\\work C:\\x\n");
+
+    s = {};
+    s.path    = "C:/w64/bin/echo.exe";
+    s.cmdline = "echo \"a  b\" c";
+    expect(t, "vwin alias", runspawn(os, a, &s, &status), "a  b c\n");
+
+    static Str env[] = {
+        "ComSpec=C:\\Windows\\System32\\cmd.exe", "Path=C:\\w64\\bin",
+    };
+    s = {};
+    s.path    = "C:/Windows/System32/cmd.exe";
+    s.cmdline = "cmd /d /c echo %path%^! %nope% \"^\" 100%%";
+    s.env     = env;
+    s.nenv    = countof(env);
+    expect(t, "vwin cmd", runspawn(os, a, &s, &status),
+           "C:\\w64\\bin! %nope% \"^\" 100%%\r\n");
+
+    putvfile(os, a, "C:/work/t.bat",
+        "@echo off\r\necho [%1] [%~1] [%2] [%*]\r\nexit /b 3\r\necho never\r\n");
+    Str bat[] = {"t.bat", "a b", "%PATH%"};
+    s = {};
+    s.path = "C:/work/t.bat";
+    s.argv = bat;
+    s.argc = countof(bat);
+    s.env  = env;
+    s.nenv = countof(env);
+    expect(t, "vwin batch", runspawn(os, a, &s, &status),
+           "[\"a b\"] [a b] [\"%PATH%\"] [\"a b\" \"%PATH%\"]\r\n");
+    expectint(t, "vwin batch status", status, 3);
+    vfinish(os);
 }
 
 // Oracle runs: bash's own test suite, run read-only on the vos. The
@@ -632,6 +1240,7 @@ static b32 oracle(Test *t, char *suite, char *name, b32 verbose)
     for (iz i = 0; i < ntestfakes; i++) {
         Str name = testfakes[i].name;
         if (name=="recho" || name=="zecho" || name=="xcase") continue;
+        if (testfakes[i].win) continue;
         vinstall(&os->vos, "usr/bin", name, (i32)i);
         if (name == "bash") vinstall(&os->vos, "usr/bin", "sh", (i32)i);
     }
@@ -720,6 +1329,7 @@ int main(int argc, char **argv)
     test_arena(&t);
     test_sched(&t);
     test_sigpipe(&t);
+    test_vwin(&t);
 
     if (argc>3 && (!strcmp(argv[1], "--oracle") || !strcmp(argv[1], "--oracle-v"))) {
         // --oracle SUITEDIR NAME...: bash test suite runs on the vos
@@ -733,14 +1343,51 @@ int main(int argc, char **argv)
     }
 
     if (argc>2 && !strcmp(argv[1], "--run")) {
-        // Run one script on the vos and show what it printed, with an
-        // optional chaos seed
-        Str script = readfile(argv[2]);
-        os.chaos = argc>3 ? (u64)atoll(argv[3]) : 0;
-        Str args[] = {"bash", "-c", script, "bash"};
-        Result r = runshell(&t, args, countof(args));
-        printstr(stdout, r.merged);
-        printf("[status %d]\n", r.status);
+        // --run [--personality NAME] [--spec] SCRIPT [SEED]: run one
+        // script on the vos and show what it printed, or its spec, with
+        // an optional chaos seed; a "# personality:" line also counts
+        i32 i    = 2;
+        i32 pers = -2;
+        b32 spec = 0;
+        for (; i+1 < argc; i++) {
+            if (!strcmp(argv[i], "--personality")) {
+                pers = personality({(u8 *)argv[i+1], (iz)strlen(argv[i+1])});
+                i++;
+            } else if (!strcmp(argv[i], "--spec")) {
+                spec = 1;
+            } else {
+                break;
+            }
+        }
+        Str script = readfile(argv[i]);
+        pers = pers==-2 ? scriptpersona(script) : pers;
+        if (!script.data || pers<0) {
+            fprintf(stderr, "tests: --run [--personality linux|native|msys] [--spec] SCRIPT [SEED]\n");
+            return 2;
+        }
+        os.chaos = i+1<argc ? (u64)atoll(argv[i+1]) : 0;
+        Str argv0  = pers==PERS_NATIVE ? Str("sh") : Str("bash");
+        Str args[] = {argv0, "-c", script, "bash"};
+        Result r = runshell(&t, args, countof(args), {}, pers);
+        if (spec) {
+            #if _WIN32
+            _setmode(1, _O_BINARY);  // the bytes exactly, CRs included
+            #endif
+            // The spec format (tools/README.md): the vos captures both
+            // streams apart and merged in the one run
+            Str names[] = {"stdout", "stderr", "merged"};
+            Str parts[] = {r.out, r.err, r.merged};
+            for (i32 k = 0; k < 3; k++) {
+                printf("== %.*s %lld\n", (int)names[k].len, (char *)names[k].data,
+                       (long long)parts[k].len);
+                printstr(stdout, parts[k]);
+                printf("\n");
+            }
+            printf("== status %d\n", r.status);
+        } else {
+            printstr(stdout, r.merged);
+            printf("[status %d]\n", r.status);
+        }
         return 0;
     }
 
@@ -777,6 +1424,16 @@ int main(int argc, char **argv)
             chaosruns = atoi(argv[++i]);
             continue;
         }
+        if (a == "--msys-diff") {
+            msysdiff = 1;
+            continue;
+        }
+        if (endswith(a, ".sh") && find(a, "msys/")>=0) {
+            // Git Bash recordings, expected to fail until M5a's steps 5
+            // to 7: counted on their own
+            test_msys(&t, argv[i]);
+            continue;
+        }
         if (endswith(a, ".sh")) {
             specs++;
             specfail += !test_spec(&t, argv[i]);
@@ -786,6 +1443,10 @@ int main(int argc, char **argv)
     if (specs) {
         printf("%d specs, %d failed\n", specs, specfail);
     }
+    if (msyspass || msysfail) {
+        printf("%d t/msys vos specs, %d passed, %d failed (%d not # vos)\n",
+               msyspass+msysfail, msyspass, msysfail, msysskip);
+    }
     printf("%d tests, %d failed\n", t.run, t.failed);
-    return !!t.failed;
+    return t.failed || msysfail;
 }

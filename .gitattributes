@@ -1,2 +1,3 @@
 # Tests whose bytes matter: keep CRLF as committed
 t/msys/*-crlf-*.sh -text
+t/winvos/*.spec -text

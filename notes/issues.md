@@ -43,7 +43,28 @@ gets checked. Rules:
   most 1024 section headers. None matters for the binaries tried.
   (m5a.md, step 2)
 - **t/msys baseline is red**: unabashed.exe passes 1 of 60 (057); steps
-  4-9 turn it green (m5a.md, "Step 3"). Exit criterion 1.
+  4-9 turn it green (m5a.md, "Step 3"). Exit criterion 1. In the vos
+  (`./tests.exe t/msys/*.sh`) 1 of the 41 `# vos` scripts passes (057).
+- **t/winvos/ is a hand-checked baseline**, not oracle output: it pins
+  today's minimal Windows behavior (no mount table, `C:/\`-style
+  paths, bare argv[0] to children, no `.exe` stripping) and must be
+  updated deliberately as steps 5 and 7 land. (m5a.md, step 4)
+- **The vos's cmd.exe is a small model**: no `&`, `&&`, `||`, `|`,
+  redirections, parentheses, `if`, `for`, `goto`, `call`, `setlocal`,
+  `echo on`, delayed expansion or the pre-`/s` quote rules (batch
+  lines do take `%0`-`%9`, `%~N`, `%*`). Enough for step 7's batch
+  quoting tests only. (m5a.md, step 4)
+- **The vos's msys children are thin**: they get the native argv split
+  by splitcygwin and a `/c/...` cwd, but no mount table, no
+  environment conversion (PATH stays Windows form) and no
+  `MSYS=noglob`; `@file` stops quietly after ten levels instead of
+  dying on the 11th; the glob handles `* ? [...]` and `{a,b}` per
+  component, not `**` or character classes. (m5a.md, step 4)
+- **Windows path gaps in the vos**: trailing dots and spaces are not
+  stripped from names, `C:x` resolves against the drive root rather
+  than that drive's cwd, rooted paths (`/x`, `\x`) always land on C:,
+  case folding is ASCII only, `CON` and the other devices are all the
+  null device, and `//./pipe/` cannot be listed. (m5a.md, step 4)
 - **The agent-batch gate cannot be met as written**: with process
   creation at about 17 ms, unabashed with Git Bash's externals is about
   1.25x Git Bash per command and at most 2.6x with free externals, not

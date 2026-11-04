@@ -13,6 +13,9 @@ struct OsInfo {
     Str   *env;      // "NAME=value", UTF-8 (WTF-8 on Windows)
     iz     nenv;
     Str    cwd;      // absolute, native form
+    Str    exe;      // absolute path of the shell's own image, native
+                     // form ("C:/x/sh.exe"), empty if unknown
+    Str    cmdline;  // Windows: the raw command line, UTF-8 (WTF-8)
     i64    pid;
     i64    ppid;
     i64    uid;
@@ -104,6 +107,12 @@ struct Spawn {
     iz       nfds;
     u64      sigign; // signals the child starts out ignoring (bit n-1
                      // for signal n); others it starts at their default
+    Str      cmdline; // Windows: the whole command line, UTF-8, built by
+                      // the core and passed verbatim; empty: the platform
+                      // builds one from argv
+    i32      crtslot; // Windows: handle slot width (4 or 8) for passing
+                      // descriptors 3 and up in the CRT's lpReserved2
+                      // blob, or 0 to pass only 0-2
 };
 
 struct Spawned {

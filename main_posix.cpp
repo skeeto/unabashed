@@ -799,6 +799,11 @@ int main(int argc, char **argv)
     }
     char *cwd = getcwd((char *)allocbytes(&a, 4096), 4096);
     info.cwd  = cwd ? fromcstr(cwd) : Str("/");
+    char *exe = (char *)allocbytes(&a, 4096);
+    ssize_t exelen = readlink("/proc/self/exe", exe, 4095);
+    if (exelen > 0) {
+        info.exe = {(u8 *)exe, (iz)exelen};  // Linux; elsewhere unknown
+    }
     info.pid  = getpid();
     info.ppid = getppid();
     info.uid  = getuid();

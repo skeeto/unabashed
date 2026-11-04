@@ -221,6 +221,7 @@ W32(b32,    GetFileInformationByHandle(uz, FileInfo *));
 W32(i32,    GetFileType(uz));
 W32(i32,    GetFullPathNameW(c16 *, i32, c16 *, c16 **));
 W32(i32,    GetLastError());
+W32(i32,    GetModuleFileNameW(uz, c16 *, i32));
 W32(uz,     GetModuleHandleW(c16 const *));
 W32(void *, GetProcAddress(uz, char const *));
 W32(uz,     GetStdHandle(i32));
@@ -2974,9 +2975,26 @@ void mainCRTStartup()
     // Startup data lives in its own small arena.
     Arena a = newarena(&os, (iz)1<<26);
 
-    Slice<Str> args = splitcmdline(&a, fromwidez(&a, GetCommandLineW()));
+    info.cmdline = fromwidez(&a, GetCommandLineW());
+    Slice<Str> args = splitcmdline(&a, clone(&a, info.cmdline));
     info.args  = args.data;
     info.nargs = args.len;
+
+    for (i32 cap = 260; cap <= 1<<15; cap *= 2) {
+        c16 *buf = alloc<c16>(&a, cap);
+        i32  len = GetModuleFileNameW(0, buf, cap);
+        if (len>0 && len<cap) {
+            Str s = fromwide(&a, buf, len);
+            if (startswith(s, "\\\\?\\")) s = cuthead(s, 4);
+            for (iz i = 0; i < s.len; i++) {
+                s[i] = s[i]=='\\' ? '/' : s[i];
+            }
+            info.exe = s;
+            break;
+        } else if (!len) {
+            break;
+        }
+    }
 
     // Windows spells it Path, but scripts expect PATH.
     Slice<Str> env = {};

@@ -3,6 +3,7 @@
 // $ afl-clang-fast++ -DFUZZ_PARSE ...    (print/reparse fixed point)
 // $ afl-clang-fast++ -DFUZZ_CHAOS ...    (same output under every schedule)
 // $ afl-clang-fast++ -DFUZZ_ISOLATE ...  (a subshell changes nothing)
+// $ afl-clang-fast++ -DFUZZ_WIN ...      (any mode, on Windows: below)
 // $ afl-fuzz -i fuzzin -o fuzzout ./fuzz
 //
 // Built with a plain compiler, it runs the files named on the command
@@ -36,6 +37,11 @@
 //   before "( eval S )" equals the one printed after it, except for
 //   variables that change on their own (isolatenoise).
 //
+// FUZZ_WIN, with any mode, runs the shell in the vos's Windows mode
+// instead (vos.cpp, Vos.win): drives, case-insensitive names, reserved
+// DOS names, PE fakes splitting their command lines, the shell as
+// w64devkit's sh.exe in C:/work with a Windows environment.
+//
 // This is free and unencumbered software released into the public domain.
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +52,10 @@
 #include "check.cpp"
 #include "fakes.cpp"
 #include "vos.cpp"
+
+#ifndef FUZZ_WIN
+#define FUZZ_WIN 0
+#endif
 
 #ifdef __AFL_FUZZ_TESTCASE_LEN
 #define FUZZ_REPLAY 0
@@ -178,6 +188,12 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.env     = ctx->env;
     info.nenv    = ctx->nenv;
     info.cwd     = ctx->cwd;
+    if (ctx->win) {
+        info.windows = 1;
+        info.exe     = ctx->exe;
+        info.cmdline = ctx->cmdline;
+        info.env     = vwinenv(&ctx->scratch, ctx->env, ctx->nenv);
+    }
     info.pid     = os->vos.procs[os->vos.cur].pid;
     info.sigign  = os->vos.procs[os->vos.cur].sigign;
     info.ppid    = 2;
@@ -204,11 +220,21 @@ static i32 runonce(Os *os, Str script, Str *extra, iz nextra, u64 chaos)
     Arena va = {};
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
-    vreset(&os->vos, va, fuzzfakes, nfuzzfakes);
+    vreset(&os->vos, va, fuzzfakes, nfuzzfakes, FUZZ_WIN);
     os->vos.chaos = chaos;
     os->vos.trace = 1;
+    #if FUZZ_WIN
+    static Str env[] = {
+        "=C:=C:\\work", "ComSpec=C:\\Windows\\System32\\cmd.exe", "LANG=C",
+        "Path=C:\\w64\\bin;C:\\Windows\\System32", "SystemRoot=C:\\Windows",
+        "TEMP=C:\\Users\\oracle\\AppData\\Local\\Temp",
+        "USERPROFILE=C:\\Users\\oracle",
+    };
+    Str args[8] = {"sh", "-c", script, "bash"};
+    #else
     static Str env[] = {"LANG=C", "HOME=/home/oracle", "PATH=/usr/local/bin:/opt/fakes/bin"};
     Str args[8] = {"bash", "-c", script, "bash"};
+    #endif
     iz  nargs   = 4;
     for (iz i = 0; i<nextra && nargs<countof(args); i++) args[nargs++] = extra[i];
     OsInfo info = {};
@@ -217,6 +243,19 @@ static i32 runonce(Os *os, Str script, Str *extra, iz nextra, u64 chaos)
     info.env     = env;
     info.nenv    = countof(env);
     info.cwd     = "/home/oracle";
+    #if FUZZ_WIN
+    // As main_win32.cpp's startup fills it in
+    info.windows = 1;
+    info.exe     = "C:/w64/bin/sh.exe";
+    info.cwd     = "C:/work";
+    info.env     = vwinenv(&os->vos.a, env, countof(env));
+    Buf cmd(&os->vos.a);
+    for (iz i = 0; i < nargs; i++) {
+        if (i) putbyte(&cmd, ' ');
+        if (i) quotearg(&cmd, args[i]); else quoteprogram(&cmd, args[i]);
+    }
+    info.cmdline = finish(&cmd);
+    #endif
     info.pid     = 2;
     info.std[1]  = 1;
     info.std[2]  = 2;
@@ -473,6 +512,9 @@ int main(int argc, char **argv)
     fuzzfakes[nfuzzfakes++] = {"bash", fake_bash};
     for (iz i = 0; i < countof(fakes) && nfuzzfakes < countof(fuzzfakes); i++) {
         fuzzfakes[nfuzzfakes++] = fakes[i];
+    }
+    for (iz i = 0; i < countof(vwinfakes) && nfuzzfakes < countof(fuzzfakes); i++) {
+        fuzzfakes[nfuzzfakes++] = vwinfakes[i];
     }
     static u8 scratchmem[1<<16];
 
