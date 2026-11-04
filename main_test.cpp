@@ -297,16 +297,21 @@ static Result finishrun(Os *os, OsInfo *info)
     return r;
 }
 
-// The command line a native parent gives a program: MSVCRT quoting.
-static Str wincmdline(Arena *a, Str *args, iz nargs)
+// The command line a native parent gives a program: MSVCRT quoting, or
+// with cygwin Cygwin's, which an msys shell splits back to args.
+static Str wincmdline(Arena *a, Str *args, iz nargs, b32 cygwin)
 {
     Buf b(a);
     for (iz i = 0; i < nargs; i++) {
-        if (i) {
-            putbyte(&b, ' ');
-            quotearg(&b, args[i]);
-        } else {
+        if (!i) {
             quoteprogram(&b, args[i]);
+            continue;
+        }
+        putbyte(&b, ' ');
+        if (cygwin) {
+            quotecygwin(&b, args[i]);
+        } else {
+            quotearg(&b, args[i]);
         }
     }
     return finish(&b);
@@ -315,12 +320,13 @@ static Str wincmdline(Arena *a, Str *args, iz nargs)
 // The Windows half of an OsInfo, as main_win32.cpp's startup fills it
 // in (vwinenv renames Path), for a shell at exe with the given
 // environment and working directory.
-static void wininfo(Os *os, OsInfo *info, Str exe, Str *env, iz nenv, Str cwd)
+static void wininfo(Os *os, OsInfo *info, Str exe, Str *env, iz nenv, Str cwd,
+                    b32 cygwin = 0)
 {
     Arena *a = &os->vos.a;
     info->windows = 1;
     info->exe     = exe;
-    info->cmdline = wincmdline(a, info->args, info->nargs);
+    info->cmdline = wincmdline(a, info->args, info->nargs, cygwin);
     info->env     = vwinenv(a, env, nenv);
     info->nenv    = nenv;
     info->cwd     = cwd;
@@ -363,7 +369,9 @@ static Result runshell(Test *t, Str *args, iz nargs, Str input = {}, i32 pers = 
             e = msysenv;
         }
         Str exe = pers==PERS_MSYS ? Str("C:/msys/usr/bin/bash.exe") : Str("C:/w64/bin/sh.exe");
-        wininfo(os, &info, exe, e, countof(env), "C:/work");
+        // a parent that quotes for Cygwin, so that a script given with
+        // -c arrives as written in the msys shell's own split
+        wininfo(os, &info, exe, e, countof(env), "C:/work", pers==PERS_MSYS);
     }
     return finishrun(os, &info);
 }

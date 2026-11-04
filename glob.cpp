@@ -127,6 +127,68 @@ static i32 testdir(Glob *g, Str path, i32 type, b32 nofollow)
     return st.type==FT_DIR ? 0 : st.type==FT_LINK ? -2 : -1;
 }
 
+static Dirent *addentry(Arena *a, Dirent *list, Str name, i32 type)
+{
+    for (Dirent *e = list; e; e = e->next) {
+        if (equalfold(e->name, name)) return list;
+    }
+    Dirent *e = alloc<Dirent>(a);
+    e->next = list;
+    e->name = name;
+    e->type = type;
+    return e;
+}
+
+// os_list for a directory as the shell names it. In msys mode, as
+// Cygwin's readdir, a directory also lists the mount points in it, the
+// root also dev and proc, and /dev holds the devices the shell emulates
+// (/proc lists nothing: see notes/issues.md).
+static Dirent *pathlist(Shell *sh, Arena *a, Str dir, i32 *err)
+{
+    if (sh->pathmode != PM_MSYS) {
+        return os_list(sh->os, a, absolute(sh, a, dir), err);
+    }
+    Arena   t = *a;
+    PathRes r = resolve(sh, &t, dir);
+    Dirent *list = 0;
+    *err = E_NOENT;
+    if (r.ok && r.kind==PK_FILE) {
+        list = os_list(sh->os, a, r.native, err);
+    } else if (r.ok && r.kind==PK_DEV && !r.sub.len) {
+        static Str devs[] = {
+            "clipboard", "console", "fd", "full", "null", "random",
+            "stderr", "stdin", "stdout", "tty", "urandom", "zero",
+        };
+        *err = 0;
+        for (iz i = 0; i < countof(devs); i++) {
+            list = addentry(a, list, devs[i], devs[i]=="fd" ? FT_DIR : FT_CHAR);
+        }
+        return list;
+    } else if (r.ok && (r.kind==PK_PROC || r.kind==PK_CYGDRIVE)) {
+        *err = 0;
+        return 0;
+    }
+    if (*err) return 0;
+
+    Str p = dir.len && dir[0]=='/' ? dir : joinposix(&t, sh->wd, dir);
+    p = posixnorm(&t, slashify(&t, p, '/'));
+    if (p.len>1 && p[p.len-1]=='/') p.len--;
+    PathCtx *c = sh->paths;
+    for (iz i = 0; i < c->mounts.len; i++) {
+        Str m = c->mounts[i].posix;
+        if (m.len<2 || m.len<=p.len) continue;
+        Str name = lastpart(m);
+        Str up   = takehead(m, m.len-name.len);
+        if (up.len > 1) up.len--;
+        if (up == p) list = addentry(a, list, clone(a, name), FT_DIR);
+    }
+    if (p == "/") {
+        list = addentry(a, list, "dev", FT_DIR);
+        list = addentry(a, list, "proc", FT_DIR);
+    }
+    return list;
+}
+
 static GlobDir *listdir(Glob *g, Str dir)
 {
     Str key = dir;
@@ -140,7 +202,7 @@ static GlobDir *listdir(Glob *g, Str dir)
     d->key  = key;
     d->err  = E_NOENT;
     if (dir.len) {
-        d->list = os_list(g->sh->os, g->a, absolute(g->sh, g->a, dir), &d->err);
+        d->list = pathlist(g->sh, g->a, dir, &d->err);
     }
     *m = d;
     return d;
