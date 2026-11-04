@@ -22,8 +22,6 @@ gets checked. Rules:
   instead of "130 130 130"). Bash's terminal signals every process at
   once. A level with a pending SIGINT should die of it before a write
   error. (m3b.md)
-- **Spec 213-trailing-backslash** has failed since M2 (the "line -1"
-  quirk). Fix it or record why it is accepted.
 - **Fuzz the M4 changes**: the run, chaos and isolate campaigns have not
   seen namerefs, regex.cpp, glob.cpp, float.cpp or mapfile. Rerun them
   (tools/fuzz) and triage.
@@ -182,3 +180,7 @@ gets checked. Rules:
   Ctrl-Break is SIGQUIT; death by SIGINT exits with 0xC000013A.
 - Trap actions that signal themselves stop at ten nested levels
   (status 139); bash recurses until it crashes.
+- After eval text that ends at its end of input (resumeaftereof),
+  `jobs -x` drops the carried end-of-input token, since it parses its
+  command where bash runs it directly. Interactive shells were not
+  compared with bash for this quirk.

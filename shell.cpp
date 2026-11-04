@@ -451,6 +451,8 @@ struct Shell {
     i32      simplestages; // of which simple commands as pipeline stages,
                            // which BASH_SUBSHELL leaves out, as bash
     i32      evaldepth;
+    b32      lexeof;       // the last parse read its input's end (bash's
+                           // shared current_token): see resumeaftereof
     i32      sourcedepth;
     i32      funcdepth;
     b32      exiting;
@@ -640,12 +642,13 @@ static Str errname(Shell *sh)
 }
 
 // The message prefix: "NAME: line N: " for scripts and -c, as bash
-// prints it, or just "NAME: " when interactive.
+// prints it, or just "NAME: " when interactive or the line is not
+// positive.
 static void msgprefix(Shell *sh, Buf *b)
 {
     print(b, errname(sh));
     print(b, ": ");
-    if (!sh->interactive) {
+    if (!sh->interactive && sh->line>0) {
         print(b, "line ");
         print(b, (i64)sh->line);
         print(b, ": ");

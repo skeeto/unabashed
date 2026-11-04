@@ -349,6 +349,7 @@ struct Lexer {
     b32      aliasopt;   // expand_aliases as set by shopt
     b32      extglobopt; // extglob as set by shopt
     b32      comsuberr;  // syntax error inside a command substitution
+    b32      staleline;  // a leading word gets line -1 (resumeaftereof)
 
     Redir   *heredocs[HEREDOCMAX];
     i32      nheredoc;
@@ -2909,7 +2910,8 @@ static Node *parsecommand(Parser *p)
 
     if (t == T_WORD) {
         Word *w    = L->val.word;
-        i32   line = L->lineno;  // a command's line is its first word's
+        i32   line = L->staleline ? -1 : L->lineno;  // its first word's
+        L->staleline = 0;
         advance(p);
         if (peek(p) == '(') {
             advance(p);
@@ -3409,6 +3411,7 @@ struct LexState {
     Token  toreadval, val;
     b32    expandaliases, extglob;
     i32    nheredoc;
+    b32    staleline;
     Redir *heredocs[HEREDOCMAX];
 };
 
@@ -3430,6 +3433,7 @@ static LexState savelex(Lexer *L)
     s.expandaliases = L->expandaliases;
     s.extglob   = L->extglob;
     s.nheredoc  = L->nheredoc;
+    s.staleline = L->staleline;
     for (i32 i = 0; i < L->nheredoc; i++) {
         s.heredocs[i] = L->heredocs[i];
     }
@@ -3453,6 +3457,7 @@ static void restorelex(Lexer *L, LexState *s)
     L->expandaliases = s->expandaliases;
     L->extglob   = s->extglob;
     L->nheredoc  = s->nheredoc;
+    L->staleline = s->staleline;
     for (i32 i = 0; i < s->nheredoc; i++) {
         L->heredocs[i] = s->heredocs[i];
     }
@@ -3494,6 +3499,7 @@ static Matched parsecomsub(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
     }
     L->eoftoken = close;
     L->nheredoc = 0;
+    L->staleline = 0;
     L->esacs = L->expectin = L->expectcmd = 0;
     if (L->expandaliases) {
         L->expandaliases = L->posix;
@@ -3593,6 +3599,19 @@ static Lexer *newlexer(Arena *a, Str src)
     return L;
 }
 
+// Continue after another input's parse read its end of input to finish
+// a command, as for eval text ending in a backslash. Bash's parsers
+// share their token history, so the next command read here starts
+// after that end of input rather than a newline: its first word is in
+// no command position (no reserved word, alias or splitting-free
+// assignment), and a simple command it begins gets the stale line
+// number bash leaves behind, -1.
+static void resumeaftereof(Lexer *L)
+{
+    L->current   = T_EOF;
+    L->staleline = 1;
+}
+
 // Parse the next complete command (one input unit). Nodes and messages
 // are allocated in L->a.
 static Parsed parseunit(Lexer *L)
@@ -3616,6 +3635,7 @@ static Parsed parseunit(Lexer *L)
         L->toread   = 0;
         L->ungot    = 0;
         L->current  = L->last = '\n';
+        L->staleline = 0;
         L->idx      = L->line.len;
         return r;
     }
@@ -3626,6 +3646,7 @@ static Parsed parseunit(Lexer *L)
     Parser p = {};
     p.L = L;
     i32 t = peek(&p);
+    L->staleline = L->staleline && t==T_WORD;
     if (t == T_EOF) {
         r.status = PARSE_EOF;
         return r;

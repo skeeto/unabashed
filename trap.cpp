@@ -268,6 +268,7 @@ static i32 runtrap(Shell *sh, i32 idx)
     i32   status   = sh->status;
     i32   saved    = sh->trapstatus;
     i32   line     = sh->line;
+    b32   lexeof   = sh->lexeof;  // bash saves its parser state
     Node *current  = sh->current;
     Node *cmdnode  = sh->cmdnode;
     // BASH_COMMAND once its node was freed: the store copy may be
@@ -297,6 +298,7 @@ static i32 runtrap(Shell *sh, i32 idx)
     sh->trapstatus = saved;
     sh->trapfuncs  = funcs;
     sh->line    = line;
+    sh->lexeof  = lexeof;
     sh->current = current;
     sh->cmdnode = cmdnode;
     if (!cmdnode && cmdtext_.data) {

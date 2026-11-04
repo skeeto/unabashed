@@ -533,6 +533,7 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
         escape(sh, e.why);
     }
     status = runsource(sh, src, file, scratch);
+    sh->lexeof    = 0;  // bash pretends the file ended in a newline
     sh->srcframes = sf.up;
     sh->srcname = srcname;
     if (sh->traps) {

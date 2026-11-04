@@ -1859,9 +1859,11 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
     return val;
 }
 
+// A leading word of this form assigns, even one read outside command
+// position (see resumeaftereof), which the parser leaves splittable.
 static b32 isassignword(Word *w)
 {
-    return (w->flags & (W_ASSIGNMENT|W_NOSPLIT)) == (W_ASSIGNMENT|W_NOSPLIT);
+    return w->flags & W_ASSIGNMENT;
 }
 
 struct Assign {
@@ -3402,12 +3404,19 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
     }
     Lexer *outer = sh->lexer;
     Str    oname = sh->iname;
-    sh->lexer = L;
-    sh->iname = iname;
+    sh->lexer  = L;
+    sh->iname  = iname;
+    sh->lexeof = 0;
     for (;;) {
         Arena unit = *L->a;  // reset after each complete line
         iz     pos  = L->srcpos;
+        if (sh->lexeof) {
+            resumeaftereof(L);  // a nested parse ended this way
+        }
         Parsed r = parseunit(L);
+        if (r.status != PARSE_EOF) {
+            sh->lexeof = L->current == T_EOF;
+        }
         if (sh->opt[O_VERBOSE] && L->srcpos>pos) {
             // set -v: echo the input lines as they are read, each
             // with a newline as the lexer sees it
