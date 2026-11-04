@@ -38,6 +38,10 @@ done
 [ $# -ge 1 ] || { echo "usage: t/win32/run [-s SHELL] [-x] [-u] WORKDIR [TEST.sh...]" >&2; exit 2; }
 work=$1
 shift
+case $work in
+/[a-zA-Z]|/[a-zA-Z]/*)  # w64devkit's sh would create C:/c/x for /c/x
+    echo "t/win32/run: write WORKDIR as C:/..., not $work" >&2; exit 2 ;;
+esac
 [ $# -gt 0 ] || set -- "$here"/[0-9]*.sh
 mkdir -p "$work/bin" || exit 2
 work=$(cd "$work" && pwd)
