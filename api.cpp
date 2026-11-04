@@ -115,7 +115,10 @@ struct Spawned {
 // Signal numbers are Linux's on every platform. A process killed by a
 // signal has status 128+N with WSIGNALED set (os_waitproc, and sh_main
 // when the shell itself dies by one); the core masks it off for $?.
-enum : i32 { NSIGNAL = 65, WSIGNALED = 0x100 };
+// WMISSED (os_waitproc): a group signal (os_siggroup) came while the
+// program ran that it could not receive (Windows: it was still
+// starting), so the waiting level takes it as its own.
+enum : i32 { NSIGNAL = 65, WSIGNALED = 0x100, WMISSED = 0x200 };
 
 enum : i32 {  // os_sigmode
     SIGM_DEFAULT, SIGM_IGNORE, SIGM_CATCH,

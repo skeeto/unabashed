@@ -168,6 +168,37 @@ which decides once all stages are joined), and pipelines (any stage
 that died of it, or a failed program stage). Signals taken before the
 wait starts are the level's own.
 
+**Programs that miss a Ctrl-C** (`notemissed`, `WMISSED`): a console
+control event reaches only the processes attached to the console when
+it is sent, and a process attaches while it starts (since Windows 8 in
+its own initialization, after `CreateProcess` returns). A program
+started just before a Ctrl-C then runs on as if nothing happened,
+where bash's forked child has the signal from the moment of the fork.
+Found through t/win32/008 failing about half the time (traces of
+spawns, control handlers and exits per process, Windows 11): in
+`g | "$U" -c "cat >/dev/null"`, conrun's Ctrl-C followed the creation
+of `ready2` by g, which starts as soon as the child shell is spawned.
+Either the child shell had not attached yet (it never ran its
+handler), or it had but the cat alias stub it had just started had
+not yet started busybox (w64devkit's alias ignores Ctrl-C and waits
+for busybox). Then g died of Ctrl-C, cat read end of file and exited
+0, and the cooperative rule dropped the signal at both levels. (Not
+the end of file racing cat's handler: busybox cat that has the event
+dies of it within 3 ms.) No observation at the event tells a program
+that missed it from one that handled it (the console's process list is
+read only after the event went out, and the alias stub is attached and
+ignoring; a first fix that marked programs off that list, or with a
+young process off it in their tree, still failed 3 runs in 20), so the
+platform keeps the last 32 programs started with
+Ctrl-C enabled and their start times; the control handler marks those
+under 100 ms old before it posts the signal (so no stage the shell
+ends over it closes a pipe first), and `os_waitproc` reports a marked
+one with `WMISSED`. The core then takes the signals noted during that
+wait as the level's own: in `runprogram`, and in `runpipeline` for a
+stage started directly. The cost is a lock and a clock read per spawn.
+t/win32/008: 36 of 60 runs failed before (`-x`, 30 times), 0 of 60
+after.
+
 **Ctrl-C before SIGPIPE** (`sigpipe`, shell.cpp): a stage acts on
 Ctrl-C only at a safe point, so its reader could die of it first and
 leave it to die of the broken pipe on its next write (005 under load:
@@ -232,7 +263,7 @@ reads, abandonment, interposition) run on Windows 11 too.
 | 003-waits | 70 and 66 concurrent background programs, `wait`, `wait -n`, `wait PID` |
 | 004-ctrlc-loop | Ctrl-C ends a busy script with SIGINT (status 130) |
 | 005-ctrlc-pipeline | Ctrl-C reaches every stage; a trap runs once, the script goes on |
-| 006-ctrlc-child | the cooperative rule: child handled it (0), died of it, failed (Windows rule) |
+| 006-ctrlc-child | the cooperative rule: child handled it (0), died of it, failed (Windows rule); the first Ctrl-C waits until the child is past 100 ms |
 | 007-ctrlc-wait | a typed line, then Ctrl-C ends `wait`; the background program ignores it |
 | 008-interactive | `-i`: prompts, Ctrl-C back to the prompt with 130, a trap in an interactive shell |
 | 009-console | UTF-8 console input, read -t on a console losing nothing, Ctrl-Z as end of file |
@@ -279,6 +310,11 @@ ping sees a typed Ctrl-C at all (an M6 item in notes/issues.md).
   not die of SIGINT). The plan asked for this, since native programs
   report Ctrl-C deaths inconsistently (busybox's applet stubs exit 0 or
   130, MSVCRT programs `0xC000013A`).
+- **A program under 100 ms old missed a Ctrl-C**: one that handles it
+  that early and exits 0 still ends the level (cmd.exe always acts on
+  Ctrl-C after a program; bash would go on). A program, or the real
+  program behind a wrapper, that takes longer than 100 ms to attach to
+  the console can still miss one unnoticed.
 - **Ctrl-Break is SIGQUIT** (the terminal's `^\`): it kills a script and
   does nothing at an interactive prompt.
 - **Exit code `0xC000013A`** for a shell killed by SIGINT, rather than

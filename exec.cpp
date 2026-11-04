@@ -1439,8 +1439,13 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     i32 status = r.err ? -r.err : taskwaitproc(s, r.proc);
     sh->childsig = 0;
     if (!r.err) {
-        b32 died = status>=0 && (status & WSIGNALED);
-        waitdone(sh, died ? sigbit((status & 255) - 128) : 0, status!=0);
+        // A signal the program missed is the level's own, as its
+        // forked bash child would have had it
+        b32 missed = status & WMISSED;
+        status &= ~WMISSED;
+        b32 died = status & WSIGNALED;
+        u64 sigs = missed ? ~(u64)0 : died ? sigbit((status & 255) - 128) : 0;
+        waitdone(sh, sigs, status!=0);
     }
     if (s->cur->intr) {
         sigtaken(sh);  // killed while waiting: the program runs on

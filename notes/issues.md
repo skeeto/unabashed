@@ -16,17 +16,12 @@ gets checked. Rules:
 
 ## Next (before M5a starts)
 
-- **t/win32/008 fails intermittently** ("after 0" instead of "after
-  130"; often even with no extra load, worse while WSL fuzzes; seen
-  before and after the SIGPIPE fix):
-  in `g | "$U" -c "cat >/dev/null"` after Ctrl-C the child shell exits
-  0. Likely the shell stage g dies of Ctrl-C at once, cat sees end of
-  file and exits 0 (or busybox's stub exits 0 on Ctrl-C), and the
-  child's cooperative rule drops its Ctrl-C. Not yet diagnosed.
-  Related, unobserved: a single-task shell writing to a native program
-  that dies of Ctrl-C can still see the broken pipe before its control
-  handler thread runs, and die of SIGPIPE (only PIPESTATUS differs; the
-  parent still acts on the failed program stage). (m3b.md)
+- **Win32 Ctrl-C before SIGPIPE, single-task shell** (unobserved): a
+  shell process writing to a native program that dies of Ctrl-C can
+  see the broken pipe before its own control handler thread runs, and
+  die of SIGPIPE (only PIPESTATUS differs; the parent still acts on the
+  failed program stage). Waiting for a late Ctrl-C before dying of
+  SIGPIPE would delay every `yes`-style loop into `head`. (m3b.md)
 - **Fuzz the M4 changes**: the run, chaos and isolate campaigns have not
   seen namerefs, regex.cpp, glob.cpp, float.cpp or mapfile. Rerun them
   (tools/fuzz) and triage.
@@ -195,7 +190,10 @@ gets checked. Rules:
 - No Big5 or other non-UTF-8 multibyte locale (glob-test's zh_TW
   part).
 - Windows: ctime is reported as mtime and blocks estimated from size;
-  a program that exits nonzero after Ctrl-C counts as killed by it;
+  a program that exits nonzero after Ctrl-C counts as killed by it,
+  and one under 100 ms old when it comes is taken to have missed it
+  (so one that handles it that early and exits 0 still ends the
+  level, as under cmd.exe);
   Ctrl-Break is SIGQUIT; death by SIGINT exits with 0xC000013A.
 - Trap actions that signal themselves stop at ten nested levels
   (status 139); bash recurses until it crashes.

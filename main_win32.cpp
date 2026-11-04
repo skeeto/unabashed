@@ -368,6 +368,12 @@ struct Hent {  // handle registration
     Wobj *obj;
 };
 
+struct Recent {  // a program started lately (see notemissed)
+    uz  proc;
+    i64 time;    // started, in Filetime units
+    b32 missed;  // a Ctrl-C came while it was young
+};
+
 struct Pwait {  // an IO_PROC waited for by the thread pool
     Wnode  node;
     Pwait *next;   // free list
@@ -420,6 +426,10 @@ struct Os {
     uz         mainthread;
     i32        mainio;     // atomic: odd while the main thread blocks in
                            // a read Ctrl-C may cancel
+    i32        recentlock; // atomic: guards recent
+    i32        nmissed;    // atomic: entries of recent with missed set
+    i32        nrecent;    // where the next entry goes
+    Recent     recent[32];
 };
 
 enum : i32 { MAXHELPERS = 64 };
@@ -1090,15 +1100,20 @@ static void helperdone(Os *os, Helper *hp)
 
 static void releaselends(Os *os, uz proc);
 static i32  exitstatus(u32 code);
+static b32  takemissed(Os *os, uz proc);
 
 // A process's exit status, releasing its handle.
 static i32 procexit(Os *os, uz proc)
 {
     i32 code = 127;
     if (!GetExitCodeProcess(proc, &code)) code = 127;
+    i32 missed = 0;
+    if (__atomic_load_n(&os->nmissed, __ATOMIC_ACQUIRE)) {
+        missed = takemissed(os, proc) ? WMISSED : 0;
+    }
     CloseHandle(proc);
     releaselends(os, proc);
-    return exitstatus((u32)code);
+    return exitstatus((u32)code) | missed;
 }
 
 static void __stdcall procfired(void *arg, u8)
@@ -1339,6 +1354,87 @@ static void releaselends(Os *os, uz proc)
 // thread blocked in a pipe read is woken with CancelSynchronousIo.
 static Os *ctrlos;
 
+static void lockrecent(Os *os)
+{
+    while (__atomic_exchange_n(&os->recentlock, 1, __ATOMIC_ACQUIRE)) {
+        Sleep(0);
+    }
+}
+
+static void unlockrecent(Os *os)
+{
+    __atomic_store_n(&os->recentlock, 0, __ATOMIC_RELEASE);
+}
+
+static void droprecent(Os *os, Recent *r)
+{
+    if (r->missed) __atomic_fetch_sub(&os->nmissed, 1, __ATOMIC_RELEASE);
+    *r = {};
+}
+
+// Note a program just started (or only forget an earlier process with
+// the same handle value, when it ignores Ctrl-C).
+static void addrecent(Os *os, uz proc, b32 add)
+{
+    Filetime ft;
+    os->now(&ft);
+    lockrecent(os);
+    for (i32 i = 0; i < countof(os->recent); i++) {
+        if (os->recent[i].proc == proc) droprecent(os, os->recent+i);
+    }
+    if (add) {
+        Recent *r = os->recent + os->nrecent;
+        os->nrecent = (os->nrecent + 1) % countof(os->recent);
+        droprecent(os, r);
+        r->proc = proc;
+        r->time = (i64)((u64)ft.hi<<32 | ft.lo);
+    }
+    unlockrecent(os);
+}
+
+// Forget a process. True if a Ctrl-C came while it was young.
+static b32 takemissed(Os *os, uz proc)
+{
+    b32 r = 0;
+    lockrecent(os);
+    for (i32 i = 0; i < countof(os->recent); i++) {
+        if (os->recent[i].proc == proc) {
+            r |= os->recent[i].missed;
+            droprecent(os, os->recent+i);
+        }
+    }
+    unlockrecent(os);
+    return r;
+}
+
+// A Ctrl-C reaches only the processes attached to the console when it
+// is sent, and a process attaches while it starts (since Windows 8 in
+// its own initialization, after CreateProcess returns), so a program
+// started just before misses it, where bash's forked child would have
+// it. A wrapper that ignores Ctrl-C and waits for the real program
+// (w64devkit's command aliases for busybox) passes on the miss. So a
+// program not yet 100 ms old when a Ctrl-C comes is taken to have
+// missed it: os_waitproc reports it (WMISSED), and the level waiting
+// for it takes the signal as its own. One that handled it and exits
+// 0 then ends the level anyway. Runs on the control handler's thread
+// before the signal is posted, so that nothing the shell does about it
+// (a stage ending, a pipe closing) reaches the program first.
+static void notemissed(Os *os)
+{
+    Filetime ft;
+    os->now(&ft);
+    i64 young = (i64)((u64)ft.hi<<32 | ft.lo) - 100*10000;
+    lockrecent(os);
+    for (i32 i = 0; i < countof(os->recent); i++) {
+        Recent *r = os->recent + i;
+        if (r->proc && !r->missed && r->time>young) {
+            r->missed = 1;
+            __atomic_fetch_add(&os->nmissed, 1, __ATOMIC_RELEASE);
+        }
+    }
+    unlockrecent(os);
+}
+
 static b32 __stdcall onctrl(u32 type)
 {
     Os *os = ctrlos;
@@ -1349,6 +1445,7 @@ static b32 __stdcall onctrl(u32 type)
     case 2:  sig = 1; break;  // CTRL_CLOSE_EVENT
     default: return 0;
     }
+    if (sig != 1) notemissed(os);
     __atomic_fetch_or(&os->siggrp, (u64)1<<(sig-1), __ATOMIC_SEQ_CST);
     SetEvent(os->wake);
     i32 t = __atomic_load_n(&os->mainio, __ATOMIC_SEQ_CST);
@@ -1969,6 +2066,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
         code = ok ? 0 : GetLastError();
     }
     if (noint) SetConsoleCtrlHandler(0, 0);
+    if (ok) addrecent(os, pi.process, !noint);
     for (i32 i = 0; i < 3; i++) {
         if (std[i]) CloseHandle(std[i]);
         if (!objs[i]) continue;

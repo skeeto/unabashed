@@ -836,6 +836,8 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             st = taskjoin(s, tasks[k]);
         } else if (procs[k] != BADHANDLE) {
             st = taskwaitproc(s, procs[k]);
+            if (st & WMISSED) died = ~(u64)0;  // see runprogram
+            st &= ~WMISSED;
             extbad |= st != 0;
         }
         statuses[k] = st;
