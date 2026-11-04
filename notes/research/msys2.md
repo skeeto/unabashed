@@ -47,7 +47,7 @@ D:                                    /d   ...   (one entry per existing drive)
   - null, full, random, ptmx, clipboard, dsp, mixer, sdX/scdX block devices, shm, mqueue.
   - fd → /proc/self/fd; stdin, stdout and stderr → /proc/self/fd/{0,1,2}.
   - /dev/tty.
-- /proc: per-PID dirs, self, cpuinfo, meminfo, mounts, version, uptime, loadavg, registry, registry32, registry64, cygdrive, sys, and others. Claude Code's snapshot reads `/proc/${CLAUDE_PID}/comm`.
+- /proc: per-PID dirs, self, cpuinfo, meminfo, mounts, version, uptime, loadavg, registry, registry32, registry64, cygdrive, sys, and others. Claude Code's snapshot reads `/proc/${CLAUDE_PID}/comm`. (msys2-runtime 3.6.9 has no `comm` there, so that read fails; recorded in t/msys/056.)
 - Bash also emulates /dev/fd/N, /dev/stdin/out/err and /dev/tcp|udp/host/port itself in redirections: redir.c:580-590 and lib/sh/eaccess.c:64.
 - Bash warns at startup if /tmp is missing: shell.c:352-366 and 412.
 
@@ -173,6 +173,7 @@ Git for Windows startup:
 Executable bit under noacl (all of these mounts are noacl):
 - Executable if the name ends in .exe, .com or .lnk, or the content starts with `#!`, `MZ` or `:\n`.
 - Observed: `-x` is true for git-bash.exe and usr/bin/egrep (`#!/bin/sh`), and false for .bat, .cmd, .py without a shebang, and etc/profile.
+- Recorded in t/msys/042-043: an empty `.com` is not -x (only `.exe` among the suffixes tried), a `.bat` starting with `#!` is, and a file that is not -x still runs as a script when named or found on PATH.
 - chmod +x does not stick. Only the w bit maps to the DOS readonly attribute.
 - Emulating this faithfully means reading the first bytes of the file when deciding `-x` or doing PATH search.
 

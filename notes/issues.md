@@ -27,6 +27,7 @@ gets checked. Rules:
 - **Time zones**: TZ unset or unexported means UTC, on Windows too; use
   the system zone. Zone names glibc reads from zoneinfo files are read
   as POSIX strings (DST before 2007 can differ). (m4.md)
+<<<<<<< HEAD
 - **lpReserved2 slot width unverified** (step 8): `encodecrtfds` and
   `decodecrtfds` are only checked against the documented layout. Check
   with real msvcrt and UCRT children, x64 to i686 and back, that the
@@ -42,6 +43,29 @@ gets checked. Rules:
   PointerToRawData to 512 bytes and DLL names over 63 bytes; reads at
   most 1024 section headers. None matters for the binaries tried.
   (m5a.md, step 2)
+- **t/msys baseline is red**: unabashed.exe passes 1 of 60 (057); steps
+  4-9 turn it green (m5a.md, "Step 3"). Exit criterion 1.
+- **The agent-batch gate cannot be met as written**: with process
+  creation at about 17 ms, unabashed with Git Bash's externals is about
+  1.25x Git Bash per command and at most 2.6x with free externals, not
+  5x (m5a.md, "Step 3"). The user picks the new gate (shell-only time,
+  one-shell batch, or vos instruction counts). The floor was measured
+  from a busybox driver; Claude Code spawns from node, which step 10's
+  CRT-free driver should stand in for.
+- **t/msys and bench/agent are not write-confined**: MSYS2 programs
+  cannot start at Low integrity, so they run under `sandbox -L` (job,
+  limits, timeout, restricted token, medium integrity). Only the corpus
+  rules (tools/README.md) keep writes in WORKDIR. Untried: an
+  AppContainer, or the sandbox pre-creating the msys
+  `\BaseNamedObjects\msys-2.0S5-<key>` directory with a Low label.
+- **Accepted: `2>nul`**: Git Bash creates a file named `nul`; a native
+  shell opens the device. Not in the t/msys corpus.
+- **Accepted: BatBadBut quoting**: arguments to .bat/.cmd targets are
+  quoted for cmd.exe's safety, unlike Cygwin's. Not in the corpus.
+- **Accepted: BASH_VERSION and friends** differ from Git Bash's
+  (`5.3.15(1)-release`); the corpus prints only BASH_VERSINFO[5].
+- **Accepted: `type cygpath`** says builtin in msys mode (m5a.md,
+  Decisions). Not in the corpus, nor is cygpath's usage text (GPL).
 
 
 ## M5b (real background processes)

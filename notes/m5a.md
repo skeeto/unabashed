@@ -157,13 +157,130 @@ Taken (recommendations, revisit if the user disagrees):
 - The exec job sets kill-on-close on the program's M3b job (Win8+).
 - Every open fd ≥3 goes to CRT targets.
 
+- Git Bash cannot start at Low integrity (step 3), so t/msys and
+  bench/agent run under `sandbox -L`: restricted token, job, process
+  cap and timeout, but the caller's integrity level. Curated scripts
+  only, which write only inside their own directory (tools/README.md,
+  corpus rules).
+
 For the user, when they come up:
 - Trial projects beyond local binutils-gdb libiberty and zlib (xz and
   GNU make tarballs need a download).
-- If external programs cap the agent-batch ratio below 5x Git Bash,
-  how to redefine that gate (step 3's baseline will tell).
-- If Git Bash will not run under the Low-integrity sandbox: a `-L` mode
-  (no integrity lowering, job and timeout kept) for recording only.
+- The agent-batch gate: external programs and the agent's own spawn of
+  the shell cap the ratio near 1.3x, at most 2.6x (step 3 results), so
+  "≥5x Git Bash" needs redefining.
+
+
+## Step 3: Git Bash harness, corpus and baseline
+
+Tools (tools/README.md has the details and the normalization rules
+that step 4 reimplements):
+- tools/argv.cpp, `make argv.exe argv32.exe`: CRT startup on purpose;
+  prints `cmdline = <...>`, `argv[i] = <...>`, `NAME=value` or `NAME
+  unset` for $ARGV_SHOW, and with ARGV_FD=N `fd N open|closed`.
+- tools/sandbox: `-E NAME=VALUE` (an exact environment) and `-L`.
+- tools/gbrecord WORKDIR SCRIPT...: records t/msys/NAME.spec from Git
+  Bash, each script twice, failing on any difference.
+- t/msys/run [-s SHELL] [-x] WORKDIR [TEST...]; t/msys/lib.sh holds
+  what both share. The shell under test is copied to
+  WORKDIR/inst/usr/bin/bash.exe, whose fstab mounts Git's usr/bin on
+  /usr/bin and /bin and Git's etc on /etc.
+- bench/agent: the draft agent batch (below).
+
+Sandbox findings for Git Bash:
+- At Low integrity every MSYS2 program dies at startup:
+  `NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-<key>):
+  0xC0000022` (the session namespace denies Low the create), and
+  CreateProcess reports 0xC0000142. A write-restricted token whose only
+  write SID is the logon SID, granted on DIR, fails the same way (and
+  also fails to set its token's default DACL). Hence `-L`.
+- An executable with a Low label runs at Low integrity wherever it is
+  started from, so a `sandbox.exe` inside a sandboxed DIR silently
+  breaks every later -L run: tools stay outside DIR.
+- msys-2.0.dll's installation key comes from the DLL's path, and the
+  mount table and process list live in per-installation shared memory.
+  An uncopied Git Bash shares them with any Git Bash the user runs (in
+  bench/agent `/tmp` resolved to the user's real TEMP, set by an
+  earlier process). The copied DLL in WORKDIR/inst isolates the corpus
+  from that, and its children (Git's own msys-2.0.dll) still inherit
+  the shell's mount table: Git's cygpath answers @ROOT@ for `/`.
+
+What the recordings settled (Git Bash 5.3.15, msys2-runtime 3.6.9):
+- `echo /*` in msys mode lists the root directory's own entries merged
+  with the mount points and the virtual trees: in the scratch install
+  `/bin /dev /etc /proc /tmp /usr` (inst holds only etc and usr; bin
+  and tmp are mounts; dev and proc virtual). /.* matches nothing.
+- `/proc/PID/comm` does not exist in this runtime (self, exename,
+  winexename and cygdrive do), so the Claude Code snapshot's read of it
+  fails quietly in Git Bash too.
+- noacl -x: `.exe` and the `#!`, `MZ`, `:\n` contents count; `.com`,
+  `.bat`, `.cmd` and an empty file do not (a `.bat` starting with `#!`
+  does). A file that is not -x still runs as a script when named
+  (`./plain`, and from PATH): only `[ -x ]` follows the rule.
+- A native parent that exports PWD (busybox does, as `C:/x`) makes
+  Git Bash keep that spelling for `pwd`; Claude Code exports none.
+- Writing to /dev/stdout reopens the output file and truncates it, so
+  the corpus does not.
+
+Corpus (60 scripts, t/msys/NNN-*.sh; `# vos` on 41):
+
+| Topic | Scripts |
+|---|---|
+| cd, pwd, PWD, `pwd -W` | 001 cd-drive, 002 cd-winpath, 003 pwd-W, 004 pwd-logical, 005 cd-case, 006 cd-mounts, 007 root-glob, 008 cd-errors, 009 cd-dotdot, 010 cdpath |
+| cygpath | 011 -u, 012 -w/-m, 013 -p, 014 -a, 015 root |
+| `~`, HOME, TEMP | 016 home-tilde, 017 home-set, 018 tmp-temp, 019 home-prompt |
+| argument conversion | 020 paths, 021 unchanged, 022 options, 023 lists, 024 MSYS2_ARG_CONV_EXCL, 025 MSYS_NO_PATHCONV, 026 argv0, 027 quoting, 028 relative |
+| environment conversion | 029 PATH, 030 vars, 031 MSYS2_ENV_CONV_EXCL, 032 MSYS_NO_PATHCONV, 033 TZ, 034 import |
+| quoting to msys children | 035 printf, 036 glob/@file, 037 env |
+| type, command -v, hash | 038 exe, 039 native, 040 exe-suffix, 041 hash-p |
+| noacl -x | 042 noacl-x, 043 noacl-run |
+| shebangs | 044 sh, 045 env, 046 parse, 047 native |
+| CRLF | 048 source, 049 comsub, 050 script (CRLF file), 051 native |
+| option lists | 052 set-o, 053 shopt |
+| identity | 054 ostype |
+| /dev, /proc | 055 dev-null, 056 proc-self, 057 dev-fd |
+| Claude Code wrapper | 058 wrapper, 059 fail, 060 snapshot |
+
+Self-check: `t/msys/run -s "$GITBASH"` passes 60 of 60, twice, in
+two different WORKDIRs.
+
+Baseline, unabashed.exe at 133dcee (`make unabashed.exe`): 1 passed,
+59 failed. By topic: cd/pwd 0/10, cygpath 0/5, HOME/TEMP 0/4, argument
+conversion 0/9, environment conversion 0/6, msys quoting 0/3, type
+0/4, noacl 0/2, shebangs 0/4, CRLF 0/4, options 0/2, identity 0/1,
+/dev and /proc 1/3 (057), wrapper 0/3. The causes are the expected
+ones: no mount table or POSIX output form (`C:/\`, `@GIT@\usr\bin/ls.exe`),
+no `pwd -W` or cygpath, no argument or environment conversion (argv[0]
+is the bare name), CRs kept, Linux identity, no igncr or
+completion_strip_exe, no shebang search on PATH.
+
+Agent batch timing (bench/agent, 52 commands, medians of 5 rounds,
+Windows 11, ms per command):
+
+| | ms |
+|---|---|
+| Git Bash, full (what the agent waits for) | 50.8 |
+| Git Bash, `-c WRAPPER(:)` (startup, snapshot, wrapper) | 29.3 |
+| Git Bash, `-c exit` | 24.5 |
+| externals alone (1.3 programs per command, from busybox) | 21.3 |
+| floor: spawning a trivial CRT program (argv.exe) | 18.3 |
+| unabashed.exe `-c exit` | 18.1 |
+| unabashed.exe `-c WRAPPER(:)` | 19.4 |
+
+Outside the sandbox the floor is the same (17.4 ms; Git Bash `-c exit`
+21, an MSYS2 `true` 18.4, `git --version` 25). So process creation on
+this machine, about 17 ms, dominates: Git Bash's own work is 6 ms of
+startup above the floor plus 5 ms of snapshot and wrapper, and the
+externals are mostly their spawns. Full ≈ noop + externals holds
+(29.3 + 21.3 = 50.6).
+
+Estimate: unabashed with the same externals ≈ 19.4 + 21.3 = 40.7 ms,
+1.25x Git Bash. Even with free externals (all builtins or in-process
+applets) the agent's spawn of the shell bounds it at 50.8/19.4 = 2.6x.
+"≥5x Git Bash" on an end-to-end per-command batch is unreachable; it
+could hold for the shell's own time (startup, snapshot, wrapper and
+builtins: 11 ms vs about 1 ms), for a batch run inside one shell, or
+in vos instruction counts. For the user to decide (Decisions).
 
 
 ## Exit criteria checks

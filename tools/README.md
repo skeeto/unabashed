@@ -101,7 +101,8 @@ main_fuzz.cpp; ./replay crash...`.
 the real filesystem and CreateProcess. It is CRT-free and XP-capable:
 
     cc -nostartfiles -o sandbox.exe tools/sandbox.cpp -ladvapi32
-    sandbox [-m MIB] [-p COUNT] [-t SECS] DIR -- PROGRAM [ARGS...]
+    sandbox [-L] [-E NAME=VALUE]... [-m MIB] [-p COUNT] [-t SECS] \
+            DIR -- PROGRAM [ARGS...]
 
 It creates DIR (with parents) and labels it Low integrity, inherited by
 its contents, then runs PROGRAM in DIR with a copy of the caller's token
@@ -126,7 +127,24 @@ On XP there are no integrity levels: the sandbox warns and relies on
 the job object and the restricted token alone, which does not stop
 writes to the user's own files. DIR must be on NTFS (Vista and later).
 Low integrity also blocks some unrelated things, such as ICMP, so the
-Windows `ping` fails inside the sandbox.
+Windows `ping` fails inside the sandbox. A program started from a file
+with a Low label runs at Low integrity even outside the sandbox, so
+keep tools (such as `sandbox.exe` itself) out of DIR.
+
+`-E NAME=VALUE`, repeatable, gives PROGRAM an environment made of
+exactly those variables (sorted as Windows sorts them; for a repeated
+name the last wins) instead of the caller's, for reproducible runs.
+
+`-L` keeps the caller's integrity level: the token is still restricted
+(no privileges, Administrators deny-only) and the job, its limits and
+the timeout still apply, but writes are no longer confined to DIR. It
+exists because MSYS2 programs, Git Bash included, cannot start at Low
+integrity: msys-2.0.dll creates its shared-object directory
+`\BaseNamedObjects\msys-2.0S5-<key>` at startup, which the session's
+namespace denies to Low (`NtCreateDirectoryObject ... 0xC0000022`, the
+process then fails with 0xC0000142). A write-restricted token (logon
+SID only, granted on DIR) fails the same way. Use `-L` only for
+curated scripts: t/msys and bench/agent.
 
 ## conrun (Windows)
 
@@ -172,3 +190,150 @@ for tests that run it as a program. The suite runs under w64devkit's
 `sh` on Windows 11 and on the XP laptop (`~/src/scratch`); there the
 sandbox warns that XP has no integrity levels, which the runner
 filters out.
+
+## argv (Windows)
+
+`argv.cpp` shows what a typical native program receives. Unlike the
+other tools it keeps the normal CRT startup, so msvcrt.dll splits the
+command line (mingw-w64 `__wgetmainargs`, no wildcard expansion):
+
+    make argv.exe argv32.exe
+
+It prints to standard output, in UTF-8, each line ending in a bare LF:
+
+    cmdline = <RAW>    GetCommandLineW(), as received
+    argv[I] = <ARG>    one line per CRT argument, I counting from 0
+    NAME=VALUE         for each name in $ARGV_SHOW, in the order given
+    NAME unset         ... for a name that is not set
+    fd N open          with ARGV_FD=N, if CRT descriptor N is open,
+                       after which "argv: fd N\n" is written to it
+    fd N closed        ... if it is not
+
+Text between `<` and `>` is raw, with no escaping (it may hold newlines
+or `>`). ARGV_SHOW holds names separated by spaces or commas, looked up
+as Windows does, ignoring case; the name prints as given. A lone UTF-16
+surrogate prints as U+FFFD. The status is 0, or 1 if writing failed.
+The vos's argv fake (M5a step 4) prints the same format.
+
+## Git Bash differential tests (t/msys)
+
+Curated scripts only, recorded from Git Bash and replayed against the
+shell under test on the real file system, never generated or random
+input. Both tools run under w64devkit's `sh`; `GITBASH` names Git
+Bash's real shell (default `C:/Users/wellons/git/usr/bin/bash.exe`;
+`bin/bash.exe` is only the git-wrapper launcher).
+
+    tools/gbrecord WORKDIR t/msys/NAME.sh...     # writes t/msys/NAME.spec
+    t/msys/run [-s SHELL] [-x] WORKDIR [TEST.sh...]
+
+WORKDIR must be outside the repository and spelled `C:/...` (a `/c/...`
+spelling would make w64devkit's sh create `C:/c/...`); use the
+scratchpad. `-s` picks the shell under test (default `unabashed.exe` in
+the repository root); `t/msys/run -s "$GITBASH"` checks the recordings
+against Git Bash itself and must pass. `-x` runs each test again with
+`UNABASHED_XPIO=1`. A failure prints the diff of the specs.
+
+**Install tree.** WORKDIR/inst is rebuilt on every invocation: the
+shell under test is copied to `inst/usr/bin/bash.exe` (with
+`msys-2.0.dll` beside it when the shell's own directory has one, as Git
+Bash's does: an MSYS2 program takes its root from that DLL), and
+`inst/etc/fstab` reads
+
+    GIT/usr/bin /usr/bin ntfs binary,noacl,auto 0 0
+    GIT/usr/bin /bin ntfs binary,noacl,auto 0 0
+    GIT/etc /etc ntfs binary,noacl,auto 0 0
+    none / cygdrive binary,posix=0,noacl,user 0 0
+    none /tmp usertemp binary,posix=0,noacl 0 0
+
+where GIT is the Git install root (`GITBASH/../..`, spaces as `\040`).
+So `/` is inst, the programs and configuration are Git's, and the copied
+DLL keeps the shell's mount table and process list apart from any Git
+Bash the user is running. WORKDIR/bin holds `sandbox.exe`, `argv.exe`
+and `argv32.exe`, built from tools/.
+
+**Runs.** Each NAME.sh is copied to WORKDIR/NAME/test.sh, a fresh
+directory holding also empty `home` and `tmp`, and run twice, once with
+stdout and stderr apart and once with `2>&1`, both with stdin
+`/dev/null`, as
+
+    sandbox -L -t 60 -p 64 -E ... WORKDIR/NAME -- inst/usr/bin/bash.exe ARGS
+
+ARGS is `--norc --noprofile test.sh`, or the words of a `# shell: ARGS`
+comment, split and unquoted by sh's `eval`, in which `$D`, `$DW` and
+`$DU` are the test directory as `C:/x`, `C:\x` and `/c/x`. The
+environment is exactly:
+
+    PATH=GIT\usr\bin;W64\bin;SYSTEMROOT\System32;WORKDIR\bin
+    SYSTEMROOT, COMSPEC=SYSTEMROOT\System32\cmd.exe  (SYSTEMROOT the caller's)
+    HOME=WORKDIR\NAME\home  TEMP=TMP=WORKDIR\NAME\tmp  (backslashes)
+    LANG=C  TZ=UTC  (and UNABASHED_XPIO=1 under -x)
+
+W64 is the w64devkit root (the directory above `cc`). Statuses must
+agree between the two runs. The spec format is tools/record's, with the
+paths normalized. `MSYS_TIMEOUT` sets the timeout in seconds.
+
+`-L`: MSYS2 programs cannot run at Low integrity (see sandbox), and the
+corpus runs them under either shell, so these runs are not
+write-confined. Hence the corpus rules below.
+
+**Recording.** `tools/gbrecord` builds the same tree with Git Bash and
+records each script twice (four runs); the two specs must be identical
+or the script is reported as nondeterministic and its spec is left
+alone.
+
+**Normalization.** Four directories are replaced by tokens:
+
+    @ROOT@  WORKDIR/inst
+    @WORK@  WORKDIR
+    @GIT@   the Git install root
+    @W64@   the w64devkit root
+
+Each directory is first made absolute as `X:R`: an uppercase drive
+letter X, then R, the path from its leading `/`, with forward slashes,
+no trailing slash, in the case `pwd` reports. With x the lowercase
+drive letter and B being R with every `/` turned into `\`, it has six
+spellings:
+
+    X:R   x:R   X:B   x:B   /xR   /XR
+
+For `C:/w/inst` these are `C:/w/inst`, `c:/w/inst`, `C:\w\inst`,
+`c:\w\inst`, `/c/w/inst` and `/C/w/inst`. The 24
+(spelling, token) pairs are ordered by the spelling's length, longest
+first, ties by the bytes of "TOKEN SPELLING"; then, pair by pair in
+that order, every occurrence of the spelling in the output is replaced
+by the token, scanning left to right without overlaps. Matching is
+byte-exact (no other case folding, no word boundaries); stdout, stderr
+and the merged stream are normalized separately and otherwise kept
+byte for byte, CRs included. Since @ROOT@'s spellings are the longest,
+`WORKDIR/inst/x` becomes `@ROOT@/x`, not `@WORK@/inst/x`.
+
+**Corpus rules.** Scripts are hand-written and reviewed. They print no
+pids, times, `$RANDOM`, user or machine names, or drive lists. They
+write only through relative paths in their own directory, `$HOME` or
+`$TMP`, never after a `cd` to an absolute path (a shell that misreads
+`/x` would write elsewhere, outside the sandbox's protection). They do
+not pass root-relative paths outside the mounts (`/`, `/foo`) to MSYS2
+children: a child of Git Bash inherits its mount table (root inst), a
+child of a native shell has Git's. Deliberate divergences stay out (see
+issues.md, M5a, "Accepted"). `# vos` marks scripts that run only
+builtins, `argv`/`argv32`, `cygpath` (a builtin in msys mode) and
+programs fakes.cpp already has (`mkdir`), or merely look programs up,
+so that the vos can run them; M5a step 4 settles the list.
+`t/msys/*-crlf-*.sh` keep their CRLF line endings (.gitattributes).
+
+## Agent batch (bench/agent)
+
+    bench/agent/run [-n RUNS] WORKDIR [SHELL]
+
+times `bench/agent/batch.txt` (52 typical agent commands, each with
+the external programs it runs) as Claude Code's Bash tool runs them:
+one `SHELL -c WRAPPER` per command, WRAPPER being the exact string from
+notes/research/msys2.md section 7 with the command in its `eval`,
+sourcing `snapshot.sh`. A busybox driver (`driver.sh`) runs inside
+`sandbox -L` in WORKDIR/run with a scratch git repository and a fixed
+environment, and the medians of RUNS rounds (5) are printed per mode:
+`full` (the commands), `noop` (the wrapper around `:`), `exit` (`SHELL
+-c exit`), `ext` (the external programs alone, run by busybox) and
+`empty` (the loop). `BENCH_MODES` selects modes; a shell without MSYS2
+paths should run only `exit noop`. The full run's output checksum must
+not change between rounds. Results: notes/m5a.md.
