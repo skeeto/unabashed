@@ -1030,18 +1030,20 @@ static i64 rulechange(PfRule *r, i64 year, i64 off)
     return t - off + r->secs;
 }
 
-// Like localtime in the zone.
+// Like localtime in the zone. As glibc, fails unless both the UTC and
+// the local time fit struct tm, which also keeps t+off from overflow.
 static PfTm localtm(i64 t, PfZone *z)
 {
+    PfTm u = breaktime(t);
+    if (!u.ok) {
+        return u;
+    }
     b32 isdst = 0;
     if (z->dst) {
-        PfTm u = breaktime(t);
-        if (u.ok) {
-            i64 year  = u.year + (i64)1900;
-            i64 start = rulechange(&z->rule[0], year, z->off[0]);
-            i64 end   = rulechange(&z->rule[1], year, z->off[1]);
-            isdst = start>end ? t<end || t>=start : t>=start && t<end;
-        }
+        i64 year  = u.year + (i64)1900;
+        i64 start = rulechange(&z->rule[0], year, z->off[0]);
+        i64 end   = rulechange(&z->rule[1], year, z->off[1]);
+        isdst = start>end ? t<end || t>=start : t>=start && t<end;
     }
     i64  off = z->off[isdst];
     PfTm r   = breaktime(t + off);
