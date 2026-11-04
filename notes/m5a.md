@@ -671,3 +671,99 @@ The failures left belong to later steps: cygpath, CRLF and the
 options to step 6; argument and environment conversion, argv[0], the
 run-time suffix rule and `.exe` stripping in type to step 7 (017, 018,
 034, 040, 055); 007 to the /proc listing (issues.md).
+
+### Step 6: msys input and builtins
+
+Input (parse.cpp's `dropcr`/`squeezecr`, applied in runsource and to
+each line fillstdin reads, so every parse goes through it: scripts,
+`-c`, eval, source, comsub and procsub bodies, traps, mapfile
+callbacks):
+- msys mode (`CR_ALL`) drops every CR, as Git Bash's parser does: in
+  quotes, heredocs and `\` CR LF continuations too. `$'\r'` survives.
+- native mode (`CR_CRLF`) drops only the CR of a CR LF pair, as
+  busybox-w32's remove_cr; POSIX mode keeps everything.
+- Command substitution (exec.cpp's capresult/trimnewlines) strips
+  trailing `\n` and `\r\n` in both Windows modes, so `a\r\r\n` keeps
+  one CR and a lone trailing CR stays. In native mode an unquoted
+  comsub splitting on newlines also takes interior CR LF as one
+  (expand.cpp's putcomsub).
+- read: native mode ends a line at CR LF and continues one at
+  backslash CR LF (with the default delimiter, not -N); msys keeps CRs
+  (`read -r`, mapfile), as recorded.
+
+Options (shell.cpp): `O_IGNCR` after history and
+`S_COMPLETION_STRIP_EXE` after compat44, at Git Bash's positions.
+`hasoption`/`hasshopt` hide them outside msys mode from set -o, shopt
+(names, listings, -p, -o), SHELLOPTS, BASHOPTS, their import, `[[ -o
+]]` and compgen; Linux and native keep bash 5.3's lists. `igncr(sh)`
+is the option in msys mode. What Git Bash's igncr does, recorded in
+t/msys/061: every CR leaves comsub output (before the trailing newline
+trim) and what read stores (not counted by -n/-N, after the delimiter
+test, and not an escaped one: `\` CR is a literal CR); mapfile keeps
+them; `$-` gains no letter; SHELLOPTS lists it.
+
+cygpath (paths.cpp's `cygpathopts`, `cygpathname`, `cygpathdir`,
+`cygpathrun`, all pure; builtins.cpp's `b_cygpath`):
+- -u (default), -w, -m (one form; two different ones are an error), -a,
+  -p, -W, -S, -f FILE or `-f -`, -l and -s as no-ops, -h, `--`,
+  clustered short options, `-fFILE`, and the long names (--unix,
+  --windows, --mixed, --absolute, --path, --file[=F], --windir,
+  --sysdir, --long-name, --short-name, --help). Usage and help text
+  are our own.
+- -a: "." and ".." name the directory without a trailing slash; -a
+  of a relative name joins the working directory's POSIX form.
+- An empty name prints "can't convert empty path" and stops, status 1.
+  Git's cygpath buffers stdout until it exits except with -f, where
+  each line is flushed: the builtin writes the error first or last to
+  match the merged recordings.
+- -f lines lose a final CR. -W and -S use SYSTEMROOT, else WINDIR,
+  else C:/Windows.
+- A `B_MSYS` builtin flag; `findbuiltin` and `compbuiltins` now take
+  the shell, so cygpath exists only in msys mode (`type cygpath` says
+  builtin, the accepted deviation). The shell started as cygpath (any
+  directory, `.exe` or not, msys persona) runs the builtin over its
+  own argv after the msys re-split and exits.
+
+Merge note for step 7: findbuiltin's new Shell argument touches
+exec.cpp (decl, assignments, simple commands, function definitions),
+builtins.cpp (type, command, builtin, hash) and proc.cpp, one line each.
+
+Tests:
+- New t/msys recordings from Git Bash: 061-igncr (comsub, read, -n,
+  -N, -d, mapfile, field splitting, with and without igncr), 062-crlf
+  -corners (continuations, quotes, heredocs, `$'\r'`, eval, funsubs),
+  063-cygpath-opts (-W/-S case-folded, -f FILE and -, CR LF input, -l,
+  -s, `--`, -a, errors and statuses). All three `# vos`.
+- t/winvos/011-native-crlf (hand-checked: the native CR rules, the
+  5.3 option lists) and 012-msys-input (the msys rules through -c
+  text, eval, traps, functions; igncr; the lists and SHELLOPTS/BASHOPTS;
+  msyspath hiding them and cygpath; the long options; the shell copied
+  as cygpath.exe).
+- paths_test: every u/w/m/up/wp/mp golden record again through the
+  builtin's parsing and run (287 more golden checks), 60 inline cases
+  (options, -a, -p, -W/-S, -f, errors) and a property loop over random
+  argument lists.
+
+Results: tests.exe 149/0; t/exec 3413/0, with --chaos 20 42533/0;
+t/parse 3045/0; t/unit 149/0; t/winvos 12 specs 208/0, with --chaos
+20 928/0; paths_test 1124310/0; wide_test 100581/0 (--real 6/0);
+t/win32 -x 26/0 (003-waits once missed a count under load, then
+passed); unabashed.exe and unabashed32.exe without warnings; the WSL
+POSIX build without warnings (tests.exe, t/exec, t/parse, t/unit,
+t/winvos 0 failed); FUZZ_WIN replay of t/winvos, t/msys, t/exec and
+t/win32 (743 files) and the Linux FUZZ_CHAOS replay of the same clean
+(the expected out-of-memory exit, 608), FUZZ_WIN+FUZZ_CHAOS over
+t/winvos and t/msys clean.
+
+t/msys by topic, passed of total, before -> after:
+
+| topic                    | vos           | real          |
+|--------------------------|---------------|---------------|
+| cygpath (011-015)        | 0/5 -> 5/5    | 0/5 -> 5/5    |
+| crlf (048-051)           | 0/3 -> 3/3    | 0/4 -> 3/4    |
+| options (052-053)        | 0/2 -> 2/2    | 0/2 -> 2/2    |
+| new: 061-063             | 3/3           | 3/3           |
+| all                      | 14/41 -> 27/44 | 15/60 -> 28/63 |
+
+051 fails only on `cmd //c`, which needs step 7's argument conversion
+(the CRs are right).

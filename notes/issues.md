@@ -41,10 +41,11 @@ gets checked. Rules:
   PointerToRawData to 512 bytes and DLL names over 63 bytes; reads at
   most 1024 section headers. None matters for the binaries tried.
   (m5a.md, step 2)
-- **t/msys baseline is red**: unabashed.exe passes 15 of 60 (001-006,
-  008-010, 016, 019, 041, 054, 056, 057); steps 6-9 turn it green
-  (m5a.md, "Step 5"). Exit criterion 1. In the vos (`./tests.exe
-  t/msys/*.sh`) 14 of the 41 `# vos` scripts pass.
+- **t/msys baseline is red**: unabashed.exe passes 28 of 63 (001-006,
+  008-016, 019, 041, 048-050, 052-054, 056, 057, 061-063); steps 7-9
+  turn it green (m5a.md, "Step 6"). Exit criterion 1. In the vos
+  (`./tests.exe t/msys/*.sh`) 27 of the 44 `# vos` scripts pass. 051
+  (CRLF from cmd.exe) waits only on step 7's `//c` conversion.
 - **t/winvos/ is a hand-checked baseline**, not oracle output: it pins
   the step 5 behavior (bare argv[0] to children, no `.exe` stripping,
   no environment conversion for children) and must be updated
@@ -68,8 +69,28 @@ gets checked. Rules:
   PATH and PWD only; BASH, OSTYPE, MACHTYPE and HOME keep the startup
   persona's forms. pwd's usage text in the Windows modes still says
   `[-LP]` (Git Bash's is unverified). (m5a.md, step 5)
-- **completion_strip_exe** (Cygwin's extra shopt) is missing from
-  `shopt`'s listing (053); step 6 with igncr.
+- **completion_strip_exe does nothing**: msys mode lists and sets it
+  (053), but there is no completion engine yet to strip `.exe` from.
+- **Native-mode CR rules have no oracle** (t/winvos/011, hand-checked
+  from busybox.md §3): the parser drops the CR of each CR LF, a comsub
+  strips trailing CR LF, an unquoted comsub splitting on newlines takes
+  CR LF as one (busybox does it in every IFS-split region; we only for
+  comsubs), and read ends a line at CR LF and continues one at
+  backslash CR LF (not with -N or another delimiter). Whether busybox
+  also strips a lone trailing CR from a comsub (ash.c:8123) is
+  unverified. Check against busybox-w32 sh when step 10 runs it.
+- **cygpath gaps** (m5a.md, step 6): -W and -S come from SYSTEMROOT
+  (or WINDIR), not GetWindowsDirectory, so their case is the
+  variable's (Cygwin prints `C:\WINDOWS\system32` with -w and the
+  on-disk case with -u; t/msys/063 folds case); -l and -s are no-ops
+  (no 8.3 names); -a is ignored with -p; -d, -t, -r, -U, -C, -D, -H,
+  -O, -P, -F and -A are unknown options; the messages and usage text
+  are ours. An empty name stops the run (recorded for the last name
+  and for -f only).
+- **Cygwin's options follow the mode, not the persona**: igncr,
+  completion_strip_exe and the cygpath builtin exist while msyspath is
+  on; switching it off hides them (igncr keeps its value, without
+  effect) and a native persona gains them with `shopt -s msyspath`.
 - **FUZZ_WIN only runs the native persona**; the msys persona and the
   msyspath toggle are fuzzed only through the spec replays.
 - **The vos's cmd.exe is a small model**: no `&`, `&&`, `||`, `|`,
