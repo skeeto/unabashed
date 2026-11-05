@@ -23,6 +23,7 @@ struct FakeCtx {
     Str     cmdline;
     Str     exe;
     b32     win;
+    ImageRef image;  // the shell's own: continue from this image
 };
 
 struct Fake {

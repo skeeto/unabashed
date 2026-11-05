@@ -13,7 +13,18 @@ struct InheritFd {
     i32    flags;  // OF_READ, OF_WRITE (both where the platform cannot tell)
 };
 
+// A region holding a state image, which a self-spawned child shell
+// continues from (`&`, see notes/m5b.md): it sits at the same address
+// in parent and child, and the child's store goes on in it.
+struct ImageRef {
+    byte  *base;  // null: none
+    iz     cap;   // reserved from base
+    iz     len;   // filled from base
+    Handle h;     // the platform's means of passing it, if any
+};
+
 struct OsInfo {
+    ImageRef image;  // from a self-spawning parent: start from it
     b32    windows;  // drive letters, ; in PATH, .exe suffixes
     Str   *args;
     iz     nargs;
@@ -136,6 +147,10 @@ struct Spawn {
     i32      crtslot; // Windows: handle slot width (4 or 8) for passing
                       // descriptors 3 and up in the CRT's lpReserved2
                       // blob, or 0 to pass only 0-2
+    ImageRef image;   // with a base: start this shell's own program
+                      // (path ignored) continuing from the image, which
+                      // the parent no longer touches, every descriptor
+                      // listed passed
 };
 
 struct Spawned {
@@ -224,6 +239,12 @@ static b32     os_isatty(Os *, Handle);
 static Dirent *os_list(Os *, Arena *, Str dir, i32 *err);
 // Start a program. The child's descriptors are exactly those listed.
 static Spawned os_spawn(Os *, Arena scratch, Spawn *);
+// Reserve a region for a child's state image (Spawn.image), where a
+// fresh process of this shell can reserve it again: base null where
+// the platform cannot self-spawn so.
+static ImageRef os_imagenew(Os *, iz cap);
+// Release a region os_imagenew made that no child took.
+static void    os_imagefree(Os *, ImageRef);
 // Replace the process with a program, as os_spawn would start it (its
 // descriptors exactly those listed). Returns only on failure, with the
 // process as it was: an E_* error, E_NOSYS where the platform cannot.

@@ -120,6 +120,12 @@ static Vos *osvos(Os *os)
     return &os->vos;
 }
 
+static byte *osheap(Os *os, iz *len)
+{
+    *len = os->heapcap;
+    return os->heap;
+}
+
 // Out of memory ends the run, from whichever fiber it happens on
 static void *oomjmp[5];
 
@@ -213,6 +219,7 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.inherit = inherit;
     info.ownstd = 1;
     info.reserve = (iz)1<<18;
+    info.image   = ctx->image;
     i32 status = sh_main(os, &info);
     os->owner = -1;  // until the next nested shell
     if (os->shells-- == 1 && os->pinned < save) os->heapused = save;

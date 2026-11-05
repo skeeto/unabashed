@@ -983,8 +983,96 @@ static b32 msysargv(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
     return 1;
 }
 
+// The descriptors the process started with.
+static void startfds(Shell *sh, OsInfo *info)
+{
+    for (i32 i = 0; i < 3; i++) {
+        File *f = stdfile(sh, info->std[i], i ? OF_WRITE : OF_READ);
+        sh->fds->fd[i] = f;
+    }
+    sh->fds->top = 3;
+    for (iz i = 0; i < info->ninherit; i++) {
+        InheritFd in = info->inherit[i];
+        if (in.fd<3 || in.fd>=FDMAX || sh->fds->fd[in.fd]) {
+            os_close(sh->os, in.h);
+            continue;
+        }
+        sh->fds->fd[in.fd] = stdfile(sh, in.h, in.flags);
+        sh->fds->top = in.fd>=sh->fds->top ? in.fd+1 : sh->fds->top;
+    }
+}
+
+// A self-spawned background shell: take over the parent's image
+// (proc.cpp, imagebuild) and run its command, as vprocmain would.
+static i32 imagemain(Os *os, OsInfo *info)
+{
+    ImageHead *h = (ImageHead *)info->image.base;
+    if (h->magic!=IMAGEMAGIC || h->build!=imagebuild_()) {
+        os_write(os, info->std[2], (u8 *)"bash: bad state image\n", 22);
+        return 126;
+    }
+    Arena  perm = newarena(os, info->reserve);
+    Shell *sh   = h->sh;
+    sh->os      = os;
+    sh->store->a.mem->os = os;
+    sh->sched   = newsched(os, &perm, info->reserve, info->chaos, info->std[2]);
+    sh->reserve = info->reserve;
+    sh->bashpid = info->pid;
+    sh->lastpid = info->pid;
+    if (sh->win32) sh->sniffs = newsniffcache(&perm);
+    if (sh->paths) sh->paths->pid = info->pid;
+
+    Escape top = {};
+    sh->esc = &top;
+    Sigproc *sig = alloc<Sigproc>(&perm);
+    sigenter(sh, sig, sh->bashpid, sh->sched->cur);
+    sh->sched->top = sig;
+    byte stackmark = 0;
+    sh->stacktop = &stackmark;
+    sh->stackmax = info->stack ? info->stack - ((iz)1<<16) : (iz)1<<19;
+    startfds(sh, info);
+
+    Arena scratch = newarena(os, info->reserve);
+    if (!__builtin_setjmp(top.jmp)) {
+        checksigs(sh, scratch);
+        execute(sh, h->node, scratch);
+    }
+    if (!sh->execed && !sh->killsig) {
+        // Its own EXIT trap, set in the background job
+        sh->esc = &top;
+        if (sh->errexited) unwind(sh, 0);
+        if (!__builtin_setjmp(top.jmp)) {
+            sh->exiting = 1;
+            runexittrap(sh, scratch);
+        }
+    }
+    // its last program's death, if that is still its status
+    b32 tail = sh->childsig && sh->taillevel==sh->subshell+1 &&
+               (sh->status & 255)==128+sh->childsig;
+    i32 status = (sh->status & 255) | (sh->killsig || tail ? WSIGNALED : 0);
+    if (sh->jobs) orphanjobs(sh);
+    if (sh->psubs || sh->sched->orphans) {
+        Fdtab *t = sh->fds;
+        for (i32 fd = 0; fd < t->top; fd++) {
+            File *f = t->fd[fd];
+            b32 std = f && f->kind==F_OS &&
+                      (f->h==info->std[0] || f->h==info->std[1] || f->h==info->std[2]);
+            if (f && !std) {
+                fileunref(sh, f);
+                t->fd[fd] = 0;
+            }
+        }
+        joinpsubs(sh);
+        joinorphans(sh->sched);
+    }
+    if (info->ownstd) closeall(sh);
+    freesched(sh->sched);
+    return status;
+}
+
 static i32 sh_main(Os *os, OsInfo *osinfo)
 {
+    if (osinfo->image.base) return imagemain(os, osinfo);
     OsInfo copy = *osinfo;  // msys mode replaces its arguments
     OsInfo *info = &copy;
     Arena perm    = newarena(os, info->reserve);
@@ -1025,20 +1113,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     sh->stacktop = &stackmark;
     sh->stackmax = info->stack ? info->stack - ((iz)1<<16) : (iz)1<<19;
 
-    for (i32 i = 0; i < 3; i++) {
-        File *f = stdfile(sh, info->std[i], i ? OF_WRITE : OF_READ);
-        sh->fds->fd[i] = f;
-    }
-    sh->fds->top = 3;
-    for (iz i = 0; i < info->ninherit; i++) {
-        InheritFd in = info->inherit[i];
-        if (in.fd<3 || in.fd>=FDMAX || sh->fds->fd[in.fd]) {
-            os_close(os, in.h);
-            continue;
-        }
-        sh->fds->fd[in.fd] = stdfile(sh, in.h, in.flags);
-        sh->fds->top = in.fd>=sh->fds->top ? in.fd+1 : sh->fds->top;
-    }
+    startfds(sh, info);
 
     sh->opt[O_BRACEEXPAND] = 1;
     sh->opt[O_HASHALL]     = 1;

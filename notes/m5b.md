@@ -155,3 +155,69 @@ then 7; then 8 and 9 in parallel; then 10.
 
 
 ## Implementation
+
+### Step 1: the image copier, and the vos's self-spawn
+
+The copier is now `shellcopy(sh, a, st, image)` (proc.cpp), with
+`vproccopy` the fiber case. Image mode copies every function body
+(never shares `Code`), the PathCtx, `exe` and `shellname`; leaves no
+Os, Sched, Sigproc, sniff cache, stack top or tail node; gives an
+empty fdtab and no coprocesses (the descriptors go to the process);
+and makes `Frame.trapat`/`Srcframe.trapat` a stand-in (1) where set.
+Those markers are only compared with the running trap action, which
+in any copy is another string, so a vproc's copy never matched them
+either: the stand-in keeps that.
+
+`imagebuild` lays out one region: an `ImageHead` (magic, a build
+stamp from `__DATE__ __TIME__` and the copied types' sizes, the Shell,
+the node), the `Mem` behind it, the `Store`, then the copy, all
+bump-allocated from the store's arena. The region is the child's store
+from then on: the child goes on allocating above the image, so the
+watermark rule (an object below a subshell's mark is the parent's,
+and its writes are journaled) holds without moving anything; a child
+store in a separate arena would put the image's objects above or below
+marks by accident of addresses. `Mem.os` is cleared (the child's).
+
+`spawnbg` (jobs.cpp) first tries `spawnimage`: `os_imagenew`, the
+descriptors a program would get (`bgfds`: F_MEM materialized, captures
+through `capturewriter`, a pipe read through `pipeosread`, a pipe
+written through a pump left to the Sched's orphans), the image, and
+`os_spawn` with `Spawn.image`; the job then waits on the process with
+`spawnwaiter`, as for a program, and `$!` is its pid. Where the
+platform has no images (POSIX and Win32 for now) or the spawn fails,
+the job is a vproc as before. `sh_main` hands an `OsInfo.image` to
+`imagemain` (unabashed.cpp): it checks the head, re-points `Mem.os`,
+makes a Sched, a Sigproc and fresh scratch, takes BASHPID from its own
+pid (`$$` stays the parent's), sets the descriptors as startup does
+(`startfds`, shared with sh_main), and runs the node with its EXIT
+trap, ending as sh_main does.
+
+The vos: `os_imagenew` reserves the region from the shells' heap (one
+address space: the child takes it in place) when `Vos.images` is set;
+`os_spawn` with an image starts the `bash` fake, passing every listed
+descriptor, and `fake_bash` (tests and fuzz layers) passes
+`FakeCtx.image` on. `tests.exe --images ...` (first argument) turns it
+on for every mode; the default stays vprocs until the specs agree.
+Before each such spawn the vos audits closure (`vimageescape`): any
+aligned word of the image pointing into the shells' heap outside the
+region (its end included) or into the test program's own image is
+reported in the spec's output.
+
+Results: default mode unchanged (tests.exe 159/0, t/exec 660 specs, 0
+failed, t/parse, t/winvos, t/msys vos, t/win32 -x 30/0). With
+`--images`, no audit failures in t/exec and t/winvos, and 3 specs
+fail:
+- 634-coproc: the coprocess runs as soon as the parent blocks on a
+  write, answers and exits, and the parent reaps it (unsetting COPROC)
+  before its `read <&${COPROC[0]}`; bash's child is slower to start.
+- 692-killed-level-program-output: `kill $p` from the background job
+  of a procsub or comsub level, whose BASHPID is a virtual pid of its
+  process: from another process it is "No such process" (step 6/7:
+  virtual pids naming their process, signals carrying the level).
+- 726-funsub-procsub-outlives: to look at.
+
+New: t/exec/875-bg-state-image (recorded): every listing (declare -p
+less the dynamic variables, declare -f, alias, trap -p, set -o, shopt,
+hash, `$-`, the positional parameters, FUNCNAME, BASH_SOURCE, PWD,
+OLDPWD, getopts' state) the same in a background job as in its
+parent, from functions with locals called from a sourced file.

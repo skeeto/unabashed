@@ -2896,6 +2896,15 @@ static void os_racy(Os *)
 {
 }
 
+// Self-spawning with a state image: not yet (M5b), so background jobs
+// stay fibers.
+static ImageRef os_imagenew(Os *, iz)
+{
+    return {};
+}
+
+static void os_imagefree(Os *, ImageRef) {}
+
 // No exec on Windows: the program starts as a child in a job that ends
 // it if the shell dies (startproc), and the shell waits and exits with
 // its exit code. Its descendants outlive a normal exit, as after a real

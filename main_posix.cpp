@@ -420,6 +420,15 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
     return r;
 }
 
+// Self-spawning with a state image: not yet (M5b), so background jobs
+// stay fibers.
+static ImageRef os_imagenew(Os *, iz)
+{
+    return {};
+}
+
+static void os_imagefree(Os *, ImageRef) {}
+
 // As os_spawn's child, but in this process. Everything is undone if
 // execve fails (a script without #!, which the shell then runs itself):
 // the targets were saved first, the other descriptors are only marked

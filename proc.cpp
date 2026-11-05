@@ -35,6 +35,7 @@ static Job *copyjobs(Store *, Job *);  // jobs.cpp
 static void closecoproc(Shell *);
 static void orphanjobs(Shell *);
 static void detachcaptures(Shell *, Shell *);  // jobs.cpp
+static Node *bgnode(Shell *, Arena *, Node *);  // jobs.cpp
 static void reportpipeline(Shell *, Arena, Node **stages, i32 n, i32 *statuses,
                            i64 *pids, Node *job);
 
@@ -118,7 +119,8 @@ static Code *copycode(Store *st, Code *c)
     return r;
 }
 
-static Func *copyfuncs(Store *st, Func *f)
+// With all, every body is copied (an image shares nothing).
+static Func *copyfuncs(Store *st, Func *f, b32 all)
 {
     if (!f) return 0;
     Func *c = (Func *)salloc(st, sizeof(Func));
@@ -126,14 +128,14 @@ static Func *copyfuncs(Store *st, Func *f)
     c->body  = f->body;
     c->code  = f->code;
     c->attrs = f->attrs;
-    if (c->code && !lastingcode(c->code)) {
+    if (c->code && (all || !lastingcode(c->code))) {
         c->code = copycode(st, c->code);
         c->body = c->body ? c->code->body : 0;
     } else if (c->code) {
         c->code->refs++;
     }
     for (i32 i = 0; i < 4; i++) {
-        c->child[i] = copyfuncs(st, f->child[i]);
+        c->child[i] = copyfuncs(st, f->child[i], all);
     }
     return c;
 }
@@ -189,8 +191,17 @@ static Args copyargs(Arena *a, Args args)
     return r;
 }
 
+// A trap action's identity at a call or source, which only equality
+// with the running action uses: a copy's actions are other strings, so
+// in an image, which may hold no pointer outside itself, any non-null
+// stand-in compares the same.
+static u8 *copytrapat(u8 *p, b32 image)
+{
+    return image && p ? (u8 *)1 : p;
+}
+
 // Copy the call frames, pointing their locals at the copied variables.
-static Frame *copyframes(Shell *c, Arena *a, Frame *f)
+static Frame *copyframes(Shell *c, Arena *a, Frame *f, b32 image)
 {
     Store  *st   = c->store;
     Frame  *head = 0;
@@ -212,6 +223,8 @@ static Frame *copyframes(Shell *c, Arena *a, Frame *f)
             r->opts = (b32 *)salloc(st, O_COUNT*(iz)sizeof(b32));
             for (i32 i = 0; i < O_COUNT; i++) r->opts[i] = f->opts[i];
         }
+        for (i32 k = 0; k < 3; k++) r->trapat[k] = copytrapat(f->trapat[k], image);
+        r->def = image ? 0 : f->def;
         *tail = r;
         tail  = &r->up;
     }
@@ -219,7 +232,8 @@ static Frame *copyframes(Shell *c, Arena *a, Frame *f)
 }
 
 // Copy the sourced files' frames, pointing them at the copied calls.
-static Srcframe *copysrcframes(Arena *a, Srcframe *s, Frame *from, Frame *to)
+static Srcframe *copysrcframes(Arena *a, Srcframe *s, Frame *from, Frame *to,
+                               b32 image)
 {
     Srcframe  *head = 0;
     Srcframe **tail = &head;
@@ -232,10 +246,31 @@ static Srcframe *copysrcframes(Arena *a, Srcframe *s, Frame *from, Frame *to)
         Frame *f = from, *g = to;
         for (; f && f!=s->frame; f = f->up, g = g->up) {}
         r->frame = f ? g : 0;
+        for (i32 k = 0; k < 3; k++) r->trapat[k] = copytrapat(s->trapat[k], image);
         *tail = r;
         tail  = &r->up;
     }
     return head;
+}
+
+static PathCtx *copypaths(Arena *a, PathCtx *p)
+{
+    if (!p) return 0;
+    PathCtx *r = alloc<PathCtx>(a);
+    *r = *p;
+    r->mounts = {};
+    for (iz i = 0; i < p->mounts.len; i++) {
+        Mount m = p->mounts[i];
+        m.posix  = clone(a, m.posix);
+        m.native = clone(a, m.native);
+        r->mounts = push(a, r->mounts, m);
+    }
+    r->cygdrive = clone(a, p->cygdrive);
+    r->cwd      = clone(a, p->cwd);
+    for (i32 i = 0; i < 26; i++) r->drivecwd[i] = clone(a, p->drivecwd[i]);
+    r->temp     = clone(a, p->temp);
+    r->windir   = clone(a, p->windir);
+    return r;
 }
 
 // A File of vproc c for the same object as f: a duplicate handle, the
@@ -296,19 +331,23 @@ static Fdtab *copyfdtab(Shell *c, Arena *a, Fdtab *t)
     return r;
 }
 
-// Deep-copy a shell's state into vproc memory m, as a subshell of it.
-static Shell *vproccopy(Shell *sh, Vproc *m)
+// Deep-copy a shell's state as a subshell of it, into store st and
+// arena a. A vproc's copy shares what lasts as long as the process
+// (function bodies, the mount table, string constants); an image's,
+// for another process, shares nothing: no pointer in it leads outside
+// st and a, which may then be one arena (notes/m5b.md). Its fdtab is
+// empty, its descriptors given to the process, and it has no Sched,
+// Os or Sigproc until the process adopts it.
+static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
 {
-    Arena *a  = &m->perm;
-    Store *st = &m->store;
     Shell *c  = alloc<Shell>(a);
     *c = *sh;
     c->store   = st;
     c->reserve = sh->sched->reserve;
-    for (i32 i = 0; i < NPOOL; i++) c->pool[i] = m->pool[i];
+    for (i32 i = 0; i < NPOOL; i++) c->pool[i] = 0;
 
     c->vars    = copyvars(st, sh->vars);
-    c->funcs   = copyfuncs(st, sh->funcs);
+    c->funcs   = copyfuncs(st, sh->funcs, image);
     c->aliases = copyaliases(st, sh->aliases);
     c->cmdhash = copyhash(st, sh->cmdhash);
     c->args.v  = (Str *)salloc(st, (sh->args.n ? sh->args.n : 1)*(iz)sizeof(Str));
@@ -333,11 +372,25 @@ static Shell *vproccopy(Shell *sh, Vproc *m)
     Arena tmp = *a;
     c->cmdtext    = sclone(st, cmdtext(sh, &tmp));
     c->cmdnode    = 0;
-    c->frame      = copyframes(c, a, sh->frame);
-    c->srcframes  = copysrcframes(a, sh->srcframes, sh->frame, c->frame);
+    c->frame      = copyframes(c, a, sh->frame, image);
+    c->srcframes  = copysrcframes(a, sh->srcframes, sh->frame, c->frame, image);
     c->argvbase   = copyargs(a, sh->argvbase);
     c->retsrc     = 0;
-    c->fds        = copyfdtab(c, a, sh->fds);
+    c->shellname  = sclone(st, sh->shellname);
+    c->exe        = sclone(st, sh->exe);
+    if (image) {
+        c->os       = 0;
+        c->sched    = 0;
+        c->paths    = copypaths(a, sh->paths);
+        c->sniffs   = 0;
+        c->fds      = alloc<Fdtab>(a);
+        c->coprocs  = 0;
+        c->spawnto  = 0;
+        c->stacktop = 0;
+        c->tailnode = 0;
+    } else {
+        c->fds      = copyfdtab(c, a, sh->fds);
+    }
 
     c->undo     = 0;
     c->esc      = 0;
@@ -362,8 +415,72 @@ static Shell *vproccopy(Shell *sh, Vproc *m)
     c->bgstats  = 0;
     closecoproc(c);
     copytraps(c, sh);
+    c->sig      = 0;
+    return c;
+}
+
+// Deep-copy a shell's state into vproc memory m, as a subshell of it.
+static Shell *vproccopy(Shell *sh, Vproc *m)
+{
+    Shell *c = shellcopy(sh, &m->perm, &m->store, 0);
+    for (i32 i = 0; i < NPOOL; i++) c->pool[i] = m->pool[i];
     sigenter(c, &m->sig, c->bashpid, 0);
     return c;
+}
+
+// A state image (notes/m5b.md): a self-spawned child shell's state,
+// one region holding the store it goes on with, headed by this.
+struct ImageHead {
+    u64    magic;
+    u64    build;   // this build's layout of the copied types
+    Shell *sh;      // a background subshell, as spawnbg makes one
+    Node  *node;    // what it runs
+};
+
+struct Image {
+    ImageRef   ref;
+    ImageHead *head;
+};
+
+enum : u64 { IMAGEMAGIC = 0x6567616d69736e75 };  // "unsimage"
+
+// Images pass only between processes of one build: the same binary.
+static u64 imagebuild_(void)
+{
+    u64 h = 0x100;
+    char const *stamp = __DATE__ " " __TIME__;
+    for (iz i = 0; stamp[i]; i++) h = (h ^ (u8)stamp[i]) * 1111111111111111111u;
+    u64 sizes[] = {sizeof(Shell), sizeof(Node), sizeof(Value), sizeof(Store),
+                   sizeof(Frame), sizeof(Func), sizeof(PathCtx)};
+    for (iz i = 0; i < countof(sizes); i++) h = (h ^ sizes[i]) * 1111111111111111111u;
+    return h;
+}
+
+// Copy sh as a background subshell running n into region im, which a
+// child process takes over: its store, with the Mem behind it, the
+// copied Shell and node, all at the start of the region.
+static Image imagebuild(Shell *sh, Node *n, ImageRef im)
+{
+    Mem   tmp = {sh->os, im.base, im.base + im.cap};
+    Arena r   = {im.base, im.base, &tmp};
+    Image img = {};
+    img.head  = alloc<ImageHead>(&r);
+    Mem *mem  = alloc<Mem>(&r);
+    Store *st = alloc<Store>(&r);
+    *mem      = tmp;
+    r.mem     = mem;
+    st->a     = r;
+    st->base  = im.base;
+
+    Shell *c = shellcopy(sh, &st->a, st, 1);
+    img.head->magic = IMAGEMAGIC;
+    img.head->build = imagebuild_();
+    img.head->sh    = c;
+    img.head->node  = bgnode(c, &st->a, n);
+    img.ref     = im;
+    img.ref.len = st->a.beg - im.base;
+    mem->os     = 0;  // the child's
+    return img;
 }
 
 // Fiber vproc entry: run the node, then release everything.

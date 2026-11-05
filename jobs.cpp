@@ -565,9 +565,134 @@ static File *devnull(Shell *sh, Arena scratch)
     return f;
 }
 
+// Make background subshell c, a copy of its parent's state, ready to
+// run a copy of n in arena a, which it returns.
+static Node *bgnode(Shell *c, Arena *a, Node *n)
+{
+    c->loopdepth = 0;
+    c->jobs = 0;  // as a forked subshell, it starts with no jobs
+    c->curjob = c->prevjob = 0;
+    c->bgstats = 0;
+    Node *r = copynode(a, n);
+    c->tailnode = n->kind==N_SIMPLE ? r : 0;
+    if (r->kind == N_SUBSHELL) {
+        r->kind = N_GROUP;
+        c->tailnode = tailcommand(r->a);
+    }
+    c->taillevel = c->subshell + 1;
+    c->asyncign = (u64)1<<1 | (u64)1<<2;  // INT, QUIT
+    return r;
+}
+
+// The descriptors a background shell process gets, as a program would,
+// its 0 and 1 replaced by in and out when given: handles to pass and
+// handles to close once it has started. An in-memory pipe it writes
+// is pumped by an orphan task, which ends when the process closes it.
+struct BgFds {
+    SpawnFd *fds;
+    iz       nfds;
+    Handle  *close;
+    iz       nclose;
+};
+
+static BgFds bgfds(Shell *sh, Arena *a, File *in, File *out)
+{
+    Sched *s = sh->sched;
+    Fdtab *t = sh->fds;
+    i32    top = t->top>2 ? t->top : 2;
+    BgFds  r = {};
+    r.fds   = alloc<SpawnFd>(a, top);
+    r.close = alloc<Handle>(a, top);
+    for (i32 fd = 0; fd < top; fd++) {
+        File *f = fd==0 && in ? in : fd==1 && out ? out : fd<t->top ? t->fd[fd] : 0;
+        if (!f) continue;
+        b32 cloexec = 0;
+        for (Coproc *c = sh->coprocs; c; c = c->next) {
+            cloexec |= fd==c->rfd || fd==c->wfd;
+        }
+        if (cloexec) continue;  // closed in every subshell but $( )
+        SpawnFd sf = {fd, BADHANDLE};
+        for (iz k = 0; k < r.nfds; k++) {
+            File *g = r.fds[k].fd==0 && in ? in : r.fds[k].fd==1 && out ? out : t->fd[r.fds[k].fd];
+            if (g==f && f->kind!=F_OS) sf.h = r.fds[k].h;
+        }
+        if (sf.h != BADHANDLE) {
+            r.fds[r.nfds++] = sf;
+            continue;
+        }
+        switch (f->kind) {
+        case F_OS:
+            sf.h = f->h;
+            break;
+        case F_MEM:
+            if (!materialize(sh, *a, f)) continue;
+            sf.h = f->h;
+            break;
+        case F_CAPTURE:
+            sf.h = capturewriter(sh, f, 0);
+            if (sf.h == BADHANDLE) continue;
+            r.close[r.nclose++] = sf.h;
+            break;
+        case F_PIPE: {
+            if (f->flags & OF_READ) {
+                sf.h = pipeosread(s, f->pipe);
+                if (sf.h == BADHANDLE) continue;
+                break;
+            }
+            OsPipe p = os_pipe(sh->os);
+            if (p.err) continue;
+            Pump *pp = newpump(s);
+            pp->pipe = f->pipe;
+            pp->kind = PUMP_FROMHANDLE;
+            pp->h    = p.r;
+            sf.h     = p.w;
+            r.close[r.nclose++] = sf.h;
+            Task *pt = spawnpump(s, pp);
+            pt->sib    = s->orphans;
+            s->orphans = pt;
+        } break;
+        }
+        r.fds[r.nfds++] = sf;
+    }
+    return r;
+}
+
+// Start node as a background shell process continuing from an image of
+// this one (notes/m5b.md), its descriptors 0 and 1 replaced when in and
+// out are given. Returns its process handle, with *pid its pid, or -1
+// where the platform cannot (then it runs as a vproc).
+static i64 spawnimage(Shell *sh, Node *n, File *in, File *out, i64 *pid,
+                      Arena scratch)
+{
+    ImageRef im = os_imagenew(sh->os, sh->reserve);
+    if (!im.base) return -1;
+    BgFds fds = bgfds(sh, &scratch, in, out);
+    Image img = imagebuild(sh, n, im);
+
+    Spawn sp = {};
+    sp.image  = img.ref;
+    sp.argv   = &sh->shellname;
+    sp.argc   = 1;
+    sp.cwd    = spawncwd(sh, &scratch);
+    sp.fds    = fds.fds;
+    sp.nfds   = fds.nfds;
+    sp.sigign = ignoredsigs(sh) | (u64)1<<1 | (u64)1<<2;  // INT, QUIT
+    Spawned r = os_spawn(sh->os, scratch, &sp);
+    for (iz i = 0; i < fds.nclose; i++) {
+        os_close(sh->os, fds.close[i]);
+    }
+    if (r.err) {
+        os_imagefree(sh->os, img.ref);
+        return -1;
+    }
+    *pid = r.pid;
+    return (i64)r.proc;
+}
+
 // Start node as a background vproc, its descriptors 0 and 1 replaced
 // when in and out are given. Returns the task, with *pid its BASHPID.
-static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid)
+static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid,
+                     Arena scratch)
 {
     // A here-document it inherits becomes an OS object first, so that
     // both read one open file, as bash's forked child shares the
@@ -581,22 +706,13 @@ static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid)
             materialize(sh, a, f);
         }
     }
+    i64   proc = spawnimage(sh, n, in, out, pid, scratch);
+    if (proc >= 0) return spawnwaiter(sh->sched, (Handle)proc);
     Vproc *m = vprocwith(sh, in, out);
     Shell *c = m->sh;
-    c->loopdepth = 0;
-    c->jobs = 0;  // as a forked subshell, it starts with no jobs
-    c->curjob = c->prevjob = 0;
-    c->bgstats = 0;
     closecoproc(c);
     detachcaptures(sh, c);
-    m->node = copynode(&m->perm, n);
-    c->tailnode = n->kind==N_SIMPLE ? m->node : 0;
-    if (m->node->kind == N_SUBSHELL) {
-        m->node->kind = N_GROUP;
-        c->tailnode = tailcommand(m->node->a);
-    }
-    c->taillevel = c->subshell + 1;
-    c->asyncign = (u64)1<<1 | (u64)1<<2;  // INT, QUIT
+    m->node = bgnode(c, &m->perm, n);
     *pid = c->bashpid;
     sh->sched->nbg++;
     return taskspawn(sh->sched, vprocmain, m, BIGSTACK);
@@ -651,7 +767,7 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
         }
     }
     if (retry) {
-        t = spawnbg(sh, n, in, 0, &pid);
+        t = spawnbg(sh, n, in, 0, &pid, scratch);
     }
     fileunref(sh, in);
     Job *j = newjob(sh, scratch, n, t, pid, 0);
@@ -849,7 +965,7 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
         mine.rfd  = fds[0];
         mine.wfd  = fds[3];
         sh->coprocs = &mine;  // the vproc closes the shell's ends
-        task = spawnbg(sh, body, r2, w1, &pid);
+        task = spawnbg(sh, body, r2, w1, &pid, scratch);
         sh->coprocs = mine.next;
     }
     fileunref(sh, r2);

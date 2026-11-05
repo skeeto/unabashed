@@ -28,6 +28,8 @@
 
 struct Vos;
 static Vos *osvos(Os *);
+// The layer's memory, from which every reservation comes.
+static byte *osheap(Os *, iz *len);
 
 struct VNode {
     VNode *child;   // directory entries, newest first
@@ -155,6 +157,7 @@ struct Vos {
     i32     nwriters;
     VCount  spawns[256];   // programs started per (process, task)
     i32     nspawns;
+    b32     images;  // self-spawn background shells (os_imagenew)
     // Windows mode
     b32        win;
     VNamedPipe npipes[64];
@@ -1895,6 +1898,53 @@ static Opened vnpopen(Vos *v, Str name, i32 flags)
 
 // Spawn a fake program as a process of its own, runnable at once. Its
 // arguments are copied into its memory, since it outlives the call.
+// The vos's processes share one address space: a child takes the
+// region in place.
+static ImageRef os_imagenew(Os *os, iz cap)
+{
+    ImageRef r = {};
+    if (!osvos(os)->images) return r;
+    r.base = os_reserve(os, cap);
+    r.cap  = r.base ? cap : 0;
+    return r;
+}
+
+static void os_imagefree(Os *, ImageRef) {}
+
+#if _WIN32
+extern "C" char __ImageBase;
+#else
+extern "C" char __executable_start, _end;
+#endif
+
+// An image must be closed (notes/m5b.md): no word in it may point into
+// the shells' memory outside its own region, nor into this program's
+// image (string constants, code), which a real child has elsewhere. A
+// conservative scan of every aligned word: returns the offset of the
+// first that does, or -1.
+static iz vimageescape(Os *os, ImageRef im)
+{
+    iz    heaplen = 0;
+    byte *heap    = osheap(os, &heaplen);
+#if _WIN32
+    byte *exe    = (byte *)&__ImageBase;
+    i32   pe     = *(i32 *)(exe + 0x3c);
+    byte *exeend = exe + *(u32 *)(exe + pe + 24 + 56);  // SizeOfImage
+#else
+    byte *exe    = (byte *)&__executable_start;
+    byte *exeend = (byte *)&_end;
+#endif
+    uz lo = (uz)im.base, hi = (uz)im.base + (uz)im.cap;
+    for (iz off = 0; off+(iz)sizeof(uz) <= im.len; off += (iz)sizeof(uz)) {
+        uz w = *(uz *)(im.base + off);
+        if (w>=lo && w<=hi) continue;  // the end included
+        b32 inheap = w>=(uz)heap && w<(uz)heap+(uz)heaplen;
+        b32 inexe  = w>=(uz)exe && w<(uz)exeend;
+        if (inheap || inexe) return off;
+    }
+    return -1;
+}
+
 static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 {
     Vos    *v = osvos(os);
@@ -1902,7 +1952,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     r.proc = BADHANDLE;
     VWinCmd wc   = {};
     Str     path = s->path;
-    if (v->win) {
+    if (v->win && !s->image.base) {
         wc = vwincmd(v, &scratch, s);
         if (wc.err) {
             r.err = wc.err;
@@ -1910,7 +1960,35 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
         }
         path = wc.path;
     }
-    VProgram g = vprogram(v, &scratch, path);
+    VProgram g = {};
+    if (s->image.base) {
+        iz off = vimageescape(os, s->image);
+        if (off >= 0) {
+            // A copier bug: fail loudly, in the spec's output
+            Buf b(&scratch, 128);
+            print(&b, "vos: image escapes its region at offset ");
+            print(&b, fmti64(&scratch, off));
+            print(&b, " to ");
+            printhex(&b, *(uz *)(s->image.base + off), 16);
+            print(&b, "\n");
+            Str msg = finish(&b);
+            for (i32 i = 0; i < 2; i++) {
+                Str *dst = i ? &v->merged : &v->err;
+                if (msg.len <= v->outcap - dst->len) {
+                    copybytes(dst->data+dst->len, msg.data, msg.len);
+                    dst->len += msg.len;
+                }
+            }
+        }
+        // This shell again, continuing from its image
+        g.prog = -1;
+        for (i32 i = 0; i < v->nfakes; i++) {
+            if (v->fakes[i].name == "bash") g.prog = i;
+        }
+        g.err = E_NOENT;
+    } else {
+        g = vprogram(v, &scratch, path);
+    }
     i32 prog = g.prog;
     if (prog < 0) {
         r.err = g.err;
@@ -1948,7 +2026,8 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     mem.beg = p->mem.beg;
     mem.end = p->mem.end;
     FakeCtx ctx = {};
-    if (v->win) {
+    ctx.image = s->image;
+    if (v->win && !s->image.base) {
         vwinctx(v, &mem, &ctx, s, &wc, &g);
     } else {
         ctx.argc = s->argc;
@@ -1966,7 +2045,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     }
     for (iz i = 0; i < s->nfds; i++) {
         // Windows passes descriptors past 2 only through the CRT's blob
-        b32 pass = !v->win || s->fds[i].fd<3 || s->crtslot;
+        b32 pass = !v->win || s->fds[i].fd<3 || s->crtslot || s->image.base;
         if (s->fds[i].fd<countof(ctx.fd) && pass) {
             ctx.fd[s->fds[i].fd] = os_dup(os, s->fds[i].h);
         }

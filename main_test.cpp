@@ -52,6 +52,12 @@ static Vos *osvos(Os *os)
     return &os->vos;
 }
 
+static byte *osheap(Os *os, iz *len)
+{
+    *len = os->heapcap;
+    return os->heap;
+}
+
 static jmp_buf *oomjmp;  // test-only: where os_oom lands
 
 [[noreturn]] static void os_oom()
@@ -225,6 +231,7 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.inherit = inherit;
     info.ownstd  = 1;
     info.reserve = (iz)1<<22;
+    info.image   = ctx->image;
     i32 status = sh_main(os, &info);
     os->marks[m].dead = 1;
     while (os->nmarks && os->marks[os->nmarks-1].dead) {
@@ -233,6 +240,8 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     }
     return status;
 }
+
+static b32 images;  // --images: os_imagenew self-spawns
 
 static Fake testfakes[256];
 static iz   ntestfakes;
@@ -277,6 +286,7 @@ static void startrun(Os *os, b32 win, Str input)
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
     vreset(&os->vos, va, testfakes, ntestfakes, win);
+    os->vos.images = images;
     os->vos.in    = input;
     os->vos.chaos = os->chaos;
     os->vos.localtz = speclocaltz;
@@ -509,6 +519,7 @@ static void test_sched(Test *t)
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
     vreset(&os->vos, va, testfakes, ntestfakes);
+    os->vos.images = images;
     Arena  a = newarena(os, (iz)1<<22);
     Sched *s = newsched(os, &a, (iz)1<<22, 0, 2);
 
@@ -1323,6 +1334,7 @@ static b32 oracle(Test *t, char *suite, char *name, b32 verbose)
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
     vreset(&os->vos, va, testfakes, ntestfakes);
+    os->vos.images = images;
     // run-all runs from a terminal, where nobody types: some tests time
     // out reads from it
     os->vos.ttyin = 1;
@@ -1412,6 +1424,14 @@ int main(int argc, char **argv)
     os.vos.err.data    = (u8 *)malloc((uz)os.vos.outcap);
     os.vos.merged.data = (u8 *)malloc((uz)os.vos.outcap);
     initfakes();
+    if (argc>1 && !strcmp(argv[1], "--images")) {
+        // Background shells as processes of their own (M5b), in every
+        // mode below
+        images = 1;
+        argv[1] = argv[0];
+        argc--;
+        argv++;
+    }
 
     Test t = {};
     t.os = &os;
