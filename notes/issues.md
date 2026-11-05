@@ -16,176 +16,7 @@ gets checked. Rules:
 
 ## M5a (Windows paths and spawning)
 
-- **Time zone gaps** (step 9): no Windows-to-IANA mapping (Cygwin's
-  tzmap, for an MSYS2 install that has zoneinfo); glibc's cache of an
-  unchanged TZ value and bash's stale export environment right after
-  `export TZ=x` are not emulated (the recordings avoid both); native
-  mode's `%Z` for a TZ busybox-w32/msvcrt would read differently (a
-  zone name, a long Windows name) is unverified. (m5a.md, step 9)
-- **Startup gaps** (step 9): a syntax error in a native-mode profile is
-  not fatal and is reported bash's way (busybox exits 2); native mode
-  accepts `--noprofile`/`--norc` and has `logout` (busybox has
-  neither); long options after short ones are accepted (bash prints
-  its usage, 2); bash's bashrc for ssh/rshd-started shells
-  (SSH_CLIENT) is not done; the `-i` job-control complaints test
-  stdin and stderr for a terminal, not a controlling terminal.
-  (m5a.md, step 9)
-- **MSYS2 programs get no `/dev/fd/N` bridge** (step 8): they are
-  passed `/dev/fd/N` unchanged, which they cannot open, so `cat <(x)`
-  with Git's cat fails. They take `\\.\pipe\NAME` (not
-  `//./pipe/NAME`), but open it three times (look, use, look again),
-  read an unbuffered instance as empty, fail to open one for writing
-  (`tee >(x)`: EINVAL), take it for a file head seeks back in, and with
-  buffered instances diff and an empty procsub hung at times. Nor do
-  they get descriptors above 2: a Cygwin child ignores an MSVCRT
-  lpReserved2 blob (checked: busybox to Git's bash, fd 4 is "Bad file
-  descriptor"); Git Bash passes them in the cygheap. (m5a.md, step 8)
-- **Bridge gaps** (step 8): busybox diff reads a bridged pipe as empty
-  (it copies a pipe to a temporary file; the unbuffered instance
-  apparently looks empty to it), recorded as such in t/win32/015; a
-  program reading one path twice gets the stream split; a program
-  that keeps a looking handle open while another waits on data
-  stalls; direct pipeline stages (spawnto) get no bridge; at most 16
-  bridges per command; a grandchild still using a reading bridge's
-  path when its program exits is cut off. (m5a.md, step 8)
-- **A pipe lent to a program aborts another reader's helper read**
-  (step 8): passing a pipe descriptor that a pump also reads made the
-  pump's read fail with E_INTR (the lend's CancelSynchronousIo). The
-  bridges avoid it by not passing bridged descriptors; any other
-  shared reader of a lent pipe would hit it. (m5a.md, step 8)
-- **splitcygwin gaps** (the msys re-split): it assumes Cygwin's
-  globbing is on (with `MSYS`/`CYGWIN=noglob` Cygwin keeps the quotes);
-  the program name, a non-ASCII byte before `:` as a drive word, and
-  tilde with an existing HOME were not recorded. msysargv's message and
-  status on the 11th response file are unverified. (m5a.md, steps 2, 5)
-- **pesniff ignores** delay-load imports, the loader's rounding of
-  PointerToRawData to 512 bytes and DLL names over 63 bytes; reads at
-  most 1024 section headers. None matters for the binaries tried.
-  (m5a.md, step 2)
-- **MSYS2 children have their own install's mount table** (step 10a):
-  Git Bash's children inherit its table and POSIX environment through
-  the cygheap; ours read their install's fstab, or join the table
-  that install's first live process set up (its `/tmp` from that
-  process's TMP), and convert the Windows forms we pass. So a child
-  in another install than the shell's has another `/`, and while the
-  user runs Git Bash with another TMP, Git's children started by us
-  see that `/tmp` (t/msys isolates them with a clone of Git's
-  install). Not modelled: a probe of the child's table.
-- **t/winvos/ is a hand-checked baseline**, not oracle output (steps
-  4-8, specs 001-017 and 024); change it deliberately.
-- **Spawning gaps** (m5a.md, step 7): the missing-DLL search ignores
-  KnownDLLs, side-by-side manifests and the loader's other rules; the
-  same Cygwin message is printed in native mode (busybox-w32 would print
-  "Error 0xc0000135" style text, unverified); ELOOP's text for a fifth
-  nested `#!` is Linux's, unverified against busybox-w32; Git Bash's
-  E2BIG limits for MSYS2 children (the cygheap, not the command line)
-  are not modelled; a busybox alias stub is recognized by size and
-  imports, not by content. Exec's XP/7 job path (breakaway) passes on
-  the XP laptop (t/win32/014 with sandbox -B, and outside the sandbox);
-  Windows 7 is untested.
-- **/proc has names but little content** (step 10a): /proc lists
-  Cygwin's fixed entries and the shell's own pids (Git Bash: every
-  process of its install, by Cygwin pid), and stat knows their types,
-  but no fixed file can be read (EACCES; cpuinfo, meminfo, mounts,
-  stat, uptime, version... have contents in Git Bash) and the
-  directories net, registry*, sys, sysvipc list nothing; /proc/self
-  lists only exename, fd and winexename and serves only the first and
-  last (no cmdline, cwd, environ, exe, maps, stat, status, winpid...),
-  and /proc/self/fd lists nothing. `/dev/zero`, `/dev/random` and the
-  other sinks only accept writes; reads fail. (m5a.md, steps 5, 10a)
-- **Native mode skips two busybox-w32 fix-ups**: assigning PATH does
-  not turn `:` into `;`, and cd does not fix a path's case to what is
-  on disk (PWD keeps the case typed). (m5a.md, step 5)
-- **Identity is not re-rendered by msyspath**: toggling it re-renders
-  PATH and PWD only; BASH, OSTYPE, MACHTYPE and HOME keep the startup
-  persona's forms. pwd's usage text in the Windows modes still says
-  `[-LP]` (Git Bash's is unverified). (m5a.md, step 5)
-- **completion_strip_exe does nothing**: msys mode lists and sets it
-  (053), but there is no completion engine yet to strip `.exe` from.
-- **Native-mode CR rules have no oracle** (t/winvos/011, hand-checked
-  from busybox.md §3): the parser drops the CR of each CR LF, a comsub
-  strips trailing CR LF, an unquoted comsub splitting on newlines takes
-  CR LF as one (busybox does it in every IFS-split region; we only for
-  comsubs), and read ends a line at CR LF and continues one at
-  backslash CR LF (not with -N or another delimiter). Whether busybox
-  also strips a lone trailing CR from a comsub (ash.c:8123) is
-  unverified. Check against busybox-w32 sh when step 10 runs it.
-- **cygpath gaps** (m5a.md, step 6): -W and -S come from SYSTEMROOT
-  (or WINDIR), not GetWindowsDirectory, so their case is the
-  variable's (Cygwin prints `C:\WINDOWS\system32` with -w and the
-  on-disk case with -u; t/msys/063 folds case); -l and -s are no-ops
-  (no 8.3 names); -a is ignored with -p; -d, -t, -r, -U, -C, -D, -H,
-  -O, -P, -F and -A are unknown options; the messages and usage text
-  are ours. An empty name stops the run (recorded for the last name
-  and for -f only).
-- **Cygwin's options follow the mode, not the persona**: igncr,
-  completion_strip_exe and the cygpath builtin exist while msyspath is
-  on; switching it off hides them (igncr keeps its value, without
-  effect) and a native persona gains them with `shopt -s msyspath`.
-- **FUZZ_WIN only runs the native persona**; the msys persona and the
-  msyspath toggle are fuzzed only through the spec replays.
-- **The vos's cmd.exe is a small model**: no `&`, `&&`, `||`, `|`,
-  redirections, parentheses, `if`, `for`, `goto`, `call`, `setlocal`,
-  `echo on`, delayed expansion or the pre-`/s` quote rules (batch
-  lines do take `%0`-`%9`, `%~N`, `%*`). Enough for step 7's batch
-  quoting tests only. (m5a.md, step 4)
-- **The vos's msys children are thin**: they get the native argv split
-  by splitcygwin and a `/c/...` cwd, but no mount table, no
-  environment conversion (PATH stays Windows form) and no
-  `MSYS=noglob`; `@file` stops quietly after ten levels instead of
-  dying on the 11th; the glob handles `* ? [...]` and `{a,b}` per
-  component, not `**` or character classes. (m5a.md, step 4) The
-  vos's env fake searches PATH without adding `.exe`, so a native
-  `#!/usr/bin/env PROG` is only tested on the real system (014).
-- **Windows path gaps in the vos**: trailing dots and spaces are not
-  stripped from names, `C:x` resolves against the drive root rather
-  than that drive's cwd, rooted paths (`/x`, `\x`) always land on C:,
-  case folding is ASCII only, `CON` and the other devices are all the
-  null device, and `//./pipe/` cannot be listed. (m5a.md, step 4)
-- **Agent-batch gate, redefined by the user**: the shell's own time
-  (end to end minus the externals run directly and the process
-  creation floor) ≥5x lower than Git
-  Bash's (m5a.md, Decisions). Not yet measured against it; the floor
-  was measured from a busybox driver, and Claude Code spawns from node,
-  which step 10's CRT-free driver should stand in for.
-- **t/msys and bench/agent are not write-confined**: MSYS2 programs
-  cannot start at Low integrity, so they run under `sandbox -L` (job,
-  limits, timeout, restricted token, medium integrity). Only the corpus
-  rules (tools/README.md) keep writes in WORKDIR. Untried: an
-  AppContainer, or the sandbox pre-creating the msys
-  `\BaseNamedObjects\msys-2.0S5-<key>` directory with a Low label.
-- **Accepted: `2>nul`**: Git Bash creates a file named `nul`; a native
-  shell opens the device. Not in the t/msys corpus.
-- **Accepted: BatBadBut quoting**: arguments to .bat/.cmd targets are
-  quoted for cmd.exe's safety, unlike Cygwin's. Not in the corpus.
-- **Accepted: BASH_VERSION and friends** differ from Git Bash's
-  (`5.3.15(1)-release`); the corpus prints only BASH_VERSINFO[5].
-- **Accepted: `type cygpath`** says builtin in msys mode (m5a.md,
-  Decisions). Not in the corpus, nor is cygpath's usage text (GPL).
-- **Accepted: paths.cpp stays lexical where Cygwin asks the file
-  system** (m5a.md steps 1, 5): cygpath -w of `C:` or `C:x` (Cygwin:
-  cwd\C), relative paths and `..` through missing directories,
-  `\\.\NUL` (Cygwin -w: `\\?\NUL`), cygpath mapping `<>|"` to private-use
-  characters, /proc/self (Cygwin: /proc/PID), and a closed /dev/fd/N
-  argument. The shell asks the file system only for the `.exe` suffix
-  rule (also SHELL and the other single-path variables reaching a
-  child, step 7) and the virtual files. None is in the corpus.
-- **`/dev/consN`, `/dev/ptyN`, `/dev/ttySN`** are untested against Git
-  Bash.
-- **Accepted: bash's ENOEXEC fallback in native mode**: a file without
-  `#!` (and not `.sh`) runs as shell code; busybox-w32 fails to run it.
-- **Accepted: a Windows-form value in HOME, TMP, PATH and the other
-  conv_envvars reaches an MSYS2 child converted** (step 10a):
-  `HOME='C:\Windows' printenv HOME` prints C:\Windows in Git Bash,
-  whose children take the value from the cygheap, and /c/Windows from
-  us: a child of a non-Cygwin parent converts these variables at
-  startup from any Windows spelling (probed: every form tried, and
-  MSYS2_ENV_CONV_EXCL and MSYS_NO_PATHCONV do not stop it). Only a
-  Cygwin parent (a trampoline such as Git's env.exe) could pass one
-  through. Removed from t/msys/037.
-- **Accepted: a 32-bit build's identity is i686** (MACHTYPE,
-  HOSTTYPE, BASH_VERSINFO[5]) where 64-bit Git Bash says x86_64;
-  t/msys/run normalizes it for a 32-bit shell (tools/README.md).
+Closed: every item was fixed or moved (m5a.md, exit criteria).
 
 
 ## M5b (real background processes)
@@ -258,6 +89,15 @@ gets checked. Rules:
 - POSIX: if another process reads the same pipe as a shell task, a read
   after poll can block the whole shell until data arrives. (m3a.md)
 
+Moved from M5a: real background processes are the next programs
+to share lent pipes.
+
+- **A pipe lent to a program aborts another reader's helper read**
+  (step 8): passing a pipe descriptor that a pump also reads made the
+  pump's read fail with E_INTR (the lend's CancelSynchronousIo). The
+  bridges avoid it by not passing bridged descriptors; any other
+  shared reader of a lent pipe would hit it. (m5a.md, step 8)
+
 
 ## M6 (editor)
 
@@ -270,6 +110,11 @@ gets checked. Rules:
   SetConsoleCtrlHandler(0, 0) at startup when interactive; anything
   run from Claude Code's shell starts that way. (m3b.md)
 - history and histexpand oracles.
+
+Moved from M5a: needs the completion engine.
+
+- **completion_strip_exe does nothing**: msys mode lists and sets it
+  (053), but there is no completion engine yet to strip `.exe` from.
 
 
 ## M7 (job control and fidelity)
@@ -350,6 +195,83 @@ gets checked. Rules:
   stages (`stagedebug`, spec 858), so it runs even without functrace.
   Here the job's vproc drops the trap. (review)
 
+Moved from M5a (fidelity gaps that neither the w64devkit trial nor
+the Git Bash corpus reaches; M7 is where fidelity is finished):
+
+- **Time zone gaps** (step 9): no Windows-to-IANA mapping (Cygwin's
+  tzmap, for an MSYS2 install that has zoneinfo); glibc's cache of an
+  unchanged TZ value and bash's stale export environment right after
+  `export TZ=x` are not emulated (the recordings avoid both); native
+  mode's `%Z` for a TZ busybox-w32/msvcrt would read differently (a
+  zone name, a long Windows name) is unverified. (m5a.md, step 9)
+- **Startup gaps** (step 9): a syntax error in a native-mode profile is
+  not fatal and is reported bash's way (busybox exits 2); native mode
+  accepts `--noprofile`/`--norc` and has `logout` (busybox has
+  neither); long options after short ones are accepted (bash prints
+  its usage, 2); bash's bashrc for ssh/rshd-started shells
+  (SSH_CLIENT) is not done; the `-i` job-control complaints test
+  stdin and stderr for a terminal, not a controlling terminal.
+  (m5a.md, step 9)
+- **MSYS2 programs get no `/dev/fd/N` bridge** (step 8): they are
+  passed `/dev/fd/N` unchanged, which they cannot open, so `cat <(x)`
+  with Git's cat fails. They take `\\.\pipe\NAME` (not
+  `//./pipe/NAME`), but open it three times (look, use, look again),
+  read an unbuffered instance as empty, fail to open one for writing
+  (`tee >(x)`: EINVAL), take it for a file head seeks back in, and with
+  buffered instances diff and an empty procsub hung at times. Nor do
+  they get descriptors above 2: a Cygwin child ignores an MSVCRT
+  lpReserved2 blob (checked: busybox to Git's bash, fd 4 is "Bad file
+  descriptor"); Git Bash passes them in the cygheap. (m5a.md, step 8)
+- **Bridge gaps** (step 8): busybox diff reads a bridged pipe as empty
+  (it copies a pipe to a temporary file; the unbuffered instance
+  apparently looks empty to it), recorded as such in t/win32/015; a
+  program reading one path twice gets the stream split; a program
+  that keeps a looking handle open while another waits on data
+  stalls; direct pipeline stages (spawnto) get no bridge; at most 16
+  bridges per command; a grandchild still using a reading bridge's
+  path when its program exits is cut off. (m5a.md, step 8)
+- **splitcygwin gaps** (the msys re-split): it assumes Cygwin's
+  globbing is on (with `MSYS`/`CYGWIN=noglob` Cygwin keeps the quotes);
+  the program name, a non-ASCII byte before `:` as a drive word, and
+  tilde with an existing HOME were not recorded. msysargv's message and
+  status on the 11th response file are unverified. (m5a.md, steps 2, 5)
+- **Spawning gaps** (m5a.md, step 7): the missing-DLL search ignores
+  KnownDLLs, side-by-side manifests and the loader's other rules; the
+  same Cygwin message is printed in native mode (busybox-w32 would print
+  "Error 0xc0000135" style text, unverified); ELOOP's text for a fifth
+  nested `#!` is Linux's, unverified against busybox-w32; Git Bash's
+  E2BIG limits for MSYS2 children (the cygheap, not the command line)
+  are not modelled. Exec's XP/7 job path (breakaway) passes on
+  the XP laptop (t/win32/014 with sandbox -B, and outside the sandbox);
+  Windows 7 is untested.
+- **/proc has names but little content** (step 10a): /proc lists
+  Cygwin's fixed entries and the shell's own pids (Git Bash: every
+  process of its install, by Cygwin pid), and stat knows their types,
+  but no fixed file can be read (EACCES; cpuinfo, meminfo, mounts,
+  stat, uptime, version... have contents in Git Bash) and the
+  directories net, registry*, sys, sysvipc list nothing; /proc/self
+  lists only exename, fd and winexename and serves only the first and
+  last (no cmdline, cwd, environ, exe, maps, stat, status, winpid...),
+  and /proc/self/fd lists nothing. `/dev/zero`, `/dev/random` and the
+  other sinks only accept writes; reads fail. (m5a.md, steps 5, 10a)
+- **Native mode skips two busybox-w32 fix-ups**: assigning PATH does
+  not turn `:` into `;`, and cd does not fix a path's case to what is
+  on disk (PWD keeps the case typed). (m5a.md, step 5)
+- **Identity is not re-rendered by msyspath**: toggling it re-renders
+  PATH and PWD only; BASH, OSTYPE, MACHTYPE and HOME keep the startup
+  persona's forms. pwd's usage text in the Windows modes still says
+  `[-LP]` (Git Bash's is unverified). (m5a.md, step 5)
+- **cygpath gaps** (m5a.md, step 6): -W and -S come from SYSTEMROOT
+  (or WINDIR), not GetWindowsDirectory, so their case is the
+  variable's (Cygwin prints `C:\WINDOWS\system32` with -w and the
+  on-disk case with -u; t/msys/063 folds case); -l and -s are no-ops
+  (no 8.3 names); -a is ignored with -p; -d, -t, -r, -U, -C, -D, -H,
+  -O, -P, -F and -A are unknown options; the messages and usage text
+  are ours. An empty name stops the run (recorded for the last name
+  and for -f only).
+- **`/dev/consN`, `/dev/ptyN`, `/dev/ttySN`** are untested against Git
+  Bash.
+
 
 ## M8 (performance)
 
@@ -413,6 +335,37 @@ gets checked. Rules:
 - `/tmp/bash-5.3` in WSL vanishes when WSL restarts; bench/run needs
   it rebuilt from the tarball.
 
+Moved from M5a: limits of the test tiers, not of the shell.
+
+- **t/winvos/ is a hand-checked baseline**, not oracle output (steps
+  4-8, specs 001-017 and 024); change it deliberately.
+- **FUZZ_WIN only runs the native persona**; the msys persona and the
+  msyspath toggle are fuzzed only through the spec replays.
+- **The vos's cmd.exe is a small model**: no `&`, `&&`, `||`, `|`,
+  redirections, parentheses, `if`, `for`, `goto`, `call`, `setlocal`,
+  `echo on`, delayed expansion or the pre-`/s` quote rules (batch
+  lines do take `%0`-`%9`, `%~N`, `%*`). Enough for step 7's batch
+  quoting tests only. (m5a.md, step 4)
+- **The vos's msys children are thin**: they get the native argv split
+  by splitcygwin and a `/c/...` cwd, but no mount table, no
+  environment conversion (PATH stays Windows form) and no
+  `MSYS=noglob`; `@file` stops quietly after ten levels instead of
+  dying on the 11th; the glob handles `* ? [...]` and `{a,b}` per
+  component, not `**` or character classes. (m5a.md, step 4) The
+  vos's env fake searches PATH without adding `.exe`, so a native
+  `#!/usr/bin/env PROG` is only tested on the real system (014).
+- **Windows path gaps in the vos**: trailing dots and spaces are not
+  stripped from names, `C:x` resolves against the drive root rather
+  than that drive's cwd, rooted paths (`/x`, `\x`) always land on C:,
+  case folding is ASCII only, `CON` and the other devices are all the
+  null device, and `//./pipe/` cannot be listed. (m5a.md, step 4)
+- **t/msys and bench/agent are not write-confined**: MSYS2 programs
+  cannot start at Low integrity, so they run under `sandbox -L` (job,
+  limits, timeout, restricted token, medium integrity). Only the corpus
+  rules (tools/README.md) keep writes in WORKDIR. Untried: an
+  AppContainer, or the sandbox pre-creating the msys
+  `\BaseNamedObjects\msys-2.0S5-<key>` directory with a Low label.
+
 
 ## Accepted deviations
 
@@ -442,3 +395,55 @@ gets checked. Rules:
   `jobs -x` drops the carried end-of-input token, since it parses its
   command where bash runs it directly. Interactive shells were not
   compared with bash for this quirk.
+
+- **Accepted: pesniff ignores** delay-load imports, the loader's
+  rounding of PointerToRawData to 512 bytes and DLL names over 63
+  bytes; reads at most 1024 section headers. None matters for the
+  binaries tried. (m5a.md, step 2)
+- **Accepted: MSYS2 children have their own install's mount table**
+  (step 10a): Git Bash's children inherit its table and POSIX environment through
+  the cygheap; ours read their install's fstab, or join the table
+  that install's first live process set up (its `/tmp` from that
+  process's TMP), and convert the Windows forms we pass. So a child
+  in another install than the shell's has another `/`, and while the
+  user runs Git Bash with another TMP, Git's children started by us
+  see that `/tmp` (t/msys isolates them with a clone of Git's
+  install). Not modelled: a probe of the child's table.
+- **Accepted: Cygwin's options follow the mode, not the persona**: igncr,
+  completion_strip_exe and the cygpath builtin exist while msyspath is
+  on; switching it off hides them (igncr keeps its value, without
+  effect) and a native persona gains them with `shopt -s msyspath`.
+- **Accepted: `2>nul`**: Git Bash creates a file named `nul`; a native
+  shell opens the device. Not in the t/msys corpus.
+- **Accepted: BatBadBut quoting**: arguments to .bat/.cmd targets are
+  quoted for cmd.exe's safety, unlike Cygwin's. Not in the corpus.
+- **Accepted: BASH_VERSION and friends** differ from Git Bash's
+  (`5.3.15(1)-release`); the corpus prints only BASH_VERSINFO[5].
+- **Accepted: `type cygpath`** says builtin in msys mode (m5a.md,
+  Decisions). Not in the corpus, nor is cygpath's usage text (GPL).
+- **Accepted: paths.cpp stays lexical where Cygwin asks the file
+  system** (m5a.md steps 1, 5): cygpath -w of `C:` or `C:x` (Cygwin:
+  cwd\C), relative paths and `..` through missing directories,
+  `\\.\NUL` (Cygwin -w: `\\?\NUL`), cygpath mapping `<>|"` to private-use
+  characters, /proc/self (Cygwin: /proc/PID), and a closed /dev/fd/N
+  argument. The shell asks the file system only for the `.exe` suffix
+  rule (also SHELL and the other single-path variables reaching a
+  child, step 7) and the virtual files. None is in the corpus.
+- **Accepted: bash's ENOEXEC fallback in native mode**: a file without
+  `#!` (and not `.sh`) runs as shell code; busybox-w32 fails to run it.
+- **Accepted: a Windows-form value in HOME, TMP, PATH and the other
+  conv_envvars reaches an MSYS2 child converted** (step 10a):
+  `HOME='C:\Windows' printenv HOME` prints C:\Windows in Git Bash,
+  whose children take the value from the cygheap, and /c/Windows from
+  us: a child of a non-Cygwin parent converts these variables at
+  startup from any Windows spelling (probed: every form tried, and
+  MSYS2_ENV_CONV_EXCL and MSYS_NO_PATHCONV do not stop it). Only a
+  Cygwin parent (a trampoline such as Git's env.exe) could pass one
+  through. Removed from t/msys/037.
+- **Accepted: a 32-bit build's identity is i686** (MACHTYPE,
+  HOSTTYPE, BASH_VERSINFO[5]) where 64-bit Git Bash says x86_64;
+  t/msys/run normalizes it for a 32-bit shell (tools/README.md).
+- **Accepted: busybox-w32's read after a backslash CR LF continuation**
+  (1.39.0, M5a step 10): it ends the continued line at the next CR and
+  leaves that line's LF unread, so the next `read` gets an empty line.
+  Not copied (a busybox bug); t/winvos/011 has our reading.

@@ -1346,3 +1346,48 @@ long-lived driver does not. Git Bash pays it too.
 
 With the busybox driver, for comparison: Git Bash full 44.6, noop 25.1,
 exit 22.3, floor 17.2, ext 19.0; ours full 28.6, noop 18.1, exit 17.0.
+
+XP laptop, t/win32 with the new unabashed32.exe: 15/15 on the last
+run, but 003-waits failed 2 runs in 6 (`n=67` for 66), as the build
+before step 10 does (2 in 8): the M5b `wait` flake already in
+issues.md, not a regression.
+
+### Step 10d: closing
+
+The native-mode CR rules, a hand-checked baseline until now, were run
+against busybox-w32 1.39.0 sh (w64devkit's). Two differed and are
+fixed: busybox turns CR LF into LF in every field-split expansion,
+whatever IFS is (we did it only for comsubs, and only with a newline
+in IFS), and its read takes CR LF as LF and continues at backslash CR
+LF with any delimiter (we only with the newline). t/winvos/011 gained
+the cases and now matches busybox line for line but for -N, mapfile
+and `$(<f)`, which busybox lacks, and a busybox bug (after a
+continuation it leaves the next line's LF unread; accepted in
+issues.md).
+
+issues.md's M5a list is empty: of its 32 items two were resolved (the
+CR rules above; the agent gate, step 10c), 11 moved to M7 (Windows
+fidelity gaps that neither the trial nor the Git Bash corpus reaches),
+one each to M5b (a lent pipe's other readers) and M6
+(completion_strip_exe), six to Test infrastructure, and the rest are
+accepted deviations.
+
+Exit criteria:
+1. Met: t/msys 72/72 real (64- and 32-bit), 45/45 `# vos` (step 10a,
+   rerun after the Path change).
+2. Met: make 4.4.1 and xz 5.6.4 configure, build and check under the
+   trial kit, config.h and substitutions equal to busybox's (10b).
+3. Met: own time 5.19-5.55x lower than Git Bash's (10c).
+4. Met: configure 1.29x (make) and 1.65x (xz) faster than busybox sh,
+   medians of 5 (10b).
+5. Met but one check: tests.exe 159/0, t/exec 659 specs 3448/0, t/parse
+   3055/0, t/unit 10 specs, t/winvos 25 specs 282/0 (chaos 20
+   1782/0), t/msys vos 45/45, t/win32 -x 30/0; XP t/win32 as above;
+   both builds import KERNEL32.dll only, subsystem 5.02 and 5.01;
+   FUZZ_WIN and FUZZ_WIN+FUZZ_CHAOS replay of t/winvos, t/msys, t/exec
+   and t/win32 (769 files) clean. Not yet done: Claude Code's Bash
+   tool with CLAUDE_CODE_GIT_BASH_PATH at a scratch install, which
+   needs a Claude Code started with that variable (no CLI here).
+   bench/agent runs the tool's exact wrapper string, so the shell side
+   is exercised; the tool's own probing (its snapshot, cygpath) is not.
+6. Met: no M5a items in issues.md.
