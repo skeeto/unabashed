@@ -2199,9 +2199,10 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     Str s = {}, e = {};
     b32 done = 0;
     // CRs on Windows: igncr drops them all (Git Bash, which otherwise
-    // keeps them), native mode a CR before the newline (busybox-w32)
+    // keeps them), native mode a CR before a newline (busybox-w32,
+    // whatever the delimiter)
     b32 nocr = igncr(sh);
-    b32 crlf = sh->pathmode==PM_NATIVE && delim=='\n' && !exact;
+    b32 crlf = sh->pathmode==PM_NATIVE && !exact;
     if (in && in->kind==F_MEM && (in->flags & OF_READ)) {
         // Text in memory (a here-document or here-string): scan it in
         // place, unless an escape needs the general loop

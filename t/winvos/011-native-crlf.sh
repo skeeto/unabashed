@@ -1,10 +1,12 @@
 # personality: native
-# Hand-checked baseline, not recorded from an oracle (M5a step 6).
-# busybox-w32's CR rules (notes/research/busybox.md §3): parser input
-# loses the CR of each CR LF pair, lone CRs stay; command substitution
-# strips trailing CR LF; an unquoted one splitting on newlines takes CR
-# LF as the newline; read takes CR LF, and backslash CR LF, as the end
-# of a line. No igncr or completion_strip_exe here: bash 5.3's lists.
+# Hand-checked baseline, not recorded from an oracle (M5a step 6),
+# checked against busybox-w32 1.39.0 sh (step 10) but for -N, mapfile
+# and $(<f), which it lacks. busybox-w32's CR rules (notes/research/
+# busybox.md §3): parser input loses the CR of each CR LF pair, lone
+# CRs stay; command substitution strips trailing CR LF; where an
+# expansion is field-split, whatever IFS is, its CR LF becomes LF; read
+# takes CR LF as LF, and backslash CR LF as a line continuation, with
+# any delimiter. No igncr or completion_strip_exe here: bash 5.3's lists.
 show() { local s=$1; s=${s//$'\r'/'\r'}; s=${s//$'\n'/'\n'}; echo "[$s] ${#1}"; }
 printf 'x=a\r\necho "[$x]" ${#x}\r\ny=p\rq; echo ${#y}\r\n' >c.sh
 printf 'cat <<E\r\nh\r\nE\r\necho a\\\r\nb\r\n' >>c.sh
@@ -19,6 +21,9 @@ for w in $(printf 'p\r\nq\r\n'); do show "$w"; done
 v=$(printf 'r\r\ns\r\n'); show "$v"
 show "$(printf 'r\r\ns\r\n')"
 IFS=' '; for w in $(printf 't\r\nu\r\n'); do show "$w"; done; unset IFS
+v=$(printf 'a\r\nb\r\n\r\nc'); for w in $v x${v}y; do show "$w"; done
+IFS=:; for w in $v; do show "$w"; done; IFS=; for w in $v; do show "$w"; done
+unset IFS; for w in "a"$'\r'$'\n'b; do show "$w"; done
 printf 'b\r\nc d\r\ne\\\r\nf\r\ng\rh\r\n' >f
 { read -r x; read -r y z; read w; read -r v; } <f
 show "$x"; show "$y"; show "$z"; show "$w"; show "$v"

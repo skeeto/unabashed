@@ -395,22 +395,6 @@ static void putvalue(X *x, Str v, i32 ctx)
     xput(x, v, flag);
 }
 
-// Append a command substitution's output. In native mode, as in
-// busybox-w32, an unquoted one splitting on newlines splits on CR LF
-// too: the CR goes with the newline instead of ending a field.
-static void putcomsub(X *x, Str v, i32 ctx)
-{
-    b32 set;
-    Str ifs = ifsvalue(x->sh, &set);
-    b32 nl  = !set;
-    for (iz i = 0; i < ifs.len; i++) nl |= ifs[i] == '\n';
-    b32 split = !x->nosplit && !(ctx & (XC_DQUOTE|XC_HEREDOC));
-    if (nl && split && x->sh->pathmode==PM_NATIVE) {
-        v = dropcr(x->a, v, CR_CRLF);
-    }
-    putvalue(x, v, ctx);
-}
-
 // Append $@ or $*, or a list of values derived from them.
 static void putlist(X *x, Str *v, iz n, b32 star, i32 ctx)
 {
@@ -2021,7 +2005,7 @@ static void expandinto(X *x, Str s, i32 ctx)
             }
             Str body = span(s.data+i+1, s.data+e-1);
             Str out = runcapture(sh, x->a, backquotebody(x->a, body, dq), 1);
-            putcomsub(x, out, ctx);
+            putvalue(x, out, ctx);
             i = e;
             continue;
         }
@@ -2061,7 +2045,7 @@ static void expandinto(X *x, Str s, i32 ctx)
                 } else {
                     Str body = span(s.data+i+2, s.data+(e>i+2 ? e-1 : e));
                     Str out  = runcapture(sh, x->a, body, 0);
-                    putcomsub(x, out, ctx);
+                    putvalue(x, out, ctx);
                 }
                 i = e;
                 continue;
@@ -2072,7 +2056,7 @@ static void expandinto(X *x, Str s, i32 ctx)
                 if (inner.len && funsubchar(inner[0])) {
                     // ${ cmd; } and ${| cmd; }: run in the current shell
                     Str out = runcapture(sh, x->a, inner, 2);
-                    putcomsub(x, out, ctx);
+                    putvalue(x, out, ctx);
                 } else {
                     expandbraced(x, inner, ctx);
                 }
@@ -2166,6 +2150,39 @@ static b32 isdelim(XField *f, Str ifs, iz i)
 static b32 iswhitedelim(XField *f, Str ifs, iz i)
 {
     return isdelim(f, ifs, i) && ifswhite(f->data[i]);
+}
+
+static b32 splitbyte(XField *f, iz i)
+{
+    return (f->flags[i] & (XF_SPLIT|XF_QUOTED|XF_KEEP)) == XF_SPLIT;
+}
+
+// Native mode, as busybox-w32: where an expansion is split, its CR LF
+// becomes LF, whatever IFS holds.
+static XField dropsplitcr(Arena *a, XField f)
+{
+    iz n = f.data.len;
+    iz k = 0;
+    for (; k < n-1; k++) {
+        if (f.data[k]=='\r' && f.data[k+1]=='\n' &&
+            splitbyte(&f, k) && splitbyte(&f, k+1)) {
+            break;
+        }
+    }
+    if (k >= n-1) return f;
+
+    XField r = f;
+    r.data  = {alloc<u8>(a, n), 0};
+    r.flags = {alloc<u8>(a, n), 0};
+    for (iz i = 0; i < n; i++) {
+        if (f.data[i]=='\r' && i+1<n && f.data[i+1]=='\n' &&
+            splitbyte(&f, i) && splitbyte(&f, i+1)) {
+            continue;
+        }
+        r.data[r.data.len++]   = f.data[i];
+        r.flags[r.flags.len++] = f.flags[i];
+    }
+    return r;
 }
 
 static void splitfield(X *x, XField f, Str ifs, Slice<XField> *out)
@@ -2530,6 +2547,9 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
                 XField f = fields[k];
                 b32 dosplit = split && !(w->flags & W_NOSPLIT);
                 Str sifs    = ifs;
+                if (dosplit && sh->pathmode==PM_NATIVE) {
+                    f = dropsplitcr(a, f);  // even with a null IFS
+                }
                 if (dosplit && x->splitspace) {
                     dosplit = unsetonly(a, &f);
                     sifs    = " ";
