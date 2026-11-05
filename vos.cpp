@@ -1829,6 +1829,21 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
         r.err = g.err;
         return r;
     }
+    if (!v->win) {
+        // Linux execve: each string at most MAX_ARG_STRLEN (32 pages),
+        // all of them with their pointers within ARG_MAX (getconf)
+        enum { STRMAX = 131072, ARGMAX = 2097152 };
+        iz total = 0;
+        for (iz i = 0; i < s->argc+s->nenv; i++) {
+            Str a = i<s->argc ? s->argv[i] : s->env[i-s->argc];
+            if (a.len >= STRMAX) total = ARGMAX;
+            total += a.len + 1 + (iz)sizeof(void *);
+        }
+        if (total > ARGMAX) {
+            r.err = E_2BIG;
+            return r;
+        }
+    }
     i32 id = 1;
     for (; id<v->nprocs && v->procs[id].state!=VP_FREE; id++) {}
     if (id==countof(v->procs) || v->live>=64) {

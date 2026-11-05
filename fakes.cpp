@@ -1071,6 +1071,36 @@ static i32 fake_false(Os *os, FakeCtx *ctx)
     return fkexit(&p, 1);
 }
 
+// getconf NAME: the few system variables scripts ask for, with the
+// oracle container's values (ARG_MAX is what os_spawn enforces).
+static i32 fake_getconf(Os *os, FakeCtx *ctx)
+{
+    static struct { Str name; i64 value; } vars[] = {
+        {"ARG_MAX",   2097152},
+        {"PAGESIZE",  4096},
+        {"PAGE_SIZE", 4096},
+        {"PATH_MAX",  4096},
+    };
+    FkProg p = fkprog(os, ctx);
+    if (ctx->argc != 2) {
+        print(diag(&p), "usage: getconf NAME");
+        enddiag(&p);
+        return fkexit(&p, 1);
+    }
+    for (iz i = 0; i < countof(vars); i++) {
+        if (ctx->argv[1] == vars[i].name) {
+            print(&p.out, vars[i].value);
+            putbyte(&p.out, '\n');
+            return fkexit(&p, 0);
+        }
+    }
+    print(diag(&p), "Unrecognized variable '");
+    print(&p.err, ctx->argv[1]);
+    putbyte(&p.err, '\'');
+    enddiag(&p);
+    return fkexit(&p, 1);
+}
+
 // yes: its arguments (or "y") on a line, until the output fails.
 static i32 fake_yes(Os *os, FakeCtx *ctx)
 {
@@ -10231,6 +10261,7 @@ static Fake fakes[] = {
     {"env",      fake_env},
     {"expr",     fake_expr},
     {"false",    fake_false},
+    {"getconf",  fake_getconf},
     {"grep",     fake_grep},
     {"head",     fake_head},
     {"hexdump",  fake_hexdump},
