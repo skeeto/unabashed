@@ -48,13 +48,6 @@ gets checked. Rules:
   stalls; direct pipeline stages (spawnto) get no bridge; at most 16
   bridges per command; a grandchild still using a reading bridge's
   path when its program exits is cut off. (m5a.md, step 8)
-- **t/win32/015 is flaky on the XP laptop** (step 8): about half the
-  runs hang somewhere after the busybox procsub "loop" line (wc's
-  standard output failing with EINVAL, or the unopened or tee cases),
-  while each section passes alone there and the whole test passes
-  with UNABASHED_XPIO=1 on Windows 11 (10 of 10 with -x). Its argv[0]
-  also differs there (the directory has spaces, so it is quoted).
-  Undiagnosed. (m5a.md, step 8)
 - **A pipe lent to a program aborts another reader's helper read**
   (step 8): passing a pipe descriptor that a pump also reads made the
   pump's read fail with E_INTR (the lend's CancelSynchronousIo). The

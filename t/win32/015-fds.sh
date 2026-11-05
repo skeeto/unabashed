@@ -12,6 +12,9 @@ norm() {
     while IFS= read -r l; do
         l=${l//"${D//\//\\}"/@D}
         l=${l//"$D"/@D}
+        case $l in  # a test directory with blanks quotes argv[0]
+        'cmdline = <"@D\'*) l=${l/'<"@D\'/'<@D\'}; l=${l/'.exe" '/'.exe '} ;;
+        esac
         printf '%s\n' "$l"
     done | "$BB" sed 's/unabashed-[0-9]*-[0-9a-f]*/@P/g'
 }

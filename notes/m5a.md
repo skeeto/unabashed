@@ -1029,9 +1029,23 @@ widths with argv's fd probe, procsubs to busybox and argv, a write
 procsub, an unopened one, the native persona and the 32-bit shell);
 main_test's vwin named-pipe test (instances, busy, access, reuse);
 t/winvos/024-descriptors (hand-checked: the fd probe, bridges);
-t/winvos/006 (argv sees fd 3). On the XP laptop 015 matches apart from
-argv[0] quoting (spaces in the directory), but hangs in about half the
-runs late in its procsub section; undiagnosed (issues.md).
+t/winvos/006 (argv sees fd 3). On the XP laptop 015 normalizes argv[0]
+quoting (spaces in the directory) as 014 does.
+
+015 hung in about half the runs on the XP laptop (one bridged
+`busybox wc -l <(seq 100000) >file` in 50-100), never on Windows 11.
+Traced: the bridge pump's writes to its client went through the private
+duplicate (Wobj.own) of the procsub's OS pipe, so they looped back into
+the pipe the pump read, its reads ended early, and wc's instance was
+never closed. One Wobj served both handles: os_close drained the wake
+queue after unregistering the last handle, a helper's operation ending
+there released the object (closing = 2), and os_close's `closing |=
+!refs` made it 3, defeating maybefree's never-twice check, so the
+object went onto the free list twice. It needs a helper completion
+pending at that close, which the single-core XP laptop's timing gives.
+Fixed with a plain `freed` mark (reset by newobj). Not modelled in the
+vos, which has no Wobj layer. After: 1200 such commands without a hang,
+015 10 of 10 there.
 
 | suite        | before | after |
 |--------------|--------|-------|
