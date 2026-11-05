@@ -105,6 +105,12 @@ msys_init() {
     sysroot=${SYSTEMROOT:-'C:\Windows'}
     w64=$(msys_abs "$(dirname "$(command -v cc)")/..") || exit 2
     msys_normscript >"$work/norm.sed"
+    # A 32-bit shell names its architecture i686 (MACHTYPE, HOSTTYPE)
+    # where the 64-bit Git Bash recorded x86_64
+    pe=$(od -A n -t u4 -j 60 -N 4 "$1" | tr -d ' ')
+    if [ "$(od -A n -t x2 -j $((pe + 4)) -N 2 "$1" | tr -d ' ')" = 014c ]; then
+        echo 's|i686|x86_64|g' >>"$work/norm.sed"
+    fi
 }
 
 # msys_spellings TOKEN DIR: "LEN TOKEN LITERAL" for each spelling of DIR
