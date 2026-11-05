@@ -69,18 +69,15 @@ gets checked. Rules:
   PointerToRawData to 512 bytes and DLL names over 63 bytes; reads at
   most 1024 section headers. None matters for the binaries tried.
   (m5a.md, step 2)
-- **t/msys is not yet all green**: unabashed.exe passes 68 of 72; all
-  45 `# vos` scripts pass in tests.exe (m5a.md, "Step 9"). Exit
-  criterion 1. Left: 007 (/proc, below) and 018, 034, 037 (next).
-- **MSYS2 children we start see the Windows environment**: Git Bash
-  hands its MSYS2 children POSIX values through the cygheap; ours
-  import the Windows block. So `HOME='C:\Windows'` reaches an msys
-  child converted (037), and the child's /tmp is not the test's TEMP
-  (018, 034: cygpath and printenv show /tmp/... under the real
-  %TEMP%; Git Bash itself passes them in the same WORKDIR). Suspected:
-  the runtime's per-user shared mount state of Git's install, set by
-  other Git Bash processes running (the sandbox's TEMP is under the
-  real one). Unverified; a WORKDIR outside %TEMP% may tell.
+- **MSYS2 children have their own install's mount table** (step 10a):
+  Git Bash's children inherit its table and POSIX environment through
+  the cygheap; ours read their install's fstab, or join the table
+  that install's first live process set up (its `/tmp` from that
+  process's TMP), and convert the Windows forms we pass. So a child
+  in another install than the shell's has another `/`, and while the
+  user runs Git Bash with another TMP, Git's children started by us
+  see that `/tmp` (t/msys isolates them with a clone of Git's
+  install). Not modelled: a probe of the child's table.
 - **t/winvos/ is a hand-checked baseline**, not oracle output (steps
   4-8, specs 001-017 and 024); change it deliberately.
 - **Spawning gaps** (m5a.md, step 7): the missing-DLL search ignores
@@ -93,11 +90,16 @@ gets checked. Rules:
   imports, not by content. Exec's XP/7 job path (breakaway) passes on
   the XP laptop (t/win32/014 with sandbox -B, and outside the sandbox);
   Windows 7 is untested.
-- **/proc lists nothing** and only `/proc/self/{exename,winexename}`
-  and `/proc/cygdrive` exist; Git Bash lists /proc and has /proc/PID,
-  stat, swaps, sys... (007 fails on `/proc/s*`). `/dev/zero`,
-  `/dev/random` and the other sinks only accept writes; reads fail.
-  (m5a.md, step 5)
+- **/proc has names but little content** (step 10a): /proc lists
+  Cygwin's fixed entries and the shell's own pids (Git Bash: every
+  process of its install, by Cygwin pid), and stat knows their types,
+  but no fixed file can be read (EACCES; cpuinfo, meminfo, mounts,
+  stat, uptime, version... have contents in Git Bash) and the
+  directories net, registry*, sys, sysvipc list nothing; /proc/self
+  lists only exename, fd and winexename and serves only the first and
+  last (no cmdline, cwd, environ, exe, maps, stat, status, winpid...),
+  and /proc/self/fd lists nothing. `/dev/zero`, `/dev/random` and the
+  other sinks only accept writes; reads fail. (m5a.md, steps 5, 10a)
 - **Native mode skips two busybox-w32 fix-ups**: assigning PATH does
   not turn `:` into `;`, and cd does not fix a path's case to what is
   on disk (PWD keeps the case typed). (m5a.md, step 5)
@@ -179,6 +181,18 @@ gets checked. Rules:
   Bash.
 - **Accepted: bash's ENOEXEC fallback in native mode**: a file without
   `#!` (and not `.sh`) runs as shell code; busybox-w32 fails to run it.
+- **Accepted: a Windows-form value in HOME, TMP, PATH and the other
+  conv_envvars reaches an MSYS2 child converted** (step 10a):
+  `HOME='C:\Windows' printenv HOME` prints C:\Windows in Git Bash,
+  whose children take the value from the cygheap, and /c/Windows from
+  us: a child of a non-Cygwin parent converts these variables at
+  startup from any Windows spelling (probed: every form tried, and
+  MSYS2_ENV_CONV_EXCL and MSYS_NO_PATHCONV do not stop it). Only a
+  Cygwin parent (a trampoline such as Git's env.exe) could pass one
+  through. Removed from t/msys/037.
+- **Accepted: a 32-bit build's identity is i686** (MACHTYPE,
+  HOSTTYPE, BASH_VERSINFO[5]) where 64-bit Git Bash says x86_64;
+  t/msys/run normalizes it for a 32-bit shell (tools/README.md).
 
 
 ## M5b (real background processes)

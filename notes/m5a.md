@@ -1149,3 +1149,80 @@ does not build, before this step too: vos.cpp needs paths.cpp.)
 | startup (070-076) | -     | 7/7            |
 | tz (077-078)      | 1/1   | 2/2            |
 | all               | 45/45 | 59/63 -> 68/72 |
+
+### Step 10a: t/msys green
+
+The four failures left after step 9 (007, 018, 034, 037), and the
+32-bit run.
+
+What Git Bash hands its MSYS2 children, found by probing Git's own
+programs from busybox (curated commands, outside the sandbox):
+- Its POSIX environment and its mount table, through the cygheap
+  (child_info in lpReserved2, with the handle of the shared table).
+  Neither can be built by a non-Cygwin parent.
+- A child of a non-Cygwin parent instead imports the Windows block:
+  HOME, TMP, TEMP, TMPDIR, SHELL, PATH and the other conv_envvars are
+  converted from any Windows spelling (`C:\x`, `C:/x`, `C:x`, `\\?\C:\x`,
+  `c:\x`; MSYS2_ENV_CONV_EXCL and MSYS_NO_PATHCONV do not stop it),
+  a value starting with `/` is kept, other variables are kept as is.
+- Its mount table is per install, keyed by its DLL's directory (a
+  junction resolves to the target, so it shares the key; a hard-linked
+  copy has its own) and per user, and the first live process of an
+  install builds it: from `<root>/etc/fstab`, with the usertemp `/tmp`
+  from that process's TMP, else TEMP, else USERPROFILE (TMP=/tmp makes
+  it C:/tmp). Probed with a private copy: children with TMP C:\foo1,
+  then C:\foo2, then C:\foo4 while one with C:\foo3 still ran, saw
+  /tmp at foo1, foo2 and foo3.
+
+So 018 and 034 failed on the harness, not the shell: Git's install had
+a dozen Git Bash processes alive (the user's), whose table put /tmp at
+the real %TEMP%, so Git's printenv, env and cat started by our shell
+saw /tmp there (HOME and PATH under the WORKDIR in %TEMP% became
+/tmp/claude/...), while the copied Git Bash under test had a table of
+its own that its children inherited. Fix (t/msys/lib.sh): WORKDIR/git,
+a clone of Git's install (usr/bin hard-linked, etc copied, rebuilt when
+Git's files change), lends the programs, so each test's first MSYS2
+child builds a fresh table from Git's fstab with the test's TMP. The
+shell keeps passing the conv_envvars in Windows form: a child that
+builds its own table converts them back to the POSIX forms Git Bash's
+children see (TEMP=/tmp, HOME and PATH as in the shell), and passing
+POSIX forms instead would break exactly that child (TMP=/tmp mounts
+/tmp on C:/tmp) and send PATH to the loader in a form it cannot use.
+
+037's `HOME='C:\Windows' printenv HOME` cannot match: C:\Windows
+reaches a child only through a Cygwin parent. Accepted (issues.md),
+and the line now assigns a Windows path to a variable the runtime does
+not convert (re-recorded with gbrecord; the spec is unchanged, as both
+print C:\Windows). A trampoline through the child install's env.exe
+would pass it, at a process per such command; not done.
+
+007 (glob.cpp's proclist, expand.cpp's procnames and proctype,
+exec.cpp's pathstat): /proc lists Cygwin's fixed entries (codesets,
+cpuinfo, cygdrive, devices, filesystems, loadavg, locales, meminfo,
+misc, mounts, net, partitions, registry, registry32, registry64, self,
+stat, swaps, sys, sysvipc, uptime, version, as Git Bash lists them)
+and the shell's pid and BASHPID; stat knows which are directories;
+/proc/self lists exename, fd and winexename. The fixed files have no
+contents (a read is EACCES) and the subdirectories list nothing
+(issues.md).
+
+32-bit: 054 failed only on MACHTYPE, HOSTTYPE and BASH_VERSINFO[5]
+naming i686, the build's architecture (step 5). t/msys/run now maps
+i686 to x86_64 when the shell under test is a 32-bit image (the PE
+header's machine), and the deviation is listed as Accepted.
+
+Tests: t/winvos/025-msys-proc (hand-checked against Git Bash: the
+listings by glob and from inside /proc, the types, the own pid, the
+unreadable file). Git Bash itself still passes 72/72 with the clone
+(`t/msys/run -s "$GITBASH"`).
+
+Results: unabashed.exe, unabashed32.exe and tests.exe without
+warnings; tests.exe 159/0; t/exec 659 specs 3448/0, with --chaos 20
+42868/0; t/parse 3055/0; t/unit 159/0; t/winvos 23 specs 272/0, with
+--chaos 20 1652/0; t/msys vos 45/45; t/win32 -x 30/0.
+
+| t/msys            | vos   | real           | real, 32-bit   |
+|-------------------|-------|----------------|----------------|
+| all               | 45/45 | 68/72 -> 72/72 | 72/72          |
+
+Exit criterion 1 (the Git Bash comparison) holds.
