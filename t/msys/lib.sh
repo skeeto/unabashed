@@ -28,6 +28,32 @@ msys_workdir() {
     msys_abs "$1" || exit 2
 }
 
+# msys_gitclone: WORK/git, the Git install the corpus uses: Git's
+# usr/bin hard-linked (copied when that fails) and its etc copied. An
+# MSYS2 program keys its mount table by its DLL's directory, and the
+# first live process of an install fixes the table for every later one
+# (/tmp from that process's TMP). Git's own install is shared with any
+# Git Bash the user runs, so a child of a non-MSYS2 shell would see
+# their /tmp (a junction does not help: the runtime resolves it). The
+# clone has a key of its own, so each test's first MSYS2 child reads
+# the clone's fstab with the test's TMP; Git Bash's children inherit
+# Git Bash's table either way. Rebuilt when Git's files change.
+msys_gitclone() {
+    gitroot=$work/git
+    stamp=$gitroot/.stamp
+    if [ -f "$stamp" ] && [ -f "$gitroot/usr/bin/msys-2.0.dll" ] &&
+       [ -z "$(find "$gitreal/usr/bin" "$gitreal/etc" -newer "$stamp" | head -1)" ]; then
+        return
+    fi
+    rm -rf "$gitroot"
+    mkdir -p "$gitroot/usr" || exit 2
+    cp -rl "$gitreal/usr/bin" "$gitroot/usr/" 2>/dev/null ||
+        { rm -rf "$gitroot/usr/bin"; cp -r "$gitreal/usr/bin" "$gitroot/usr/"; } ||
+        exit 2
+    cp -r "$gitreal/etc" "$gitroot/" || exit 2
+    : >"$stamp"
+}
+
 # msys_init SHELL: build WORK/bin and the scratch install WORK/inst
 msys_init() {
     case $work in
@@ -38,10 +64,11 @@ msys_init() {
         echo "$0: no Git Bash at $gitbash (set GITBASH)" >&2
         exit 2
     fi
-    gitroot=$(msys_abs "$(dirname "$gitbash")/../..") || exit 2
+    gitreal=$(msys_abs "$(dirname "$gitbash")/../..") || exit 2
     bin=$work/bin
     inst=$work/inst
     mkdir -p "$bin" || exit 2
+    msys_gitclone
     if [ ! -e "$bin/sandbox.exe" ] || [ "$root/tools/sandbox.cpp" -nt "$bin/sandbox.exe" ]; then
         cc -nostartfiles -o "$bin/sandbox.exe" "$root/tools/sandbox.cpp" \
            -ladvapi32 || exit 2
