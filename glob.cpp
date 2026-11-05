@@ -139,10 +139,35 @@ static Dirent *addentry(Arena *a, Dirent *list, Str name, i32 type)
     return e;
 }
 
+// The listing of a /proc directory, as Git Bash's (msys2-runtime
+// 3.6.9): /proc's fixed entries (procnames) and the processes, of which
+// the shell knows only itself; /proc/self, the files the shell serves.
+static Dirent *proclist(Shell *sh, Arena *a, PathRes r)
+{
+    Dirent *list = 0;
+    if (!r.num && !r.sub.len) {
+        for (iz i = 0; i < countof(procnames); i++) {
+            Str n = procnames[i].name;
+            list = addentry(a, list, n, proctype(n));
+        }
+        i64 pids[] = {sh->pid, sh->bashpid};
+        for (iz i = 0; i < countof(pids); i++) {
+            Buf b(a, 24);
+            print(&b, pids[i]);
+            list = addentry(a, list, finish(&b), FT_DIR);
+        }
+    } else if (!r.sub.len && procself(sh, r)) {
+        list = addentry(a, list, "exename", FT_FILE);
+        list = addentry(a, list, "fd", FT_DIR);
+        list = addentry(a, list, "winexename", FT_FILE);
+    }
+    return list;
+}
+
 // os_list for a directory as the shell names it. In msys mode, as
 // Cygwin's readdir, a directory also lists the mount points in it, the
-// root also dev and proc, and /dev holds the devices the shell emulates
-// (/proc lists nothing: see notes/issues.md).
+// root also dev and proc, /dev holds the devices the shell emulates and
+// /proc what proclist has.
 static Dirent *pathlist(Shell *sh, Arena *a, Str dir, i32 *err)
 {
     if (sh->pathmode != PM_MSYS) {
@@ -167,7 +192,10 @@ static Dirent *pathlist(Shell *sh, Arena *a, Str dir, i32 *err)
             list = addentry(a, list, devs[i], devs[i]=="fd" ? FT_DIR : FT_CHAR);
         }
         return list;
-    } else if (r.ok && (r.kind==PK_PROC || r.kind==PK_CYGDRIVE)) {
+    } else if (r.ok && r.kind==PK_PROC) {
+        *err = 0;
+        return proclist(sh, a, r);
+    } else if (r.ok && r.kind==PK_CYGDRIVE) {
         *err = 0;
         return 0;
     }

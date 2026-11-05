@@ -1300,12 +1300,6 @@ static Stat fdstat(Shell *sh, i64 fd)
     return s;
 }
 
-// Is a resolved /proc entry ours: /proc/self or /proc/$$?
-static b32 procself(Shell *sh, PathRes r)
-{
-    return r.num<0 || r.num==sh->pid || r.num==sh->bashpid;
-}
-
 // The contents of a file under /proc/self, or null if there is none:
 // the few Cygwin files an agent reads (no comm in msys2-runtime 3.6).
 static Str procfile(Shell *sh, Arena *a, PathRes r)
@@ -1378,6 +1372,12 @@ static Stat pathstat(Shell *sh, Arena a, Str path, b32 follow)
         break;
     case PK_PROC:
         if (!r.num && !r.sub.len) return dirstat(sh);
+        if (!r.num && proctype(r.sub)==FT_DIR) return dirstat(sh);
+        if (!r.num && proctype(r.sub)==FT_FILE) {
+            s.type = FT_FILE;  // without contents
+            s.mode = 0444;
+            break;
+        }
         if (!r.num || !procself(sh, r)) {
             s.err = E_NOENT;
             return s;

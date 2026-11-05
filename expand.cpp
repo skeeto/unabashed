@@ -2365,6 +2365,33 @@ static Str absolute(Shell *sh, Arena *a, Str path)
 
 static Stat pathstat(Shell *, Arena, Str, b32);  // exec.cpp
 
+// Is a resolved /proc entry ours: /proc/self or /proc/$$?
+static b32 procself(Shell *sh, PathRes r)
+{
+    return r.num<0 || r.num==sh->pid || r.num==sh->bashpid;
+}
+
+// The fixed entries of Cygwin's /proc, as Git Bash lists them
+// (msys2-runtime 3.6.9), and which are directories. Of their contents
+// the shell has none (notes/issues.md).
+static struct { Str name; b32 dir; } procnames[] = {
+    {"codesets", 0}, {"cpuinfo", 0}, {"cygdrive", 1}, {"devices", 0},
+    {"filesystems", 0}, {"loadavg", 0}, {"locales", 0}, {"meminfo", 0},
+    {"misc", 0}, {"mounts", 0}, {"net", 1}, {"partitions", 0},
+    {"registry", 1}, {"registry32", 1}, {"registry64", 1}, {"self", 1},
+    {"stat", 0}, {"swaps", 0}, {"sys", 1}, {"sysvipc", 1},
+    {"uptime", 0}, {"version", 0},
+};
+
+// A fixed /proc entry's type, or FT_NONE.
+static i32 proctype(Str name)
+{
+    for (iz i = 0; i < countof(procnames); i++) {
+        if (procnames[i].name == name) return procnames[i].dir ? FT_DIR : FT_FILE;
+    }
+    return FT_NONE;
+}
+
 // The working directory a program starts in: in a virtual msys
 // directory (/proc), the root.
 static Str spawncwd(Shell *sh, Arena *a)
