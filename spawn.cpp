@@ -179,8 +179,9 @@ static Sniff sniff(Shell *sh, Arena scratch, Str native, Stat st)
     }
     os_close(sh->os, o.h);
 
-    // Remember it, starting the table over when it is full
-    iz need = (iz)sizeof(SniffEntry) + key.len + s.line.len + 64;
+    // Remember it, starting the table over when it is full. alloc wants
+    // room for one more object than it takes, and clone one more byte.
+    iz need = 2*(iz)sizeof(SniffEntry) + key.len + s.line.len + 64;
     if (!c || need>(c->a.end-c->base)/4) {
         s.line = clone(&scratch, s.line);
         return s;
