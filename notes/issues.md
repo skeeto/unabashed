@@ -173,9 +173,20 @@ gets checked. Rules:
   group signals (`os_siggroup` is 0), so the core's `WMISSED` handling
   (the fallback when a missed program cannot be ended) has no tests.exe
   coverage; untested on Windows 8 and 10 (disassociating a job's port
-  may fail there: handled, later messages are ignored); not run on the
-  XP laptop. A 32-bit shell reading a 64-bit child's PEB (console
-  image, Ctrl-C ignored, initializing, same image) gets "unknown".
+  may fail there: handled, later messages are ignored). On the XP
+  laptop 006 and 012 passed 100 runs, 008 failed 1 in 60 ("after 0":
+  `g | "$U" -c "cat >/dev/null"`, the child shell missed the Ctrl-C),
+  down from 3 in 40 before programs started after an unseen Ctrl-C were
+  ended (os_spawn's unseen rule) and before notemissedspawn compared
+  creation times; the cause of the rest is not known. A 32-bit shell
+  reading a 64-bit child's PEB (console image, Ctrl-C ignored,
+  initializing, same image) gets "unknown".
+- **Win32: a bare `wait` can return before every background program
+  has been reported** (XP laptop, t/win32/003, about 1 run in 4 since
+  at least step 6): `wait -n` afterwards yields one extra status 0
+  from the first batch of 70 (`n=67` for 66 programs). Not seen on
+  Windows 11. Background jobs are interim fibers until this milestone
+  replaces them, so it is to be rechecked then.
 - **Win32: a foreign program's Ctrl-C handler that starts a program is
   taken for a wrapper**: a young program, attached and childless at a
   Ctrl-C, is watched for 50 ms, since w64devkit's aliases ignore Ctrl-C

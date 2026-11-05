@@ -504,6 +504,8 @@ struct Os {
     i32        mainio;     // atomic: odd while the main thread blocks in
                            // a read Ctrl-C may cancel
     i32        nctrl;      // atomic: Ctrl-C events so far
+    i32        nctrlseen;  // nctrl when the core last took siggrp
+    u64        ctrlat;     // atomic: the last Ctrl-C's time (FILETIME)
     i32        recentlock; // atomic: guards recent
     b32        lateattach; // Windows 8: attach after CreateProcess
     b32        xp;         // Windows XP: 32767-character environments
@@ -1841,6 +1843,7 @@ static b32 notemissed(Os *os)
     GetThreadTimes(GetCurrentThread(), ft, ft+1, ft+2, ft+3);
     j.at  = (u64)ft[0].hi<<32 | ft[0].lo;
     j.now = ticks();
+    __atomic_store_n(&os->ctrlat, j.at, __ATOMIC_SEQ_CST);
 
     Recent *young[countof(os->recent)];
     i32     n = 0;
@@ -1968,13 +1971,19 @@ static void watchjob(Os *os)
 }
 
 // A Ctrl-C came while os_spawn was in CreateProcess (nctrl moved): the
-// new program missed it if not yet attached.
+// new program missed it if not yet attached, or if created after it,
+// since it may have attached by now (on XP too, in its own startup).
+// Creation times tick coarsely (15.6 ms on XP), so a program created in
+// the Ctrl-C's tick is judged by attachment alone.
 static void notemissedspawn(Os *os, uz proc, i32 pid)
 {
     Judging j = {};
     j.npids = GetConsoleProcessList(j.pids, countof(j.pids));
     j.npids = j.npids>0 && j.npids<=countof(j.pids) ? j.npids : -1;
-    if (!attached(&j, pid) && consoleimage(os, proc)) {
+    u64 at   = __atomic_load_n(&os->ctrlat, __ATOMIC_SEQ_CST);
+    u64 born = bornat(proc);
+    b32 late = at && born>at;
+    if ((late || !attached(&j, pid)) && consoleimage(os, proc)) {
         TerminateProcess(proc, 0xc000013a);
     }
 }
@@ -2596,9 +2605,17 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
             flags |= injob && ejob ? CREATE_BREAKAWAY_FROM_JOB : 0;
         }
     }
-    flags |= tojob || ejob ? CREATE_SUSPENDED : 0;
+    // A Ctrl-C the core has not yet seen came before this program could
+    // attach, so it missed it, where bash would not have started it or
+    // its forked child would have had it: it is ended before it runs.
+    // That also covers a Ctrl-C between the core's last look and here,
+    // a window long enough on a slow machine to start a whole program.
+    i32 nctrl  = __atomic_load_n(&os->nctrl, __ATOMIC_SEQ_CST);
+    u64 ctrls  = (u64)1<<1 | (u64)1<<2;  // SIGINT, SIGQUIT (Ctrl-Break)
+    b32 unseen = !noint && (nctrl!=os->nctrlseen ||
+                 (__atomic_load_n(&os->siggrp, __ATOMIC_SEQ_CST) & ctrls));
+    flags |= tojob || ejob || unseen ? CREATE_SUSPENDED : 0;
     if (noint) SetConsoleCtrlHandler(0, 1);
-    i32 nctrl = __atomic_load_n(&os->nctrl, __ATOMIC_SEQ_CST);
     b32 ok = CreateProcessW(app.data, line.data, 0, 0, 1, flags, wenv.data,
                             cwd.data, &si, &pi);
     i32 code = ok ? 0 : GetLastError();
@@ -2609,6 +2626,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
         code = ok ? 0 : GetLastError();
     }
     if (noint) SetConsoleCtrlHandler(0, 0);
+    if (ok && unseen) TerminateProcess(pi.process, 0xc000013a);
     if (ok && exec) {
         uz j = 0;
         if (tojob) {
@@ -2700,9 +2718,14 @@ static u64 os_sigpending(Os *os)
     return __atomic_exchange_n(&os->sigown, (u64)0, __ATOMIC_SEQ_CST);
 }
 
+// Also notes how many Ctrl-C events the core has seen, after taking
+// them, so that one counted but not yet posted stays pending (see the
+// unseen rule in os_spawn).
 static u64 os_siggroup(Os *os)
 {
-    return __atomic_exchange_n(&os->siggrp, (u64)0, __ATOMIC_SEQ_CST);
+    u64 r = __atomic_exchange_n(&os->siggrp, (u64)0, __ATOMIC_SEQ_CST);
+    os->nctrlseen = __atomic_load_n(&os->nctrl, __ATOMIC_SEQ_CST);
+    return r;
 }
 
 static void os_sigmode(Os *, i32, i32)
