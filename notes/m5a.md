@@ -1240,3 +1240,67 @@ warnings; tests.exe 159/0; t/exec 659 specs 3448/0, with --chaos 20
 | all               | 45/45 | 68/72 -> 72/72 | 72/72          |
 
 Exit criterion 1 (the Git Bash comparison) holds.
+
+
+### Step 10b: the w64devkit trial
+
+tools/w64trial (tools/README.md) builds autoconf projects with a
+mirror of w64devkit whose sh.exe is the shell (kit-ub) and with one
+whose sh.exe is the stock stub to busybox (kit-bb), each phase under
+tools/sandbox, then compares config.h and config.status's
+substitutions. The mirrors hard-link bin and junction the rest; both
+shells get one, since gcc pays about 7 ms a run reaching lib and
+libexec through the junctions. Sources: GNU make 4.4.1 and xz 5.6.4
+(release tarballs, checksums as published).
+
+Trial setup, not the shell:
+- make 4.4.1's gnulib breaks under GCC 15's C23 (`getenv ()`), with
+  either shell: CFLAGS=-std=gnu17.
+- autoconf needs w64devkit's etc/profile (PATH_SEPARATOR=';',
+  ac_executable_extensions, build_alias); each phase sources it, as a
+  login shell does. Set through the environment, the import would
+  uppercase their names.
+- Path, ComSpec and SystemRoot are spelled as Windows does, or neither
+  shell imports (slashes) the environment.
+- busybox fails gnulib's POSIX shell test (`$(umask)` is a new process
+  that always says 0002), so xz's configure stops with stock w64devkit;
+  the busybox run gets gl_cv_posix_shell=/bin/sh. Ours passes the test.
+
+Shell bugs found and fixed:
+- `$SHELL` as `/bin/sh` (configure's config.sub calls, 127): in native
+  mode a missing /bin/X, /usr/bin/X, /sbin/X or /usr/sbin/X is X by
+  name, sh, bash and ash being the shell (busybox-w32's unix_path).
+  t/winvos/026-native-unixpath.
+- The alias-stub test (small, CRT-free, beside busybox.exe) took
+  u-config and cc.exe (the alias for gcc) for busybox stubs, so
+  pkg-config ran as an applet. Stubs are now known by their message
+  naming busybox.exe in ASCII (their UTF-16 path is built in code, not
+  stored whole). t/winvos/016 runs a CRT-free non-stub.
+- main_win32.cpp renamed Path to PATH before the core saw it, so the
+  native import (values slashed, only for a Windows parent's
+  environment) never ran on real Windows: configure found backslashed
+  MKDIR_P and the shell read the backslashes as escapes. t/win32/013.
+
+Results: make and xz configure, build and pass make check with both
+shells, with equal config.h and substitutions. Single runs (ms):
+
+| phase     | make bb | make ub | xz bb | xz ub |
+|-----------|---------|---------|-------|-------|
+| configure | 27068   | 20538   | 37743 | 22362 |
+| make -j8  | 3289    | 2904    | 42286 | 22026 |
+| check -j8 | 752     | 540     | 9300  | 4160  |
+
+The configure workload (exit criterion 4), `w64trial -n 5`, medians
+of 5 with the shells alternating:
+
+| configure | busybox sh | unabashed | ratio |
+|-----------|------------|-----------|-------|
+| make      | 24910      | 19302     | 1.29x |
+| xz        | 31301      | 19011     | 1.65x |
+
+Per operation outside the sandbox: a trivial program 16 ms from busybox,
+3.4 ms from us (busybox's waits poll); a busybox applet 7.0 ms and
+6.2 ms; `x=$(echo hi)` 6 ms and 0.05 ms; a gcc compile and link 83-92
+ms and 72-74 ms. Configure spends most of its time in gcc.
+
+Exit criterion 2 holds.
