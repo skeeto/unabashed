@@ -1385,8 +1385,8 @@ Exit criteria:
    1782/0), t/msys vos 45/45, t/win32 -x 30/0; XP t/win32 as above;
    both builds import KERNEL32.dll only, subsystem 5.02 and 5.01;
    FUZZ_WIN and FUZZ_WIN+FUZZ_CHAOS replay of t/winvos, t/msys, t/exec
-   and t/win32 (769 files) clean. Claude Code 2.1.309 headless (`claude.exe -p`, Bash tool
-   only) with CLAUDE_CODE_GIT_BASH_PATH at a scratch install's
+   and t/win32 (769 files) clean. Claude Code 2.1.309 headless
+   (`claude.exe -p`, Bash tool only) with CLAUDE_CODE_GIT_BASH_PATH at a scratch install's
    usr/bin/bash.exe: it took its snapshot and ran twelve agent-style
    commands (arithmetic, mkdir and cd with the cwd carried to the next
    call, pipes, a quoted heredoc, git init and status, exit statuses,
