@@ -442,7 +442,7 @@ struct Wobj {
     Wobj      *next;     // free list
     i32        refs;     // registered handles
     i32        kind;     // K_*
-    b32        closing;  // no handle left: release once unused
+    b32        freed;    // on the free list (maybefree): never twice
     uz         own;      // private duplicate the helpers use, or 0
     Helper    *helper;   // its operation in flight, or null
     Io        *active;   // the Io it serves, null once abandoned
@@ -789,11 +789,11 @@ static b32 busy(Wobj *w)
 // Release an object nothing refers to any more.
 static void maybefree(Os *os, Wobj *w)
 {
-    if (w->refs || busy(w) || w->lent || w->queue || w->closing==2) return;
+    if (w->refs || busy(w) || w->lent || w->queue || w->freed) return;
     if (w->own) CloseHandle(w->own);
-    w->own     = 0;
-    w->closing = 2;  // released: never twice
-    w->next    = os->freeobj;
+    w->own   = 0;
+    w->freed = 1;
+    w->next  = os->freeobj;
     os->freeobj = w;
 }
 
@@ -2300,13 +2300,13 @@ static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 
 // Never the last handle of an object in an operation: helpers use a
 // private duplicate (Wobj.own), released once the object is unused.
+// An operation that ended meanwhile may release it in drainwake already.
 static void os_close(Os *os, Handle h)
 {
     if (h == BADHANDLE) return;
     Wobj *w = unreg(os, h);
     if (w) {
         drainwake(os);
-        w->closing |= !w->refs;
         maybefree(os, w);
     }
     CloseHandle(h);
