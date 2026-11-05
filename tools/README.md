@@ -357,3 +357,21 @@ environment, and the medians of RUNS rounds (5) are printed per mode:
 `empty` (the loop). `BENCH_MODES` selects modes; a shell without MSYS2
 paths should run only `exit noop`. The full run's output checksum must
 not change between rounds. Results: notes/m5a.md.
+
+## w64devkit trial (tools/w64trial)
+
+    tools/w64trial [-s SHELL] [-k KIT] [-j N] [-n RUNS] WORKDIR TARBALL...
+
+Builds autoconf release tarballs (NAME.tar.gz extracting to NAME) the
+way a w64devkit user would, once with the stock kit's busybox sh and
+once with SHELL (default `unabashed.exe`) as the kit's sh.exe. KIT
+defaults to the w64devkit running the script, and is never written:
+WORKDIR/kit-bb and kit-ub mirror it (bin hard-linked, every other entry
+a junction), differing only in sh.exe. Each phase (extract, configure,
+`make -jN`, `make -jN check`) runs `sh -c` in tools/sandbox in
+WORKDIR/bb or WORKDIR/ub, after sourcing the kit's etc/profile, with a
+fixed Windows-style environment, and is timed. Then config.h (as
+config.status names it) and config.status's substitutions must be
+equal, the build directories and kits normalized. `-n RUNS` then reruns
+configure RUNS times per shell, alternating, and prints the medians.
+Logs are WORKDIR/{bb,ub}/NAME.PHASE.log. Results: notes/m5a.md.
