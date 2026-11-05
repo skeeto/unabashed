@@ -1589,7 +1589,7 @@ static VWinCmd vwincmd(Vos *v, Arena *a, Spawn *s)
                 return r;
             }
         }
-        putbyte(&b, '"');
+        print(&b, " & exit\"");
         r.cmdline = finish(&b);
         r.path    = comspec;
         r.split   = 1;
@@ -2591,7 +2591,22 @@ static i32 vfake_cmd(Os *os, FakeCtx *ctx)
             cmd = finish(&b);
         }
     }
-    vcmdline(&c, vcmdcaret(c.a, vcmdexpand(&c, cmd, 0, {})));
+    // Commands joined by & outside quotes and carets, after % expansion;
+    // the blanks before an & are not part of the command (%* drops them)
+    cmd = vcmdexpand(&c, cmd, 0, {});
+    for (b32 more = 1; more && !c.done;) {
+        iz  i = 0;
+        b32 q = 0;
+        for (; i<cmd.len && (q || cmd[i]!='&'); i++) {
+            q ^= cmd[i] == '"';
+            i += !q && cmd[i]=='^';
+        }
+        more = i < cmd.len;
+        Str one = takehead(cmd, more ? i : cmd.len);
+        for (; more && one.len && vcmdblank(one[one.len-1]); one.len--) {}
+        vcmdline(&c, vcmdcaret(c.a, one));
+        cmd = cuthead(cmd, more ? i+1 : cmd.len);
+    }
     return fkexit(&c.p, c.status);
 }
 

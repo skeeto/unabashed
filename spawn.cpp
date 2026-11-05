@@ -645,9 +645,11 @@ static Target imagetarget(Shell *sh, Arena *a, Str native, Stat st, Sniff s,
     return t;
 }
 
-// A batch file runs through %ComSpec% /d /e:on /v:off /s /c "...", its
-// arguments quoted for cmd.exe as Rust's fix for BatBadBut does, since
-// CreateProcess would otherwise start cmd.exe with them unescaped.
+// A batch file runs through %ComSpec% /d /e:on /v:off /s /c "... & exit",
+// its arguments quoted for cmd.exe as Rust's fix for BatBadBut does,
+// since CreateProcess would otherwise start cmd.exe with them unescaped.
+// The trailing exit keeps an `exit /b N` status, which XP's cmd.exe
+// otherwise drops (cmd /c t.bat is 0 there, 3 on Windows 10 and later).
 static Target batchtarget(Shell *sh, Arena *a, Str native, Slice<Str> argv, Slice<Str> env)
 {
     Target t = {};
@@ -677,7 +679,7 @@ static Target batchtarget(Shell *sh, Arena *a, Str native, Slice<Str> argv, Slic
             return t;
         }
     }
-    putbyte(&b, '"');
+    print(&b, " & exit\"");
     t.path    = comspec;
     t.cmdline = finish(&b);
     t.env     = cenv;

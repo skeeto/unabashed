@@ -4,7 +4,9 @@
 # through the real cmd.exe, shebangs to busybox, exec with kill-on-close,
 # and a program missing a DLL. (MSYS2 programs cannot start under this
 # sandbox's token: t/msys covers them.) Paths are normalized: @D the
-# test directory, @B WORKDIR/bin.
+# test directory, @B WORKDIR/bin. The sandbox lets the shell's exec job
+# break away from its own, since XP and 7 have no nested jobs.
+# sandbox: -B
 D=$(pwd -W)
 B=$(cd "$BIN" && pwd -W)
 norm() {
@@ -14,6 +16,9 @@ norm() {
         l=${l//"$D"/@D}
         l=${l//"${B//\//\\}"/@B}
         l=${l//"$B"/@B}
+        case $l in  # a test directory with blanks quotes argv[0]
+        'cmdline = <"@D\'*) l=${l/'<"@D\'/'<@D\'}; l=${l/'.exe" '/'.exe '} ;;
+        esac
         printf '%s\n' "$l"
     done
 }
@@ -35,7 +40,12 @@ cp t.bat t.cmd
 echo "status $?"
 
 echo "== shebangs"
-printf '#!%s sh\necho "bb $# $1"\n' "$BB" >s1
+# A #! line ends the interpreter at a blank, so with blanks in its path
+# (C:/Documents and Settings on XP) busybox runs from here, by a path
+# relative to the current directory
+bb=$BB
+[[ $bb == *[[:blank:]]* ]] && cp "$BB" busybox.exe && bb=busybox.exe
+printf '#!%s sh\necho "bb $# $1"\n' "$bb" >s1
 printf '#!/usr/bin/env argv\n' >s2
 printf '#!/bin/sh\necho "self $1"\n' >s3
 printf 'echo "dotsh $1"\n' >s4.sh

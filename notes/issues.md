@@ -62,8 +62,9 @@ gets checked. Rules:
   nested `#!` is Linux's, unverified against busybox-w32; Git Bash's
   E2BIG limits for MSYS2 children (the cygheap, not the command line)
   are not modelled; a busybox alias stub is recognized by size and
-  imports, not by content. Exec's XP/7 job path (breakaway) is
-  untested: the XP laptop was unreachable.
+  imports, not by content. Exec's XP/7 job path (breakaway) passes on
+  the XP laptop (t/win32/014 with sandbox -B, and outside the sandbox);
+  Windows 7 is untested.
 - **/proc lists nothing** and only `/proc/self/{exename,winexename}`
   and `/proc/cygdrive` exist; Git Bash lists /proc and has /proc/PID,
   stat, swaps, sys... (007 fails on `/proc/s*`). `/dev/zero`,

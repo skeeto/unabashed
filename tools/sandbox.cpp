@@ -1,7 +1,7 @@
 // sandbox: run a program so that it can only write inside one directory
 // $ cc -nostartfiles -o sandbox.exe sandbox.cpp -ladvapi32
 //
-// usage: sandbox [-L] [-E NAME=VALUE]... [-m MIB] [-p COUNT] [-t SECS]
+// usage: sandbox [-BL] [-E NAME=VALUE]... [-m MIB] [-p COUNT] [-t SECS]
 //                DIR -- PROGRAM [ARGS...]
 //
 // Creates DIR (with parents) and gives it a Low mandatory integrity label,
@@ -22,7 +22,10 @@
 // keeps the caller's integrity level: the token is still restricted and
 // the job, limits and timeout still apply, but writes are no longer
 // confined to DIR. It exists only to record curated scripts with
-// programs that cannot start at Low integrity (MSYS2, see t/msys).
+// programs that cannot start at Low integrity (MSYS2, see t/msys). -B
+// lets a process leave the job with CREATE_BREAKAWAY_FROM_JOB, for
+// tests of a program's own jobs before Windows 8, which has no nested
+// jobs; a process that leaves is no longer killed with the sandbox.
 //
 // Windows XP has no integrity levels, so there it warns and relies on the
 // job object and the restricted token (no Administrators group) alone.
@@ -106,6 +109,7 @@ enum : i32 {
     INVALID_FILE_ATTRIBUTES          = -1,
     JOB_OBJECT_LIMIT_ACTIVE_PROCESS  = 0x0008,
     JOB_OBJECT_LIMIT_JOB_MEMORY      = 0x0200,
+    JOB_OBJECT_LIMIT_BREAKAWAY_OK    = 0x0800,
     JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x0400,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000,
     JobObjectExtendedLimitInformation = 9,
@@ -334,8 +338,9 @@ static void report(Arena scratch, c16 const *msg, c16 const *arg, u32 err)
 [[noreturn]] static void usage(Arena scratch, i32 status)
 {
     static c16 const text[] =
-    u"usage: sandbox [-L] [-E NAME=VALUE]... [-m MIB] [-p COUNT] [-t SECS]\n"
+    u"usage: sandbox [-BL] [-E NAME=VALUE]... [-m MIB] [-p COUNT] [-t SECS]\n"
     u"               DIR -- PROGRAM [ARGS...]\n"
+    u"  -B        allow processes to break away from the job\n"
     u"  -E N=V    run with an empty environment plus each N=V given\n"
     u"  -L        keep the caller's integrity level (curated scripts only)\n"
     u"  -m MIB    limit the committed memory of the process tree\n"
@@ -441,6 +446,7 @@ struct Config {
     EnvVar *env     = {};  // -E, most recent first
     b32     setenv  = {};  // any -E: the environment is exactly env
     b32     medium  = {};  // -L: keep the integrity level
+    b32     away    = {};  // -B: breakaway allowed
     i32     mib     = {};
     i32     procs   = {};
     i32     secs    = {};
@@ -479,6 +485,8 @@ static Config parseargs(Arena *perm, Arena scratch)
             usage(scratch, 0);
         } else if (equals(arg.val, u"-L")) {
             r.medium = 1;
+        } else if (equals(arg.val, u"-B")) {
+            r.away = 1;
         } else if (equals(arg.val, u"-E")) {
             Arg val = nextarg(&scratch, cmd, i);
             i = val.end;
@@ -637,6 +645,7 @@ static uz makejob(Arena scratch, Config *c)
     JobLimits lim = {};
     lim.flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
                 JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+    lim.flags |= c->away ? JOB_OBJECT_LIMIT_BREAKAWAY_OK : 0;
     if (c->mib) {
         lim.flags  |= JOB_OBJECT_LIMIT_JOB_MEMORY;
         lim.jobmem  = (uz)c->mib << 20;

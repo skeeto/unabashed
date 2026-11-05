@@ -19,6 +19,7 @@
 #                         its standard input a hidden console; words
 #                         are split as by the shell, quotes included
 #   # shell: ARGS         run `SHELL ARGS` instead of `SHELL test.sh`
+#   # sandbox: FLAGS      extra tools/sandbox flags, such as -B
 # U holds the shell's path, for tests that run it as a program.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -90,6 +91,7 @@ for t; do
     [ $xp = 1 ] && modes="normal xpio"
     actions=$(sed -n 's/^# conrun: //p' "$t")
     args=$(sed -n 's/^# shell: //p' "$t")
+    sflags=$(sed -n 's/^# sandbox: //p' "$t")
     for mode in $modes; do
         dir=$work/$name
         rm -rf "$dir"
@@ -109,7 +111,7 @@ for t; do
             set -- "$@" "$U" test.sh
         fi
         # XP has no integrity levels, which the sandbox reports
-        "$bin/sandbox.exe" -t 120 "$dir" -- "$@" >"$dir/raw" 2>&1 </dev/null
+        "$bin/sandbox.exe" $sflags -t 120 "$dir" -- "$@" >"$dir/raw" 2>&1 </dev/null
         echo "status $?" >>"$dir/raw"
         grep -v '^sandbox: warning: no integrity levels' "$dir/raw" >"$dir/got"
         if [ $update = 1 ]; then
