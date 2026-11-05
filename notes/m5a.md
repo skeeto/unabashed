@@ -1389,5 +1389,5 @@ Exit criteria:
    tool with CLAUDE_CODE_GIT_BASH_PATH at a scratch install, which
    needs a Claude Code started with that variable (no CLI here).
    bench/agent runs the tool's exact wrapper string, so the shell side
-   is exercised; the tool's own probing (its snapshot, cygpath) is not.
+   is exercised; the tool's own setup (taking its snapshot) is not.
 6. Met: no M5a items in issues.md.
