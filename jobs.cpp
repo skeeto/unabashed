@@ -593,6 +593,8 @@ struct BgFds {
     iz       nfds;
     Handle  *close;
     iz       nclose;
+    Task    *caps[8];  // capture pumps, owned by the job once started
+    i32      ncaps;
 };
 
 static BgFds bgfds(Shell *sh, Arena *a, File *in, File *out)
@@ -628,11 +630,13 @@ static BgFds bgfds(Shell *sh, Arena *a, File *in, File *out)
             if (!materialize(sh, *a, f)) continue;
             sf.h = f->h;
             break;
-        case F_CAPTURE:
+        case F_CAPTURE: {
+            if (r.ncaps == countof(r.caps)) continue;
             sf.h = capturewriter(sh, f, 0);
             if (sf.h == BADHANDLE) continue;
             r.close[r.nclose++] = sf.h;
-            break;
+            r.caps[r.ncaps++] = ((Capture *)f->cap)->pumps;
+        } break;
         case F_PIPE: {
             if (f->flags & OF_READ) {
                 sf.h = pipeosread(s, f->pipe);
@@ -684,6 +688,13 @@ static i64 spawnimage(Shell *sh, Node *n, File *in, File *out, i64 *pid,
     if (r.err) {
         os_imagefree(sh->os, img.ref);
         return -1;
+    }
+    for (i32 i = 0; i < fds.ncaps; i++) {
+        // As capturewriter with an owner: a ${ ...; } it writes does not
+        // wait for it
+        Task *t = fds.caps[i];
+        ((Pump *)t->arg)->owner = r.pid;
+        t->group = t->tag;
     }
     *pid = r.pid;
     return (i64)r.proc;

@@ -2053,6 +2053,11 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     ctx.scratch = mem;
 
     p->state  = VP_RUN;
+    if (s->image.base) {
+        // A shell continuing from an image takes a while to start, as a
+        // forked or self-spawned one does: its parent goes on meanwhile
+        p->state = VP_BLOCK;
+    }
     p->status = 0;
     p->prog   = prog;
     p->shell  = v->fakes[prog].name == "bash";
@@ -2062,6 +2067,10 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     p->sigpend = 0;
     p->sigign = s->sigign;
     p->wait   = VW_NONE;
+    if (s->image.base) {
+        p->wait  = VW_SLEEP;
+        p->until = v->clock + 5000000;  // 5 ms
+    }
     p->ios    = 0;
     p->ctx    = ctx;
     p->tag    = 0;
@@ -2232,6 +2241,7 @@ static Io *os_wait(Os *os, i64 deadline)
             v->clock += 1000000;
             vyield(os, v);
             yielded = 1;
+            return 0;  // what that did, the next poll sees
             continue;
         }
         if (deadline>0 && v->clock>=deadline) return 0;

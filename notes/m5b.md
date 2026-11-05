@@ -205,16 +205,22 @@ reported in the spec's output.
 
 Results: default mode unchanged (tests.exe 159/0, t/exec 660 specs, 0
 failed, t/parse, t/winvos, t/msys vos, t/win32 -x 30/0). With
-`--images`, no audit failures in t/exec and t/winvos, and 3 specs
-fail:
-- 634-coproc: the coprocess runs as soon as the parent blocks on a
-  write, answers and exits, and the parent reaps it (unsetting COPROC)
-  before its `read <&${COPROC[0]}`; bash's child is slower to start.
-- 692-killed-level-program-output: `kill $p` from the background job
-  of a procsub or comsub level, whose BASHPID is a virtual pid of its
-  process: from another process it is "No such process" (step 6/7:
-  virtual pids naming their process, signals carrying the level).
-- 726-funsub-procsub-outlives: to look at.
+`--images`, no audit failures in t/exec and t/winvos. Fixed on the way:
+- 634-coproc: the coprocess answered and exited before the parent's
+  `read <&${COPROC[0]}`, and the parent reaped it (unsetting COPROC)
+  first; bash's child is slower to start. A vos image child now starts
+  after 5 ms of virtual time, and a vos poll that yielded to other
+  processes returns nothing, leaving what they did to the next poll (in
+  every mode: no spec changed).
+- 726-funsub-procsub-outlives: a capture's pump had no owner, so the
+  capture's EOF waited on nothing; the pumps `bgfds` makes are owned by
+  the child's pid once it is spawned.
+
+One spec still fails with `--images`: 692-killed-level-program-output.
+`kill $p` from the background job of a procsub or comsub level, whose
+BASHPID is a virtual pid of its process, is "No such process" from
+another process (steps 6 and 7: virtual pids naming their process,
+signals carrying the level).
 
 New: t/exec/875-bg-state-image (recorded): every listing (declare -p
 less the dynamic variables, declare -f, alias, trap -p, set -o, shopt,
