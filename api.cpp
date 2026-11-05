@@ -80,6 +80,11 @@ struct OsPipe {
     i32    err;
 };
 
+enum : i32 {
+    NP_OUT   = 1,  // the server writes, its client reads
+    NP_NOBUF = 2,  // NP_OUT: a write completes only as the client reads it
+};
+
 struct NamedPipe {
     Handle h;     // the server's end
     Str    name;  // canonical native path, //./pipe/NAME
@@ -196,11 +201,13 @@ static void    os_close(Os *, Handle);
 // A second handle to the same open file.
 static Handle  os_dup(Os *, Handle);
 static OsPipe  os_pipe(Os *);
-// Windows: a pipe for one client under a fresh name in the //./pipe/
-// namespace. The server's end writes to the client (out) or reads from
-// it; IO_CONNECT on it completes once the client has opened the name.
-// E_NOSYS elsewhere.
-static NamedPipe os_namedpipe(Os *, Arena *, b32 out);
+// Windows: an instance of a named pipe for one client, under a fresh
+// name in the //./pipe/ namespace, or another instance of name (then
+// returned as is). A client opening the name gets the oldest instance
+// not yet taken. The server's end writes to its client (NP_OUT) or
+// reads what it writes. IO_CONNECT on it completes once its client has
+// opened it. E_NOSYS elsewhere.
+static NamedPipe os_namedpipe(Os *, Arena *, Str name, i32 how);
 // Bytes a fresh pipe accepts before a write blocks.
 static iz      os_pipecap(Os *);
 // Copy up to len bytes that a read would return now, without

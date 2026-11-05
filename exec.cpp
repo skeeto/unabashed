@@ -1445,26 +1445,31 @@ static b32 materialize(Shell *sh, Arena a, File *f)
 
 // Bridges
 //
-// A Windows program cannot open the shell's /dev/fd/N. An argument
-// naming one of its descriptors 3 and up that way (the whole argument,
-// or what follows its last "=", as in --file=/dev/fd/63) becomes the
-// path of a named pipe for one client, \\.\pipe\NAME (//./pipe/NAME
-// for an MSYS2 program), whose server end a pump bridges to the
-// descriptor: what the descriptor reads goes to a program reading the
-// pipe, what a program writes into it goes to the descriptor. The pump
+// A native Windows program cannot open the shell's /dev/fd/N. An
+// argument naming one of its descriptors 3 and up that way (the whole
+// argument, or what follows its last "=", as in --file=/dev/fd/63)
+// becomes the path of a named pipe, \.\pipe\NAME, whose server ends a
+// pump bridges to the descriptor: what the descriptor reads goes to a
+// program reading the pipe, what a program writes into it goes to the
+// descriptor. Its clients come in turn, since a program may open the
+// path once only to look (a stat) before it opens it to use; the pump
 // ends with the program (endbridge). Our own shell needs none: it opens
-// /dev/fd/N itself, the descriptor passed in lpReserved2.
+// /dev/fd/N itself, the descriptor passed in lpReserved2. Nor does an
+// MSYS2 program get one: it takes \.\pipe\NAME (not //./pipe/NAME) but
+// opens it three times, finds an unbuffered pipe empty, cannot open one
+// to write, and at times hangs (notes/m5a.md, step 8).
 
 enum { MAXBRIDGES = 16 };
 
 struct Bridges {
     Task *t[MAXBRIDGES];
+    i32   fd[MAXBRIDGES];  // the descriptor each bridges
     i32   n;
 };
 
 // Bridge descriptor fd: the path for the program, or a null string if
 // it cannot be bridged.
-static Str startbridge(Shell *sh, Arena *a, i32 fd, b32 cygwin, Bridges *br)
+static Str startbridge(Shell *sh, Arena *a, i32 fd, Bridges *br)
 {
     Sched *s = sh->sched;
     File  *f = fd<FDMAX ? sh->fds->fd[fd] : 0;
@@ -1485,22 +1490,42 @@ static Str startbridge(Shell *sh, Arena *a, i32 fd, b32 cygwin, Bridges *br)
     } else {
         return {};  // a capture
     }
-    NamedPipe np = os_namedpipe(sh->os, a, out);
-    if (np.err) {
+    // Instances listen ahead from the start (see nextclient)
+    i32       how = out ? NP_OUT|NP_NOBUF : 0;
+    NamedPipe np  = os_namedpipe(sh->os, a, {}, how);
+    Handle    spare[NSPARE];
+    i32       nspare = 0;
+    i32       err    = np.err ? np.err : 0;
+    if (!err && np.name.len>countof(((Pump *)0)->name)) err = E_NAMETOOLONG;
+    for (; !err && nspare<NSPARE; nspare++) {
+        NamedPipe more = os_namedpipe(sh->os, a, np.name, how);
+        err = more.err;
+        spare[nspare] = more.h;
+    }
+    if (err) {
+        if (!np.err) os_close(sh->os, np.h);
+        for (i32 i = 0; i < nspare-1; i++) os_close(sh->os, spare[i]);
         if (peer != BADHANDLE) os_close(sh->os, peer);
         return {};
     }
     Pump *p = newpump(s);
-    p->kind = out ? PUMP_SERVE : PUMP_TAKE;
-    p->h    = np.h;
-    p->peer = peer;
-    p->pipe = pipe;
+    p->kind    = out ? PUMP_SERVE : PUMP_TAKE;
+    p->h       = np.h;
+    p->peer    = peer;
+    p->pipe    = pipe;
+    for (i32 i = 0; i < NSPARE; i++) {
+        p->spare[i] = spare[i];
+    }
+    p->how     = how;
+    p->namelen = np.name.len;
+    copybytes(p->name, np.name.data, np.name.len);
+    br->fd[br->n]  = fd;
     br->t[br->n++] = spawnpump(s, p);
-    return cygwin ? np.name : slashify(a, np.name, '\\');
+    return slashify(a, np.name, '\\');
 }
 
 // argv with its /dev/fd/N arguments bridged, or argv itself if none.
-static Str *bridgeargs(Shell *sh, Arena *a, Str *argv, iz argc, b32 cygwin, Bridges *br)
+static Str *bridgeargs(Shell *sh, Arena *a, Str *argv, iz argc, Bridges *br)
 {
     Str *r = argv;
     i32  fds[MAXBRIDGES];
@@ -1518,7 +1543,7 @@ static Str *bridgeargs(Shell *sh, Arena *a, Str *argv, iz argc, b32 cygwin, Brid
             path = fds[k]==fd ? paths[k] : path;
         }
         if (!path.data && n<MAXBRIDGES) {
-            path = startbridge(sh, a, fd, cygwin, br);
+            path = startbridge(sh, a, fd, br);
             fds[n]     = fd;
             paths[n++] = path;
         }
@@ -1548,8 +1573,8 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     if (sh->win32) {
         // What starts, and how: decided here, before descriptors move
         tg = wintarget(sh, &a, path, argv, argc, env);
-        if (!tg.err && !tg.self && !sh->spawnto) {
-            argv = bridgeargs(sh, &a, argv, argc, tg.cygwin, &br);
+        if (!tg.err && !tg.self && !tg.cygwin && !sh->spawnto) {
+            argv = bridgeargs(sh, &a, argv, argc, &br);
             if (br.n) tg = wintarget(sh, &a, path, argv, argc, env);
         }
         if (tg.err) {
@@ -1584,6 +1609,13 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
             cloexec |= fd==c->rfd || fd==c->wfd;
         }
         if (cloexec) continue;  // a coprocess's: bash makes them close-on-exec
+        // On Windows a descriptor above 2 reaches only a CRT program,
+        // and not one it reaches through a bridge, whose pump reads it
+        b32 unused = sh->win32 && fd>2 && !tg.crtslot;
+        for (i32 i = 0; i < br.n; i++) {
+            unused |= br.fd[i] == fd;
+        }
+        if (unused) continue;
         SpawnFd sf = {fd, BADHANDLE};
         // A File already given to an earlier descriptor shares its handle
         b32 shared = 0;

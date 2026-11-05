@@ -48,10 +48,10 @@ cat f4
 echo "== procsubs to native programs"
 "$BB" cat <(echo one) <(printf 'two\n')
 "$BB" paste <(printf 'a\nb\n') <(printf 'c\nd\n')
-# busybox diff stats each file first, through a handle that takes the
-# pipe's one instance (notes/issues.md)
-"$BB" diff <(printf 'a\n') <(printf 'b\n') 2>&1 | "$BB" sed "s/ '.*//"
-echo "diff status ${PIPESTATUS[0]}"
+# busybox diff copies a pipe to a temporary file, but finds the
+# unbuffered pipe empty: wrong, an open issue (notes/issues.md)
+TMP=$(pwd -W) "$BB" diff <(printf 'a\n') <(printf 'b\n') 2>&1
+echo "diff status $?"
 "$BB" cat <(for i in 1 2 3; do echo "loop $i"; done)
 "$BB" wc -l <("$BB" seq 100000) | norm
 "$BB" cat - <(echo second) <<<first

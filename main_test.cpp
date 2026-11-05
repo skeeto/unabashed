@@ -1151,7 +1151,7 @@ static void test_vwin(Test *t)
     expectint(t, "vwin elf", vprogram(v, &a, "C:/work/elf.exe").err, E_NOEXEC);
 
     // Named pipes
-    NamedPipe np = os_namedpipe(os, &a, 0);
+    NamedPipe np = os_namedpipe(os, &a, {}, 0);
     expect(t, "vwin pipe name", np.name, "//./pipe/unabashed-2-1");
     expectint(t, "vwin pipe stat", os_stat(os, a, "//./pipe/Unabashed-2-1", 1).type, FT_PIPE);
     expectint(t, "vwin pipe access", os_open(os, a, np.name, OF_READ, 0).err, E_ACCES);
@@ -1163,15 +1163,23 @@ static void test_vwin(Test *t)
     expectint(t, "vwin pipe open", o.err, 0);
     expectint(t, "vwin pipe connected", vioready(osvos(os), &io), 1);
     expectint(t, "vwin pipe busy", os_open(os, a, np.name, OF_WRITE, 0).err, E_BUSY);
+    NamedPipe np2 = os_namedpipe(os, &a, np.name, 0);
+    expect(t, "vwin pipe instance", np2.name, np.name);
+    Opened o2 = os_open(os, a, np.name, OF_WRITE, 0);
+    expectint(t, "vwin pipe second", o2.err, 0);
+    os_write(os, o2.h, (u8 *)"2nd", 3);
+    os_close(os, o2.h);
     os_write(os, o.h, (u8 *)"hi", 2);
     os_close(os, o.h);
     u8 buf[8] = {};
     expectint(t, "vwin pipe read", os_read(os, np.h, buf, countof(buf)), 2);
     expectint(t, "vwin pipe eof", os_read(os, np.h, buf, countof(buf)), 0);
+    expectint(t, "vwin pipe read second", os_read(os, np2.h, buf, countof(buf)), 3);
     os_close(os, np.h);
+    os_close(os, np2.h);
     expectint(t, "vwin pipe gone", os_stat(os, a, np.name, 1).err, E_NOENT);
-    np = os_namedpipe(os, &a, 1);
-    expect(t, "vwin pipe reuse", np.name, "//./pipe/unabashed-2-2");
+    np = os_namedpipe(os, &a, {}, NP_OUT);
+    expect(t, "vwin pipe reuse", np.name, "//./pipe/unabashed-2-3");
     os_close(os, np.h);
 
     // Command lines: MSVCRT splitting for argv, Cygwin's (globs and

@@ -177,7 +177,7 @@ static Handle os_dup(Os *, Handle h)
     return fd<0 ? BADHANDLE : (Handle)fd;
 }
 
-static NamedPipe os_namedpipe(Os *, Arena *, b32)
+static NamedPipe os_namedpipe(Os *, Arena *, Str, i32)
 {
     NamedPipe r = {};
     r.h   = BADHANDLE;

@@ -61,11 +61,12 @@ struct VPipe {
     u64  wgroup;   // tracing: the last writer's group (vgroup), or 0
 };
 
-struct VNamedPipe {  // Windows mode: //./pipe/NAME, for one client
+struct VNamedPipe {  // Windows mode: an instance of //./pipe/NAME
     Str    name;       // NAME
     VPipe *pipe;
+    i32    seq;        // creation order
     b32    out;        // the server writes, its client reads
-    b32    connected;  // the client has opened it
+    b32    connected;  // its one client has opened it
 };
 
 struct VFile {      // open file description
@@ -1781,13 +1782,16 @@ static void vwinctx(Vos *v, Arena *mem, FakeCtx *ctx, Spawn *s, VWinCmd *wc, VPr
     for (iz i = 0; i < argv.len; i++) ctx->argv[i] = argv[i];
 }
 
-// A pipe in the //./pipe/ namespace for one client, as Win32's
-// CreateNamedPipe with one instance: the server holds one end, and the
-// client opening the name (ignoring case) gets the other. Its name is
-// deterministic: the creator's pid and a sequence number. A slot is
-// free again once both ends are closed.
-static NamedPipe os_namedpipe(Os *os, Arena *a, b32 out)
+// An instance of a pipe in the //./pipe/ namespace for one client, as
+// Win32's CreateNamedPipe: the server holds one end, and the client
+// opening the name (ignoring case) gets the other end of the oldest
+// instance not yet taken. A fresh name is deterministic: the creator's
+// pid and a sequence number. A slot is free again once both ends are
+// closed. Unlike Win32's, an NP_NOBUF instance buffers what the server
+// writes, like any pipe.
+static NamedPipe os_namedpipe(Os *os, Arena *a, Str name, i32 how)
 {
+    b32 out = how & NP_OUT;
     Vos      *v = osvos(os);
     NamedPipe r = {};
     r.h = BADHANDLE;
@@ -1810,19 +1814,26 @@ static NamedPipe os_namedpipe(Os *os, Arena *a, b32 out)
         return r;
     }
     os_close(os, out ? p.r : p.w);  // the client's, opened by name
-    Buf b(&v->a, 64);
-    print(&b, "unabashed-");
-    print(&b, v->procs[v->cur].pid);
-    putbyte(&b, '-');
-    print(&b, (i64)++v->npipeseq);
     VNamedPipe *n = v->npipes + i;
-    n->name      = finish(&b);
+    v->npipeseq++;
+    if (name.data) {
+        n->name = clone(&v->a, cuthead(name, Str("//./pipe/").len));
+        r.name  = name;
+    } else {
+        Buf b(&v->a, 64);
+        print(&b, "unabashed-");
+        print(&b, v->procs[v->cur].pid);
+        putbyte(&b, '-');
+        print(&b, (i64)v->npipeseq);
+        n->name = finish(&b);
+        r.name  = concat(a, "//./pipe/", n->name);
+    }
     n->pipe      = v->files[out ? p.w : p.r].pipe;
+    n->seq       = v->npipeseq;
     n->out       = out;
     n->connected = 0;
     v->nnpipes  += i == v->nnpipes;
-    r.h    = out ? p.w : p.r;
-    r.name = concat(a, "//./pipe/", n->name);
+    r.h = out ? p.w : p.r;
     return r;
 }
 
@@ -1839,45 +1850,45 @@ static VNamedPipe *vserverpipe(Vos *v, Handle h)
     return 0;
 }
 
-// A client opens a named pipe: the end its server does not hold, once,
-// for the access the pipe's direction allows (Win32: ERROR_PIPE_BUSY,
+// A client opens a named pipe: the end its server does not hold of the
+// oldest instance with none yet, for the access the pipe's direction
+// allows (Win32: ERROR_PIPE_BUSY when all are taken,
 // ERROR_ACCESS_DENIED).
 static Opened vnpopen(Vos *v, Str name, i32 flags)
 {
     Opened r = {};
     r.h   = BADHANDLE;
     r.err = E_NOENT;
-    for (i32 i = v->nnpipes-1; i >= 0; i--) {
-        VNamedPipe *n = v->npipes + i;
-        VPipe      *p = n->pipe;
-        if (!equalfold(n->name, name) || !(n->out ? p->writers : p->readers)) {
+    VNamedPipe *n = 0;
+    for (i32 i = 0; i < v->nnpipes; i++) {
+        VNamedPipe *c = v->npipes + i;
+        VPipe      *p = c->pipe;
+        if (!equalfold(c->name, name) || !(c->out ? p->writers : p->readers)) {
             continue;
         }
-        if (n->connected) {
-            r.err = E_BUSY;
-            return r;
-        }
-        if (flags & (n->out ? OF_WRITE : OF_READ)) {
-            r.err = E_ACCES;
-            return r;
-        }
-        r.h = vnewhandle(v);
-        if (r.h == BADHANDLE) {
-            r.err = E_MFILE;
-            return r;
-        }
-        r.err = 0;
-        n->connected = 1;
-        VFile *f = v->files + r.h;
-        f->kind  = n->out ? VK_PIPEREAD : VK_PIPEWRITE;
-        f->flags = flags;
-        f->pipe  = p;
-        if (n->out) {
-            p->readers++;
-        } else {
-            p->writers++;
-        }
+        r.err = E_BUSY;
+        if (!c->connected && (!n || c->seq<n->seq)) n = c;
+    }
+    if (!n) return r;
+    if (flags & (n->out ? OF_WRITE : OF_READ)) {
+        r.err = E_ACCES;
         return r;
+    }
+    r.h = vnewhandle(v);
+    if (r.h == BADHANDLE) {
+        r.err = E_MFILE;
+        return r;
+    }
+    r.err = 0;
+    n->connected = 1;
+    VFile *f = v->files + r.h;
+    f->kind  = n->out ? VK_PIPEREAD : VK_PIPEWRITE;
+    f->flags = flags;
+    f->pipe  = n->pipe;
+    if (n->out) {
+        n->pipe->readers++;
+    } else {
+        n->pipe->writers++;
     }
     return r;
 }

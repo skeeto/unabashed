@@ -817,6 +817,8 @@ static void pipeclose(Sched *s, Pipe *p, b32 writer)
 // handle, for externals given a shell object (materialization), and
 // between a named pipe and a descriptor (bridges, exec.cpp).
 
+enum : i32 { NSPARE = 2 };  // a bridge's instances listening ahead
+
 enum : i32 {
     PUMP_TOHANDLE, PUMP_FROMHANDLE, PUMP_TEXT, PUMP_TOBUF,
     PUMP_SERVE,  // a named pipe's client reads: peer into h
@@ -833,7 +835,15 @@ struct Pump {
     i64     owner;   // PUMP_TOBUF: BASHPID of the vproc writing it, or 0
     Wtrace *wtrace;  // PUMP_TOBUF: the capture's, for tracewrite
     Handle  peer;    // PUMP_SERVE, PUMP_TAKE: owned, or BADHANDLE
-    b32     connected;  // PUMP_SERVE, PUMP_TAKE: the client came
+    // PUMP_SERVE, PUMP_TAKE: h is the oldest instance of the named pipe
+    // still listening, spare the next ones (owned, or BADHANDLE)
+    Handle  spare[NSPARE];
+    u8      name[64];   // the pipe's name, len bytes
+    iz      namelen;
+    i32     how;        // its instances' NP_* flags
+    b32     waiting;    // for a client
+    b32     connected;  // a client is being served
+    b32     ending;     // the program exited: no client is to come
 };
 
 // A Pump that outlives the arena of whoever starts it, pooled.
@@ -847,6 +857,35 @@ static Pump *newpump(Sched *s)
         p = alloc<Pump>(&s->a);
     }
     return p;
+}
+
+// A bridge's next client (PUMP_SERVE, PUMP_TAKE), or BADHANDLE when it
+// ends first. Before it is served, a new instance listens behind the
+// spares: a client opening the name again soon finds one waiting (as
+// busybox does, looking first; an MSYS2 program opens it three times).
+static Handle nextclient(Sched *s, Pump *p)
+{
+    // Once ending, only a client that came already
+    p->waiting = 1;
+    s->cur->deadline = p->ending ? os_now(s->os) : 0;
+    i32 err = taskconnect(s, p->h);  // else served, even if cancelled
+    s->cur->deadline = 0;
+    p->waiting = 0;
+    if (err) return BADHANDLE;
+    Handle c = p->h;
+    p->connected = 1;
+    p->h = p->spare[0];
+    for (i32 i = 0; i < NSPARE-1; i++) {
+        p->spare[i] = p->spare[i+1];
+    }
+    p->spare[NSPARE-1] = BADHANDLE;
+    if (p->h != BADHANDLE) {
+        Arena     none = {};
+        Str       name = {p->name, p->namelen};
+        NamedPipe np   = os_namedpipe(s->os, &none, name, p->how);
+        p->spare[NSPARE-1] = np.err ? BADHANDLE : np.h;
+    }
+    return c;
 }
 
 static void pumpmain(Task *t)
@@ -885,28 +924,59 @@ static void pumpmain(Task *t)
             }
         }
         break;
-    case PUMP_SERVE:
-        p->connected = !t->cancel && !taskconnect(s, p->h);
-        for (; p->connected && !t->cancel;) {
-            iz n = taskread(s, p->peer, buf, countof(buf));
-            if (n<=0 || t->cancel || taskwrite(s, p->h, buf, n)) break;
+    case PUMP_SERVE: {
+        // Clients in turn, each served what the last left: one leaving
+        // before it read (perhaps one that only looked, as a stat
+        // through a handle does) takes nothing, the write failing at
+        // once on the unbuffered pipe (NP_NOBUF).
+        iz  len = 0;  // bytes in buf not yet delivered
+        b32 eof = 0;
+        while (!t->cancel && !p->ending && p->h!=BADHANDLE) {
+            Handle c = nextclient(s, p);
+            if (c == BADHANDLE) break;
+            for (b32 fresh = 1; !t->cancel; fresh = 0) {
+                if (!len && !eof) {
+                    len = taskread(s, p->peer, buf, countof(buf));
+                    eof = len <= 0;
+                    len = eof ? 0 : len;
+                }
+                if (!len || t->cancel) break;
+                if (taskwrite(s, c, buf, len)) {
+                    len = fresh ? len : 0;  // else partly read: gone
+                    break;
+                }
+                len = 0;
+            }
+            os_close(s->os, c);
+            p->connected = 0;
         }
         break;
+    }
     case PUMP_TAKE:
-        p->connected = !t->cancel && !taskconnect(s, p->h);
-        for (; p->connected;) {
-            iz n = taskread(s, p->h, buf, countof(buf));
-            if (n <= 0) break;
-            i32 err = p->pipe ? pipewrite(s, p->pipe, buf, n)
+        // Clients in turn until the program exits, and those that came
+        // by then: one may only look
+        while (!t->cancel && p->h!=BADHANDLE) {
+            Handle c   = nextclient(s, p);
+            i32    err = c==BADHANDLE;
+            for (; !err;) {
+                iz n = taskread(s, c, buf, countof(buf));
+                if (n <= 0) break;
+                err = p->pipe ? pipewrite(s, p->pipe, buf, n)
                               : taskwrite(s, p->peer, buf, n);
+            }
+            if (c != BADHANDLE) os_close(s->os, c);
+            p->connected = 0;
             if (err) break;
         }
         if (p->pipe) pipeclose(s, p->pipe, 1);
         break;
     }
     if (p->h != BADHANDLE) os_close(s->os, p->h);
-    if (p->peer!=BADHANDLE && (p->kind==PUMP_SERVE || p->kind==PUMP_TAKE)) {
-        os_close(s->os, p->peer);
+    if (p->kind==PUMP_SERVE || p->kind==PUMP_TAKE) {
+        for (i32 i = 0; i < NSPARE; i++) {
+            if (p->spare[i] != BADHANDLE) os_close(s->os, p->spare[i]);
+        }
+        if (p->peer  != BADHANDLE) os_close(s->os, p->peer);
     }
 }
 
@@ -952,9 +1022,16 @@ static i32 joinpump(Sched *s, Task *t)
     return r;
 }
 
-// Stop a bridge pump (exec.cpp) at its next wait.
+// Stop a bridge pump (exec.cpp) at its next wait. Its spares go
+// first, so that while it waits for a client only the instance it waits
+// on listens (see os_cancel).
 static void cancelbridge(Sched *s, Task *t)
 {
+    Pump *p = (Pump *)t->arg;
+    for (i32 i = 0; i < NSPARE; i++) {
+        if (p->spare[i] != BADHANDLE) os_close(s->os, p->spare[i]);
+        p->spare[i] = BADHANDLE;
+    }
     t->cancel = 1;
     if (t->state==TS_BLOCKED && t->wait==W_IO) {
         taskfail(s, t, E_PIPE);  // else it completes by itself
@@ -963,13 +1040,22 @@ static void cancelbridge(Sched *s, Task *t)
     }
 }
 
-// End a bridge pump once its program has exited: a client that never
-// came will not, and a client that read is gone; what a client wrote
-// is copied to the end.
+// End a bridge pump once its program has exited: a client yet to come
+// will not, and a reading client is gone; what writing clients wrote
+// is copied to the end, theirs that connected unnoticed too.
 static void endbridge(Sched *s, Task *t)
 {
     Pump *p = (Pump *)t->arg;
-    if (p->kind==PUMP_SERVE || !p->connected) cancelbridge(s, t);
+    p->ending = 1;
+    if (p->kind == PUMP_SERVE) {
+        cancelbridge(s, t);
+    } else {
+        for (i32 i = 0; i < NSPARE; i++) {
+            if (p->spare[i] != BADHANDLE) os_close(s->os, p->spare[i]);
+            p->spare[i] = BADHANDLE;
+        }
+        if (p->waiting) t->deadline = os_now(s->os);
+    }
     joinpump(s, t);
 }
 

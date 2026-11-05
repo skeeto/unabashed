@@ -75,6 +75,7 @@ enum : i32 {
     PIPE_ACCESS_INBOUND          = 1,
     PIPE_ACCESS_OUTBOUND         = 2,
     PIPE_REJECT_REMOTE_CLIENTS   = 8,
+    PIPE_UNLIMITED_INSTANCES     = 255,
     STARTF_USESTDHANDLES         = 0x100,
     STD_ERROR_HANDLE             = -12,
 };
@@ -2351,41 +2352,54 @@ static OsPipe os_pipe(Os *os)
     return r;
 }
 
-// The name is unguessable, so that no other process can take the one
-// instance before the client it is meant for.
-static NamedPipe os_namedpipe(Os *os, Arena *a, b32 out)
+// The name is unguessable, so that no other process can take an
+// instance before the client it is meant for. Without a buffer
+// (NP_NOBUF), a write waits for its client to read it, so that a
+// client leaving unread (one that only looked) takes nothing with it.
+static NamedPipe os_namedpipe(Os *os, Arena *a, Str name, i32 how)
 {
     NamedPipe r = {};
     r.h = BADHANDLE;
     static u32 counter;
+    b32 out   = how & NP_OUT;
     i32 pmode = PIPE_REJECT_REMOTE_CLIENTS;  // byte mode, blocking
+    i32 bufs  = how&NP_NOBUF ? 0 : 1<<16;
     for (i32 try_ = 0; try_ < 100; try_++) {
-        i64 qpc = 0;
-        QueryPerformanceCounter(&qpc);
-        u64 tag = (u64)os_now(os) ^ (u64)qpc<<20 ^ (u64)++counter<<48;
-        tag *= 0x9e3779b97f4a7c15u;
-        tag ^= tag >> 31;
-        Buf b(a, 64);
-        print(&b, "//./pipe/unabashed-");
-        print(&b, (i64)GetCurrentProcessId());
-        putbyte(&b, '-');
-        for (i32 i = 0; i < 16; i++) {
-            putbyte(&b, (u8)"0123456789abcdef"[(tag >> (60 - 4*i)) & 15]);
+        Str fresh = {};
+        if (!name.data) {
+            i64 qpc = 0;
+            QueryPerformanceCounter(&qpc);
+            u64 tag = (u64)os_now(os) ^ (u64)qpc<<20 ^ (u64)++counter<<48;
+            tag *= 0x9e3779b97f4a7c15u;
+            tag ^= tag >> 31;
+            Buf b(a, 64);
+            print(&b, "//./pipe/unabashed-");
+            print(&b, (i64)GetCurrentProcessId());
+            putbyte(&b, '-');
+            for (i32 i = 0; i < 16; i++) {
+                putbyte(&b, (u8)"0123456789abcdef"[(tag >> (60 - 4*i)) & 15]);
+            }
+            fresh = finish(&b);
         }
-        Str name = finish(&b);
+        Str use = name.data ? name : fresh;
         c16 wname[64];
-        iz  n = 0;
-        for (; n < name.len; n++) wname[n] = name[n]=='/' ? '\\' : name[n];
+        if (use.len >= countof(wname)) {
+            r.err = E_NAMETOOLONG;
+            return r;
+        }
+        iz n = 0;
+        for (; n < use.len; n++) wname[n] = use[n]=='/' ? '\\' : use[n];
         wname[n] = 0;
-        i32 mode = (out ? PIPE_ACCESS_OUTBOUND : PIPE_ACCESS_INBOUND) |
-                   FILE_FLAG_FIRST_PIPE_INSTANCE;
-        uz h = CreateNamedPipeW(wname, mode, pmode, 1, 1<<16, 1<<16, 0, 0);
+        i32 mode = out ? PIPE_ACCESS_OUTBOUND : PIPE_ACCESS_INBOUND;
+        mode |= name.data ? 0 : FILE_FLAG_FIRST_PIPE_INSTANCE;
+        uz h = CreateNamedPipeW(wname, mode, pmode, PIPE_UNLIMITED_INSTANCES,
+                                bufs, bufs, 0, 0);
         i32 code = h==INVALID_HANDLE_VALUE ? GetLastError() : 0;
         if (code==ERROR_INVALID_PARAMETER && pmode) {
             pmode = 0;  // XP: no PIPE_REJECT_REMOTE_CLIENTS
             try_--;
             continue;
-        } else if (code == ERROR_ACCESS_DENIED) {
+        } else if (code==ERROR_ACCESS_DENIED && !name.data) {
             continue;  // the name is taken
         } else if (code) {
             r.err = errnum(code);
@@ -2396,7 +2410,7 @@ static NamedPipe os_namedpipe(Os *os, Arena *a, b32 out)
         copybytes(w->pname, wname, (n+1)*(iz)sizeof(c16));
         reg(os, h, w);
         r.h    = h;
-        r.name = name;
+        r.name = use;
         return r;
     }
     r.err = E_EXIST;
