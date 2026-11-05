@@ -131,6 +131,7 @@ struct Vos {
     i64     nextino;
     i32     user;        // owner of new nodes
     i64     clock;       // virtual realtime, ns; advances on each query
+    Str     localtz;     // os_localtz's answer, "UTC0" if null
     i64     nextpid;     // for the next spawned process
     Fake   *fakes;
     iz      nfakes;
@@ -1309,6 +1310,14 @@ static i64 os_now(Os *os)
 {
     Vos *v = osvos(os);
     return v->clock += 1000;
+}
+
+// The system zone: UTC as in the oracle's container, unless a test
+// configures another (a spec's "# localtz:" line).
+static Str os_localtz(Os *os, Arena *)
+{
+    Vos *v = osvos(os);
+    return v->localtz.data ? v->localtz : Str("UTC0");
 }
 
 // Signals. A shell receives every signal as a pending bit, and its core
@@ -2749,6 +2758,11 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes, b32 win = 0)
     vmkdirs(v, "usr/local/bin");
     vmkdirs(v, "usr/bin");
     vmkdirs(v, "etc");
+    // What login shells see of the oracle image's /etc/profile: the
+    // PATH Debian gives a user other than root
+    vputfile(v, "etc", "profile",
+        "PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games\n"
+        "export PATH\n");
     vmkdirs(v, "dev");
     VNode *bin = vnew(v, v->root, "bin", FT_LINK, 0777);
     bin->data = "usr/bin";

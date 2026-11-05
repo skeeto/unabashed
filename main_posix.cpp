@@ -756,6 +756,17 @@ static i64 os_now(Os *)
     return (i64)ts.tv_sec*1000000000 + ts.tv_nsec;
 }
 
+// glibc's default zone is the file /etc/localtime, which the core
+// reads whole (transitions and footer), else UTC.
+static Str os_localtz(Os *, Arena *)
+{
+    struct stat st;
+    if (stat("/etc/localtime", &st) || !S_ISREG(st.st_mode)) {
+        return "UTC0";
+    }
+    return ":/etc/localtime";
+}
+
 static byte *fiberstack(Os *, iz size)
 {
     void *p = mmap(0, (uz)size, PROT_READ|PROT_WRITE,

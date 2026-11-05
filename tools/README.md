@@ -268,7 +268,15 @@ environment is exactly:
     HOME=WORKDIR\NAME\home  TEMP=TMP=WORKDIR\NAME\tmp  (backslashes)
     LANG=C  TZ=UTC  (and UNABASHED_XPIO=1 under -x)
 
-W64 is the w64devkit root (the directory above `cc`). Statuses must
+W64 is the w64devkit root (the directory above `cc`). A `# env:
+NAME=VALUE` comment adds a variable (one word, no blanks; `$D`, `$DW`
+and `$DU` expanded), and `# env: -TZ` drops `TZ=UTC` so the system zone
+applies. A directory NAME.d beside the script is copied over the test
+directory first (`home/.profile`, `etc/profile`, ...). When the test
+directory then has an `etc`, the test runs from a private install,
+`WORKDIR/NAME/inst`, a copy of `inst/usr/bin` whose fstab mounts that
+`etc` on `/etc`, so that neither shell reads Git's startup files and
+the test's are read instead. Statuses must
 agree between the two runs. The spec format is tools/record's, with the
 paths normalized. `MSYS_TIMEOUT` sets the timeout in seconds.
 

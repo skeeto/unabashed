@@ -1539,8 +1539,8 @@ static Str progbase(Str argv0)
 
 static PathMode personaof(Str argv0, b32 fstab)
 {
-    Str name = progbase(argv0);
-    b32 sh = equalfold(name, "sh") || equalfold(name, "ash") || equalfold(name, "lash");
+    Str name = progbase(startswith(argv0, "-") ? cuthead(argv0, 1) : argv0);
+    b32 sh =equalfold(name, "sh") || equalfold(name, "ash") || equalfold(name, "lash");
     return sh && !fstab ? PM_NATIVE : PM_MSYS;
 }
 

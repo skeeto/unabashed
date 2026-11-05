@@ -190,6 +190,31 @@ struct BasicInfo {  // PROCESS_BASIC_INFORMATION
     uz ppid;
 };
 
+struct SysTime {  // SYSTEMTIME, WORDs
+    c16 year;
+    c16 month;
+    c16 dow;
+    c16 day;
+    c16 hour;
+    c16 minute;
+    c16 second;
+    c16 ms;
+};
+
+// TIME_ZONE_INFORMATION, and the DYNAMIC_ form's extra fields
+struct TzInfo {
+    i32     bias;
+    c16     stdname[32];
+    SysTime stddate;
+    i32     stdbias;
+    c16     dstname[32];
+    SysTime dstdate;
+    i32     dstbias;
+    c16     key[128];
+    u8      nodst;
+};
+static_assert(sizeof(TzInfo) == 432);
+
 #define W32(r, p) extern "C" __declspec(dllimport) r __stdcall p noexcept
 W32(b32,    AssignProcessToJobObject(uz, uz));
 W32(b32,    CloseHandle(uz));
@@ -230,6 +255,7 @@ W32(void *, GetProcAddress(uz, char const *));
 W32(uz,     GetStdHandle(i32));
 W32(i32,    GetSystemWindowsDirectoryW(c16 *, i32));
 W32(void,   GetSystemTimeAsFileTime(Filetime *));
+W32(i32,    GetTimeZoneInformation(TzInfo *));
 W32(b32,    ReadConsoleW(uz, c16 *, i32, i32 *, uz));
 W32(i32,    GetConsoleProcessList(i32 *, i32));
 W32(b32,    GetProcessTimes(uz, Filetime *, Filetime *, Filetime *, Filetime *));
@@ -2973,6 +2999,47 @@ static Str fromwidez(Arena *a, c16 *s)
     iz len = 0;
     for (; s[len]; len++) {}
     return fromwide(a, s, len);
+}
+
+static WinDate windate(SysTime t)
+{
+    WinDate d = {};
+    d.year   = t.year;
+    d.month  = t.month;
+    d.dow    = t.dow;
+    d.day    = t.day;
+    d.hour   = t.hour;
+    d.minute = t.minute;
+    d.second = t.second;
+    d.ms     = t.ms;
+    return d;
+}
+
+// The system zone as a POSIX TZ string (the core's wintz). Vista and
+// later report whether automatic daylight saving time is off, which
+// GetTimeZoneInformation (XP's only call) leaves out.
+static Str os_localtz(Os *, Arena *a)
+{
+    typedef i32 __stdcall Dynamic(TzInfo *);
+    Dynamic *getdynamic = (Dynamic *)dynamic(u"kernel32.dll",
+                                             "GetDynamicTimeZoneInformation");
+    TzInfo t = {};
+    i32 r = getdynamic ? getdynamic(&t) : GetTimeZoneInformation(&t);
+    if (r == -1) {
+        return "UTC0";  // TIME_ZONE_ID_INVALID
+    }
+    t.stdname[countof(t.stdname)-1] = 0;
+    t.dstname[countof(t.dstname)-1] = 0;
+    WinZone w = {};
+    w.bias    = t.bias;
+    w.stdbias = t.stdbias;
+    w.dstbias = t.dstbias;
+    w.stddate = windate(t.stddate);
+    w.dstdate = windate(t.dstdate);
+    w.stdname = fromwidez(a, t.stdname);
+    w.dstname = fromwidez(a, t.dstname);
+    w.nodst   = getdynamic && t.nodst;
+    return wintz(a, &w);
 }
 
 // Was the process started with Ctrl-C ignored (inherited from

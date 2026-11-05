@@ -1722,6 +1722,58 @@ static Str readwholefile(Shell *sh, Arena *a, Str path, i32 *err)
     return finish(&b);
 }
 
+// An exported variable's value, null when it is not in the environment.
+static Str envvalue(Shell *sh, Arena *a, Str name)
+{
+    Value *v = lookup(sh, name);
+    if (!v || !(v->attrs & V_EXPORT)) return {};
+    Got g = getvar(sh, a, name);
+    return !g.set ? Str{} : g.value.data ? g.value : Str("");
+}
+
+// The zone local time is in, as the C library bash uses finds it: TZ
+// when it is in the environment, else the system's (os_localtz). Like
+// glibc, a TZ naming a zoneinfo file (absolute, or under TZDIR or
+// /usr/share/zoneinfo) uses the file, otherwise it is a POSIX TZ
+// string. An msys shell reads zoneinfo through its mounts and, like
+// Cygwin, takes a TZ that does not parse as GMT; a native one, like
+// busybox-w32, has no zoneinfo.
+static PfZone *shellzone(Shell *sh, Arena *a)
+{
+    Str tz     = envvalue(sh, a, "TZ");
+    b32 system = !tz.data;
+    if (system) tz = os_localtz(sh->os, a);
+    PfZone *z = alloc<PfZone>(a);
+    Str name = startswith(tz, ":") ? cuthead(tz, 1) : tz;
+    if (name.len && sh->pathmode!=PM_NATIVE) {
+        Str path = name;
+        if (name[0] != '/') {
+            Str dir = sh->pathmode==PM_POSIX ? envvalue(sh, a, "TZDIR") : Str{};
+            dir  = dir.len ? dir : Str("/usr/share/zoneinfo");
+            path = concat3(a, dir, "/", name);
+        }
+        Stat st = pathstat(sh, *a, path, 1);
+        if (!st.err && st.type==FT_FILE && st.size<=((iz)1<<20)) {
+            Arena tmp = *a;
+            i32   err = 0;
+            Str   s   = readwholefile(sh, &tmp, path, &err);
+            PfZone f  = err ? PfZone{} : parsetzif(&tmp, s);
+            if (f.ok) {
+                *a = tmp;  // keep the file's tables
+                *z = f;
+                return z;
+            }
+        }
+    }
+    *z = parsezone(tz);
+    if (system && !z->ok) {
+        *z = parsezone("UTC0");  // an unreadable /etc/localtime
+    } else if (sh->pathmode==PM_MSYS && !z->ok) {
+        *z = parsezone("GMT0");
+    }
+    return z;
+}
+
 // Execute an external command, by path or by searching PATH, unless
 // the caller has already found it.
 static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, Str found = {})

@@ -200,10 +200,8 @@ static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
     env.utf8       = sh->utf8;
     env.now        = pfnow;
     env.shellstart = sh->start / 1000000000;
-    Value *tz = lookup(sh, "TZ");
-    if (tz && (tz->attrs & V_EXPORT)) {
-        Got g = getvar(sh, &scratch, "TZ");
-        env.tz = !g.set ? Str{} : g.value.data ? g.value : Str("");
+    if (find(args[i], "%(") >= 0) {
+        env.zone = shellzone(sh, &scratch);
     }
     env.error      = pferror;
     env.flush      = var.data ? 0 : pfflushout;
@@ -235,6 +233,8 @@ static i32 b_test(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 // Control flow
 
+static void logoutfiles(Shell *, Arena);  // unabashed.cpp
+
 static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     // In a trap action, the status from before the action (POSIX)
@@ -255,10 +255,22 @@ static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
             status = (i32)(v & 255);
         }
     }
+    sh->status = status;
+    logoutfiles(sh, scratch);
     sh->status  = status;
     sh->exiting = 1;
     sh->exitcalled = 1;
     escape(sh, ESC_EXIT);
+}
+
+// logout: exit, in a login shell only
+static i32 b_logout(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    if (!sh->login) {
+        builtinerror(sh, scratch, "logout", "not login shell: use `exit'");
+        return 1;
+    }
+    return b_exit(sh, args, nargs, scratch);
 }
 
 // Element i of an indexed (or dynamic) array variable, or null.
@@ -322,6 +334,7 @@ static i32 b_return(Shell *sh, Str *args, iz nargs, Arena scratch)
     // In a trap action itself, the status from before the action
     b32 intrap = sh->intrap && sh->funcdepth==sh->trapfuncs;
     i32 status = intrap ? sh->trapstatus : sh->status;
+    sh->retprev = sh->status;
     iz  i = skipdashdash(args, nargs, 1);
     if (i < nargs) {
         i64 v;
@@ -413,6 +426,8 @@ static i32 b_eval(Shell *sh, Str *args, iz nargs, Arena scratch)
     return status;
 }
 
+static i32 sourcetext(Shell *, Str *args, iz nargs, Str src, Arena, b32 startup);
+
 static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     Str name = args[0];
@@ -490,10 +505,20 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
         builtinerror(sh, scratch, name, concat(&scratch, file, ": cannot execute binary file"));
         return 126;
     }
+    return sourcetext(sh, args+i, nargs-i, src, scratch, 0);
+}
+
+// Run a sourced file's text: args[0] is its name, any others the
+// positional parameters while it runs. A startup file (bash's own,
+// not the source builtin's) ended by return leaves the status from
+// before the return.
+static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b32 startup)
+{
+    Str  file  = args[0];
     Args saved = sh->args;
-    if (i+1 < nargs) {
-        sh->args.v = args + i + 1;
-        sh->args.n = nargs - i - 1;
+    if (nargs > 1) {
+        sh->args.v = args + 1;
+        sh->args.n = nargs - 1;
     }
     sh->sourcedepth++;
     sh->status = 0;
@@ -505,12 +530,12 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     sf.frame = sh->frame;
     sf.file  = file;
     sf.line  = line;
-    if (i+1 < nargs) {
-        sf.args.v    = args + i + 1;
-        sf.args.n    = nargs - i - 1;
+    if (nargs > 1) {
+        sf.args.v    = args + 1;
+        sf.args.n    = nargs - 1;
         sf.argpushed = sh->shopt[S_EXTDEBUG];
     } else {
-        sf.args.v    = args + i;  // as bash: the name stands in
+        sf.args.v    = args;  // as bash: the name stands in
         sf.args.n    = 1;
         sf.argpushed = 1;
     }
@@ -550,10 +575,11 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     if (sh->flow == FLOW_RETURN) {
         // Functions have taken their own returns: this one is the file's
         sh->flow = FLOW_NONE;
+        if (startup) status = sh->retprev;
     }
     sh->line = line;
     sh->sourcedepth--;
-    if (i+1 < nargs) sh->args = saved;
+    if (nargs > 1) sh->args = saved;
     return status;
 }
 
@@ -1663,7 +1689,7 @@ static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (hidden && (set || unset)) {
             setpathmode(sh, scratch, set ? PM_MSYS : PM_NATIVE);
         } else if (set || unset) {
-            *slot = set;
+            if (oflag || idx!=S_LOGIN_SHELL) *slot = set;  // read-only, quietly
             if (!oflag && (idx==S_ARRAY_EXPAND_ONCE || idx==S_ASSOC_EXPAND_ONCE)) {
                 // two names for one option
                 sh->shopt[S_ARRAY_EXPAND_ONCE] = sh->shopt[S_ASSOC_EXPAND_ONCE] = set;
@@ -3651,6 +3677,7 @@ static Builtin builtins[] = {
     {"kill",     b_kill,     0},
     {"let",      b_let,      0},
     {"local",    b_local,    B_DECL},
+    {"logout",   b_logout,   0},
     {"mapfile",  b_mapfile,  0},
     {"printf",   b_printf,   0},
     {"pwd",      b_pwd,      0},

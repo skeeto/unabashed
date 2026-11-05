@@ -277,22 +277,35 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
     if (f) f->attrs |= V_EXPORT;
 }
 
-// A non-interactive shell first runs the file BASH_ENV names, after
-// expanding it, unless in POSIX mode. A missing file is no error, and
-// others are reported without a line number.
-static void sourcebashenv(Shell *sh, Arena scratch)
+// Startup files
+
+struct Startup {
+    Str rcfile;     // --rcfile, --init-file
+    b32 login;      // -l, --login
+    b32 noprofile;  // --noprofile
+    b32 norc;       // --norc
+    b32 posix;      // in POSIX mode before the files (--posix, ...)
+    b32 busybox;    // busybox-w32's rules, not bash's (native mode)
+};
+
+// Run one startup file, as bash's maybe_execute_file does: a leading ~
+// from HOME, a missing file skipped, other failures reported without a
+// line number ("bash: FILE: is a directory"). False if the file is not
+// there, so that the caller may try the next. Under busybox's rules
+// every failure is quiet and a return's status stays.
+static b32 startupfile(Shell *sh, Arena scratch, Str name, Startup *s)
 {
-    Got g = getvar(sh, &scratch, "BASH_ENV");
-    if (sh->opt[O_POSIX] || !g.value.len) return;
-    Str  file = expandfilename(sh, &scratch, g.value);
-    if (!file.len) return;
+    Str file = s->busybox ? name : tildefilename(sh, &scratch, name);
+    if (!file.len) return 0;
     i32  err;
     Str  src = readwholefile(sh, &scratch, file, &err);
     Stat st  = pathstat(sh, scratch, file, 1);
-    if (err == E_NOENT) return;
+    if (err==E_NOENT && st.err) return 0;
     Str bad = err ? errtext(err) : Str{};
-    if (!err && !st.err && st.type==FT_DIR) bad = "is a directory";
-    if (bad.data) {
+    if (!st.err && st.type==FT_DIR) bad = "is a directory";
+    if (bad.data && s->busybox) {
+        return 0;
+    } else if (bad.data) {
         Buf b(&scratch, 64);
         print(&b, errname(sh));
         print(&b, ": ");
@@ -301,9 +314,116 @@ static void sourcebashenv(Shell *sh, Arena scratch)
         print(&b, bad);
         putbyte(&b, '\n');
         fdwrite(sh, 2, finish(&b));
+        return 1;
+    }
+    Str *args = alloc<Str>(&scratch);
+    args[0] = file;
+    sh->status = sourcetext(sh, args, 1, src, scratch, !s->busybox);
+    return 1;
+}
+
+// A file named by a variable, ENV or BASH_ENV, after expanding the
+// value (bash then expands a leading ~, busybox does not).
+static void envfile(Shell *sh, Arena scratch, Str var, Startup *s)
+{
+    Got g = getvar(sh, &scratch, var);
+    if (!g.value.len) return;
+    Str name = expandfilename(sh, &scratch, g.value);
+    if (name.len) startupfile(sh, scratch, name, s);
+}
+
+// bash's login files: /etc/profile, then the first of ~/.bash_profile,
+// ~/.bash_login and ~/.profile (only ~/.profile when named sh).
+static void loginfiles(Shell *sh, Arena scratch, Startup *s, b32 actsh)
+{
+    if (s->noprofile) return;
+    startupfile(sh, scratch, "/etc/profile", s);
+    if (actsh) {
+        startupfile(sh, scratch, "~/.profile", s);
+    } else if (!startupfile(sh, scratch, "~/.bash_profile", s) &&
+               !startupfile(sh, scratch, "~/.bash_login", s)) {
+        startupfile(sh, scratch, "~/.profile", s);
+    }
+}
+
+// Read the startup files for how the shell was started, with $0 and the
+// positional parameters already set. bash's rules (POSIX and msys
+// modes): -l or --login reads the login files unless in POSIX mode; a
+// $0 starting with - makes a login shell that reads them only when
+// interactive. A non-interactive shell then reads $BASH_ENV (not when
+// named sh or in POSIX mode). An interactive one reads ~/.bashrc, or
+// --rcfile's file, unless --norc or a login shell (an msys shell, as
+// Git Bash, reads /etc/bash.bashrc first); named sh or in POSIX mode
+// it reads $ENV instead. Named sh, the shell enters POSIX mode after
+// the files. busybox-w32's rules (native mode, w64devkit's build): a
+// login shell (-l, --login, a $0 starting with - or l, as lash) reads
+// <system drive>/etc/profile, <exe>/../etc/profile and $HOME/.profile;
+// an interactive one then $ENV. --noprofile works in both.
+static void startup(Shell *sh, Arena scratch, Str argv0, Startup *s)
+{
+    b32 dash = startswith(argv0, "-");
+    Str base = progbase(dash ? cuthead(argv0, 1) : argv0);
+    if (s->busybox) {
+        b32 login = s->login || dash || startswith(base, "l") || startswith(base, "L");
+        sh->login = sh->shopt[S_LOGIN_SHELL] = login;
+        if (login && !s->noprofile) {
+            Str windir = sh->paths->windir;
+            Str drive  = windir.len>1 && windir[1]==':' ? takehead(windir, 2) : Str("C:");
+            startupfile(sh, scratch, concat(&scratch, drive, "/etc/profile"), s);
+            Str dir = takehead(sh->exe, sh->exe.len - lastpart(sh->exe).len);
+            startupfile(sh, scratch, concat(&scratch, dir, "../etc/profile"), s);
+            Got home = getvar(sh, &scratch, "HOME");
+            if (home.set) {
+                startupfile(sh, scratch, concat(&scratch, home.value, "/.profile"), s);
+            }
+        }
+        if (sh->interactive) envfile(sh, scratch, "ENV", s);
         return;
     }
-    runsource(sh, src, file, scratch);
+
+    b32 actsh = sh->win32 ? equalfold(base, "sh") : base=="sh";
+    b32 login = s->login || dash;
+    sh->login = sh->shopt[S_LOGIN_SHELL] = login;
+    b32 read  = 0;  // the login files
+    if (s->login && !s->posix) {
+        loginfiles(sh, scratch, s, actsh);
+        read = 1;
+    }
+    if (!sh->interactive) {
+        if (!s->posix && !actsh) envfile(sh, scratch, "BASH_ENV", s);
+    } else if (s->posix) {
+        envfile(sh, scratch, "ENV", s);
+    } else {
+        if (login && !read) loginfiles(sh, scratch, s, actsh);
+        if (actsh) {
+            envfile(sh, scratch, "ENV", s);
+        } else if (!s->norc && !login) {
+            if (sh->pathmode == PM_MSYS) {
+                startupfile(sh, scratch, "/etc/bash.bashrc", s);
+            }
+            startupfile(sh, scratch, s->rcfile.data ? s->rcfile : Str("~/.bashrc"), s);
+        }
+    }
+    if (actsh && !sh->opt[O_POSIX]) setposix(sh, 1);
+}
+
+// A login shell ending by the exit builtin (not in a subshell), or an
+// interactive one ending at all, reads ~/.bash_logout, once, and Git
+// Bash /etc/bash.bash_logout after it. The exit status stays unless
+// the file runs exit itself.
+static void logoutfiles(Shell *sh, Arena scratch)
+{
+    if (!sh->login || sh->loggedout || sh->subshell || sh->pathmode==PM_NATIVE) {
+        return;
+    }
+    sh->loggedout = 1;
+    Startup s  = {};
+    i32 status = sh->status;
+    startupfile(sh, scratch, "~/.bash_logout", &s);
+    if (sh->pathmode == PM_MSYS) {
+        startupfile(sh, scratch, "/etc/bash.bash_logout", &s);
+    }
+    sh->status = status;
 }
 
 // SHELLOPTS or BASHOPTS inherited from the environment turns on the
@@ -949,6 +1069,8 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         Str cmd = {};
         b32 havecmd = 0;
         b32 selftest_ = 0;
+        Startup st = {};
+        st.busybox = sh->pathmode == PM_NATIVE;
         for (; i < info->nargs; i++) {
             Str a = info->args[i];
             if (a == "--unabashed-selftest") {
@@ -959,7 +1081,31 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                 i++;
                 break;
             }
-            if (a=="--norc" || a=="--noprofile" || a=="--noediting") continue;
+            if (a == "--norc") {
+                st.norc = 1;
+                continue;
+            } else if (a == "--noprofile") {
+                st.noprofile = 1;
+                continue;
+            } else if (a == "--login") {
+                st.login = 1;
+                continue;
+            } else if (a == "--noediting") {
+                continue;
+            } else if (a=="--rcfile" || a=="--init-file") {
+                if (i+1 == info->nargs) {
+                    Buf b(&scratch, 64);
+                    print(&b, sh->name);
+                    print(&b, ": ");
+                    print(&b, cuthead(a, 2));
+                    print(&b, ": option requires an argument\n");
+                    fdwrite(sh, 2, finish(&b));
+                    sh->status = 2;
+                    escape(sh, ESC_EXIT);
+                }
+                st.rcfile = info->args[++i];
+                continue;
+            }
             if (a == "--posix") {
                 setposix(sh, 1);
                 continue;
@@ -978,8 +1124,10 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                     if (i+1 < info->nargs) setoptionbyname(sh, info->args[++i], on);
                 } else if (c == 'O') {
                     if (i+1 < info->nargs) setshoptbyname(sh, scratch, info->args[++i], on);
-                } else if (c=='l' || c=='r' || c=='D') {
-                    // login, restricted: accepted
+                } else if (c == 'l') {
+                    st.login = 1;
+                } else if (c=='r' || c=='D') {
+                    // restricted, dump strings: accepted
                 } else {
                     for (i32 o = 0; o < O_COUNT; o++) {
                         if (setoptions[o].letter == c) sh->opt[o] = on;
@@ -992,14 +1140,25 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             sh->shopt[S_EXPAND_ALIASES] = 1;
             if (!getvar(sh, &scratch, "PS1").set) setvar(sh, scratch, "PS1", "\\s-\\v\\$ ");
             if (!getvar(sh, &scratch, "PS2").set) setvar(sh, scratch, "PS2", "> ");
-        } else if (!selftest_) {
-            sourcebashenv(sh, scratch);
+            b32 tty = os_isatty(os, info->std[0]) || os_isatty(os, info->std[2]);
+            if (!st.busybox && !tty) {
+                // As bash finding no terminal for job control (a
+                // terminal on either stream stands in for /dev/tty)
+                Str name = progbase(sh->shellname);
+                Buf b(&scratch, 128);
+                print(&b, name);
+                print(&b, ": cannot set terminal process group (-1): "
+                          "Inappropriate ioctl for device\n");
+                print(&b, name);
+                print(&b, ": no job control in this shell\n");
+                fdwrite(sh, 2, finish(&b));
+            }
         }
 
+        // $0 and the positional parameters, then the startup files
+        Str file = {};
         if (selftest_) {
-            Output *out = newoutput(os, &perm, info->std[1]);
-            sh->status = selftest(os, &perm, out);
-            flush(out);
+            // no startup files
         } else if (sh->cflag) {
             if (i >= info->nargs) {
                 Buf b(&scratch, 64);
@@ -1007,23 +1166,39 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                 print(&b, ": -c: option requires an argument\n");
                 fdwrite(sh, 2, finish(&b));
                 sh->status = 2;
-            } else {
-                cmd = info->args[i++];
-                havecmd = 1;
-                setvar(sh, scratch, "BASH_EXECUTION_STRING", cmd);
-                if (i < info->nargs) sh->name = info->args[i++];
-                sh->args.v = info->args + i;
-                sh->args.n = info->nargs - i;
-                sh->iname  = "-c";
-                runsource(sh, cmd, "-c", scratch);
+                escape(sh, ESC_EXIT);
             }
+            cmd = info->args[i++];
+            havecmd = 1;
+            setvar(sh, scratch, "BASH_EXECUTION_STRING", cmd);
+            if (i < info->nargs) sh->name = info->args[i++];
+            sh->args.v = info->args + i;
+            sh->args.n = info->nargs - i;
+            sh->iname  = "-c";
         } else if (i<info->nargs && !sh->sflag) {
-            // A script file
-            Str file = info->args[i++];
+            file = info->args[i++];
             sh->name   = file;
             sh->iname  = file;
             sh->args.v = info->args + i;
             sh->args.n = info->nargs - i;
+        } else {
+            sh->sflag  = 1;
+            sh->args.v = info->args + i;
+            sh->args.n = info->nargs>i ? info->nargs-i : 0;
+        }
+        if (!selftest_) {
+            st.posix = sh->opt[O_POSIX];
+            startup(sh, scratch, info->nargs ? info->args[0] : Str("bash"), &st);
+        }
+
+        if (selftest_) {
+            Output *out = newoutput(os, &perm, info->std[1]);
+            sh->status = selftest(os, &perm, out);
+            flush(out);
+        } else if (havecmd) {
+            runsource(sh, cmd, "-c", scratch);
+        } else if (file.data) {
+            // A script file
             i32  err;
             Str  src = readwholefile(sh, &scratch, file, &err);
             Stat st  = pathstat(sh, scratch, file, 1);
@@ -1059,21 +1234,21 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             }
         } else {
             // Commands from standard input
-            sh->sflag  = 1;
-            sh->args.v = info->args + i;
-            sh->args.n = info->nargs>i ? info->nargs-i : 0;
             StdinSource in = {};
             in.sh  = sh;
             Arena inarena = newarena(os, sh->reserve);
             in.buf = Buf(&inarena, 4096);
             runsource(sh, {}, sh->name, scratch, 1, 1, fillstdin, &in);
         }
-        (void)havecmd;
     } else if (top.why==ESC_FATAL && sh->cflag) {
         sh->status = 127;  // as bash's -c reports a fatal error
     }
     if (!sh->execed && !sh->killsig) {
-        // Signals still pending, then the EXIT trap
+        // A login shell's logout files, signals still pending, then the
+        // EXIT trap
+        if (sh->interactive && !__builtin_setjmp(top.jmp)) {
+            logoutfiles(sh, scratch);
+        }
         if (!__builtin_setjmp(top.jmp)) {
             sh->exiting = 0;
             checksigs(sh, scratch);

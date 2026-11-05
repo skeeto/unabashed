@@ -460,6 +460,9 @@ struct Shell {
     i32      funcdepth;
     b32      exiting;
     b32      interactive;
+    b32      login;        // a login shell (logout, ~/.bash_logout)
+    b32      loggedout;    // ~/.bash_logout has run
+    i32      retprev;      // the status before the last return builtin
     b32      utf8;         // UTF-8 locale, else bytes
     b32      win32;        // on Windows: platform facts, not paths
     PathMode pathmode;     // how paths read and print (paths.cpp)
@@ -686,6 +689,7 @@ static void flushbout(Shell *sh)
 // code if sourced, else the script, else $0 (which BASH_ARGV0 sets).
 static Str errname(Shell *sh)
 {
+    if (sh->interactive) return progbase(sh->shellname);  // as bash
     if (sh->srcname.len) return sh->srcname;
     b32 script = !sh->cflag && !sh->interactive;
     return script || !sh->argv0.data ? sh->name : sh->argv0;

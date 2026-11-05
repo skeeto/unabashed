@@ -253,6 +253,8 @@ static i32 personality(Str name)  // -1 if unknown
     return -1;
 }
 
+static Str speclocaltz;  // a spec's "# localtz:" line: the vos's zone
+
 // A fresh heap and vos for a run: the vos in the upper half of the
 // heap, the shell below.
 static void startrun(Os *os, b32 win, Str input)
@@ -266,6 +268,7 @@ static void startrun(Os *os, b32 win, Str input)
     vreset(&os->vos, va, testfakes, ntestfakes, win);
     os->vos.in    = input;
     os->vos.chaos = os->chaos;
+    os->vos.localtz = speclocaltz;
 }
 
 static OsInfo baseinfo(Os *os, Str *args, iz nargs)
@@ -632,6 +635,18 @@ static i32 scriptpersona(Str script)
     return PERS_LINUX;
 }
 
+// A script's "# localtz: TZ" line, the system zone the vos reports
+// (os_localtz), else null for its UTC.
+static Str scriptlocaltz(Str script)
+{
+    Str key = "# localtz: ";
+    for (Cut c = {{}, script, 1}; c.ok;) {
+        c = cut(c.tail, '\n');
+        if (startswith(c.head, key)) return trim(cuthead(c.head, key.len));
+    }
+    return {};
+}
+
 static b32 test_spec(Test *t, char *path)
 {
     Str  p        = {(u8 *)path, (iz)strlen(path)};
@@ -652,6 +667,7 @@ static b32 test_spec(Test *t, char *path)
         return 1;
     }
     i32 pers = scriptpersona(script);
+    speclocaltz = scriptlocaltz(script);
     if (pers < 0) {
         fprintf(stderr, "SKIP: %s (unknown personality)\n", path);
         return 1;
@@ -1407,6 +1423,7 @@ int main(int argc, char **argv)
         }
         Str script = readfile(argv[i]);
         pers = pers==-2 ? scriptpersona(script) : pers;
+        speclocaltz = scriptlocaltz(script);
         if (!script.data || pers<0) {
             fprintf(stderr, "tests: --run [--personality linux|native|msys] [--spec] SCRIPT [SEED]\n");
             return 2;

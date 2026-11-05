@@ -116,6 +116,22 @@ msys_run() {
     rm -rf "$dir"
     mkdir -p "$dir/home" "$dir/tmp" || exit 2
     cp "$script" "$dir/test.sh" || exit 2
+    # NAME.d: files laid over the test directory (home/.profile, ...)
+    tree=${script%.sh}.d
+    if [ -d "$tree" ]; then
+        cp -r "$tree/." "$dir/" || exit 2
+    fi
+    # With an etc of its own, the test gets a private install whose
+    # /etc is that directory, so no file of Git's etc is read
+    shellexe=$inst/usr/bin/bash.exe
+    if [ -d "$dir/etc" ]; then
+        mkdir -p "$dir/inst/usr/bin" "$dir/inst/etc" || exit 2
+        cp "$inst/usr/bin/"* "$dir/inst/usr/bin/" || exit 2
+        e=$(msys_abs "$dir/etc" | sed 's/ /\\040/g')
+        sed "s|^[^ ]* /etc |$e /etc |" "$inst/etc/fstab" \
+            >"$dir/inst/etc/fstab" || exit 2
+        shellexe=$dir/inst/usr/bin/bash.exe
+    fi
     # D, DW and DU: the test directory as C:/x, C:\x and /c/x, for
     # "# shell:" arguments
     D=$(msys_abs "$dir")
@@ -129,12 +145,22 @@ msys_run() {
     fi
     path=$(printf '%s' "$gitroot/usr/bin;$w64/bin;$sysroot/System32;$bin" |
            tr / '\\')
+    # "# env: NAME=VALUE" lines add variables (no blanks; $D, $DW and
+    # $DU expanded), and "# env: -TZ" drops TZ=UTC
+    tz=TZ=UTC
+    xenv=
+    for e in $(sed -n 's/^# env: //p' "$script"); do
+        case $e in
+        -TZ) tz= ;;
+        *)   eval "e=\"$e\""; xenv="$xenv -E $e" ;;
+        esac
+    done
     set -- "$bin/sandbox.exe" -L -t "${MSYS_TIMEOUT:-60}" -p 64 \
         -E "PATH=$path" -E "SYSTEMROOT=$sysroot" \
         -E "COMSPEC=$sysroot\\System32\\cmd.exe" \
         -E "HOME=$DW\\home" -E "TEMP=$DW\\tmp" -E "TMP=$DW\\tmp" \
-        -E LANG=C -E TZ=UTC ${msys_xenv:+-E "$msys_xenv"} \
-        "$dir" -- "$inst/usr/bin/bash.exe" "$@"
+        -E LANG=C ${tz:+-E "$tz"} ${msys_xenv:+-E "$msys_xenv"} \
+        $xenv "$dir" -- "$shellexe" "$@"
     if [ "$merge" = 1 ]; then
         "$@" >"$dir/raw.out" 2>&1 </dev/null
         status=$?

@@ -231,6 +231,10 @@ static u64     os_siggroup(Os *);
 static void    os_sigmode(Os *, i32 sig, i32 mode);
 // Realtime clock, in ns since the epoch.
 static i64     os_now(Os *);
+// The system's time zone, for local time while TZ is not in the
+// environment, in TZ's own syntax: a POSIX TZ string ("EST5EDT,M3.2.0,
+// M11.1.0"), or ':' and the absolute path of a zoneinfo file.
+static Str     os_localtz(Os *, Arena *);
 // The currently running fiber, converting the thread on first use.
 static Fiber  *os_self(Os *);
 // Create a suspended fiber running fn(os, arg), which must never

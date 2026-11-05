@@ -1,0 +1,1 @@
+echo "etc/profile: $0 $# $(shopt -q login_shell && echo login)"; x=etc

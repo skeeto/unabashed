@@ -649,6 +649,8 @@ static void promptput(Buf *b, Str s, b32 vis, b32 quote)
     }
 }
 
+static PfZone *shellzone(Shell *, Arena *);  // exec.cpp
+
 // Decode the backslash escapes of a prompt string, as ${x@P} does,
 // then expand it as if in double quotes when promptvars is on.
 static Str promptdecode(X *x, Str s)
@@ -740,16 +742,7 @@ static Str promptdecode(X *x, Str s)
                 f = f.len ? f : Str("%X");
                 i = k<s.len ? k : s.len-1;
             }
-            if (!zone) {
-                Str tz = "UTC";
-                Value *v = lookup(sh, "TZ");
-                if (v && (v->attrs & V_EXPORT)) {
-                    Got g = getvar(sh, a, "TZ");
-                    tz = g.set ? g.value : tz;
-                }
-                zone  = alloc<PfZone>(a);
-                *zone = parsezone(tz);
-            }
+            if (!zone) zone = shellzone(sh, a);
             PfTm tm = localtm(os_now(sh->os)/1000000000, zone);
             PfTout t = {};
             fmttime(&t, f, &tm);
@@ -2665,18 +2658,24 @@ static Str expandheredoc(Shell *sh, Arena *a, Str body)
 }
 
 // Expand a startup file name, such as BASH_ENV: as in double quotes,
-// with " literal, then a leading tilde prefix.
+// with " literal.
 static Str expandfilename(Shell *sh, Arena *a, Str text)
 {
     X *x = newx(sh, a);
     x->nosplit = 1;
     expandinto(x, text, XC_DQUOTE|XC_PROMPT);
-    Str r = finish(&x->data);
-    if (!r.len || r[0]!='~') return r;
-    Str prefix = cut(cuthead(r, 1), '/').head;
+    return finish(&x->data);
+}
+
+// A leading tilde prefix of a file name, expanded.
+static Str tildefilename(Shell *sh, Arena *a, Str name)
+{
+    if (!name.len || name[0]!='~') return name;
+    X  *x      = newx(sh, a);
+    Str prefix = cut(cuthead(name, 1), '/').head;
     b32 ok;
-    Str home = tildeprefix(x, prefix, &ok);
-    return ok ? concat(a, home, cuthead(r, 1+prefix.len)) : r;
+    Str home   = tildeprefix(x, prefix, &ok);
+    return ok ? concat(a, home, cuthead(name, 1+prefix.len)) : name;
 }
 
 

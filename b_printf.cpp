@@ -12,12 +12,15 @@
 
 // Interface
 
+struct PfZone;
+
 struct PrintfEnv {
     void *ctx;
     b32   utf8;                             // UTF-8 locale, else C
     i64   (*now)(void *ctx);                // seconds since the epoch
     i64   shellstart;                       // for %(...)T with -2
     Str   tz;                               // TZ if exported, else null
+    PfZone *zone;                           // local time's zone, else from tz
     void  (*error)(void *ctx, Str msg);     // "printf: ..." diagnostics
     void  (*setint)(void *ctx, Str, i64);   // %n assignment, may be null
     void  (*flush)(void *ctx, Str);         // line-buffered output, may be null
@@ -828,6 +831,8 @@ static PfTm breaktime(i64 t)
 // Time zones: POSIX TZ strings, as glibc reads them when no zoneinfo
 // file has the name. A string with daylight saving time but no rules
 // gets glibc's built-in default, the United States rules since 2007.
+// A zoneinfo (TZif) file adds its transitions: glibc uses them up to
+// the last one and the file's footer string after it.
 
 struct PfRule {
     u8  kind;  // 'J' Jn, 'N' n, 'M' Mm.w.d
@@ -837,11 +842,25 @@ struct PfRule {
     i64 secs;  // local time of day of the change
 };
 
+struct PfType {
+    i64 off;   // seconds east of UTC
+    b32 dst;
+    Str name;
+};
+
 struct PfZone {
-    Str    name[2];  // standard, daylight
-    i64    off[2];   // seconds east of UTC
-    b32    dst;
-    PfRule rule[2];  // daylight saving time starts, ends
+    Str     name[2];  // standard, daylight
+    i64     off[2];   // seconds east of UTC
+    b32     dst;
+    PfRule  rule[2];  // daylight saving time starts, ends
+    b32     ok;       // the string had a name and an offset
+    // From a zoneinfo file, else ntypes is zero
+    i64    *times;    // transitions, ascending
+    u8     *index;    // the type each transition starts
+    iz      ntimes;
+    PfType *types;
+    iz      ntypes;
+    b32     hasrule;  // the footer gave the rule above
 };
 
 static b32 zonename(Str s, iz *i, Str *name)
@@ -954,6 +973,7 @@ static PfZone parsezone(Str tz)
     if (!tzclock(tz, &i, 24, &off)) {
         return z;
     }
+    z.ok     = 1;
     z.off[0] = z.off[1] = -off;
     if (!zonename(tz, &i, &z.name[1])) {
         z.name[1] = z.name[0];
@@ -1028,19 +1048,246 @@ static PfTm localtm(i64 t, PfZone *z)
     if (!u.ok) {
         return u;
     }
-    b32 isdst = 0;
-    if (z->dst) {
-        i64 year  = u.year + (i64)1900;
-        i64 start = rulechange(&z->rule[0], year, z->off[0]);
-        i64 end   = rulechange(&z->rule[1], year, z->off[1]);
-        isdst = start>end ? t<end || t>=start : t>=start && t<end;
+    b32 ruled = !z->ntypes || (z->hasrule && z->ntimes && t>=z->times[z->ntimes-1]);
+    i64 off   = 0;
+    Str name  = {};
+    if (ruled) {
+        b32 isdst = 0;
+        if (z->dst) {
+            i64 year  = u.year + (i64)1900;
+            i64 start = rulechange(&z->rule[0], year, z->off[0]);
+            i64 end   = rulechange(&z->rule[1], year, z->off[1]);
+            isdst = start>end ? t<end || t>=start : t>=start && t<end;
+        }
+        off  = z->off[isdst];
+        name = z->name[isdst];
+    } else {
+        // Before the first transition the first standard type, as
+        // glibc, else the type the last transition up to t started
+        PfType *ty = z->types;
+        if (!z->ntimes || t<z->times[0]) {
+            for (iz i = z->ntypes-1; i >= 0; i--) {
+                ty = z->types[i].dst ? ty : z->types+i;
+            }
+        } else {
+            iz lo = 0, hi = z->ntimes;  // times[lo] <= t < times[hi]
+            while (hi-lo > 1) {
+                iz mid = lo + (hi-lo)/2;
+                if (z->times[mid] <= t) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            ty = z->types + z->index[lo];
+        }
+        off  = ty->off;
+        name = ty->name;
     }
-    i64  off = z->off[isdst];
     PfTm r   = breaktime(t + off);
     r.secs   = t;
     r.gmtoff = off;
-    r.zone   = z->name[isdst];
+    r.zone   = name;
     return r;
+}
+
+static u32 tzifu32(u8 *p)
+{
+    return (u32)p[0]<<24 | (u32)p[1]<<16 | (u32)p[2]<<8 | p[3];
+}
+
+// Read a zoneinfo (TZif) file: its transitions and types, and the
+// footer's rule if it has one (version 2 and later). Not ok unless the
+// file is well formed; a footer that does not parse is ignored.
+static PfZone parsetzif(Arena *a, Str s)
+{
+    PfZone z = {};
+    if (s.len<44 || !startswith(s, "TZif")) {
+        return z;
+    }
+    b32 v2 = s[4] >= '2';
+    iz  at = 0;
+    for (i32 pass = 0; pass < 1+v2; pass++) {
+        if (s.len-at<44 || !startswith(cuthead(s, at), "TZif")) {
+            return z;
+        }
+        iz n[6];  // isutcnt isstdcnt leapcnt timecnt typecnt charcnt
+        for (i32 k = 0; k < 6; k++) {
+            u32 v = tzifu32(s.data + at + 20 + 4*k);
+            if (v > (u32)s.len) return z;
+            n[k] = (iz)v;
+        }
+        iz nleap = n[2], ntimes = n[3], ntypes = n[4], nchars = n[5];
+        if (!ntypes || ntypes>256 || !nchars) {
+            return z;
+        }
+        iz tlen = pass ? 8 : 4;  // bytes per time: 8 in the v2 block
+        iz size = ntimes*tlen + ntimes + ntypes*6 + nchars + nleap*(tlen+4) + n[1] + n[0];
+        at += 44;
+        if (size > s.len-at) {
+            return z;
+        }
+        if (v2 && !pass) {
+            at += size;  // the v1 block: skip to the 64-bit one
+            continue;
+        }
+        u8 *p = s.data + at;
+        z.times  = alloc<i64>(a, ntimes);
+        z.index  = alloc<u8>(a, ntimes);
+        z.types  = alloc<PfType>(a, ntypes);
+        z.ntimes = ntimes;
+        z.ntypes = ntypes;
+        for (iz i = 0; i < ntimes; i++, p += tlen) {
+            u64 v = tlen==8 ? (u64)tzifu32(p)<<32 | tzifu32(p+4)
+                            : (u64)(i64)(i32)tzifu32(p);
+            z.times[i] = (i64)v;
+            if (i && z.times[i]<=z.times[i-1]) return {};
+        }
+        for (iz i = 0; i < ntimes; i++, p++) {
+            if (*p >= ntypes) return {};
+            z.index[i] = *p;
+        }
+        u8 *chars = p + ntypes*6;
+        for (iz i = 0; i < ntypes; i++, p += 6) {
+            if (p[5] >= nchars) return {};
+            z.types[i].off = (i32)tzifu32(p);
+            z.types[i].dst = p[4] != 0;
+            Str name = {chars+p[5], nchars-p[5]};
+            z.types[i].name = cut(name, 0).head;
+        }
+        at += size;
+    }
+    if (v2) {
+        // The footer: a newline, a TZ string, a newline
+        Str rest = cuthead(s, at);
+        Cut c    = rest.len ? cut(cuthead(rest, 1), '\n') : Cut{};
+        if (rest.len && rest[0]=='\n' && c.ok && c.head.len) {
+            PfZone f = parsezone(c.head);
+            if (f.ok) {
+                for (i32 k = 0; k < 2; k++) {
+                    z.name[k] = f.name[k];
+                    z.off[k]  = f.off[k];
+                    z.rule[k] = f.rule[k];
+                }
+                z.dst     = f.dst;
+                z.hasrule = 1;
+            }
+        }
+    }
+    z.ok = 1;
+    return z;
+}
+
+// TIME_ZONE_INFORMATION's parts, with names in UTF-8 (wintz)
+struct WinDate {
+    i32 year;    // 0: a rule, day is the week (1-5, 5 the last)
+    i32 month;   // 0: no daylight saving time
+    i32 dow;
+    i32 day;
+    i32 hour;
+    i32 minute;
+    i32 second;
+    i32 ms;
+};
+
+struct WinZone {
+    i32     bias;     // minutes: UTC is local time plus bias
+    i32     stdbias;
+    i32     dstbias;
+    WinDate stddate;  // when standard time starts
+    WinDate dstdate;  // when daylight saving time starts
+    Str     stdname;
+    Str     dstname;
+    b32     nodst;    // DynamicDaylightTimeDisabled
+};
+
+// A zone abbreviation from a Windows zone name, as Cygwin makes one:
+// its capital letters ("Eastern Standard Time" is EST). With fewer than
+// three, as a localized name may have, the offset in angle brackets.
+static void wintzname(Buf *b, Str name, i32 west)
+{
+    iz n = 0;
+    for (iz i = 0; i < name.len; i++) n += name[i]>='A' && name[i]<='Z';
+    if (n >= 3) {
+        for (iz i = 0; i < name.len; i++) {
+            if (name[i]>='A' && name[i]<='Z') putbyte(b, name[i]);
+        }
+        return;
+    }
+    i32 east = -west;
+    print(b, east<0 ? Str("<-") : Str("<+"));
+    east = east<0 ? -east : east;
+    putbyte(b, (u8)('0' + east/600%10));
+    putbyte(b, (u8)('0' + east/60%10));
+    putbyte(b, (u8)('0' + east%60/10));
+    putbyte(b, (u8)('0' + east%10));
+    putbyte(b, '>');
+}
+
+// [-]h[:mm[:ss]]
+static void wintzclock(Buf *b, i64 secs)
+{
+    if (secs < 0) {
+        putbyte(b, '-');
+        secs = -secs;
+    }
+    print(b, secs/3600);
+    if (secs % 3600) {
+        putbyte(b, ':');
+        putbyte(b, (u8)('0' + secs/600%6));
+        putbyte(b, (u8)('0' + secs/60%10));
+        if (secs % 60) {
+            putbyte(b, ':');
+            putbyte(b, (u8)('0' + secs%60/10));
+            putbyte(b, (u8)('0' + secs%10));
+        }
+    }
+}
+
+static void wintzrule(Buf *b, WinDate *d)
+{
+    static i32 cumul[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
+    putbyte(b, ',');
+    if (d->year) {
+        // A fixed date, counted without February 29
+        putbyte(b, 'J');
+        print(b, (i64)cumul[(d->month-1)%12] + d->day);
+    } else {
+        putbyte(b, 'M');
+        print(b, (i64)d->month);
+        putbyte(b, '.');
+        print(b, (i64)d->day);
+        putbyte(b, '.');
+        print(b, (i64)d->dow);
+    }
+    i64 secs = d->hour*(i64)3600 + d->minute*60 + d->second + (d->ms>=500);
+    if (secs != 7200) {
+        putbyte(b, '/');
+        wintzclock(b, secs);
+    }
+}
+
+// The POSIX TZ string for a Windows zone: names from the zone's names,
+// offsets from the biases, rules from the transition dates.
+static Str wintz(Arena *a, WinZone *w)
+{
+    Buf b(a, 64);
+    i32 std = w->bias + w->stdbias;  // minutes west, as POSIX counts
+    wintzname(&b, w->stdname, std);
+    wintzclock(&b, std*(i64)60);
+    b32 valid = w->stddate.month>=1 && w->stddate.month<=12 &&
+                w->dstdate.month>=1 && w->dstdate.month<=12;
+    if (w->nodst || !valid) {
+        return finish(&b);
+    }
+    i32 dst = w->bias + w->dstbias;
+    wintzname(&b, w->dstname, dst);
+    if (dst != std-60) {
+        wintzclock(&b, dst*(i64)60);
+    }
+    wintzrule(&b, &w->dstdate);
+    wintzrule(&b, &w->stddate);
+    return finish(&b);
 }
 
 struct PfTout {
@@ -1924,7 +2171,7 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs)
     p->nargs   = nargs;
 
     iz     *match = 0;  // see matchparens, built on the first %(
-    PfZone *zone  = 0;  // from env->tz, on the first %(...)T
+    PfZone *zone  = env->zone;  // else from env->tz, on the first %(...)T
     b32 stale = 1;  // match predates a rewrite of fmt
     b32 owned = 0;  // fmt is our own copy, safe to rewrite
 
