@@ -245,11 +245,20 @@ Bash's does: an MSYS2 program takes its root from that DLL), and
     none / cygdrive binary,posix=0,noacl,user 0 0
     none /tmp usertemp binary,posix=0,noacl 0 0
 
-where GIT is the Git install root (`GITBASH/../..`, spaces as `\040`).
+where GIT is WORKDIR/git (spaces as `\040`), a clone of the Git
+install (`GITBASH/../..`): its `usr/bin` hard-linked (copied when
+links fail) and its `etc` copied, rebuilt when Git's files change.
 So `/` is inst, the programs and configuration are Git's, and the copied
 DLL keeps the shell's mount table and process list apart from any Git
-Bash the user is running. WORKDIR/bin holds `sandbox.exe`, `argv.exe`
-and `argv32.exe`, built from tools/.
+Bash the user is running. The clone does the same for the MSYS2
+children of a shell that is not an MSYS2 program: the runtime keys its
+shared mount table by the DLL's directory (a junction resolves to the
+same key), and the first live process of an install fixes `/tmp` from
+its TMP, so children from Git's own directory would see the `/tmp` of
+whatever Git Bash the user is running. With the clone, each test's
+first MSYS2 child reads GIT/etc/fstab with the test's TMP. (Git Bash's
+children inherit Git Bash's table either way.) WORKDIR/bin holds
+`sandbox.exe`, `argv.exe` and `argv32.exe`, built from tools/.
 
 **Runs.** Each NAME.sh is copied to WORKDIR/NAME/test.sh, a fresh
 directory holding also empty `home` and `tmp`, and run twice, once with
@@ -293,7 +302,7 @@ alone.
 
     @ROOT@  WORKDIR/inst
     @WORK@  WORKDIR
-    @GIT@   the Git install root
+    @GIT@   the Git install (its clone, WORKDIR/git)
     @W64@   the w64devkit root
 
 Each directory is first made absolute as `X:R`: an uppercase drive
@@ -313,7 +322,10 @@ by the token, scanning left to right without overlaps. Matching is
 byte-exact (no other case folding, no word boundaries); stdout, stderr
 and the merged stream are normalized separately and otherwise kept
 byte for byte, CRs included. Since @ROOT@'s spellings are the longest,
-`WORKDIR/inst/x` becomes `@ROOT@/x`, not `@WORK@/inst/x`.
+`WORKDIR/inst/x` becomes `@ROOT@/x`, not `@WORK@/inst/x`. When the
+shell under test is a 32-bit image, every `i686` then becomes `x86_64`
+(MACHTYPE and HOSTTYPE name the build's architecture; Git Bash is
+64-bit).
 
 **Corpus rules.** Scripts are hand-written and reviewed. They print no
 pids, times, `$RANDOM`, user or machine names, or drive lists. They
