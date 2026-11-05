@@ -128,7 +128,7 @@ static b32 bbstub(SniffFile *f, Arena scratch, PeInfo pe, Stat st)
     if (pe.crt || pe.posix || pe.ours || pe.dll || st.size>((iz)1<<16)) {
         return 0;
     }
-    iz  len = st.size;
+    iz  len = (iz)st.size;  // at most 64 KiB, as checked
     u8 *buf = (u8 *)allocbytes(&scratch, len);
     len = sniffread(f, 0, buf, len);
     u8 const want[] = "busybox.exe";

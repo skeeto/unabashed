@@ -22,4 +22,6 @@ t. removed
 native PWD
 C:/Windows
 win32
+C:/a/b C:/c
+C:\a\b C:\c
 status 0

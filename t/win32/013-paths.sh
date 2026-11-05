@@ -48,4 +48,8 @@ cp "$U" sh.exe
 ./sh.exe -c 'cd a/b && case $PWD in [A-Z]:/*/013-paths/a/b) echo "native PWD";; esac
 cd /Windows && echo "$PWD"
 echo $OSTYPE'
+# busybox-w32's import, values slashed, only for a Windows parent's
+# environment (a mixed-case Path, ComSpec or ProgramData)
+"$BB" env -i 'Path=C:\a\b' 'X=C:\c' ./sh.exe -c 'echo "$PATH $X"'
+"$BB" env -i 'PATH=C:\a\b' 'X=C:\c' ./sh.exe -c 'echo "$PATH $X"'
 rm -f sh.exe

@@ -3282,17 +3282,14 @@ void mainCRTStartup()
         info.windir = s;
     }
 
-    // Windows spells it Path, but scripts expect PATH.
+    // As Windows spells it: Path tells the core (importnative) that a
+    // Windows parent started it, and the core spells it PATH
     Slice<Str> env = {};
     c16 *block = GetEnvironmentStringsW();
     for (c16 *p = block; p && *p;) {
         iz n = 0;
         for (; p[n]; n++) {}
         Str var = fromwide(&a, p, n);
-        Str name = envname(var);
-        if (name.len==4 && hassuffix(name, "path")) {
-            copybytes(var.data, (u8 *)"PATH", 4);
-        }
         env = push(&a, env, var);
         p += n + 1;
     }
