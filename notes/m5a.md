@@ -1380,14 +1380,20 @@ Exit criteria:
 3. Met: own time 5.19-5.55x lower than Git Bash's (10c).
 4. Met: configure 1.29x (make) and 1.65x (xz) faster than busybox sh,
    medians of 5 (10b).
-5. Met but one check: tests.exe 159/0, t/exec 659 specs 3448/0, t/parse
+5. Met: tests.exe 159/0, t/exec 659 specs 3448/0, t/parse
    3055/0, t/unit 10 specs, t/winvos 25 specs 282/0 (chaos 20
    1782/0), t/msys vos 45/45, t/win32 -x 30/0; XP t/win32 as above;
    both builds import KERNEL32.dll only, subsystem 5.02 and 5.01;
    FUZZ_WIN and FUZZ_WIN+FUZZ_CHAOS replay of t/winvos, t/msys, t/exec
-   and t/win32 (769 files) clean. Not yet done: Claude Code's Bash
-   tool with CLAUDE_CODE_GIT_BASH_PATH at a scratch install, which
-   needs a Claude Code started with that variable (no CLI here).
-   bench/agent runs the tool's exact wrapper string, so the shell side
-   is exercised; the tool's own setup (taking its snapshot) is not.
+   and t/win32 (769 files) clean. Claude Code 2.1.309 headless (`claude.exe -p`, Bash tool
+   only) with CLAUDE_CODE_GIT_BASH_PATH at a scratch install's
+   usr/bin/bash.exe: it took its snapshot and ran twelve agent-style
+   commands (arithmetic, mkdir and cd with the cwd carried to the next
+   call, pipes, a quoted heredoc, git init and status, exit statuses,
+   loops, type, cygpath -w, sleep, alias, shopt) with Git Bash's
+   results. The path must name bash.exe or sh.exe: Claude Code
+   rejects unabashed.exe ("is not a bash/sh binary") and, finding no
+   Git Bash, drops the Bash tool. A first pwd printed C:/... because
+   the driver (busybox) exported PWD in that form; Git Bash prints the
+   same, and with PWD unset both print /c/....
 6. Met: no M5a items in issues.md.

@@ -271,6 +271,10 @@ the Git Bash corpus reaches; M7 is where fidelity is finished):
   and for -f only).
 - **`/dev/consN`, `/dev/ptyN`, `/dev/ttySN`** are untested against Git
   Bash.
+- **An inherited backslashed PWD**: when PWD names the current
+  directory as `C:\x\y`, Git Bash keeps it and pwd prints `C:\x/y`
+  (only the first separator stays a backslash); ours prints `C:/x/y`.
+  Seen while checking Claude Code (m5a.md, exit criteria).
 
 
 ## M8 (performance)
