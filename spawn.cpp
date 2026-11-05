@@ -49,10 +49,13 @@ enum : iz {
 
 static SniffCache *newsniffcache(Arena *perm)
 {
-    SniffCache *c = alloc<SniffCache>(perm);
-    c->base  = (byte *)allocbytes(perm, SNIFFCACHE);
+    // at most a sixteenth of what perm has left (small fuzz arenas)
+    iz          len = (perm->end - perm->beg) / 16;
+    SniffCache *c   = alloc<SniffCache>(perm);
+    len = len<SNIFFCACHE ? len : SNIFFCACHE;
+    c->base  = (byte *)allocbytes(perm, len);
     c->a.beg = c->base;
-    c->a.end = c->base + SNIFFCACHE;
+    c->a.end = c->base + len;
     return c;
 }
 
@@ -156,7 +159,7 @@ static Sniff sniff(Shell *sh, Arena scratch, Str native, Stat st)
 
     // Remember it, starting the table over when it is full
     iz need = (iz)sizeof(SniffEntry) + key.len + s.line.len + 64;
-    if (!c || need>SNIFFCACHE/4) {
+    if (!c || need>(c->a.end-c->base)/4) {
         s.line = clone(&scratch, s.line);
         return s;
     }
