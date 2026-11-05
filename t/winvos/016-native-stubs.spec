@@ -22,10 +22,10 @@ hi
 hi
 status 126
 
-== stderr 44
-bash: line 20: argv: Argument list too long
+== stderr 59
+bash: line 20: C:/w64/bin/argv.exe: Argument list too long
 
-== merged 485
+== merged 500
 cmdline = <ls -d "a b">
 argv[0] = <ls>
 argv[1] = <-d>
@@ -47,7 +47,7 @@ argv[0] = <ls>
 argv[1] = <4>
 hi
 hi
-bash: line 20: argv: Argument list too long
+bash: line 20: C:/w64/bin/argv.exe: Argument list too long
 status 126
 
 == status 0

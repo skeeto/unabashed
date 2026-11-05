@@ -2581,8 +2581,9 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
     // that the shell itself is unaffected
     b32 noint = s->sigign>>1 & 1;
     // Since Windows 8, a program runs in a job of its own (see judge),
-    // entered before it runs
-    b32 tojob = os->lateattach && !noint;
+    // entered before it runs; exec's job is for kill-on-close only, so
+    // also when the program ignores Ctrl-C (as in background, &)
+    b32 tojob = os->lateattach && (!noint || exec);
     uz  ejob  = 0;  // exec's job before Windows 8
     i32 flags = CREATE_UNICODE_ENVIRONMENT;
     flags |= os->noconsole ? CREATE_NO_WINDOW : 0;

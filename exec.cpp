@@ -1629,11 +1629,20 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     }
     if (status>=0 && (status & WNOLIB)) {
         // As Cygwin reports a native program that could not load a DLL
+        // (recorded from Git Bash: the image's POSIX path, .exe kept)
         status &= ~WNOLIB;
+        Str image = tg.path;
+        if (sh->pathmode == PM_MSYS) {
+            PathCtx c = pathctx(sh, &a, {});
+            Str     p = toposix(&c, &a, image);
+            image = p.data ? p : image;
+        }
+        Str dll = missingdll(sh, &a, tg.path, env);
         Buf b(&a, 256);
-        print(&b, path);
-        print(&b, ": error while loading shared libraries: ?: cannot open"
-                  " shared object file: No such file or directory\n");
+        print(&b, image.len ? image : path);
+        print(&b, ": error while loading shared libraries: ");
+        print(&b, dll.data ? dll : Str("?"));
+        print(&b, ": cannot open shared object file: No such file or directory\n");
         flushbout(sh);
         fdwrite(sh, 2, finish(&b));
     }
@@ -1837,7 +1846,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         shellerror(sh, a, concat(&a, path, ": No such file or directory"));
         return 127;
     }
-    shellerror(sh, a, concat3(&a, name, Str(": "), errtext(err)));
+    shellerror(sh, a, concat3(&a, path, Str(": "), errtext(err)));
     return err==E_NOENT ? 127 : 126;
 }
 

@@ -74,6 +74,48 @@ static iz sniffread(void *ctx, i64 off, u8 *buf, iz len)
     return n;
 }
 
+// The first DLL an image imports that the loader would find in none of
+// its places (the image's directory, System32 and SysWOW64, the Windows
+// directory, PATH), as Cygwin names it for STATUS_DLL_NOT_FOUND. Null
+// if all are there (a DLL's own import was missing).
+static Str missingdll(Shell *sh, Arena *a, Str native, Slice<Str> env)
+{
+    Opened o = os_open(sh->os, *a, native, OF_READ, 0);
+    if (o.err) return {};
+    SniffFile f = {sh->os, o.h};
+    PeInfo pe = pesniff(sniffread, &f, *a, a);
+    os_close(sh->os, o.h);
+
+    Slice<Str> dirs = {};
+    dirs = push(a, dirs, takehead(native, native.len-lastpart(native).len));
+    Str windir = sh->paths->windir;
+    if (windir.len) {
+        dirs = push(a, dirs, concat(a, windir, "/System32/"));
+        dirs = push(a, dirs, concat(a, windir, "/SysWOW64/"));
+        dirs = push(a, dirs, concat(a, windir, "/"));
+    }
+    Str path = envlookup(env, "PATH", 1);
+    for (Cut c = {{}, path, path.len>0}; c.ok;) {
+        c = cut(c.tail, sh->pathmode==PM_MSYS ? ':' : ';');
+        if (!c.head.len) continue;
+        PathRes r = resolve(sh, a, c.head);
+        if (r.ok && r.kind==PK_FILE) dirs = push(a, dirs, concat(a, r.native, "/"));
+    }
+
+    for (iz i = 0; i < pe.dlls.len; i++) {
+        Str dll = pe.dlls[i];
+        if (startswith(dll, "api-ms-") || startswith(dll, "ext-ms-")) continue;
+        b32 found = 0;
+        for (iz d = 0; !found && d < dirs.len; d++) {
+            Arena t = *a;
+            Stat  s = os_stat(sh->os, t, concat(&t, dirs[d], dll), 1);
+            found = !s.err && s.type==FT_FILE;
+        }
+        if (!found) return dll;
+    }
+    return {};
+}
+
 // What the file at a canonical native path holds, given its status.
 static Sniff sniff(Shell *sh, Arena scratch, Str native, Stat st)
 {

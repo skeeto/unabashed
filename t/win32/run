@@ -61,6 +61,28 @@ cp "$shell" "$bin/unabashed.exe" || exit 2
 U=$bin/unabashed.exe
 export U
 
+# For 014-spawn: tools/argv.cpp's builds, one importing a missing DLL,
+# the 32-bit shell beside the 64-bit one, busybox and Git's usr/bin
+for v in argv:g++ argv32:i686-w64-mingw32-g++; do
+    exe=$bin/${v%%:*}.exe
+    if [ ! -e "$exe" ] || [ "$root/tools/argv.cpp" -nt "$exe" ]; then
+        ${v#*:} -std=c++20 -municode -O2 -s -o "$exe" \
+            "$root/tools/argv.cpp" || exit 2
+    fi
+done
+if [ ! -e "$bin/nodll.exe" ]; then
+    printf 'LIBRARY nosuch.dll\nEXPORTS\nnosuch\n' >"$bin/nosuch.def"
+    printf 'int nosuch(void);\nint main(void) { return nosuch(); }\n' >"$bin/nodll.c"
+    dlltool -d "$bin/nosuch.def" -l "$bin/libnosuch.a" &&
+    cc -o "$bin/nodll.exe" "$bin/nodll.c" "$bin/libnosuch.a" || exit 2
+fi
+U32=$(dirname "$shell")/unabashed32.exe
+[ -f "$U32" ] && cp "$U32" "$bin/unabashed32.exe"
+BIN=$bin
+BB=$(command -v busybox)
+GITBIN=$(dirname "${GITBASH:-C:/Users/wellons/git/usr/bin/bash.exe}")
+export BIN BB GITBIN
+
 pass=0
 fail=0
 for t; do

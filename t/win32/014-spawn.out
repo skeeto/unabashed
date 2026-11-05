@@ -1,0 +1,55 @@
+== widths
+cmdline = <@D\argv.exe "a b" "q\"q" "" x\ C:/x *>
+argv[0] = <@D\argv.exe>
+argv[1] = <a b>
+argv[2] = <q"q>
+argv[3] = <>
+argv[4] = <x\>
+argv[5] = <C:/x>
+argv[6] = <*>
+cmdline = <@D\argv32.exe "a\\\"b">
+argv[0] = <@D\argv32.exe>
+argv[1] = <a\"b>
+cmdline = <@D\argv.exe "a b" "q\"q" "" x\ C:/x *>
+argv[0] = <@D\argv.exe>
+argv[1] = <a b>
+argv[2] = <q"q>
+argv[3] = <>
+argv[4] = <x\>
+argv[5] = <C:/x>
+argv[6] = <*>
+cmdline = <@D\argv32.exe "a\\\"b">
+argv[0] = <@D\argv32.exe>
+argv[1] = <a\"b>
+cmdline = <.\argv "a b" /c/x "*">
+argv[0] = <.\argv>
+argv[1] = <a b>
+argv[2] = </c/x>
+argv[3] = <*>
+== batch
+["a&b"] ["%PATH%"] ["""q"""] ["x^y"] ["a|b"]
+status 3
+["<x>"] ["%%"] ["c d"] [] []
+status 3
+== shebangs
+bb 1 one
+bb 1 two
+cmdline = <argv ./s2 three>
+argv[0] = <argv>
+argv[1] = <./s2>
+argv[2] = <three>
+self four
+dotsh five
+self six
+== exec
+died with the shell
+cmdline = <@D\argv32.exe exec>
+argv[0] = <@D\argv32.exe>
+argv[1] = <exec>
+status 5
+== missing DLL
+/014-spawn/nodll.exe: error while loading shared libraries: nosuch.dll: cannot open shared object file: No such file or directory
+status 127
+@D/nodll.exe: error while loading shared libraries: nosuch.dll: cannot open shared object file: No such file or directory
+status 127
+status 0

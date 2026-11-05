@@ -646,6 +646,7 @@ struct PeInfo {
     b32 dll;
     b32 ours;       // carries our .unabash section
     b32 ok;         // a PE image
+    Slice<Str> dlls;  // imported DLLs as named, when asked for
 };
 
 // Read up to len bytes at off into buf, returning the count read, short
@@ -710,8 +711,9 @@ static i32 pecrt(Str dll)
 
 // Sniff a PE image: its machine, subsystem, CRT and POSIX runtime by
 // the import directory, and our own marker section. Reads through the
-// callback, which sees no offset past what the headers point at.
-static PeInfo pesniff(PeRead read, void *ctx, Arena scratch)
+// callback, which sees no offset past what the headers point at. With
+// keep, also the names of the imported DLLs, allocated there.
+static PeInfo pesniff(PeRead read, void *ctx, Arena scratch, Arena *keep = 0)
 {
     PeInfo r = {};
     u8     mz[64];
@@ -778,11 +780,15 @@ static PeInfo pesniff(PeRead read, void *ctx, Arena scratch)
         i64 noff = peoffset(sects, nsect, headers, namerva);
         iz  len  = noff<0 ? 0 : read(ctx, noff, name, countof(name));
         iz  end  = 0;
-        for (; end<len && name[end]; end++) {
-            name[end] = lowercase(name[end]);
-        }
+        for (; end<len && name[end]; end++) {}
         if (end == len) {
             continue;  // unterminated or unreadable
+        }
+        if (keep) {
+            r.dlls = push(keep, r.dlls, clone(keep, Str{name, end}));
+        }
+        for (iz k = 0; k < end; k++) {
+            name[k] = lowercase(name[k]);
         }
 
         Str dll = {name, end};
