@@ -769,3 +769,166 @@ t/msys by topic, passed of total, before -> after:
 
 051 fails only on `cmd //c`, which needs step 7's argument conversion
 (the CRs are right).
+
+### Step 7: spawning by target kind
+
+spawn.cpp (between glob.cpp and exec.cpp) decides how a program
+starts on Windows; main_win32's os_spawn only runs CreateProcess with
+the core's `Spawn.path` and `Spawn.cmdline`.
+
+Search and the execute bit:
+- `pathsearch` (moved from exec.cpp with `canexec` and `pathlookup`):
+  msys mode tries `""` then `.exe`; native mode the bare name then
+  `.com .exe .sh .bat .cmd` unless the name has one; POSIX unchanged.
+  bash's file_to_lose_on rule holds: a non-executable match is
+  remembered, found by type/command -v/-P and hashed, and running it
+  says "Permission denied", 126 (checked in WSL).
+- The platform's os_stat reports content bits only (`#!`, `MZ`,
+  `:\n`; any `.exe` is taken to be MZ, unread); `winmode` adds the
+  mode's rule: msys noacl is `.exe` or those contents, never
+  `.com/.bat/.cmd` or empty files (recorded, 042-044); native is
+  busybox-w32's do_lstat: an executable extension, `#!`, an APE
+  header, or a PE image that is not a DLL with subsystem 1, 2, 3 or 7
+  (a bare `MZ` is not).
+- pathstat's msys `.exe` retry and `locate` (what to run): msys adds
+  `.exe` to a missing name; native mode, as busybox's
+  add_win32_extension does for explicit paths too, tries the
+  extensions on `./mine` (checked against w64devkit's busybox sh,
+  where `./mine` runs mine.exe with argv[0] `.\mine`).
+- The sniff cache: `SniffCache`, a 256 KiB block from perm (off the
+  journaled store, so subshells share it), a hash trie keyed by the
+  ASCII-folded native path, valid while mtime and size match, started
+  over when full. It holds the kind (script line, `:`, PE info, bare
+  MZ, APE). bash's command hash is unchanged.
+
+Targets (`wintarget`, by `pesniff` and the extension):
+- Our own image (the `.unabash` section): its persona by the target's
+  name and install (`personaof`, fstab at its root): Cygwin quoting
+  for an msys persona, MSVCRT for a native one; the child environment
+  of an msys child.
+- MSYS2/Cygwin images: `quotecygwin` (quotes the empty word, blanks,
+  quotes and the glob/brace characters, `@`/`~` first) and no argument
+  conversion; the conv_envvars (PATH, ORIGINAL_PATH, LD_LIBRARY_PATH as
+  lists; HOME, SHELL, TMPDIR, TMP, TEMP) in Windows form with
+  backslashes, so the child imports them back.
+- Native images from an msys shell: argv[0] the image's Windows path
+  with backslashes (026), the rest through `msysargv` with the shell's
+  environment (MSYS_NO_PATHCONV, MSYS2_ARG_CONV_EXCL), `msysenv` for
+  the environment plus the `=X:` entries, SYSTEMROOT and WINDIR when
+  absent (recorded: MSYSTEM is not added); MSYS2-style quoting.
+- Native images from a native shell: MSVCRT quoting, argv[0] as typed
+  with backslashes (busybox's spawnveq); the busybox alias stubs
+  (CRT-free, at most 64 KiB, busybox.exe beside) are bypassed: busybox
+  runs with the applet as argv[0], unless BB_OVERRIDE_APPLETS names it
+  (`-` for all, `+` prefix, blanks/commas/semicolons); the libtool
+  hack turns `cmd //c echo` into `/c`.
+- The single-path conv_envvars of either kind of child get `.exe` when
+  missing and the `.exe` is a file (recorded: SHELL=/usr/bin/bash
+  reaches a child as `...\bash.exe`; arguments and other variables do
+  not).
+- `.bat`/`.cmd`: `%ComSpec%` (else `<windir>\System32\cmd.exe`) with
+  `/d /e:on /v:off /s /c "..."`, arguments through `quotebatarg`
+  (Rust's BatBadBut rules, now in core) after msysargv in msys mode;
+  CR or LF in an argument is EINVAL.
+- `crtslot`: a CRT image's handle width, kept in the Target for step 8
+  (descriptors above 2 are not passed yet).
+
+Shebangs (up to four nested levels, then ELOOP "bad interpreter: Too
+many levels of symbolic links"): leading blanks skipped, the line ends
+at CR or LF, the rest of the line is one argument. `/bin/sh`,
+`/bin/bash`, `/usr/bin/sh`, `/usr/bin/bash` and `/usr/bin/env sh|bash`
+self-spawn with `-O`/`+O msyspath` for the parent's mode; others are
+found by path (mount table in msys mode, extensions in native), else
+by basename on PATH; missing: "path: interp: bad interpreter: No such
+file or directory", 126 (046). In native mode `/usr/bin/env PROG` runs
+busybox's env stub (env searches PATH). A native `.sh` without `#!`
+runs as `sh file` (self); other files without `#!` keep bash's
+in-process ENOEXEC fallback (busybox would fail: accepted). `#!` alone
+runs as shell code (045); `#!/usr/bin/env python` no longer does.
+
+Errors and exit:
+- E2BIG from a command line over 32766 UTF-16 units, or (XP) an
+  environment block over 32767: "path: Argument list too long", 126.
+  Exec errors now name the program's path, as bash does.
+- `exitstatus` maps 0xC0000135 to 127 with WNOLIB; the core prints
+  Cygwin's "IMAGE: error while loading shared libraries: DLL: cannot
+  open shared object file: No such file or directory", the image's
+  POSIX path in msys mode and the first import found in none of the
+  image's directory, System32, SysWOW64, the Windows directory and
+  PATH (recorded from Git Bash with a program importing a missing DLL).
+- `exec prog`: os_exec spawns, waits and ExitProcess with the status.
+  The program is in a kill-on-close job (Windows 8+: its own, also
+  when it ignores Ctrl-C as a background job does; XP/7: one made here,
+  with breakaway from the shell's job when allowed), cleared before the
+  shell exits normally. CREATE_NO_WINDOW when the shell has no console.
+- In msys mode a Windows-path argv[0] gives `$0` without `.exe`
+  (`/usr/bin/bash`, 059).
+
+type, command -v, hash: in msys mode the name found by the `.exe` rule
+is shown without it (038-041); native shows the file found.
+
+vos: Linux os_spawn enforces execve's limits (a string under 128 KiB,
+all strings and pointers within 2 MiB) and a `getconf` fake reports
+ARG_MAX, so execscript's E2BIG case passes (its trap order still
+differs). The vos's Windows mode gives the platform's content-only
+mode bits. The t/msys vos fixture spells C:\WINDOWS as the recording
+machine did and has w64devkit's cc.
+
+Tests:
+- t/winvos baselines changed on purpose: `.bat` mode bits are the
+  core's (unit), a bare `MZ` file is not executable and `./mine` runs
+  mine.exe as `.\mine` (003), argv[0] backslashed (002, 006), type
+  shows `/usr/bin/bash` (007).
+- New hand-checked t/winvos specs: 013-msys-children (Cygwin quoting,
+  conversions and exclusions, SYSTEMROOT/WINDIR, batch from msys),
+  014-native-shebang, 015-msys-shebang (chains, rest-of-line argument,
+  ELOOP, `.sh`, missing interpreters, `#!/usr/bin/env fake`),
+  016-native-stubs (bypass, BB_OVERRIDE_APPLETS forms, `cmd //c`,
+  E2BIG 126), 017-sniff-cache (rewrites of the same size).
+- t/win32/014-spawn: argv.exe and argv32.exe from both shell widths,
+  BatBadBut vectors through the real cmd.exe from both modes, shebangs
+  to busybox (`#!BUSYBOX sh`, `#!/usr/bin/env argv`, `#!/bin/sh`,
+  `.sh`), exec with kill-on-close (the shell killed by its Windows pid,
+  the program dies), exec's status, a program importing nosuch.dll
+  from both modes. The runner builds argv, argv32 and that program.
+  MSYS2 programs cannot start under this sandbox's token (t/msys
+  covers them with `-L`).
+
+Spawn cost, 400 runs of `./argv.exe "a b" /c/x` in the sandbox, three
+rounds each (pre-step-7 master d1a7e1c -> this step): msys mode
+3.35 -> 3.49 ms per spawn (argument and environment conversion),
+native 3.36 -> 3.37 ms.
+
+Results: tests.exe 149/0; t/exec 3413/0, with --chaos 20 42533/0;
+t/parse 3045/0; t/unit 149/0; t/winvos 17 specs 232/0, with --chaos 20
+1252/0; paths_test 1124310/0; wide_test 100581/0; t/win32 -x 28/0, and
+006, 008, 012, 014 twenty times each with -x, clean; unabashed.exe and
+unabashed32.exe without warnings, importing KERNEL32.dll only; the WSL
+POSIX build without warnings (tests.exe, t/exec, t/winvos, t/msys 0
+failed); Linux FUZZ_CHAOS replay of t/winvos, t/msys, t/exec, t/win32
+(749 files) clean but the expected out-of-memory exit (608). The XP
+laptop was unreachable (ssh timed out): unabashed32.exe's 014 subset
+and XP/7's exec job path are unchecked there.
+
+t/msys by topic, passed of total, before -> after:
+
+| topic                    | vos            | real           |
+|--------------------------|----------------|----------------|
+| cd, pwd (001-010)        | 9/9            | 9/10           |
+| home, tmp (016-019)      | 2/3 -> 3/3     | 2/4 -> 3/4     |
+| argconv (020-028)        | 0/9 -> 9/9     | 0/9 -> 9/9     |
+| envconv (029-034)        | 0/5 -> 5/5     | 0/6 -> 5/6     |
+| msysq (035-037)          | -              | 0/3 -> 2/3     |
+| type, exe (038-041)      | 1/3 -> 3/3     | 1/4 -> 4/4     |
+| noacl, shebang (042-047) | -              | 0/6 -> 6/6     |
+| crlf (048-051)           | 3/3            | 3/4 -> 4/4     |
+| dev, proc (054-057)      | 2/2            | 3/4 -> 4/4     |
+| claude (058-060)         | -              | 0/3 -> 3/3     |
+| all                      | 27/44 -> 44/44 | 28/63 -> 59/63 |
+
+(cygpath, options and 061-063 unchanged and green.) Left: 007 (the
+/proc listing); 018, 034 and 037, where an MSYS2 child we start gets
+its environment from the Windows block (Git Bash hands its children
+POSIX values through the cygheap): `HOME='C:\Windows'` arrives
+converted, and the child's /tmp is the real %TEMP% rather than the
+test's TEMP (issues.md).

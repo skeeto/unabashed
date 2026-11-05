@@ -62,7 +62,7 @@ U=$bin/unabashed.exe
 export U
 
 # For 014-spawn: tools/argv.cpp's builds, one importing a missing DLL,
-# the 32-bit shell beside the 64-bit one, busybox and Git's usr/bin
+# the 32-bit shell beside the 64-bit one, and busybox
 for v in argv:g++ argv32:i686-w64-mingw32-g++; do
     exe=$bin/${v%%:*}.exe
     if [ ! -e "$exe" ] || [ "$root/tools/argv.cpp" -nt "$exe" ]; then
@@ -80,8 +80,7 @@ U32=$(dirname "$shell")/unabashed32.exe
 [ -f "$U32" ] && cp "$U32" "$bin/unabashed32.exe"
 BIN=$bin
 BB=$(command -v busybox)
-GITBIN=$(dirname "${GITBASH:-C:/Users/wellons/git/usr/bin/bash.exe}")
-export BIN BB GITBIN
+export BIN BB
 
 pass=0
 fail=0

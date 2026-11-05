@@ -476,6 +476,8 @@ struct Target {
     Slice<Str> env;
     i32        err;
     Str        interp;   // with err: the #! interpreter that failed
+    i32        crtslot;  // a CRT image's handle width, for step 8's
+                         // descriptors above 2 (not passed yet)
 };
 
 // A file to run, by the name the shell has for it: its native path and
@@ -593,6 +595,7 @@ static Target imagetarget(Shell *sh, Arena *a, Str native, Stat st, Sniff s,
         return t;
     }
 
+    t.crtslot = s.pe.crt ? s.pe.width : 0;
     if (sh->pathmode == PM_NATIVE) {
         // A busybox alias stub would run busybox.exe as the applet it
         // is named after: skip it, unless the applet is overridden

@@ -41,22 +41,29 @@ gets checked. Rules:
   PointerToRawData to 512 bytes and DLL names over 63 bytes; reads at
   most 1024 section headers. None matters for the binaries tried.
   (m5a.md, step 2)
-- **t/msys baseline is red**: unabashed.exe passes 28 of 63 (001-006,
-  008-016, 019, 041, 048-050, 052-054, 056, 057, 061-063); steps 7-9
-  turn it green (m5a.md, "Step 6"). Exit criterion 1. In the vos
-  (`./tests.exe t/msys/*.sh`) 27 of the 44 `# vos` scripts pass. 051
-  (CRLF from cmd.exe) waits only on step 7's `//c` conversion.
-- **t/winvos/ is a hand-checked baseline**, not oracle output: it pins
-  the step 5 behavior (bare argv[0] to children, no `.exe` stripping,
-  no environment conversion for children) and must be updated
-  deliberately as step 7 lands. (m5a.md, steps 4, 5)
-- **Children see the shell's own forms until step 7**: no argument or
-  environment conversion (an msys shell hands a native child `/c/x`
-  and a colon PATH; 017, 018, 034, 055 fail on it), argv[0] is the
-  typed name, a program named without `.exe` does not run (040), and
-  `type`/`command -v` keep `.exe` (038-040). An msys-persona child of
-  our shell gets an MSVCRT-quoted command line but re-splits it the
-  Cygwin way; the two disagree on some backslash and quote runs.
+- **t/msys is not yet all green**: unabashed.exe passes 59 of 63; all
+  44 `# vos` scripts pass in tests.exe (m5a.md, "Step 7"). Exit
+  criterion 1. Left: 007 (/proc, below) and 018, 034, 037 (next).
+- **MSYS2 children we start see the Windows environment**: Git Bash
+  hands its MSYS2 children POSIX values through the cygheap; ours
+  import the Windows block. So `HOME='C:\Windows'` reaches an msys
+  child converted (037), and the child's /tmp is not the test's TEMP
+  (018, 034: cygpath and printenv show /tmp/... under the real
+  %TEMP%; Git Bash itself passes them in the same WORKDIR). Suspected:
+  the runtime's per-user shared mount state of Git's install, set by
+  other Git Bash processes running (the sandbox's TEMP is under the
+  real one). Unverified; a WORKDIR outside %TEMP% may tell.
+- **t/winvos/ is a hand-checked baseline**, not oracle output (steps
+  4-7, specs 001-017); change it deliberately.
+- **Spawning gaps** (m5a.md, step 7): the missing-DLL search ignores
+  KnownDLLs, side-by-side manifests and the loader's other rules; the
+  same Cygwin message is printed in native mode (busybox-w32 would print
+  "Error 0xc0000135" style text, unverified); ELOOP's text for a fifth
+  nested `#!` is Linux's, unverified against busybox-w32; Git Bash's
+  E2BIG limits for MSYS2 children (the cygheap, not the command line)
+  are not modelled; a busybox alias stub is recognized by size and
+  imports, not by content. Exec's XP/7 job path (breakaway) is
+  untested: the XP laptop was unreachable.
 - **/proc lists nothing** and only `/proc/self/{exename,winexename}`
   and `/proc/cygdrive` exist; Git Bash lists /proc and has /proc/PID,
   stat, swaps, sys... (007 fails on `/proc/s*`). `/dev/zero`,
@@ -103,7 +110,9 @@ gets checked. Rules:
   environment conversion (PATH stays Windows form) and no
   `MSYS=noglob`; `@file` stops quietly after ten levels instead of
   dying on the 11th; the glob handles `* ? [...]` and `{a,b}` per
-  component, not `**` or character classes. (m5a.md, step 4)
+  component, not `**` or character classes. (m5a.md, step 4) The
+  vos's env fake searches PATH without adding `.exe`, so a native
+  `#!/usr/bin/env PROG` is only tested on the real system (014).
 - **Windows path gaps in the vos**: trailing dots and spaces are not
   stripped from names, `C:x` resolves against the drive root rather
   than that drive's cwd, rooted paths (`/x`, `\x`) always land on C:,
@@ -132,21 +141,25 @@ gets checked. Rules:
 - **Accepted: paths.cpp stays lexical where Cygwin asks the file
   system** (m5a.md steps 1, 5): cygpath -w of `C:` or `C:x` (Cygwin:
   cwd\C), relative paths and `..` through missing directories,
-  `\\.\NUL` (Cygwin -w: `\\?\NUL`), SHELL naming an existing program
-  (Cygwin appends `.exe`), cygpath mapping `<>|"` to private-use
+  `\\.\NUL` (Cygwin -w: `\\?\NUL`), cygpath mapping `<>|"` to private-use
   characters, /proc/self (Cygwin: /proc/PID), and a closed /dev/fd/N
   argument. The shell asks the file system only for the `.exe` suffix
-  rule and the virtual files. None is in the corpus.
-- **msysenv does not add MSYSTEM, SYSTEMROOT and WINDIR** when absent,
-  as the runtime does; step 7's spawner must. (m5a.md step 1)
-- **Startup import of Windows-form variables** (`envtoposix`) is
-  checked by t/msys 016-019 for HOME and TMP; 034 (the other names)
-  waits on step 7's child environment. `/dev/consN`, `/dev/ptyN`,
-  `/dev/ttySN` are untested against Git Bash.
+  rule (also SHELL and the other single-path variables reaching a
+  child, step 7) and the virtual files. None is in the corpus.
+- **`/dev/consN`, `/dev/ptyN`, `/dev/ttySN`** are untested against Git
+  Bash.
+- **Accepted: bash's ENOEXEC fallback in native mode**: a file without
+  `#!` (and not `.sh`) runs as shell code; busybox-w32 fails to run it.
 
 
 ## M5b (real background processes)
 
+- **`kill $!` misses a background program on Win32**: `prog &` gets
+  the shell's own pid in `$!`, and `kill -9 $!` marks the job killed
+  (wait says 137) while the Windows process runs on (found by
+  t/win32/014-spawn, which kills by the program's own `$$`). In a probe
+  where the program had already exited, `kill -9 $!` seemed to kill the
+  calling shell itself. (m5a.md, step 7)
 - **Win32 Ctrl-C a starting program can still miss** (m3b.md, "Programs
   that miss a Ctrl-C"): unnoticed are one over 100 ms old and still
   not attached; the real program of a wrapper that starts it more than
