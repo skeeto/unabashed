@@ -26,6 +26,7 @@ struct Sniff {
     PeInfo pe;
     Str    line;  // FK_SCRIPT: what follows #!, up to CR or LF
     b32    ape;   // starts with MZqFpD (an Actually Portable Executable)
+    b32    stub;  // a small CRT-free image naming L"busybox.exe"
 };
 
 struct SniffEntry {
@@ -119,6 +120,27 @@ static Str missingdll(Shell *sh, Arena *a, Str native, Slice<Str> env)
     return {};
 }
 
+// Is an image one of w64devkit's busybox alias stubs? They are small
+// and CRT-free, and name busybox.exe in UTF-16, which its other small
+// CRT-free programs (cc.exe, an alias for gcc; u-config) do not.
+static b32 bbstub(SniffFile *f, Arena scratch, PeInfo pe, Stat st)
+{
+    if (pe.crt || pe.posix || pe.ours || pe.dll || st.size>((iz)1<<16)) {
+        return 0;
+    }
+    iz  len = st.size;
+    u8 *buf = (u8 *)allocbytes(&scratch, len);
+    len = sniffread(f, 0, buf, len);
+    u8 const want[] = "busybox.exe";
+    iz       n      = countof(want) - 1;
+    for (iz i = 0; i+2*n <= len; i++) {
+        iz k = 0;
+        for (; k<n && buf[i+2*k]==want[k] && !buf[i+2*k+1]; k++) {}
+        if (k == n) return 1;
+    }
+    return 0;
+}
+
 // What the file at a canonical native path holds, given its status.
 static Sniff sniff(Shell *sh, Arena scratch, Str native, Stat st)
 {
@@ -154,6 +176,7 @@ static Sniff sniff(Shell *sh, Arena scratch, Str native, Stat st)
         s.pe   = pesniff(sniffread, &f, scratch);
         s.kind = s.pe.ok ? FK_PE : FK_MZ;
         s.ape  = startswith(h, "MZqFpD");
+        s.stub = bbstub(&f, scratch, s.pe, st);
     }
     os_close(sh->os, o.h);
 
@@ -559,13 +582,11 @@ static Target selftarget(Shell *sh, Arena *a, Str image, i32 width,
     return t;
 }
 
-// Is a PE image one of w64devkit's busybox alias stubs: a small native
-// program with no CRT beside a busybox.exe? Then the busybox path.
+// Is a PE image one of w64devkit's busybox alias stubs (bbstub) beside
+// a busybox.exe? Then the busybox path.
 static Str stubbusybox(Shell *sh, Arena *a, Str native, Stat st, Sniff s)
 {
-    if (s.pe.crt || s.pe.posix || s.pe.ours || s.pe.dll || st.size>((iz)1<<16)) {
-        return {};
-    }
+    if (!s.stub) return {};
     Str  bb = concat(a, takehead(native, native.len-lastpart(native).len), "busybox.exe");
     Stat b  = os_stat(sh->os, *a, bb, 1);
     return !b.err && b.type==FT_FILE ? bb : Str{};
@@ -718,6 +739,16 @@ static Shebang parseshebang(Str line)
     return r;
 }
 
+// Is a native-mode path one busybox-w32 runs by its last part: a name
+// directly in /bin, /usr/bin, /sbin or /usr/sbin?
+static b32 unixpath(Shell *sh, Str path)
+{
+    if (sh->pathmode != PM_NATIVE) return 0;
+    Str dir = takehead(path, path.len-lastpart(path).len);
+    return lastpart(path).len &&
+           (dir=="/bin/" || dir=="/usr/bin/" || dir=="/sbin/" || dir=="/usr/sbin/");
+}
+
 // Is a #! line one for a POSIX shell, which this shell runs itself?
 static b32 selfinterp(Shebang b)
 {
@@ -762,6 +793,20 @@ static Target wintarget(Shell *sh, Arena *a, Str path, Str *argv, iz argc, Slice
     Str file = path;
     for (i32 depth = 0;; depth++) {
         Located l = locate(sh, a, file);
+        if (l.err==E_NOENT && !depth && unixpath(sh, file)) {
+            // busybox-w32: a missing /bin/X, /usr/bin/X, /sbin/X or
+            // /usr/sbin/X is X by name (configure's SHELL=/bin/sh)
+            Str name = lastpart(file);
+            if (name=="sh" || name=="bash" || name=="ash") {
+                t = selftarget(sh, a, sh->exe, (i32)sizeof(void *), v, env);
+                break;
+            }
+            Str found = pathlookup(sh, a, name);
+            if (found.data) {
+                file = found;
+                l    = locate(sh, a, file);
+            }
+        }
         if (l.err) {
             t.err    = l.err;
             t.interp = depth ? v[0] : Str{};

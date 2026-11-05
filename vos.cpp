@@ -2750,13 +2750,14 @@ static void vinstall(Vos *v, Str dir, Str name, i32 prog)
     n->cap  = VIMAGE;
 }
 
-static void vinstallpe(Vos *v, Str dir, Str name, i32 prog, i32 machine, Str dll, b32 ours)
+static VNode *vinstallpe(Vos *v, Str dir, Str name, i32 prog, i32 machine, Str dll, b32 ours)
 {
     VNode *d = vmkdirs(v, dir);
     VNode *n = vnew(v, d, name, FT_FILE, 0755);
     n->prog = prog + 1;
     n->data = vpeimage(&v->a, machine, dll, ours, prog+1);
     n->cap  = n->data.len;
+    return n;
 }
 
 static VNode *vputfile(Vos *v, Str dir, Str name, Str data)
@@ -2794,6 +2795,8 @@ static void vwintree(Vos *v)
         } else if (name == "argv") {
             vinstallpe(v, "C:/w64/bin", "argv.exe", i, X64, "msvcrt.dll", 0);
             vinstallpe(v, "C:/w64/bin", "argv32.exe", i, I386, "msvcrt.dll", 0);
+            // small and CRT-free, but no stub: as u-config or cc.exe
+            vinstallpe(v, "C:/w64/bin", "argvk.exe", i, X64, "kernel32.dll", 0);
         } else if (name == "busybox") {
             vinstallpe(v, "C:/w64/bin", "busybox.exe", i, X64, "msvcrt.dll", 0);
         } else if (name == "cmd") {
@@ -2802,7 +2805,9 @@ static void vwintree(Vos *v)
                    && name!="printenv" && name!="xcase") {
             vinstallpe(v, "C:/msys/usr/bin", exe, i, X64, "msys-2.0.dll", 0);
             if (alias >= 0) {
-                vinstallpe(v, "C:/w64/bin", exe, alias, X64, "kernel32.dll", 0);
+                VNode *n = vinstallpe(v, "C:/w64/bin", exe, alias, X64, "kernel32.dll", 0);
+                Str    w = Str("busybox.exe");  // in UTF-16, as spawn.cpp's bbstub
+                for (iz k = 0; k < w.len; k++) n->data[0x800+2*k] = w[k];
             }
         }
     }

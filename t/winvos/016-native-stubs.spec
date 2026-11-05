@@ -1,4 +1,4 @@
-== stdout 441
+== stdout 507
 cmdline = <ls -d "a b">
 argv[0] = <ls>
 argv[1] = <-d>
@@ -18,14 +18,17 @@ argv[2] = <3>
 cmdline = <ls 4>
 argv[0] = <ls>
 argv[1] = <4>
+cmdline = <s\pkg-config 5>
+argv[0] = <s\pkg-config>
+argv[1] = <5>
 hi
 hi
 status 126
 
 == stderr 59
-bash: line 20: C:/w64/bin/argv.exe: Argument list too long
+bash: line 25: C:/w64/bin/argv.exe: Argument list too long
 
-== merged 500
+== merged 566
 cmdline = <ls -d "a b">
 argv[0] = <ls>
 argv[1] = <-d>
@@ -45,9 +48,12 @@ argv[2] = <3>
 cmdline = <ls 4>
 argv[0] = <ls>
 argv[1] = <4>
+cmdline = <s\pkg-config 5>
+argv[0] = <s\pkg-config>
+argv[1] = <5>
 hi
 hi
-bash: line 20: C:/w64/bin/argv.exe: Argument list too long
+bash: line 25: C:/w64/bin/argv.exe: Argument list too long
 status 126
 
 == status 0
