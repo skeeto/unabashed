@@ -906,7 +906,12 @@ t/parse 3045/0; t/unit 149/0; t/winvos 17 specs 232/0, with --chaos 20
 unabashed32.exe without warnings, importing KERNEL32.dll only; the WSL
 POSIX build without warnings (tests.exe, t/exec, t/winvos, t/msys 0
 failed); Linux FUZZ_CHAOS replay of t/winvos, t/msys, t/exec, t/win32
-(749 files) clean but the expected out-of-memory exit (608). The XP
+(749 files) clean but the expected out-of-memory exit (608); FUZZ_WIN
+replay of the same clean but out-of-memory exits (016's 400 KB
+command line, and 608, 633, 796 as before this step) and t/win32's
+004 and 005, which loop until a Ctrl-C the vos never sends (as before;
+the replay had stopped at 003 on the sniff cache's size, now sized to
+the arena). The XP
 laptop was unreachable (ssh timed out): unabashed32.exe's 014 subset
 and XP/7's exec job path are unchecked there.
 
