@@ -1304,3 +1304,45 @@ Per operation outside the sandbox: a trivial program 16 ms from busybox,
 ms and 72-74 ms. Configure spends most of its time in gcc.
 
 Exit criterion 2 holds.
+
+
+### Step 10c: the agent batch gate
+
+bench/agent gained a `floor` mode (tools/argv.cpp, a do-nothing CRT
+program, started as the shell is) and prints `own`, full - ext - floor
+per command, the gate's measure. Its busybox driver turned out to skew
+it: busybox's waits poll, so a program it starts costs about 16 ms
+against 3.4 ms from us. `full` and `floor` share that and it cancels,
+but `ext` (the externals alone, run by the driver) carries it once per
+external, more than once per command, and with it our own time came out
+negative (28.6 - 19.0 - 17.1 ms). `-d DRIVER` runs the batch under a
+native-mode shell with exact waits instead, ours as sh.exe.
+
+That run found a bug: after a few hundred distinct programs the shell
+died out of memory. alloc wants room for one more object than it takes,
+and the sniff cache's "start over when full" test allowed for one, so
+between one and two entries' worth left it neither started over nor
+fit. Fixed (spawn.cpp), with t/winvos/027-native-sniffcache.
+
+Results (Windows 11, 52 commands, medians of 5 rounds, our driver, ms
+per command):
+
+| mode                       | Git Bash | unabashed |
+|----------------------------|----------|-----------|
+| full (what the agent waits)| 35.8     | 18.9      |
+| noop (-c WRAPPER(:))       | 13.8     | 4.1       |
+| exit (-c exit)             | 11.9     | 3.6       |
+| floor                      | 3.4      | 3.5       |
+| ext (externals alone)      | 11.6     | 11.6      |
+| own (full - ext - floor)   | 20.7     | 3.7       |
+
+Three such pairs gave own ratios of 5.55x, 5.19x and 5.53x, and full
+1.86-1.89x. Exit criterion 3 holds, narrowly. Of our 3.7 ms, 0.6 is
+startup and wrapper above the floor; the rest is that the first
+CreateProcess in a fresh process costs Windows about 1.5-2 ms more than
+later ones (measured with a standalone program: plain, thread-pool and
+job waits cost the same), which each per-command shell pays and the
+long-lived driver does not. Git Bash pays it too.
+
+With the busybox driver, for comparison: Git Bash full 44.6, noop 25.1,
+exit 22.3, floor 17.2, ext 19.0; ours full 28.6, noop 18.1, exit 17.0.

@@ -1,7 +1,8 @@
 # bench/agent/driver.sh: runs inside tools/sandbox under busybox sh; see
 # bench/agent/run. usage: driver.sh setup|prep|MODE
 #
-# Environment: BENCH (this directory), SHELLEXE (the shell timed), U and
+# Environment: BENCH (this directory), SHELLEXE (the shell timed),
+# FLOOREXE (a do-nothing CRT program), U and
 # M (Git's usr/bin and mingw64/bin), REPO (the scratch repository), and
 # REPOU, SNAPU, CWDU, TMPW (paths as the wrapper spells them).
 set -u
@@ -67,6 +68,11 @@ exit)
     while IFS= read -r w; do
         "$SHELLEXE" -c exit </dev/null
     done <"$work/wrapped.txt" >"$work/out.exit" 2>&1
+    ;;
+floor)
+    while IFS= read -r w; do
+        "$FLOOREXE" </dev/null
+    done <"$work/wrapped.txt" >"$work/out.floor" 2>&1
     ;;
 ext)
     while IFS= read -r e; do

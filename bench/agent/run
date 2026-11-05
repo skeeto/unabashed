@@ -3,7 +3,7 @@
 # as Claude Code's Bash tool runs it: `SHELL -c WRAPPER` with the command
 # inside the wrapper's eval (notes/research/msys2.md section 7).
 #
-# usage: bench/agent/run [-n RUNS] WORKDIR [SHELL]
+# usage: bench/agent/run [-n RUNS] [-d DRIVER] WORKDIR [SHELL]
 #
 # SHELL defaults to $GITBASH (C:/Users/wellons/git/usr/bin/bash.exe).
 # Everything runs in tools/sandbox (-L: MSYS2 programs cannot start at
@@ -14,9 +14,14 @@
 #   full   SHELL -c WRAPPER(command): what an agent waits for
 #   noop   SHELL -c WRAPPER(:): shell startup, snapshot and wrapper
 #   exit   SHELL -c exit: bare shell startup
-#   ext    the command's external programs alone, run by busybox sh
+#   floor  a do-nothing CRT program (tools/argv.cpp) started the same way
+#   ext    the command's external programs alone, run by the driver
 #   empty  the driver loop alone
-# so full-ext estimates the shell's share. BENCH_MODES picks modes; a
+# and the shell's own time per command, full-ext-floor (notes/m5a.md).
+# The driver is busybox sh, or with -d DRIVER a native-mode shell such
+# as unabashed.exe (run as sh.exe): busybox's waits poll, adding about
+# 12 ms to each program it starts, which full and floor share but which
+# would inflate ext. BENCH_MODES picks modes; a
 # shell that does not yet understand MSYS2 paths should run only "exit
 # noop", since the batch is meant for one that does (curated commands,
 # writes only in the scratch repository and $TMP). Runs under
@@ -26,12 +31,16 @@ bench=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$bench/../.." && pwd)
 . "$root/t/msys/lib.sh"
 runs=5
-if [ "${1-}" = -n ]; then
-    runs=$2
-    shift 2
-fi
+driver=
+while [ $# -gt 0 ]; do
+    case $1 in
+    -n) runs=$2; shift 2 ;;
+    -d) driver=$2; shift 2 ;;
+    *)  break ;;
+    esac
+done
 if [ $# -lt 1 ]; then
-    echo "usage: bench/agent/run [-n RUNS] WORKDIR [SHELL]" >&2
+    echo "usage: bench/agent/run [-n RUNS] [-d DRIVER] WORKDIR [SHELL]" >&2
     exit 2
 fi
 work=$(msys_workdir "$1") || exit 2
@@ -50,6 +59,14 @@ if [ ! -e "$work/bin/sandbox.exe" ] || [ "$root/tools/sandbox.cpp" -nt "$work/bi
     cc -nostartfiles -o "$work/bin/sandbox.exe" "$root/tools/sandbox.cpp" \
        -ladvapi32 || exit 2
 fi
+if [ ! -e "$work/bin/argv.exe" ] || [ "$root/tools/argv.cpp" -nt "$work/bin/argv.exe" ]; then
+    g++ -std=c++20 -municode -O2 -s -o "$work/bin/argv.exe" "$root/tools/argv.cpp" || exit 2
+fi
+drv="busybox.exe sh"
+if [ -n "$driver" ]; then
+    cp "$driver" "$work/bin/sh.exe" || exit 2
+    drv=$work/bin/sh.exe
+fi
 cp "$bench/snapshot.sh" "$run/snapshot.sh" || exit 2
 
 posix() { printf '/%s%s' "$(printf '%s' "$1" | cut -c1 | tr A-Z a-z)" "${1#?:}"; }
@@ -64,20 +81,20 @@ drive() {
         -E "HOME=$(win "$run/home")" -E "TEMP=$(win "$run/tmp")" \
         -E "TMP=$(win "$run/tmp")" -E LANG=C -E TZ=UTC \
         -E GIT_CONFIG_NOSYSTEM=1 \
-        -E "BENCH=$bench" -E "SHELLEXE=$shell" \
+        -E "BENCH=$bench" -E "SHELLEXE=$shell" -E "FLOOREXE=$work/bin/argv.exe" \
         -E "U=$gitroot/usr/bin" -E "M=$gitroot/mingw64/bin" \
         -E "REPO=$run/repo" -E "REPOU=$(posix "$run/repo")" \
         -E "SNAPU=$(posix "$run/snapshot.sh")" \
         -E "CWDU=$(posix "$run/tmp/claude-cwd")" \
         -E "TMPW=$(win "$run/tmp")" \
-        "$run" -- busybox.exe sh "$bench/driver.sh" "$1"
+        "$run" -- $drv "$bench/driver.sh" "$1"
 }
 
 rm -rf "$run/repo"
 drive setup >/dev/null || { echo "$0: setup failed" >&2; exit 1; }
 drive prep || { echo "$0: prep failed" >&2; exit 1; }
 
-modes=${BENCH_MODES:-full noop exit ext empty}
+modes=${BENCH_MODES:-full noop exit floor ext empty}
 for m in $modes; do : >"$work/times.$m"; done
 sum=
 r=0
@@ -92,8 +109,14 @@ while [ $r -lt "$runs" ]; do
 done
 
 n=$(wc -l <"$bench/batch.txt")
-echo "$n commands, $runs rounds, medians in ms ($shell)"
+echo "$n commands, $runs rounds, medians in ms ($shell, driver ${driver:-busybox})"
 for m in $modes; do
     med=$(sort -n "$work/times.$m" | sed -n "$(( (runs+1)/2 ))p")
-    printf '%-6s %6d  %5d per command\n' $m "$med" $((med/n))
+    eval "med_$m=$med"
+    printf '%-6s %6d  %5d.%d per command\n' $m "$med" $((med/n)) $((med*10/n%10))
 done
+if [ -n "${med_full-}" ] && [ -n "${med_ext-}" ] && [ -n "${med_floor-}" ]; then
+    own=$((med_full - med_ext - med_floor))
+    a=$((own<0 ? -own : own))
+    printf 'own    %6d  %5d.%d per command (full - ext - floor)\n' $own $((own/n)) $((a*10/n%10))
+fi

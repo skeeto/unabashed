@@ -343,20 +343,25 @@ so that the vos can run them; M5a step 4 settles the list.
 
 ## Agent batch (bench/agent)
 
-    bench/agent/run [-n RUNS] WORKDIR [SHELL]
+    bench/agent/run [-n RUNS] [-d DRIVER] WORKDIR [SHELL]
 
 times `bench/agent/batch.txt` (52 typical agent commands, each with
 the external programs it runs) as Claude Code's Bash tool runs them:
 one `SHELL -c WRAPPER` per command, WRAPPER being the exact string from
 notes/research/msys2.md section 7 with the command in its `eval`,
-sourcing `snapshot.sh`. A busybox driver (`driver.sh`) runs inside
-`sandbox -L` in WORKDIR/run with a scratch git repository and a fixed
-environment, and the medians of RUNS rounds (5) are printed per mode:
-`full` (the commands), `noop` (the wrapper around `:`), `exit` (`SHELL
--c exit`), `ext` (the external programs alone, run by busybox) and
-`empty` (the loop). `BENCH_MODES` selects modes; a shell without MSYS2
-paths should run only `exit noop`. The full run's output checksum must
-not change between rounds. Results: notes/m5a.md.
+sourcing `snapshot.sh`. A driver (`driver.sh`) runs inside `sandbox -L`
+in WORKDIR/run with a scratch git repository and a fixed environment,
+and the medians of RUNS rounds (5) are printed per mode: `full` (the
+commands), `noop` (the wrapper around `:`), `exit` (`SHELL -c exit`),
+`floor` (a do-nothing CRT program, tools/argv.cpp, started the same
+way), `ext` (the external programs alone, run by the driver) and
+`empty` (the loop), then `own`, full - ext - floor: the shell's own
+time, which the M5a gate compares. The driver is busybox sh, or with
+`-d` a native-mode shell such as unabashed.exe, copied as sh.exe; use
+one with exact waits for `own`, since busybox's polling waits add about
+12 ms to each program it starts, inflating `ext`. `BENCH_MODES` selects
+modes; a shell without MSYS2 paths should run only `exit noop`. The
+full run's output checksum must not change between rounds. Results: notes/m5a.md.
 
 ## w64devkit trial (tools/w64trial)
 
