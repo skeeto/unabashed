@@ -16,14 +16,6 @@ gets checked. Rules:
 
 ## M5a (Windows paths and spawning)
 
-- **Inherited descriptors above 2 are invisible**:
-  `unabashed -c 'echo hi >&3' 3>&1` fails with "Bad file descriptor"
-  on every platform; sh_main imports only 0-2. Import the open
-  descriptors at startup (POSIX: probe; Win32: lpReserved2/MSVCRT
-  handles). Real scripts hit this. (m4.md)
-- **Programs cannot open `/dev/fd/N` on Win32**, so `diff <(a) <(b)`
-  fails there: pass a named pipe path bridged by a pump
-  (`os_pipe(named)`, ConnectNamedPipe in a helper). (m3a.md)
 - **Time zone gaps** (step 9): no Windows-to-IANA mapping (Cygwin's
   tzmap, for an MSYS2 install that has zoneinfo); glibc's cache of an
   unchanged TZ value and bash's stale export environment right after
@@ -38,11 +30,36 @@ gets checked. Rules:
   (SSH_CLIENT) is not done; the `-i` job-control complaints test
   stdin and stderr for a terminal, not a controlling terminal.
   (m5a.md, step 9)
-- **lpReserved2 slot width unverified** (step 8): `encodecrtfds` and
-  `decodecrtfds` are only checked against the documented layout. Check
-  with real msvcrt and UCRT children, x64 to i686 and back, that the
-  width follows the child's PE32/PE32+ and that 0-2 entries agree
-  with hStd*. (m5a.md, step 2)
+- **MSYS2 programs get no `/dev/fd/N` bridge** (step 8): they are
+  passed `/dev/fd/N` unchanged, which they cannot open, so `cat <(x)`
+  with Git's cat fails. They take `\\.\pipe\NAME` (not
+  `//./pipe/NAME`), but open it three times (look, use, look again),
+  read an unbuffered instance as empty, fail to open one for writing
+  (`tee >(x)`: EINVAL), take it for a file head seeks back in, and with
+  buffered instances diff and an empty procsub hung at times. Nor do
+  they get descriptors above 2: a Cygwin child ignores an MSVCRT
+  lpReserved2 blob (checked: busybox to Git's bash, fd 4 is "Bad file
+  descriptor"); Git Bash passes them in the cygheap. (m5a.md, step 8)
+- **Bridge gaps** (step 8): busybox diff reads a bridged pipe as empty
+  (it copies a pipe to a temporary file; the unbuffered instance
+  apparently looks empty to it), recorded as such in t/win32/015; a
+  program reading one path twice gets the stream split; a program
+  that keeps a looking handle open while another waits on data
+  stalls; direct pipeline stages (spawnto) get no bridge; at most 16
+  bridges per command; a grandchild still using a reading bridge's
+  path when its program exits is cut off. (m5a.md, step 8)
+- **t/win32/015 is flaky on the XP laptop** (step 8): about half the
+  runs hang somewhere after the busybox procsub "loop" line (wc's
+  standard output failing with EINVAL, or the unopened or tee cases),
+  while each section passes alone there and the whole test passes
+  with UNABASHED_XPIO=1 on Windows 11 (10 of 10 with -x). Its argv[0]
+  also differs there (the directory has spaces, so it is quoted).
+  Undiagnosed. (m5a.md, step 8)
+- **A pipe lent to a program aborts another reader's helper read**
+  (step 8): passing a pipe descriptor that a pump also reads made the
+  pump's read fail with E_INTR (the lend's CancelSynchronousIo). The
+  bridges avoid it by not passing bridged descriptors; any other
+  shared reader of a lent pipe would hit it. (m5a.md, step 8)
 - **splitcygwin gaps** (the msys re-split): it assumes Cygwin's
   globbing is on (with `MSYS`/`CYGWIN=noglob` Cygwin keeps the quotes);
   the program name, a non-ASCII byte before `:` as a drive word, and
@@ -65,7 +82,7 @@ gets checked. Rules:
   other Git Bash processes running (the sandbox's TEMP is under the
   real one). Unverified; a WORKDIR outside %TEMP% may tell.
 - **t/winvos/ is a hand-checked baseline**, not oracle output (steps
-  4-7, specs 001-017); change it deliberately.
+  4-8, specs 001-017 and 024); change it deliberately.
 - **Spawning gaps** (m5a.md, step 7): the missing-DLL search ignores
   KnownDLLs, side-by-side manifests and the loader's other rules; the
   same Cygwin message is printed in native mode (busybox-w32 would print

@@ -938,6 +938,106 @@ POSIX values through the cygheap): `HOME='C:\Windows'` arrives
 converted, and the child's /tmp is the real %TEMP% rather than the
 test's TEMP (issues.md).
 
+### Step 8: descriptors
+
+**Inherited descriptors** (`OsInfo.inherit`, imported by sh_main as
+F_OS files from 3 up, skipping any at 0-2, at FDMAX or up, or twice):
+- POSIX (`inherited`, before initasync opens anything): one `poll`
+  over 3 to min(RLIMIT_NOFILE, FDMAX), POLLNVAL marking the closed
+  ones; F_GETFL for the access; then each moved with F_DUPFD_CLOEXEC
+  to 10 and up, after all are found, so a duplicate cannot land on a
+  number not yet probed.
+- Win32: the CRT's lpReserved2 blob from GetStartupInfoW, decoded at
+  our own pointer width (`decodecrtfds`). An entry from 3 up with
+  FOPEN and a disk, char or pipe handle is taken; a handle that equals
+  a standard or earlier one is duplicated, others are made
+  non-inheritable. The blob gives no access mode, so both.
+- vos: fake_bash passes its context's descriptors 3-63 (os_dup), with
+  `vaccess` giving the mode.
+
+**Passing them** (startproc): a CRT program (`Target.crtslot`, set for
+MSVCRT/UCRT images, busybox's stub and our own shell, `selftarget`) gets
+every descriptor below FDMAX in the blob: 0-2 closed there, so the CRT
+sets them up from hStd* in text mode as without a blob, and 3 and up
+binary (FOPEN, plus FPIPE/FDEV by GetFileType), as busybox-w32 passes
+them. Verified with t/win32/015 and a probe of the raw blob:
+- The slot width is the child's (PE32+ 8, PE32 4) from a 64-bit
+  shell, but a 32-bit shell always writes 4-byte slots: for a 64-bit
+  child WOW64 widens them itself, zero-extending each handle and
+  keeping the bytes after them, so 8-byte slots came out 13 bytes
+  apart (a 49-byte blob arrived as 69). Our 64-bit shell started by a
+  32-bit parent thus decodes at 8.
+- An MSYS2/Cygwin program gets no blob (crtslot 0) and no descriptors
+  above 2: Cygwin passes those in its cygheap, and a Cygwin child
+  ignores an MSVCRT blob (checked: busybox sh with fd 4 open starting
+  Git's bash, `echo >&4` is "Bad file descriptor", `ls /proc/self/fd`
+  shows 0-3).
+- Descriptors above 2 go nowhere else on Windows: runprogram skips
+  them for a non-CRT target, and always skips bridged ones (below).
+
+**Named pipes**: `os_namedpipe(os, a, name, how)` makes an instance of
+`//./pipe/unabashed-PID-HEX` (fresh, unguessable, FIRST_PIPE_INSTANCE)
+or another instance of `name`; NP_OUT for the server writing, NP_NOBUF
+for no buffer (a write completes only as the client reads it).
+PIPE_REJECT_REMOTE_CLIENTS is dropped when XP rejects it. IO_CONNECT
+waits for the client in a helper (H_CONNECT, ConnectNamedPipe on the
+object's own handle; ERROR_PIPE_CONNECTED and ERROR_NO_DATA count as
+connected). os_cancel ends that wait by becoming the client
+(CreateFileW on the saved name; if that fails a real client came, and
+the Io completes by itself). The vos has the same under `//./pipe/`:
+instances in creation order, one client each, E_BUSY when all are
+taken, E_ACCES for the wrong direction; it buffers NP_NOBUF writes.
+
+**Bridges** (exec.cpp): for a native program (not our own shell, not an
+MSYS2 program, not a spawnto stage), an argument that is `/dev/fd/N`
+with N from 3, whole or after its last `=`, becomes `\\.\pipe\NAME`
+(one bridge per descriptor, at most 16), and wintarget runs again on
+the new argv. A pump serves the pipe: PUMP_SERVE copies what the
+descriptor reads (an OS handle, a pipe's OS form, a materialized
+string) to the client; PUMP_TAKE copies what a client writes into the
+descriptor's pipe or handle. Decisions:
+- Clients come in turn, two more instances listening ahead (NSPARE),
+  since a program may open the path once only to look before it opens
+  it to use. busybox diff opened it twice (with one instance its
+  second open failed); Git's cat three times, in order: look, use, look
+  again. Instances go to clients oldest first, on XP too (probed with
+  a three-instance server).
+- Serving instances are unbuffered, so a client that leaves without
+  reading takes nothing: the write fails, and the next client gets the
+  same bytes. A writing bridge drains, at its program's exit, the
+  clients that connected by then (a deadline of now on its connect),
+  so what a short-lived writer left in the pipe is not lost.
+- The program's exit ends the bridge (endbridge): a serving bridge is
+  cancelled (its spares closed first, so the cancelling client can
+  only reach the instance waited on); a taking one drains as above.
+  On an escape, unconnected bridges are cancelled and all orphaned.
+- A bridged descriptor is not also passed in the blob: lending the
+  pipe to the program aborted the pump's own read of it (E_INTR), and
+  busybox cat then saw an empty second file about one run in four.
+- MSYS2 programs are left unbridged. They do take `\\.\pipe\NAME`
+  (`//./pipe/NAME` is "No such file or directory"), but with
+  unbuffered instances Git's cat read nothing (it finds the pipe empty
+  and stops), a probe server with buffered ones worked, yet with
+  buffered serving instances diff and an empty procsub still hung at
+  times, `tee >(...)` cannot open one for writing (EINVAL, truncation
+  of a file), and head seeks back in it. A hang is worse than the
+  error they get now (issues.md).
+
+Tests: t/win32/015-fds (curated; inheritance to our shell at both
+widths and from busybox, CRT programs of both widths from both shell
+widths with argv's fd probe, procsubs to busybox and argv, a write
+procsub, an unopened one, the native persona and the 32-bit shell);
+main_test's vwin named-pipe test (instances, busy, access, reuse);
+t/winvos/024-descriptors (hand-checked: the fd probe, bridges);
+t/winvos/006 (argv sees fd 3). On the XP laptop 015 matches apart from
+argv[0] quoting (spaces in the directory), but hangs in about half the
+runs late in its procsub section; undiagnosed (issues.md).
+
+| suite        | before | after |
+|--------------|--------|-------|
+| t/win32 (-x) | 28/28  | 30/30 |
+| t/msys real  | 68/72  | 68/72 |
+
 ### Step 9: startup files and the time zone
 
 Startup files (unabashed.cpp, "Startup files"), read after `$0` and the
