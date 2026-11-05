@@ -29,6 +29,7 @@ enum : i32 {
     ERROR_NO_DATA                = 232,
     ERROR_OPERATION_ABORTED      = 995,
     ERROR_PATH_NOT_FOUND         = 3,
+    ERROR_PIPE_CONNECTED         = 535,
     FILE_APPEND_DATA             = 4,
     FILE_ATTRIBUTE_DIRECTORY     = 0x10,
     FILE_ATTRIBUTE_NORMAL        = 0x80,
@@ -36,6 +37,7 @@ enum : i32 {
     FILE_ATTRIBUTE_REPARSE_POINT = 0x400,
     FILE_ATTRIBUTE_TEMPORARY     = 0x100,
     FILE_FLAG_DELETE_ON_CLOSE    = 0x04000000,
+    FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000,
     FILE_FLAG_BACKUP_SEMANTICS   = 0x02000000,
     FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000,
     FILE_READ_ATTRIBUTES         = 0x80,
@@ -70,6 +72,9 @@ enum : i32 {
     OPEN_EXISTING                = 3,
     PAGE_NOACCESS                = 1,
     PAGE_READWRITE               = 4,
+    PIPE_ACCESS_INBOUND          = 1,
+    PIPE_ACCESS_OUTBOUND         = 2,
+    PIPE_REJECT_REMOTE_CLIENTS   = 8,
     STARTF_USESTDHANDLES         = 0x100,
     STD_ERROR_HANDLE             = -12,
 };
@@ -223,6 +228,8 @@ W32(uz,     CreateJobObjectW(uz, c16 *));
 W32(uz,     CreateEventW(uz, b32, b32, c16 *));
 W32(uz,     CreateThread(uz, uz, u32 (__stdcall *)(void *), void *, i32, i32 *));
 W32(uz,     CreateFileW(c16 *, i32, i32, uz, i32, i32, uz));
+W32(uz,     CreateNamedPipeW(c16 *, i32, i32, i32, i32, i32, i32, uz));
+W32(b32,    ConnectNamedPipe(uz, uz));
 W32(b32,    CreatePipe(uz *, uz *, uz, i32));
 W32(b32,    CreateProcessW(c16 *, c16 *, uz, uz, b32, i32, c16 *, c16 *,
                            StartupInfo *, ProcessInfo *));
@@ -242,6 +249,7 @@ W32(b32,    GetNumberOfConsoleInputEvents(uz, i32 *));
 W32(i32,    GetCurrentProcessId());
 W32(i32,    GetTempPathW(i32, c16 *));
 W32(c16 *,  GetEnvironmentStringsW());
+W32(void,   GetStartupInfoW(StartupInfo *));
 W32(b32,    GetExitCodeProcess(uz, i32 *));
 W32(b32,    GetFileAttributesExW(c16 *, i32, FileAttributes *));
 W32(i32,    GetFileAttributesW(c16 *));
@@ -385,6 +393,7 @@ enum : i32 {  // Helper operations
     H_CONREAD,   // a console line
     H_WRITE,     // the core's bytes
     H_PUMP,      // the object into an Interpose's pipe
+    H_CONNECT,   // a named pipe's client (IO_CONNECT)
 };
 
 enum : i32 { P_READING = 1, P_WRITING, P_DONE };  // a pump's state
@@ -444,6 +453,8 @@ struct Wobj {
     b32        eof;      // an end of file to report once
     i32        lent;     // children holding it directly
     Interpose *ip;
+    b32        pipeout;  // a named pipe's server: writes to its client
+    c16        pname[64];  // a named pipe's server: its name, else empty
 };
 
 struct Hent {  // handle registration
@@ -908,6 +919,15 @@ static iz srcread(Helper *hp, iz len)
     return r;
 }
 
+// Wait for a named pipe's client: 0 once there is one, else the error.
+// A client may have come and even gone already.
+static i32 connectpipe(uz h)
+{
+    if (ConnectNamedPipe(h, 0)) return 0;
+    i32 code = GetLastError();
+    return code==ERROR_PIPE_CONNECTED || code==ERROR_NO_DATA ? 0 : code;
+}
+
 // Copy the object into the interposed pipe until it ends or the shell
 // asks to stop (stopinterpose). Bytes read after the request stay in
 // buf for the read-ahead. The write end is closed at the end, so that
@@ -967,6 +987,9 @@ static u32 __stdcall helpermain(void *arg)
         } break;
         case H_PUMP:
             pumploop(hp);
+            break;
+        case H_CONNECT:
+            hp->code = connectpipe(hp->obj->own);
             break;
         }
         __atomic_store_n(&hp->live, 0, __ATOMIC_SEQ_CST);
@@ -1080,6 +1103,13 @@ static void readahead(Wobj *w, uz h, Io *io)
 static b32 startio(Os *os, Wobj *w, Io *io)
 {
     uz h = io->h;
+    if (io->op == IO_CONNECT) {
+        if (issue(os, w, h, H_CONNECT, io)) return 0;
+        i32 code = connectpipe(h);  // no helper: block
+        io->n   = 0;
+        io->err = code ? errnum(code) : 0;
+        return 1;
+    }
     if (io->op == IO_READ) {
         if (w->alen>w->aoff || w->eof) {
             readahead(w, h, io);
@@ -1198,6 +1228,13 @@ static void helperdone(Os *os, Helper *hp)
         break;
     case H_PUMP:
         appendahead(w, hp->buf, hp->n);  // read after the stop
+        break;
+    case H_CONNECT:
+        if (io) {
+            io->n   = 0;
+            io->err = hp->code ? errnum(hp->code) : 0;
+            pushdone(os, io);
+        }
         break;
     }
     if (!reuse) {
@@ -2314,6 +2351,58 @@ static OsPipe os_pipe(Os *os)
     return r;
 }
 
+// The name is unguessable, so that no other process can take the one
+// instance before the client it is meant for.
+static NamedPipe os_namedpipe(Os *os, Arena *a, b32 out)
+{
+    NamedPipe r = {};
+    r.h = BADHANDLE;
+    static u32 counter;
+    i32 pmode = PIPE_REJECT_REMOTE_CLIENTS;  // byte mode, blocking
+    for (i32 try_ = 0; try_ < 100; try_++) {
+        i64 qpc = 0;
+        QueryPerformanceCounter(&qpc);
+        u64 tag = (u64)os_now(os) ^ (u64)qpc<<20 ^ (u64)++counter<<48;
+        tag *= 0x9e3779b97f4a7c15u;
+        tag ^= tag >> 31;
+        Buf b(a, 64);
+        print(&b, "//./pipe/unabashed-");
+        print(&b, (i64)GetCurrentProcessId());
+        putbyte(&b, '-');
+        for (i32 i = 0; i < 16; i++) {
+            putbyte(&b, (u8)"0123456789abcdef"[(tag >> (60 - 4*i)) & 15]);
+        }
+        Str name = finish(&b);
+        c16 wname[64];
+        iz  n = 0;
+        for (; n < name.len; n++) wname[n] = name[n]=='/' ? '\\' : name[n];
+        wname[n] = 0;
+        i32 mode = (out ? PIPE_ACCESS_OUTBOUND : PIPE_ACCESS_INBOUND) |
+                   FILE_FLAG_FIRST_PIPE_INSTANCE;
+        uz h = CreateNamedPipeW(wname, mode, pmode, 1, 1<<16, 1<<16, 0, 0);
+        i32 code = h==INVALID_HANDLE_VALUE ? GetLastError() : 0;
+        if (code==ERROR_INVALID_PARAMETER && pmode) {
+            pmode = 0;  // XP: no PIPE_REJECT_REMOTE_CLIENTS
+            try_--;
+            continue;
+        } else if (code == ERROR_ACCESS_DENIED) {
+            continue;  // the name is taken
+        } else if (code) {
+            r.err = errnum(code);
+            return r;
+        }
+        Wobj *w = newobj(os, K_PIPE);
+        w->pipeout = out;
+        copybytes(w->pname, wname, (n+1)*(iz)sizeof(c16));
+        reg(os, h, w);
+        r.h    = h;
+        r.name = name;
+        return r;
+    }
+    r.err = E_EXIST;
+    return r;
+}
+
 static i64 os_seek(Os *os, Handle h, i64 off, i32 whence)
 {
     i64 pos = 0;
@@ -2586,30 +2675,57 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
 
     Str16 cwd = s->cwd.len ? widepath(&scratch, s->cwd) : Str16{};
 
-    // Inheritable duplicates of the standard handles, closed right after
-    // creation. Descriptors above 2 are not passed (yet). A pipe or
-    // console the child gets is lent to it (see Wobj), perhaps through
-    // an interposed pipe.
-    uz    self    = GetCurrentProcess();
-    uz    std[3]  = {};
-    Wobj *objs[3] = {};
-    b32   viaip[3] = {};
+    // Inheritable duplicates of the child's descriptors, closed right
+    // after creation: 0-2 as the standard handles, and with crtslot the
+    // rest in the CRT's lpReserved2 blob, at the child's handle width.
+    // The blob leaves 0-2 closed, so that the CRT sets them up from the
+    // standard handles as it would without one (text mode); the others
+    // are binary, as busybox-w32 passes them. A pipe or console the
+    // child gets is lent to it (see Wobj), perhaps through an
+    // interposed pipe.
+    uz  self = GetCurrentProcess();
+    i32 top  = 3;
+    for (iz i = 0; i<s->nfds && s->crtslot; i++) {
+        i32 fd = s->fds[i].fd;
+        top = fd>=top && fd<FDMAX ? fd+1 : top;
+    }
+    uz    *dups  = alloc<uz>(&scratch, top);  // 0: none
+    Wobj **objs  = alloc<Wobj *>(&scratch, top);
+    b32   *viaip = alloc<b32>(&scratch, top);
     for (iz i = 0; i < s->nfds; i++) {
         i32 fd = s->fds[i].fd;
         uz  h  = s->fds[i].h;
-        if (fd<0 || fd>2 || h==BADHANDLE || std[fd]) continue;
+        if (fd<0 || fd>=top || h==BADHANDLE || dups[fd]) continue;
         h = lend(os, h, objs+fd, viaip+fd);
-        if (!DuplicateHandle(self, h, self, std+fd, 0, 1, DUPLICATE_SAME_ACCESS)) {
-            std[fd] = 0;
+        if (!DuplicateHandle(self, h, self, dups+fd, 0, 1, DUPLICATE_SAME_ACCESS)) {
+            dups[fd] = 0;
         }
+    }
+    Str blob = {};
+    if (top > 3) {
+        CrtFd *c = alloc<CrtFd>(&scratch, top);
+        for (i32 fd = 3; fd < top; fd++) {
+            if (!dups[fd]) continue;
+            i32 type = GetFileType(dups[fd]);
+            c[fd].handle = (i64)dups[fd];
+            c[fd].flags  = CRTFD_OPEN | (type==FILE_TYPE_PIPE ? CRTFD_PIPE : 0) |
+                           (type==FILE_TYPE_CHAR ? CRTFD_DEV : 0);
+        }
+        // A 32-bit parent always writes 4-byte slots: for a 64-bit
+        // child WOW64 widens them itself (zero-extended), and would
+        // widen 8-byte slots again (observed on Windows 11)
+        i32 width = sizeof(void *)==4 ? 4 : s->crtslot;
+        blob = encodecrtfds(&scratch, c, top, width);
     }
 
     StartupInfo si = {};
     si.cb     = sizeof(si);
     si.flags  = STARTF_USESTDHANDLES;
-    si.input  = std[0];
-    si.output = std[1];
-    si.error  = std[2];
+    si.input  = dups[0];
+    si.output = dups[1];
+    si.error  = dups[2];
+    si.show   = (i32)(blob.len << 16);  // cbReserved2
+    si.reserved2 = blob.data;
     ProcessInfo pi = {};
     // trap '' INT in the spawning subshell: the child inherits the
     // ignoring of Ctrl-C, which is set only around its creation so
@@ -2679,8 +2795,8 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
     } else if (ejob) {
         CloseHandle(ejob);
     }
-    for (i32 i = 0; i < 3; i++) {
-        if (std[i]) CloseHandle(std[i]);
+    for (i32 i = 0; i < top; i++) {
+        if (dups[i]) CloseHandle(dups[i]);
         if (!objs[i]) continue;
         addlend(os, ok ? pi.process : 0, objs[i], viaip[i]);
     }
@@ -2848,6 +2964,11 @@ static void os_submit(Os *os, Io *io)
     }
 
     Wobj *w = lookup(os, io->h);
+    if (io->op==IO_CONNECT && (!w || !w->pname[0])) {
+        io->err  = E_INVAL;  // not a named pipe's server
+        io->done = 1;
+        return;
+    }
     if (!w || w->kind==K_CHAR || w->kind==K_CONOUT ||
             (w->kind==K_CONIN && io->op==IO_WRITE)) {
         // A file, a device, console output: at once (pipes in either
@@ -2905,6 +3026,7 @@ static Io *os_wait(Os *os, i64 deadline)
 
 static b32 os_cancel(Os *os, Io *io)
 {
+    drainwake(os);  // perhaps completed meanwhile
     switch (io->plt[0]) {
     case S_QUEUED: {
         Wobj *w = (Wobj *)io->plt[1];
@@ -2930,6 +3052,18 @@ static b32 os_cancel(Os *os, Io *io)
         return 1;
     case S_ACTIVE: {
         Wobj *w = (Wobj *)io->plt[1];
+        if (io->op == IO_CONNECT) {
+            // Become the client, which ends the helper's wait, unless a
+            // real one came first: then it completes by itself
+            i32 access = w->pipeout ? GENERIC_READ : GENERIC_WRITE;
+            uz  c = CreateFileW(w->pname, access, 0, 0, OPEN_EXISTING, 0, 0);
+            if (c == INVALID_HANDLE_VALUE) return 0;
+            CloseHandle(c);
+            w->active = 0;
+            os->nwait--;
+            io->plt[0] = S_NONE;
+            return 1;
+        }
         if (io->op != IO_READ) return 0;  // the core's bytes are in use
         // Abandoned: what the helper reads goes to the read-ahead
         w->active = 0;
@@ -3209,6 +3343,40 @@ void mainCRTStartup()
         }
         info.std[i] = h;
     }
+    // Descriptors above 2 from a CRT parent (busybox, ourselves) in the
+    // lpReserved2 blob, at this image's width: real handles of a known
+    // type only, made the shell's own (not inheritable, registered), a
+    // handle that another descriptor also names duplicated
+    StartupInfo si = {};
+    si.cb = sizeof(si);
+    GetStartupInfoW(&si);
+    Str blob = {si.reserved2, (iz)((u32)si.show >> 16)};
+    Slice<CrtFd>     crt = blob.data ? decodecrtfds(&a, blob, sizeof(void *)) : Slice<CrtFd>{};
+    Slice<InheritFd> in  = {};
+    for (i32 fd = 3; fd < crt.len; fd++) {
+        uz  h    = (uz)crt[fd].handle;
+        i32 type = (crt[fd].flags & CRTFD_OPEN) ? GetFileType(h) : 0;
+        if (type!=FILE_TYPE_DISK && type!=FILE_TYPE_CHAR && type!=FILE_TYPE_PIPE) {
+            continue;
+        }
+        b32 seen = h==info.std[0] || h==info.std[1] || h==info.std[2];
+        for (iz i = 0; i < in.len; i++) seen |= h == in[i].h;
+        if (seen) {
+            h = os_dup(&os, h);
+            if (h == BADHANDLE) continue;
+        } else {
+            SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
+            track(&os, h);
+        }
+        InheritFd e = {};
+        e.fd    = fd;
+        e.h     = h;
+        e.flags = OF_READ | OF_WRITE;
+        in = push(&a, in, e);
+    }
+    info.inherit  = in.data;
+    info.ninherit = in.len;
+
     if (ctrlcignored()) info.sigign |= (u64)1 << (2-1);
     info.stack = stackreserve();
 

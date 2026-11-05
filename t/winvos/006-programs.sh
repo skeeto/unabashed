@@ -1,6 +1,6 @@
 # personality: native
 # Hand-checked baseline, not recorded from an oracle (M5a steps 4, 5);
-# step 7 changes it on purpose.
+# steps 7 and 8 change it on purpose.
 # busybox applets through alias stubs and by name, MSYS2 programs given
 # argv (no Cygwin globbing without a command line from the core), the
 # environment and working directory children see.

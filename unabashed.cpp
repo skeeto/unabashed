@@ -1030,6 +1030,15 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         sh->fds->fd[i] = f;
     }
     sh->fds->top = 3;
+    for (iz i = 0; i < info->ninherit; i++) {
+        InheritFd in = info->inherit[i];
+        if (in.fd<3 || in.fd>=FDMAX || sh->fds->fd[in.fd]) {
+            os_close(os, in.h);
+            continue;
+        }
+        sh->fds->fd[in.fd] = stdfile(sh, in.h, in.flags);
+        sh->fds->top = in.fd>=sh->fds->top ? in.fd+1 : sh->fds->top;
+    }
 
     sh->opt[O_BRACEEXPAND] = 1;
     sh->opt[O_HASHALL]     = 1;

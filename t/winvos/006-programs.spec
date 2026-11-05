@@ -1,4 +1,4 @@
-== stdout 420
+== stdout 429
 2
 applet
 status 127
@@ -21,14 +21,15 @@ fd 1 open
 argv: fd 1
 cmdline = <argv>
 argv[0] = <argv>
-fd 3 closed
+fd 3 open
+argv: fd 3
 status 127
 
 == stderr 68
 nosuch: applet not found
 bash: line 23: printenv: command not found
 
-== merged 488
+== merged 497
 2
 applet
 nosuch: applet not found
@@ -52,7 +53,8 @@ fd 1 open
 argv: fd 1
 cmdline = <argv>
 argv[0] = <argv>
-fd 3 closed
+fd 3 open
+argv: fd 3
 bash: line 23: printenv: command not found
 status 127
 

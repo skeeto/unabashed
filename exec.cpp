@@ -1443,6 +1443,95 @@ static b32 materialize(Shell *sh, Arena a, File *f)
     return 1;
 }
 
+// Bridges
+//
+// A Windows program cannot open the shell's /dev/fd/N. An argument
+// naming one of its descriptors 3 and up that way (the whole argument,
+// or what follows its last "=", as in --file=/dev/fd/63) becomes the
+// path of a named pipe for one client, \\.\pipe\NAME (//./pipe/NAME
+// for an MSYS2 program), whose server end a pump bridges to the
+// descriptor: what the descriptor reads goes to a program reading the
+// pipe, what a program writes into it goes to the descriptor. The pump
+// ends with the program (endbridge). Our own shell needs none: it opens
+// /dev/fd/N itself, the descriptor passed in lpReserved2.
+
+enum { MAXBRIDGES = 16 };
+
+struct Bridges {
+    Task *t[MAXBRIDGES];
+    i32   n;
+};
+
+// Bridge descriptor fd: the path for the program, or a null string if
+// it cannot be bridged.
+static Str startbridge(Shell *sh, Arena *a, i32 fd, b32 cygwin, Bridges *br)
+{
+    Sched *s = sh->sched;
+    File  *f = fd<FDMAX ? sh->fds->fd[fd] : 0;
+    if (!f || br->n==MAXBRIDGES) return {};
+    b32    out  = f->flags & OF_READ;  // the program reads
+    Handle peer = BADHANDLE;
+    Pipe  *pipe = 0;
+    if (out && f->kind==F_MEM && !materialize(sh, *a, f)) return {};
+    if (f->kind == F_OS) {
+        peer = os_dup(sh->os, f->h);
+        if (peer == BADHANDLE) return {};
+    } else if (f->kind==F_PIPE && out) {
+        Handle h = pipeosread(s, f->pipe);
+        peer = h==BADHANDLE ? BADHANDLE : os_dup(sh->os, h);
+        if (peer == BADHANDLE) return {};
+    } else if (f->kind == F_PIPE) {
+        pipe = f->pipe;
+    } else {
+        return {};  // a capture
+    }
+    NamedPipe np = os_namedpipe(sh->os, a, out);
+    if (np.err) {
+        if (peer != BADHANDLE) os_close(sh->os, peer);
+        return {};
+    }
+    Pump *p = newpump(s);
+    p->kind = out ? PUMP_SERVE : PUMP_TAKE;
+    p->h    = np.h;
+    p->peer = peer;
+    p->pipe = pipe;
+    br->t[br->n++] = spawnpump(s, p);
+    return cygwin ? np.name : slashify(a, np.name, '\\');
+}
+
+// argv with its /dev/fd/N arguments bridged, or argv itself if none.
+static Str *bridgeargs(Shell *sh, Arena *a, Str *argv, iz argc, b32 cygwin, Bridges *br)
+{
+    Str *r = argv;
+    i32  fds[MAXBRIDGES];
+    Str  paths[MAXBRIDGES];
+    i32  n = 0;
+    for (iz i = 1; i < argc; i++) {
+        Str arg = argv[i];
+        iz  at  = arg.len;
+        for (; at>0 && arg[at-1]!='='; at--) {}
+        Str tail = cuthead(arg, at);
+        i32 fd   = startswith(tail, "/dev/fd/") ? devfdnum(tail) : -1;
+        if (fd<3 || fd>=FDMAX) continue;
+        Str path = {};
+        for (i32 k = 0; k < n; k++) {
+            path = fds[k]==fd ? paths[k] : path;
+        }
+        if (!path.data && n<MAXBRIDGES) {
+            path = startbridge(sh, a, fd, cygwin, br);
+            fds[n]     = fd;
+            paths[n++] = path;
+        }
+        if (!path.data) continue;
+        if (r == argv) {
+            r = alloc<Str>(a, argc);
+            for (iz k = 0; k < argc; k++) r[k] = argv[k];
+        }
+        r[i] = concat(a, takehead(arg, at), path);
+    }
+    return r;
+}
+
 // Run a program and wait for it. Returns its status, or the negated
 // error that kept it from starting. Shell objects on its descriptors
 // become OS pipes: text and in-memory pipes are fed by pump tasks, and
@@ -1454,10 +1543,18 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     Fdtab *t = sh->fds;
     b32 execing = sh->execing;  // for this program only
     sh->execing = 0;
-    Target tg = {};
+    Target  tg = {};
+    Bridges br = {};
     if (sh->win32) {
         // What starts, and how: decided here, before descriptors move
         tg = wintarget(sh, &a, path, argv, argc, env);
+        if (!tg.err && !tg.self && !sh->spawnto) {
+            argv = bridgeargs(sh, &a, argv, argc, tg.cygwin, &br);
+            if (br.n) tg = wintarget(sh, &a, path, argv, argc, env);
+        }
+        if (tg.err) {
+            for (i32 i = 0; i < br.n; i++) endbridge(s, br.t[i]);
+        }
         if (tg.interp.data) {
             Buf b(&a, 256);
             print(&b, path);
@@ -1560,9 +1657,10 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         sp.cmdline = tg.cmdline;
         sp.env     = tg.env.data;
         sp.nenv    = tg.env.len;
+        sp.crtslot = tg.crtslot;
     }
     if (execing && !sh->subshell && !sh->capdepth && s->ntasks==1 &&
-            !npumps && !capfile && !sh->spawnto) {
+            !npumps && !capfile && !sh->spawnto && !br.n) {
         // exec while nothing else runs in this process: become the
         // program (it keeps the shell's pid), else start it as a child
         i32 err = os_exec(sh->os, a, &sp);
@@ -1574,7 +1672,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     // Killed while the program runs (or any other escape): it runs on,
     // so its output pumps do too, orphaned for the Sched to join
     Escape e = {};
-    if (npumps) {
+    if (npumps || br.n) {
         e.up    = sh->esc;
         e.undo  = sh->undo;
         e.frame = sh->frame;
@@ -1585,6 +1683,13 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
             for (i32 i = 0; i < npumps; i++) {
                 pumps[i]->sib = s->orphans;
                 s->orphans    = pumps[i];
+            }
+            for (i32 i = 0; i < br.n; i++) {
+                // The program runs on, but one that has not opened its
+                // pipe yet is not waited for
+                if (!((Pump *)br.t[i]->arg)->connected) cancelbridge(s, br.t[i]);
+                br.t[i]->sib = s->orphans;
+                s->orphans   = br.t[i];
             }
             escape(sh, e.why);
         }
@@ -1653,7 +1758,10 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     }
     // What the program wrote is passed on before anything the shell
     // writes next
-    if (npumps) sh->esc = e.up;
+    if (npumps || br.n) sh->esc = e.up;
+    for (i32 i = 0; i < br.n; i++) {
+        endbridge(s, br.t[i]);
+    }
     for (i32 i = 0; i < npumps; i++) {
         joinpump(s, pumps[i]);
     }

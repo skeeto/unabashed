@@ -200,6 +200,17 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.ppid    = 2;
     info.chaos   = os->chaos;
     for (i32 i = 0; i < 3; i++) info.std[i] = os_dup(os, ctx->fd[i]);
+    // The rest it was given, as a POSIX shell inherits them, or a
+    // Windows one through lpReserved2 (os_spawn passes them only then)
+    InheritFd inherit[countof(ctx->fd)];
+    for (i32 fd = 3; fd < countof(ctx->fd); fd++) {
+        if (ctx->fd[fd] == BADHANDLE) continue;
+        InheritFd *e = inherit + info.ninherit++;
+        e->fd    = fd;
+        e->h     = os_dup(os, ctx->fd[fd]);
+        e->flags = vaccess(&os->vos, ctx->fd[fd]);
+    }
+    info.inherit = inherit;
     info.ownstd = 1;
     info.reserve = (iz)1<<18;
     i32 status = sh_main(os, &info);

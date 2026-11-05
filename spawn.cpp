@@ -479,8 +479,10 @@ struct Target {
     Slice<Str> env;
     i32        err;
     Str        interp;   // with err: the #! interpreter that failed
-    i32        crtslot;  // a CRT image's handle width, for step 8's
-                         // descriptors above 2 (not passed yet)
+    i32        crtslot;  // a CRT image's handle width (or ours), so that
+                         // descriptors above 2 pass in lpReserved2
+    b32        self;     // our own shell, which opens /dev/fd/N itself
+    b32        cygwin;   // an MSYS2 or Cygwin program
 };
 
 // A file to run, by the name the shell has for it: its native path and
@@ -543,7 +545,8 @@ static Str installroot(Str image)
 // its argv[0] and install give it, Cygwin's way for msys (unabashed.cpp's
 // msysargv) and CommandLineToArgvW's otherwise. In msys mode the
 // environment goes as to an MSYS2 program, which its import undoes.
-static Target selftarget(Shell *sh, Arena *a, Str image, Slice<Str> argv, Slice<Str> env)
+static Target selftarget(Shell *sh, Arena *a, Str image, i32 width,
+                         Slice<Str> argv, Slice<Str> env)
 {
     Target t = {};
     Stat   f = os_stat(sh->os, *a, concat(a, installroot(image), "/etc/fstab"), 1);
@@ -551,6 +554,8 @@ static Target selftarget(Shell *sh, Arena *a, Str image, Slice<Str> argv, Slice<
     t.path    = image;
     t.cmdline = cmdline(a, argv, msys ? SPLIT_CYGWIN : SPLIT_MSVCRT);
     t.env     = msyschildenv(sh, a, env);
+    t.crtslot = width;  // sh_main imports them as a CRT would
+    t.self    = 1;
     return t;
 }
 
@@ -590,11 +595,15 @@ static Target imagetarget(Shell *sh, Arena *a, Str native, Stat st, Sniff s,
     Target t = {};
     t.path = native;
     if (s.pe.ours) {
-        return selftarget(sh, a, native, argv, env);
+        return selftarget(sh, a, native, s.pe.width, argv, env);
     } else if (s.pe.posix) {
-        // MSYS2 and Cygwin programs: no conversion, nothing globbed
+        // MSYS2 and Cygwin programs: no conversion, nothing globbed.
+        // Descriptors above 2 cannot reach them: Cygwin passes those in
+        // its cygheap, and takes an lpReserved2 blob that is not its
+        // own child_info for none (notes/m5a.md, step 8).
         t.cmdline = cmdline(a, argv, SPLIT_CYGWIN);
         t.env     = msyschildenv(sh, a, env);
+        t.cygwin  = 1;
         return t;
     }
 
@@ -612,6 +621,7 @@ static Target imagetarget(Shell *sh, Arena *a, Str native, Stat st, Sniff s,
             t.path    = bb;
             t.cmdline = cmdline(a, v, SPLIT_MSVCRT);
             t.env     = env;
+            t.crtslot = s.pe.width;  // busybox.exe, an msvcrt program
             return t;
         }
         // busybox-w32's libtool hack (w64devkit issue 50)
@@ -813,7 +823,7 @@ static Target wintarget(Shell *sh, Arena *a, Str path, Str *argv, iz argc, Slice
         v = next;
 
         if (sh_ || selfinterp(b)) {
-            t = selftarget(sh, a, sh->exe, v, env);
+            t = selftarget(sh, a, sh->exe, (i32)sizeof(void *), v, env);
             break;
         }
         file = findinterp(sh, a, b.interp);

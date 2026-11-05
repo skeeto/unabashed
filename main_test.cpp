@@ -212,6 +212,17 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.host    = "oracle";
     // Its own references: exec may close them before the process exits
     for (i32 i = 0; i < 3; i++) info.std[i] = os_dup(os, ctx->fd[i]);
+    // The rest it was given, as a POSIX shell inherits them, or a
+    // Windows one through lpReserved2 (os_spawn passes them only then)
+    InheritFd inherit[countof(ctx->fd)];
+    for (i32 fd = 3; fd < countof(ctx->fd); fd++) {
+        if (ctx->fd[fd] == BADHANDLE) continue;
+        InheritFd *e = inherit + info.ninherit++;
+        e->fd    = fd;
+        e->h     = os_dup(os, ctx->fd[fd]);
+        e->flags = vaccess(osvos(os), ctx->fd[fd]);
+    }
+    info.inherit = inherit;
     info.ownstd  = 1;
     info.reserve = (iz)1<<22;
     i32 status = sh_main(os, &info);
@@ -1140,17 +1151,28 @@ static void test_vwin(Test *t)
     expectint(t, "vwin elf", vprogram(v, &a, "C:/work/elf.exe").err, E_NOEXEC);
 
     // Named pipes
-    OsPipe np = vnamedpipe(os, "Test");
-    expectint(t, "vwin pipe stat", os_stat(os, a, "//./pipe/test", 1).type, FT_PIPE);
-    o = os_open(os, a, "\\\\.\\PIPE\\TEST", OF_WRITE, 0);
+    NamedPipe np = os_namedpipe(os, &a, 0);
+    expect(t, "vwin pipe name", np.name, "//./pipe/unabashed-2-1");
+    expectint(t, "vwin pipe stat", os_stat(os, a, "//./pipe/Unabashed-2-1", 1).type, FT_PIPE);
+    expectint(t, "vwin pipe access", os_open(os, a, np.name, OF_READ, 0).err, E_ACCES);
+    Io io = {};
+    io.op = IO_CONNECT;
+    io.h  = np.h;
+    expectint(t, "vwin pipe listening", vioready(osvos(os), &io), 0);
+    o = os_open(os, a, "\\\\.\\PIPE\\UNABASHED-2-1", OF_WRITE, 0);
     expectint(t, "vwin pipe open", o.err, 0);
+    expectint(t, "vwin pipe connected", vioready(osvos(os), &io), 1);
+    expectint(t, "vwin pipe busy", os_open(os, a, np.name, OF_WRITE, 0).err, E_BUSY);
     os_write(os, o.h, (u8 *)"hi", 2);
     os_close(os, o.h);
     u8 buf[8] = {};
-    expectint(t, "vwin pipe read", os_read(os, np.r, buf, countof(buf)), 2);
-    os_close(os, np.r);
-    os_close(os, np.w);
-    expectint(t, "vwin pipe gone", os_stat(os, a, "//./pipe/test", 1).err, E_NOENT);
+    expectint(t, "vwin pipe read", os_read(os, np.h, buf, countof(buf)), 2);
+    expectint(t, "vwin pipe eof", os_read(os, np.h, buf, countof(buf)), 0);
+    os_close(os, np.h);
+    expectint(t, "vwin pipe gone", os_stat(os, a, np.name, 1).err, E_NOENT);
+    np = os_namedpipe(os, &a, 1);
+    expect(t, "vwin pipe reuse", np.name, "//./pipe/unabashed-2-2");
+    os_close(os, np.h);
 
     // Command lines: MSVCRT splitting for argv, Cygwin's (globs and
     // response files) for an MSYS2 program, an alias stub through

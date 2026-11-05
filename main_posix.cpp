@@ -177,6 +177,14 @@ static Handle os_dup(Os *, Handle h)
     return fd<0 ? BADHANDLE : (Handle)fd;
 }
 
+static NamedPipe os_namedpipe(Os *, Arena *, b32)
+{
+    NamedPipe r = {};
+    r.h   = BADHANDLE;
+    r.err = E_NOSYS;
+    return r;
+}
+
 static iz os_pipecap(Os *)
 {
     return 1<<14;  // macOS starts small; Linux has 64 KiB
@@ -790,14 +798,60 @@ static Str fromcstr(char *s)
     return r;
 }
 
+// The descriptors above 2 the shell inherited, found with one poll of
+// them all (POLLNVAL marks a closed one) before the shell opens any,
+// each moved out of the way as the shell's own: at 10 and up, and
+// close-on-exec.
+static Slice<InheritFd> inherited(Arena *a)
+{
+    Slice<InheritFd> r = {};
+    struct rlimit rl;
+    i32 max = FDMAX;
+    if (!getrlimit(RLIMIT_NOFILE, &rl) && rl.rlim_cur<(rlim_t)max) {
+        max = (i32)rl.rlim_cur;
+    }
+    if (max <= 3) return r;
+    struct pollfd *fds = alloc<struct pollfd>(a, max-3);
+    for (i32 fd = 3; fd < max; fd++) {
+        fds[fd-3].fd = fd;
+    }
+    i32 ready;
+    do {
+        ready = poll(fds, (nfds_t)(max-3), 0);
+    } while (ready<0 && errno==EINTR);
+    if (ready < 0) return r;
+    for (i32 i = 0; i < max-3; i++) {
+        if (fds[i].revents & POLLNVAL) continue;
+        i32 fl = fcntl(fds[i].fd, F_GETFL);
+        InheritFd e = {};
+        e.fd    = fds[i].fd;
+        e.flags = (fl&O_ACCMODE)==O_RDONLY ? OF_READ :
+                  (fl&O_ACCMODE)==O_WRONLY ? OF_WRITE : OF_READ|OF_WRITE;
+        r = push(a, r, e);
+    }
+    // All found first: a duplicate may land on a number not yet seen
+    iz n = 0;
+    for (iz i = 0; i < r.len; i++) {
+        i32 h = fcntl(r[i].fd, F_DUPFD_CLOEXEC, 10);
+        close(r[i].fd);
+        if (h < 0) continue;
+        r[n] = r[i];
+        r[n++].h = (Handle)h;
+    }
+    r.len = n;
+    return r;
+}
+
 int main(int argc, char **argv)
 {
     static Os os;
     OsInfo info = {};
     info.reserve = (iz)1 << (sizeof(void *)==8 ? 34 : 28);
-    initasync(&os);
-
     Arena a = newarena(&os, (iz)1<<26);
+    Slice<InheritFd> in = inherited(&a);
+    info.inherit  = in.data;
+    info.ninherit = in.len;
+    initasync(&os);
     info.nargs = argc;
     info.args  = alloc<Str>(&a, argc);
     for (i32 i = 0; i < argc; i++) {

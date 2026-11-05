@@ -61,9 +61,11 @@ struct VPipe {
     u64  wgroup;   // tracing: the last writer's group (vgroup), or 0
 };
 
-struct VNamedPipe {  // Windows mode: //./pipe/NAME
-    Str    name;
+struct VNamedPipe {  // Windows mode: //./pipe/NAME, for one client
+    Str    name;       // NAME
     VPipe *pipe;
+    b32    out;        // the server writes, its client reads
+    b32    connected;  // the client has opened it
 };
 
 struct VFile {      // open file description
@@ -156,6 +158,7 @@ struct Vos {
     b32        win;
     VNamedPipe npipes[64];
     i32        nnpipes;
+    i32        npipeseq;  // named pipes made so far
 };
 
 static VNode *vnew(Vos *v, VNode *dir, Str name, i32 type, i32 mode)
@@ -552,6 +555,19 @@ static VFile *vfile(Vos *v, Handle h)
         return v->files + h;
     }
     return 0;
+}
+
+// How a handle is open (OF_READ, OF_WRITE), for InheritFd.
+static i32 vaccess(Vos *v, Handle h)
+{
+    VFile *f = vfile(v, h);
+    switch (f ? f->kind : VK_FREE) {
+    case VK_PIPEREAD:  return OF_READ;
+    case VK_PIPEWRITE: return OF_WRITE;
+    case VK_FILE:
+        if (f->flags & (OF_READ|OF_WRITE)) return f->flags & (OF_READ|OF_WRITE);
+    }
+    return OF_READ | OF_WRITE;
 }
 
 
@@ -1765,35 +1781,85 @@ static void vwinctx(Vos *v, Arena *mem, FakeCtx *ctx, Spawn *s, VWinCmd *wc, VPr
     for (iz i = 0; i < argv.len; i++) ctx->argv[i] = argv[i];
 }
 
-// A pipe in the //./pipe/ namespace, both ends held by the caller (the
-// server). Clients open it by name, ignoring case, while it has ends.
-static OsPipe vnamedpipe(Os *os, Str name)
+// A pipe in the //./pipe/ namespace for one client, as Win32's
+// CreateNamedPipe with one instance: the server holds one end, and the
+// client opening the name (ignoring case) gets the other. Its name is
+// deterministic: the creator's pid and a sequence number. A slot is
+// free again once both ends are closed.
+static NamedPipe os_namedpipe(Os *os, Arena *a, b32 out)
 {
-    Vos   *v = osvos(os);
-    OsPipe r = {};
-    if (v->nnpipes == countof(v->npipes)) {
-        r.r = r.w = BADHANDLE;
+    Vos      *v = osvos(os);
+    NamedPipe r = {};
+    r.h = BADHANDLE;
+    if (!v->win) {
+        r.err = E_NOSYS;
+        return r;
+    }
+    i32 i = 0;
+    for (; i < v->nnpipes; i++) {
+        VPipe *p = v->npipes[i].pipe;
+        if (!p->readers && !p->writers) break;
+    }
+    if (i == countof(v->npipes)) {
         r.err = E_NFILE;
         return r;
     }
-    r = os_pipe(os);
-    if (!r.err) {
-        VNamedPipe *n = v->npipes + v->nnpipes++;
-        n->name = clone(&v->a, name);
-        n->pipe = v->files[r.r].pipe;
+    OsPipe p = os_pipe(os);
+    if (p.err) {
+        r.err = p.err;
+        return r;
     }
+    os_close(os, out ? p.r : p.w);  // the client's, opened by name
+    Buf b(&v->a, 64);
+    print(&b, "unabashed-");
+    print(&b, v->procs[v->cur].pid);
+    putbyte(&b, '-');
+    print(&b, (i64)++v->npipeseq);
+    VNamedPipe *n = v->npipes + i;
+    n->name      = finish(&b);
+    n->pipe      = v->files[out ? p.w : p.r].pipe;
+    n->out       = out;
+    n->connected = 0;
+    v->nnpipes  += i == v->nnpipes;
+    r.h    = out ? p.w : p.r;
+    r.name = concat(a, "//./pipe/", n->name);
     return r;
 }
 
+// The named pipe whose server end h is, or null.
+static VNamedPipe *vserverpipe(Vos *v, Handle h)
+{
+    VFile *f = vfile(v, h);
+    for (i32 i = 0; f && i<v->nnpipes; i++) {
+        VNamedPipe *n = v->npipes + i;
+        if (n->pipe==f->pipe && f->kind==(n->out ? VK_PIPEWRITE : VK_PIPEREAD)) {
+            return n;
+        }
+    }
+    return 0;
+}
+
+// A client opens a named pipe: the end its server does not hold, once,
+// for the access the pipe's direction allows (Win32: ERROR_PIPE_BUSY,
+// ERROR_ACCESS_DENIED).
 static Opened vnpopen(Vos *v, Str name, i32 flags)
 {
     Opened r = {};
     r.h   = BADHANDLE;
     r.err = E_NOENT;
     for (i32 i = v->nnpipes-1; i >= 0; i--) {
-        VPipe *p = v->npipes[i].pipe;
-        if (!equalfold(v->npipes[i].name, name) || (!p->readers && !p->writers)) {
+        VNamedPipe *n = v->npipes + i;
+        VPipe      *p = n->pipe;
+        if (!equalfold(n->name, name) || !(n->out ? p->writers : p->readers)) {
             continue;
+        }
+        if (n->connected) {
+            r.err = E_BUSY;
+            return r;
+        }
+        if (flags & (n->out ? OF_WRITE : OF_READ)) {
+            r.err = E_ACCES;
+            return r;
         }
         r.h = vnewhandle(v);
         if (r.h == BADHANDLE) {
@@ -1801,14 +1867,15 @@ static Opened vnpopen(Vos *v, Str name, i32 flags)
             return r;
         }
         r.err = 0;
+        n->connected = 1;
         VFile *f = v->files + r.h;
-        f->kind  = flags&OF_WRITE ? VK_PIPEWRITE : VK_PIPEREAD;
+        f->kind  = n->out ? VK_PIPEREAD : VK_PIPEWRITE;
         f->flags = flags;
         f->pipe  = p;
-        if (flags & OF_WRITE) {
-            p->writers++;
-        } else {
+        if (n->out) {
             p->readers++;
+        } else {
+            p->writers++;
         }
         return r;
     }
@@ -2002,6 +2069,15 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
         if (v->procs[io->h].state != VP_EXIT) return 0;
         if (perform) io->n = vreap(os, v, io->h);
         return 1;
+    case IO_CONNECT: {
+        VNamedPipe *n = vserverpipe(v, io->h);
+        if (!n) {
+            io->err = E_INVAL;
+            return 1;
+        }
+        if (perform) io->n = 0;
+        return n->connected;
+    }
     }
     io->err = E_INVAL;
     return 1;
@@ -2087,6 +2163,9 @@ static Io *os_wait(Os *os, i64 deadline)
 static b32 os_cancel(Os *os, Io *io)
 {
     Vos *v = osvos(os);
+    if (io->op==IO_CONNECT && vioready(v, io)) {
+        return 0;  // a client came: it completes, as on Win32
+    }
     for (i32 i = 0; i < v->nprocs; i++) {
         for (Io **p = &v->procs[i].ios; *p; p = &(*p)->next) {
             if (*p == io) {

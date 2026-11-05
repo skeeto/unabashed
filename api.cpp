@@ -6,6 +6,13 @@ enum : Handle { BADHANDLE = (Handle)-1 };
 
 struct Fiber;
 
+// A descriptor above 2 the shell inherited from its parent.
+struct InheritFd {
+    i32    fd;
+    Handle h;      // the shell's own reference to it
+    i32    flags;  // OF_READ, OF_WRITE (both where the platform cannot tell)
+};
+
 struct OsInfo {
     b32    windows;  // drive letters, ; in PATH, .exe suffixes
     Str   *args;
@@ -26,6 +33,8 @@ struct OsInfo {
     i64    egid;
     Str    host;
     Handle std[3];
+    InheritFd *inherit;  // descriptors above 2 from the parent: those open
+    iz     ninherit;     // (POSIX), or the CRT's lpReserved2 blob (Windows)
     iz     reserve;  // address space for each large arena
     iz     stack;    // usable bytes of the calling thread's stack, 0 if unknown
     u64    chaos;    // test layers: seed for random yields, 0 for none
@@ -68,6 +77,12 @@ struct Opened {
 struct OsPipe {
     Handle r;
     Handle w;
+    i32    err;
+};
+
+struct NamedPipe {
+    Handle h;     // the server's end
+    Str    name;  // canonical native path, //./pipe/NAME
     i32    err;
 };
 
@@ -146,6 +161,7 @@ enum : i32 {
     IO_READ = 1,  // at least one byte, or end of file (n = 0)
     IO_WRITE,     // at least one byte (n), perhaps fewer than len
     IO_PROC,      // a spawned program's exit: n is os_waitproc's status
+    IO_CONNECT,   // a named pipe's client opened it (os_namedpipe): n = 0
 };
 
 struct Io {
@@ -180,6 +196,11 @@ static void    os_close(Os *, Handle);
 // A second handle to the same open file.
 static Handle  os_dup(Os *, Handle);
 static OsPipe  os_pipe(Os *);
+// Windows: a pipe for one client under a fresh name in the //./pipe/
+// namespace. The server's end writes to the client (out) or reads from
+// it; IO_CONNECT on it completes once the client has opened the name.
+// E_NOSYS elsewhere.
+static NamedPipe os_namedpipe(Os *, Arena *, b32 out);
 // Bytes a fresh pipe accepts before a write blocks.
 static iz      os_pipecap(Os *);
 // Copy up to len bytes that a read would return now, without
