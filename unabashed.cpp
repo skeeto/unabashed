@@ -166,6 +166,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "vars.cpp"
 #include "expand.cpp"
 #include "glob.cpp"
+#include "spawn.cpp"
 #include "exec.cpp"
 #include "proc.cpp"
 #include "builtins.cpp"
@@ -353,6 +354,8 @@ static void pathsetup(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
     c->pid  = info->pid;
     c->cwd  = cwd.data ? cwd : Str("C:/");
     sh->exe = exe.data ? exe : Str{};
+    c->windir  = info->windir.len ? winnorm(perm, info->windir, "C:/") : Str{};
+    sh->sniffs = newsniffcache(perm);
     Str temp = envlookup(env, "TEMP", 1);
     temp = temp.data ? temp : envlookup(env, "TMP", 1);
     c->temp = temp.data ? winnorm(perm, temp, c->cwd) : Str{};
@@ -808,8 +811,13 @@ static b32 msysargv(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
             if (program && !i) {
                 Str arg0 = r.arg;
                 if (find(arg0, ":")>=0 || find(arg0, "\\")>=0) {
+                    // as POSIX, and in msys mode without .exe (recorded:
+                    // $0 is /usr/bin/bash when started as ...\bash.exe)
                     Str p = toposix(&c, &scratch, arg0);
                     arg0 = p.data ? p : arg0;
+                    if (p.data && sh->pathmode==PM_MSYS && hasext(arg0, ".exe")) {
+                        arg0.len -= 4;
+                    }
                 }
                 out = push(perm, out, clone(perm, arg0));
                 continue;

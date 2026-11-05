@@ -14,7 +14,9 @@
 #include "unabashed.cpp"
 
 enum : i32 {
+    CREATE_BREAKAWAY_FROM_JOB    = 0x01000000,
     CREATE_NEW                   = 1,
+    CREATE_NO_WINDOW             = 0x08000000,
     CREATE_SUSPENDED             = 4,
     CREATE_UNICODE_ENVIRONMENT   = 0x400,
     DUPLICATE_SAME_ACCESS        = 2,
@@ -53,6 +55,7 @@ enum : i32 {
     INVALID_FILE_ATTRIBUTES      = -1,
     IO_REPARSE_TAG_NAME_SURROGATE = 0x20000000,  // symlinks, junctions
     JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x800,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000,
     JOB_OBJECT_MSG_NEW_PROCESS   = 6,
     JOB_OBJECT_MSG_EXIT_PROCESS  = 7,  // an exit status not an exception's
     JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS = 8,  // 0xC000013A among them
@@ -225,7 +228,7 @@ W32(i32,    GetModuleFileNameW(uz, c16 *, i32));
 W32(uz,     GetModuleHandleW(c16 const *));
 W32(void *, GetProcAddress(uz, char const *));
 W32(uz,     GetStdHandle(i32));
-W32(i32,    GetSystemDirectoryW(c16 *, i32));
+W32(i32,    GetSystemWindowsDirectoryW(c16 *, i32));
 W32(void,   GetSystemTimeAsFileTime(Filetime *));
 W32(b32,    ReadConsoleW(uz, c16 *, i32, i32 *, uz));
 W32(i32,    GetConsoleProcessList(i32 *, i32));
@@ -503,6 +506,8 @@ struct Os {
     i32        nctrl;      // atomic: Ctrl-C events so far
     i32        recentlock; // atomic: guards recent
     b32        lateattach; // Windows 8: attach after CreateProcess
+    b32        xp;         // Windows XP: 32767-character environments
+    b32        noconsole;  // children get CREATE_NO_WINDOW
     i64        freq;       // QueryPerformanceCounter ticks per second
     i64        youngticks; // 100 ms: programs judged at a Ctrl-C
     Recent     recent[32];
@@ -655,15 +660,6 @@ static b32 hassuffix(Str s, Str suffix)  // ASCII case-insensitive
         if (lowercase(tail[i]) != suffix[i]) return 0;
     }
     return 1;
-}
-
-static b32 exename(Str path)
-{
-    static Str exts[] = {".exe", ".com", ".bat", ".cmd", ".sh"};
-    for (iz i = 0; i < countof(exts); i++) {
-        if (hassuffix(path, exts[i])) return 1;
-    }
-    return 0;
 }
 
 // Asynchronous I/O machinery (see the comment on Wobj above)
@@ -1592,14 +1588,14 @@ static i32 endmissed(Os *os, uz proc)
 // A job of its own for a program just created suspended, so that its
 // descendants can be told at a Ctrl-C (see judge). Breaking away from
 // it is allowed if the shell is in no job, or its own job allows it
-// (Os.jobflags): what a program could do without this job. 0 if
-// unavailable.
-static uz newjob(Os *os, uz proc)
+// (Os.jobflags): what a program could do without this job. More limits
+// in extra. 0 if unavailable.
+static uz newjob(Os *os, uz proc, u32 extra)
 {
     uz job = CreateJobObjectW(0, 0);
     if (!job) return 0;
     JobLimits l = {};
-    l.flags = os->jobflags;
+    l.flags = os->jobflags | extra;
     i32 info = JobObjectExtendedLimitInformation;
     if (!SetInformationJobObject(job, info, &l, sizeof(l)) ||
         !AssignProcessToJobObject(job, proc)) {
@@ -2349,12 +2345,13 @@ static Stat os_stat(Os *, Arena scratch, Str path, b32 follow)
     }
 
     Str16 w     = widepath(&scratch, path);
-    b32   exe   = exename(path);
+    b32   exe   = hassuffix(path, ".exe");
     i32   flags = FILE_FLAG_BACKUP_SEMANTICS;
     flags |= follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT;
 
-    // Read access lets the magic number decide whether a file without
-    // an executable extension is a program or script.
+    // The execute bits say what the content is: #!, MZ or ":\n" (the
+    // core adds its extension rules, spawn.cpp's winmode). Read access
+    // lets the first bytes decide, except for an .exe, taken to be MZ.
     i32 access = exe ? FILE_READ_ATTRIBUTES : GENERIC_READ;
     uz  h = CreateFileW(w.data, access, FILE_SHARE_ALL, 0, OPEN_EXISTING, flags, 0);
     if (h == INVALID_HANDLE_VALUE) {
@@ -2387,7 +2384,8 @@ static Stat os_stat(Os *, Arena scratch, Str path, b32 follow)
             if (ReadFile(h, magic, 2, &n, 0) && n==2) {
                 b32 mz = magic[0]=='M' && magic[1]=='Z';
                 b32 sb = magic[0]=='#' && magic[1]=='!';
-                r.mode |= mz||sb ? 0111 : 0;
+                b32 co = magic[0]==':' && magic[1]=='\n';
+                r.mode |= mz||sb||co ? 0111 : 0;
             }
         }
         CloseHandle(h);
@@ -2502,65 +2500,37 @@ static Str envget(Str *env, iz nenv, Str name)
     return {};
 }
 
-static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
+// Start a program: the image s->path with the command line s->cmdline
+// (the core's, spawn.cpp), suspended until it is in its job where it
+// gets one. With exec (os_exec), its job kills it if the shell dies:
+// the M3b job on Windows 8, else one made here, out of the shell's own
+// job if that allows breaking away, without one if not. *job is then
+// that job, or 0.
+static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
 {
     Spawned r = {};
     r.proc = BADHANDLE;
 
-    // Command line: MSVCRT quoting, or cmd.exe for batch files, which
-    // CreateProcess would otherwise run with no escaping at all.
-    Str16 app = {};
-    Buf   cmd(&scratch, 1<<10);
-    if (hassuffix(s->path, ".bat") || hassuffix(s->path, ".cmd")) {
-        Str comspec = envget(s->env, s->nenv, "comspec");
-        if (!comspec.len) {
-            c16 sys[260];
-            i32 len = GetSystemDirectoryW(sys, countof(sys));
-            if (!len || len>=countof(sys)) {
-                r.err = lasterr();
-                return r;
-            }
-            comspec = concat(&scratch, fromwide(&scratch, sys, len), "\\cmd.exe");
-        }
-        // cmd would report a missing script itself, with status 1
-        Str16 wscript = widepath(&scratch, s->path);
-        i32   attr    = GetFileAttributesW(wscript.data);
-        if (attr == INVALID_FILE_ATTRIBUTES) {
-            r.err = lasterr();
-            return r;
-        } else if (attr & FILE_ATTRIBUTE_DIRECTORY) {
-            r.err = E_ACCES;
-            return r;
-        }
-        Str script = fromwide(&scratch, wscript.data, wscript.len);
-        quoteprogram(&cmd, comspec);
-        print(&cmd, " /d /e:on /v:off /s /c \"");
-        quotebatarg(&cmd, script, 1);
+    Str cmd = s->cmdline;
+    if (!cmd.len) {
+        Buf b(&scratch, 1<<10);
+        quoteprogram(&b, s->argc ? s->argv[0] : s->path);
         for (iz i = 1; i < s->argc; i++) {
-            putbyte(&cmd, ' ');
-            if (!quotebatarg(&cmd, s->argv[i], 0)) {
-                r.err = E_INVAL;
-                return r;
-            }
+            putbyte(&b, ' ');
+            quotearg(&b, s->argv[i]);
         }
-        putbyte(&cmd, '"');
-        app = widepath(&scratch, comspec);
-    } else {
-        quoteprogram(&cmd, s->argc ? s->argv[0] : s->path);
-        for (iz i = 1; i < s->argc; i++) {
-            putbyte(&cmd, ' ');
-            quotearg(&cmd, s->argv[i]);
-        }
-        app = widepath(&scratch, s->path);
+        cmd = finish(&b);
     }
-    Str16 line = towide(&scratch, finish(&cmd));
+    Str16 line = towide(&scratch, cmd);
     if (line.len > 32766) {
         r.err = E_2BIG;
         return r;
     }
+    Str16 app = widepath(&scratch, s->path);
 
     // Environment block: sorted, each entry null-terminated, and one
-    // more null at the end (towide adds the last).
+    // more null at the end (towide adds the last). XP takes at most
+    // 32767 characters in all.
     Str *env = alloc<Str>(&scratch, s->nenv);
     iz   nenv = 0;
     for (iz i = 0; i < s->nenv; i++) {
@@ -2574,6 +2544,10 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     }
     if (!nenv) putbyte(&block, 0);
     Str16 wenv = towide(&scratch, finish(&block));
+    if (os->xp && wenv.len>32767) {
+        r.err = E_2BIG;
+        return r;
+    }
 
     Str16 cwd = s->cwd.len ? widepath(&scratch, s->cwd) : Str16{};
 
@@ -2609,7 +2583,19 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     // Since Windows 8, a program runs in a job of its own (see judge),
     // entered before it runs
     b32 tojob = os->lateattach && !noint;
-    i32 flags = CREATE_UNICODE_ENVIRONMENT | (tojob ? CREATE_SUSPENDED : 0);
+    uz  ejob  = 0;  // exec's job before Windows 8
+    i32 flags = CREATE_UNICODE_ENVIRONMENT;
+    flags |= os->noconsole ? CREATE_NO_WINDOW : 0;
+    if (exec && !os->lateattach) {
+        JobLimits own  = {};
+        i32       info = JobObjectExtendedLimitInformation;
+        b32       injob = QueryInformationJobObject(0, info, &own, sizeof(own), 0);
+        if (!injob || (own.flags & JOB_OBJECT_LIMIT_BREAKAWAY_OK)) {
+            ejob   = CreateJobObjectW(0, 0);
+            flags |= injob && ejob ? CREATE_BREAKAWAY_FROM_JOB : 0;
+        }
+    }
+    flags |= tojob || ejob ? CREATE_SUSPENDED : 0;
     if (noint) SetConsoleCtrlHandler(0, 1);
     i32 nctrl = __atomic_load_n(&os->nctrl, __ATOMIC_SEQ_CST);
     b32 ok = CreateProcessW(app.data, line.data, 0, 0, 1, flags, wenv.data,
@@ -2622,13 +2608,31 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
         code = ok ? 0 : GetLastError();
     }
     if (noint) SetConsoleCtrlHandler(0, 0);
-    if (ok && !noint) {
-        uz job = tojob ? newjob(os, pi.process) : 0;
+    if (ok && exec) {
+        uz j = 0;
+        if (tojob) {
+            j = newjob(os, pi.process, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE);
+        } else if (ejob) {
+            JobLimits l = {};
+            l.flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+            i32 info = JobObjectExtendedLimitInformation;
+            if (SetInformationJobObject(ejob, info, &l, sizeof(l)) &&
+                    AssignProcessToJobObject(ejob, pi.process)) {
+                j = ejob;
+            }
+        }
+        if (ejob && j!=ejob) CloseHandle(ejob);
+        if (flags & CREATE_SUSPENDED) ResumeThread(pi.thread);
+        *job = j;
+    } else if (ok && !noint) {
+        uz j = tojob ? newjob(os, pi.process, 0) : 0;
         if (tojob) ResumeThread(pi.thread);
-        addrecent(os, pi.process, pi.pid, job);
+        addrecent(os, pi.process, pi.pid, j);
         if (__atomic_load_n(&os->nctrl, __ATOMIC_SEQ_CST) != nctrl) {
             notemissedspawn(os, pi.process, pi.pid);
         }
+    } else if (ejob) {
+        CloseHandle(ejob);
     }
     for (i32 i = 0; i < 3; i++) {
         if (std[i]) CloseHandle(std[i]);
@@ -2646,6 +2650,11 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     return r;
 }
 
+static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
+{
+    return startproc(os, scratch, s, 0, 0);
+}
+
 // Native crashes become the matching signal statuses, as in Cygwin.
 static i32 exitstatus(u32 code)
 {
@@ -2656,6 +2665,7 @@ static i32 exitstatus(u32 code)
     case 0xc0000094u: return WSIGNALED | (128 + 8);   // divide by zero: SIGFPE
     case 0xc000013au: return WSIGNALED | (128 + 2);   // Ctrl-C: SIGINT
     case 0xc0000409u: return WSIGNALED | (128 + 6);   // fast fail: SIGABRT
+    case 0xc0000135u: return WNOLIB | 127;            // a DLL is missing
     }
     return (i32)(code & 0xff);
 }
@@ -2706,9 +2716,29 @@ static void os_racy(Os *)
 {
 }
 
-static i32 os_exec(Os *, Arena, Spawn *)
+// No exec on Windows: the program starts as a child in a job that ends
+// it if the shell dies (startproc), and the shell waits and exits with
+// its exit code. Its descendants outlive a normal exit, as after a real
+// exec: the job lets them go first.
+static i32 os_exec(Os *os, Arena scratch, Spawn *s)
 {
-    return E_NOSYS;  // no exec on Windows: start a child instead
+    uz      job = 0;
+    Spawned r   = startproc(os, scratch, s, 1, &job);
+    if (r.err) return r.err;
+    for (;;) {
+        uz  hs[2] = {r.proc, os->wake};
+        i32 w = WaitForMultipleObjects(2, hs, 0, INFINITE);
+        if (w != 1) break;
+        drainwake(os);
+    }
+    i32 code = 0;
+    GetExitCodeProcess(r.proc, &code);
+    if (job) {
+        JobLimits l = {};
+        l.flags = os->jobflags;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &l, sizeof(l));
+    }
+    ExitProcess(code);
 }
 
 // Waits on the process and the wake queue together, so that helpers
@@ -2961,6 +2991,9 @@ void mainCRTStartup()
         os.lateattach = 1;
     }
     os.queryproc = (NtQueryInformationProcessFn)dynamic(u"ntdll.dll", "NtQueryInformationProcess");
+    os.xp = !dynamic(u"kernel32.dll", "GetTickCount64");  // Vista
+    i32 conpid = 0;
+    os.noconsole = !GetConsoleProcessList(&conpid, 1);
     i64 freq = 0;
     QueryPerformanceFrequency(&freq);
     os.freq       = freq;
@@ -2998,6 +3031,16 @@ void mainCRTStartup()
         } else if (!len) {
             break;
         }
+    }
+
+    c16 windir[260];
+    i32 windirlen = GetSystemWindowsDirectoryW(windir, countof(windir));
+    if (windirlen>0 && windirlen<countof(windir)) {
+        Str s = fromwide(&a, windir, windirlen);
+        for (iz i = 0; i < s.len; i++) {
+            s[i] = s[i]=='\\' ? '/' : s[i];
+        }
+        info.windir = s;
     }
 
     // Windows spells it Path, but scripts expect PATH.

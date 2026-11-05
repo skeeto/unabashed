@@ -16,6 +16,8 @@ struct OsInfo {
     Str    exe;      // absolute path of the shell's own image, native
                      // form ("C:/x/sh.exe"), empty if unknown
     Str    cmdline;  // Windows: the raw command line, UTF-8 (WTF-8)
+    Str    windir;   // Windows: the Windows directory, native form
+                     // ("C:/Windows"), for SYSTEMROOT and ComSpec
     i64    pid;
     i64    ppid;
     i64    uid;
@@ -108,8 +110,9 @@ struct Spawn {
     u64      sigign; // signals the child starts out ignoring (bit n-1
                      // for signal n); others it starts at their default
     Str      cmdline; // Windows: the whole command line, UTF-8, built by
-                      // the core and passed verbatim; empty: the platform
-                      // builds one from argv
+                      // the core (spawn.cpp) and passed verbatim with path
+                      // as the image (ComSpec for a batch file); the vos
+                      // also takes it empty, quoting argv itself
     i32      crtslot; // Windows: handle slot width (4 or 8) for passing
                       // descriptors 3 and up in the CRT's lpReserved2
                       // blob, or 0 to pass only 0-2
@@ -127,7 +130,9 @@ struct Spawned {
 // WMISSED (os_waitproc): a group signal (os_siggroup) came while the
 // program ran that it could not receive (Windows: it was still
 // starting), so the waiting level takes it as its own.
-enum : i32 { NSIGNAL = 65, WSIGNALED = 0x100, WMISSED = 0x200 };
+// WNOLIB (os_waitproc, Windows): the program could not start for a
+// missing DLL; the status is 127 and the core reports it as Cygwin.
+enum : i32 { NSIGNAL = 65, WSIGNALED = 0x100, WMISSED = 0x200, WNOLIB = 0x400 };
 
 enum : i32 {  // os_sigmode
     SIGM_DEFAULT, SIGM_IGNORE, SIGM_CATCH,

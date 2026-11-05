@@ -1,7 +1,8 @@
 # personality: native
 # Hand-checked baseline of today's minimal Windows layer, not recorded
 # from an oracle (M5a step 4); steps 5 and 7 change it on purpose.
-# No execute bit: an executable extension, MZ or #! makes a file
+# No execute bit: an executable extension, #! or a PE image (not
+# merely MZ, as busybox-w32 checks the header) makes a file
 # executable, and a name without one is found with .exe added.
 : >plain
 : >tool.EXE

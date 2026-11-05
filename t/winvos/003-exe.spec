@@ -5,7 +5,7 @@ run.bat x
 x.sh x
 y.com x
 shebang x
-mz x
+mz -
 C:/w64/bin/ls.exe x
 cmdline = <./mine.exe b>
 argv[0] = <./mine.exe>
@@ -17,7 +17,7 @@ script d
 shebang e
 
 == stderr 49
-bash: line 17: ./mine: No such file or directory
+bash: line 18: ./mine: No such file or directory
 
 == merged 259
 plain -
@@ -26,9 +26,9 @@ run.bat x
 x.sh x
 y.com x
 shebang x
-mz x
+mz -
 C:/w64/bin/ls.exe x
-bash: line 17: ./mine: No such file or directory
+bash: line 18: ./mine: No such file or directory
 cmdline = <./mine.exe b>
 argv[0] = <./mine.exe>
 argv[1] = <b>

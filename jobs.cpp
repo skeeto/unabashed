@@ -53,7 +53,7 @@ static void waitermain(Task *t)
     while (!t->io.done) {
         block(t->s, W_IO);
     }
-    t->status = t->io.err ? 127 : (i32)t->io.n & ~WMISSED;
+    t->status = t->io.err ? 127 : (i32)t->io.n & ~(WMISSED|WNOLIB);
 }
 
 static Task *spawnwaiter(Sched *s, Handle proc)

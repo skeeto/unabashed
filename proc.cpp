@@ -900,7 +900,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         } else if (procs[k] != BADHANDLE) {
             st = taskwaitproc(s, procs[k]);
             if (st & WMISSED) died = ~(u64)0;  // see runprogram
-            st &= ~WMISSED;
+            st &= ~(WMISSED|WNOLIB);
             extbad |= st != 0;
         }
         statuses[k] = st;

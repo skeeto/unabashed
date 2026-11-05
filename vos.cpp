@@ -1131,15 +1131,10 @@ static i64 os_seek(Os *os, Handle h, i64 off, i32 whence)
 }
 
 // Windows mode: names the Win32 layer marks executable by extension.
-static b32 vexename(Str name)
+static b32 vexename(Str name)  // taken to start with MZ, as Win32's os_stat
 {
-    static Str exts[] = {".exe", ".com", ".bat", ".cmd", ".sh"};
-    for (iz i = 0; i < countof(exts); i++) {
-        if (name.len>=exts[i].len && equalfold(taketail(name, exts[i].len), exts[i])) {
-            return 1;
-        }
-    }
-    return 0;
+    Str exe = ".exe";
+    return name.len>=exe.len && equalfold(taketail(name, exe.len), exe);
 }
 
 static Stat vstat(Vos *v, VNode *n)
@@ -1159,12 +1154,14 @@ static Stat vstat(Vos *v, VNode *n)
     r.gid   = n->uid;
     if (v->win && (n->type==FT_FILE || n->type==FT_DIR)) {
         // Synthesized as the Win32 layer does (fromattrs, os_stat): a
-        // read-only file loses its write bits, and an executable
-        // extension or a leading MZ or #! makes a file executable
+        // read-only file loses its write bits, and an .exe name or a
+        // leading MZ, #! or ":\n" makes a file executable (the shell
+        // adds the rules of its path mode)
         r.mode = n->type==FT_DIR ? 0755 : 0644;
         if (n->type == FT_FILE) {
             Str d = n->data;
-            b32 magic = d.len>=2 && ((d[0]=='M' && d[1]=='Z') || (d[0]=='#' && d[1]=='!'));
+            b32 magic = d.len>=2 && ((d[0]=='M' && d[1]=='Z') || (d[0]=='#' && d[1]=='!')
+                                     || (d[0]==':' && d[1]=='\n'));
             r.mode &= n->mode&0200 ? 0777 : ~0222;
             r.mode |= vexename(n->name) || magic ? 0111 : 0;
         }

@@ -201,6 +201,7 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
         info.windows = 1;
         info.exe     = ctx->exe;
         info.cmdline = ctx->cmdline;
+        info.windir  = "C:/Windows";
         info.env     = vwinenv(&ctx->scratch, ctx->env, ctx->nenv);
     }
     info.pid     = osvos(os)->procs[osvos(os)->cur].pid;
@@ -326,6 +327,7 @@ static void wininfo(Os *os, OsInfo *info, Str exe, Str *env, iz nenv, Str cwd,
     Arena *a = &os->vos.a;
     info->windows = 1;
     info->exe     = exe;
+    info->windir  = "C:/Windows";
     info->cmdline = wincmdline(a, info->args, info->nargs, cygwin);
     info->env     = vwinenv(a, env, nenv);
     info->nenv    = nenv;
@@ -880,6 +882,10 @@ static Result runmsys(Test *t, Str name, Str script)
     vinstallpe(v, "C:/work/bin", "argv.exe", argv, X64, "msvcrt.dll", 0);
     vinstallpe(v, "C:/work/bin", "argv32.exe", argv, I386, "msvcrt.dll", 0);
 
+    // As on the recording machine: C:\WINDOWS, and w64devkit's cc
+    vwalk(v, "/C:/Windows", 0).node->name = "WINDOWS";
+    vinstallpe(v, "C:/w64/bin", "cc.exe", argv, X64, "msvcrt.dll", 0);
+
     Str dir = concat(a, "C:/work/", name);
     vmkdirs(v, concat(a, dir, "/home"));
     vmkdirs(v, concat(a, dir, "/tmp"));
@@ -888,11 +894,11 @@ static Result runmsys(Test *t, Str name, Str script)
     Str dw = slashify(a, dir, '\\');
     Str du = concat(a, "/c", cuthead(dir, 2));
     Str env[] = {
-        "COMSPEC=C:\\Windows\\System32\\cmd.exe",
+        "COMSPEC=C:\\WINDOWS\\System32\\cmd.exe",
         concat(a, concat(a, "HOME=", dw), "\\home"),
         "LANG=C",
-        "PATH=C:\\git\\usr\\bin;C:\\w64\\bin;C:\\Windows\\System32;C:\\work\\bin",
-        "SYSTEMROOT=C:\\Windows",
+        "PATH=C:\\git\\usr\\bin;C:\\w64\\bin;C:\\WINDOWS\\System32;C:\\work\\bin",
+        "SYSTEMROOT=C:\\WINDOWS",
         concat(a, concat(a, "TEMP=", dw), "\\tmp"),
         concat(a, concat(a, "TMP=", dw), "\\tmp"),
         "TZ=UTC",
@@ -1080,7 +1086,8 @@ static void test_vwin(Test *t)
     expect(t, "vwin list", finish(&names), "bar Baz.BAT dir Foo.TXT ");
     expectint(t, "vwin mode file", os_stat(os, a, "C:/work/Foo.TXT", 1).mode, 0644);
     expectint(t, "vwin mode #!", os_stat(os, a, "C:/work/bar", 1).mode, 0755);
-    expectint(t, "vwin mode .bat", os_stat(os, a, "C:/work/baz.bat", 1).mode, 0755);
+    // extension rules belong to the core (winmode): content only here
+    expectint(t, "vwin mode .bat", os_stat(os, a, "C:/work/baz.bat", 1).mode, 0644);
     expectint(t, "vwin mode dir", os_stat(os, a, "C:/work/dir", 1).mode, 0755);
     os_chmod(os, a, "C:/work/Foo.TXT", 0444);
     expectint(t, "vwin mode read-only", os_stat(os, a, "C:/work/Foo.TXT", 1).mode, 0444);

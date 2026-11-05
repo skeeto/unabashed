@@ -2840,7 +2840,7 @@ static b32 describe(Shell *sh, Arena *a, Str name, u8 mode, b32 all, b32 nofuncs
     for (iz nth = 0;; nth++) {
         Str path = {};
         if (slash) {
-            Stat st = os_stat(sh->os, *a, absolute(sh, a, name), 1);
+            Stat st = pathstat(sh, *a, name, 1);
             if (!nth && canexec(sh, st)) path = name;
         } else {
             path = std ? pathsearch(sh, a, stdpath(sh), name, nth)
@@ -3016,7 +3016,7 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (!found.data) found = name;
         tried = 1;
         Str  full = absolute(sh, &scratch, found);
-        Stat st   = os_stat(sh->os, scratch, full, 1);
+        Stat st   = pathstat(sh, scratch, found, 1);
         failed = !canexec(sh, st);
         if (!st.err && st.type==FT_DIR) {
             // bash names the directory in full here

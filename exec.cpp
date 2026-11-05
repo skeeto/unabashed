@@ -1156,52 +1156,6 @@ static void traceline(Shell *sh, Arena a, Str text)
 
 // Programs
 
-// May this shell's user execute the file? As the kernel: the owner's
-// bits for the owner, then the group's, then everyone else's.
-static b32 canexec(Shell *sh, Stat st)
-{
-    if (st.err || st.type!=FT_FILE) return 0;
-    i32 bits = st.uid==sh->euid ? st.mode>>6 : st.gid==sh->egid ? st.mode>>3 : st.mode;
-    return (bits & 1) || (!sh->euid && (st.mode & 0111));
-}
-
-// Search a path list for the nth match of an executable name. Native
-// mode also tries Windows' executable extensions, msys mode only .exe.
-// (Step 7 of M5a replaces this with the per-mode rules.)
-static Str pathsearch(Shell *sh, Arena *a, Str path, Str name, iz nth = 0)
-{
-    static Str exts[] = {"", ".exe", ".com", ".bat", ".cmd"};
-    u8  sep  = listsep(sh);
-    iz  next = sh->pathmode==PM_NATIVE ? countof(exts) : sh->pathmode==PM_MSYS ? 2 : 1;
-    for (Str rest = path;;) {
-        Cut c = cut(rest, sep);
-        Str dir = c.head.len ? c.head : Str(".");
-        for (iz e = 0; e < next; e++) {
-            Str cand = concat(a, joinpath(a, dir, name), exts[e]);
-            Str full = absolute(sh, a, cand);
-            Stat st = os_stat(sh->os, *a, full, 1);
-            if (canexec(sh, st) && !nth--) {
-                return cand;  // relative when the PATH entry is, as bash shows
-            }
-        }
-        if (!c.ok) break;
-        rest = c.tail;
-    }
-    return {};
-}
-
-// Search PATH for the nth match of an executable name.
-static Str pathlookup(Shell *sh, Arena *a, Str name, iz nth = 0)
-{
-    Got g = getvar(sh, a, "PATH");
-    if (!g.set) {
-        // As bash: only the working directory, giving the bare name
-        Stat st = os_stat(sh->os, *a, absolute(sh, a, name), 1);
-        return !nth && canexec(sh, st) ? name : Str{};
-    }
-    return pathsearch(sh, a, g.value, name, nth);
-}
-
 // The path that command -p searches, which finds the standard utilities.
 static Str stdpath(Shell *sh)
 {
@@ -1295,7 +1249,7 @@ static Str commandpath(Shell *sh, Arena *a, Str name, b32 enter)
 {
     HashCmd *h = hashfind(sh, name);
     if (h && sh->shopt[S_CHECKHASH]) {
-        Stat st = os_stat(sh->os, *a, absolute(sh, a, h->path), 1);
+        Stat st = pathstat(sh, *a, h->path, 1);
         if (!canexec(sh, st)) {
             hashremove(sh, name);
             h = 0;
@@ -1380,8 +1334,9 @@ static Stat dirstat(Shell *sh)
 }
 
 // os_stat for a path the shell was given. The Windows modes resolve it
-// through the mount table and answer for the virtual files themselves.
-// In msys mode, as Cygwin's stat, "foo" finds "foo.exe".
+// through the mount table, answer for the virtual files themselves and
+// decide a file's execute bits (winmode). In msys mode, as Cygwin's
+// stat, "foo" finds "foo.exe".
 static Stat pathstat(Shell *sh, Arena a, Str path, b32 follow)
 {
     if (sh->pathmode == PM_POSIX) {
@@ -1394,13 +1349,20 @@ static Stat pathstat(Shell *sh, Arena a, Str path, b32 follow)
         return s;
     }
     switch (r.kind) {
-    case PK_FILE:
-        s = os_stat(sh->os, a, r.native, follow);
-        if (s.err==E_NOENT && sh->pathmode==PM_MSYS && !endswith(r.native, ".exe")) {
-            Stat x = os_stat(sh->os, a, concat(&a, r.native, ".exe"), follow);
-            if (!x.err && x.type==FT_FILE) s = x;
+    case PK_FILE: {
+        Str native = r.native;
+        s = os_stat(sh->os, a, native, follow);
+        if (s.err==E_NOENT && sh->pathmode==PM_MSYS && !hasext(native, ".exe")) {
+            Str  exe = concat(&a, native, ".exe");
+            Stat x   = os_stat(sh->os, a, exe, follow);
+            if (!x.err && x.type==FT_FILE) {
+                s      = x;
+                native = exe;
+            }
         }
+        if (!s.err) s.mode = winmode(sh, a, native, s);
         return s;
+    }
     case PK_NULL:
     case PK_TTY:
     case PK_DEVICE:
@@ -1492,6 +1454,23 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     Fdtab *t = sh->fds;
     b32 execing = sh->execing;  // for this program only
     sh->execing = 0;
+    Target tg = {};
+    if (sh->win32) {
+        // What starts, and how: decided here, before descriptors move
+        tg = wintarget(sh, &a, path, argv, argc, env);
+        if (tg.interp.data) {
+            Buf b(&a, 256);
+            print(&b, path);
+            print(&b, ": ");
+            print(&b, tg.interp);
+            print(&b, ": bad interpreter: ");
+            print(&b, errtext(tg.err));
+            syserror(sh, a, finish(&b));
+            return -E_INTERP;
+        } else if (tg.err) {
+            return -tg.err;
+        }
+    }
     SpawnFd *fds = alloc<SpawnFd>(&a, t->top ? t->top : 1);
     iz nfds = 0;
     Handle *closeafter = alloc<Handle>(&a, t->top ? t->top : 1);
@@ -1576,6 +1555,12 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     sp.fds   = fds;
     sp.nfds  = nfds;
     sp.sigign = ignoredsigs(sh);
+    if (sh->win32) {
+        sp.path    = tg.path;
+        sp.cmdline = tg.cmdline;
+        sp.env     = tg.env.data;
+        sp.nenv    = tg.env.len;
+    }
     if (execing && !sh->subshell && !sh->capdepth && s->ntasks==1 &&
             !npumps && !capfile && !sh->spawnto) {
         // exec while nothing else runs in this process: become the
@@ -1641,6 +1626,16 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     }
     if (s->cur->intr) {
         sigtaken(sh);  // killed while waiting: the program runs on
+    }
+    if (status>=0 && (status & WNOLIB)) {
+        // As Cygwin reports a native program that could not load a DLL
+        status &= ~WNOLIB;
+        Buf b(&a, 256);
+        print(&b, path);
+        print(&b, ": error while loading shared libraries: ?: cannot open"
+                  " shared object file: No such file or directory\n");
+        flushbout(sh);
+        fdwrite(sh, 2, finish(&b));
     }
     if (status>=0 && (status & WSIGNALED)) {
         sh->childsig = (status & 255) - 128;
@@ -1768,6 +1763,9 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
     sh->spawnto = 0;
     if (st >= 0) return st;
     i32 err = -st;
+    if (err == E_INTERP) {
+        return 126;  // reported
+    }
     if (err==E_NOEXEC && direct && isshellscript(sh, a, path)) {
         direct->retry = 1;  // run as shell code, concurrently
         return 0;

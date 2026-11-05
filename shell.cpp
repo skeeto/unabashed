@@ -397,6 +397,8 @@ struct Coproc {       // bash 5.3 allows several
     b32  dead;
 };
 
+struct SniffCache;  // spawn.cpp
+
 struct Shell {
     Os      *os;
     Sched   *sched;        // shared by every vproc of the process
@@ -463,6 +465,7 @@ struct Shell {
     PathMode pathmode;     // how paths read and print (paths.cpp)
     PathCtx *paths;        // the mount table and the rest, from startup
     Str      exe;          // the shell's own image, native (OsInfo.exe)
+    SniffCache *sniffs;    // Windows: what files hold, shared by subshells
 
     // Options
     b32      opt[O_COUNT];

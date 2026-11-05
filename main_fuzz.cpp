@@ -192,6 +192,7 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
         info.windows = 1;
         info.exe     = ctx->exe;
         info.cmdline = ctx->cmdline;
+        info.windir  = "C:/Windows";
         info.env     = vwinenv(&ctx->scratch, ctx->env, ctx->nenv);
     }
     info.pid     = os->vos.procs[os->vos.cur].pid;
@@ -247,6 +248,7 @@ static i32 runonce(Os *os, Str script, Str *extra, iz nextra, u64 chaos)
     // As main_win32.cpp's startup fills it in
     info.windows = 1;
     info.exe     = "C:/w64/bin/sh.exe";
+    info.windir  = "C:/Windows";
     info.cwd     = "C:/work";
     info.env     = vwinenv(&os->vos.a, env, countof(env));
     Buf cmd(&os->vos.a);

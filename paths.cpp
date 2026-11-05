@@ -41,6 +41,7 @@ struct PathCtx {
     Str          temp;          // canonical %TEMP%, for usertemp mounts
     u32          drives;        // existing drives, bit 0 for A:, 0 if unknown
     i64          pid;           // our pid as /proc names it, for /dev/fd/N
+    Str          windir;        // the Windows directory, for children
 };
 
 enum : i32 {  // PathRes kinds
