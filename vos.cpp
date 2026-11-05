@@ -2806,8 +2806,8 @@ static void vwintree(Vos *v)
             vinstallpe(v, "C:/msys/usr/bin", exe, i, X64, "msys-2.0.dll", 0);
             if (alias >= 0) {
                 VNode *n = vinstallpe(v, "C:/w64/bin", exe, alias, X64, "kernel32.dll", 0);
-                Str    w = Str("busybox.exe");  // in UTF-16, as spawn.cpp's bbstub
-                for (iz k = 0; k < w.len; k++) n->data[0x800+2*k] = w[k];
+                Str    w = Str("could not start busybox.exe");  // spawn.cpp's bbstub
+                copybytes(n->data.data+0x800, w.data, w.len);
             }
         }
     }

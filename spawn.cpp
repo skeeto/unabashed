@@ -26,7 +26,7 @@ struct Sniff {
     PeInfo pe;
     Str    line;  // FK_SCRIPT: what follows #!, up to CR or LF
     b32    ape;   // starts with MZqFpD (an Actually Portable Executable)
-    b32    stub;  // a small CRT-free image naming L"busybox.exe"
+    b32    stub;  // a w64devkit busybox alias stub (bbstub)
 };
 
 struct SniffEntry {
@@ -121,8 +121,10 @@ static Str missingdll(Shell *sh, Arena *a, Str native, Slice<Str> env)
 }
 
 // Is an image one of w64devkit's busybox alias stubs? They are small
-// and CRT-free, and name busybox.exe in UTF-16, which its other small
-// CRT-free programs (cc.exe, an alias for gcc; u-config) do not.
+// and CRT-free, and their messages name busybox.exe ("could not start
+// busybox.exe"), which its other small CRT-free programs (cc.exe, an
+// alias for gcc; u-config) do not. (Their UTF-16 L"\busybox.exe" is
+// built in code, not stored whole.)
 static b32 bbstub(SniffFile *f, Arena scratch, PeInfo pe, Stat st)
 {
     if (pe.crt || pe.posix || pe.ours || pe.dll || st.size>((iz)1<<16)) {
@@ -131,12 +133,9 @@ static b32 bbstub(SniffFile *f, Arena scratch, PeInfo pe, Stat st)
     iz  len = (iz)st.size;  // at most 64 KiB, as checked
     u8 *buf = (u8 *)allocbytes(&scratch, len);
     len = sniffread(f, 0, buf, len);
-    u8 const want[] = "busybox.exe";
-    iz       n      = countof(want) - 1;
-    for (iz i = 0; i+2*n <= len; i++) {
-        iz k = 0;
-        for (; k<n && buf[i+2*k]==want[k] && !buf[i+2*k+1]; k++) {}
-        if (k == n) return 1;
+    Str want = "busybox.exe";
+    for (iz i = 0; i+want.len <= len; i++) {
+        if (Str{buf+i, want.len} == want) return 1;
     }
     return 0;
 }

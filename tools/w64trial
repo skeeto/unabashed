@@ -2,17 +2,20 @@
 # tools/w64trial: build autoconf projects with w64devkit whose sh.exe is
 # unabashed, and with its stock busybox sh, then compare (M5a step 10).
 #
-# usage: tools/w64trial [-s SHELL] [-k KIT] [-j N] WORKDIR TARBALL...
+# usage: tools/w64trial [-s SHELL] [-k KIT] [-j N] [-n RUNS] WORKDIR TARBALL...
 #   -s SHELL  the shell to install as sh.exe (default: unabashed.exe
 #             beside this repository's Makefile)
 #   -k KIT    the w64devkit to copy (default: the one running make)
 #   -j N      make's job count (default 8)
+#   -n RUNS   then time configure RUNS more times per shell, the two
+#             alternating, and print the medians (the configure
+#             workload of notes/m5a.md)
 #
-# WORKDIR/kit-ub mirrors KIT: bin holds hard links to KIT/bin except
-# sh.exe, a copy of SHELL, and every other entry is a junction into KIT.
-# Nothing is ever written to KIT. Each TARBALL (NAME.tar.gz, extracting
-# to NAME) is built twice, under tools/sandbox in WORKDIR/bb (KIT as is)
-# and WORKDIR/ub (kit-ub): `sh -c ./configure`, `make`, `make check`,
+# WORKDIR/kit-ub and kit-bb mirror KIT: bin holds hard links to KIT/bin
+# except sh.exe, a copy of SHELL or of KIT's own, and every other entry
+# is a junction into KIT. Nothing is ever written to KIT. Each TARBALL
+# (NAME.tar.gz, extracting to NAME) is built twice, under tools/sandbox
+# in WORKDIR/bb (with kit-bb) and WORKDIR/ub (kit-ub): `sh -c ./configure`, `make`, `make check`,
 # each phase timed. Then config.h and config.status's substitutions
 # must be equal, with the two build directories and kits normalized.
 # Logs are WORKDIR/{bb,ub}/NAME.PHASE.log. Exits nonzero on any failed
@@ -23,16 +26,18 @@ root=$(cd "$here/.." && pwd)
 shell=$root/unabashed.exe
 kit=$(cd "$(dirname "$(command -v gcc)")/.." && pwd)
 jobs=8
+runs=0
 cflags="-O2 -std=gnu17"  # older gnulib (make 4.4.1) fails under C23
 while [ $# -gt 0 ]; do
     case $1 in
     -s) shell=$2; shift 2 ;;
     -k) kit=$(cd "$2" && pwd); shift 2 ;;
     -j) jobs=$2; shift 2 ;;
+    -n) runs=$2; shift 2 ;;
     *)  break ;;
     esac
 done
-[ $# -ge 2 ] || { echo "usage: tools/w64trial [-s SHELL] [-k KIT] [-j N] WORKDIR TARBALL..." >&2; exit 2; }
+[ $# -ge 2 ] || { echo "usage: tools/w64trial [-s SHELL] [-k KIT] [-j N] [-n RUNS] WORKDIR TARBALL..." >&2; exit 2; }
 work=$1
 shift
 case $work in
@@ -54,35 +59,42 @@ fi
 win() { echo "$1" | tr / '\\'; }
 now() { date +%s%N; }
 
-# The mirror kit, rebuilt from scratch every run. Junctions are removed
-# with cmd's rmdir, which never follows them into KIT.
-ub=$work/kit-ub
-if [ -d "$ub" ]; then
-    for e in "$ub"/*; do
-        if [ "$e" = "$ub/bin" ]; then
-            rm -rf "$e"
-        elif [ -d "$e" ]; then
-            cmd /c rmdir "$(win "$e")" </dev/null
-        else
-            rm -f "$e"
-        fi || exit 2
-    done
-    rmdir "$ub" || exit 2
-fi
-mkdir -p "$ub/bin" || exit 2
-for e in "$kit"/*; do
-    n=${e##*/}
-    if [ "$n" = bin ]; then
-        for f in "$e"/*; do
-            [ "${f##*/}" = sh.exe ] || ln "$f" "$ub/bin/" || exit 2
+# mirror DIR SH: a mirror of KIT in DIR, rebuilt from scratch, with SH
+# as its sh.exe. Junctions are removed with cmd's rmdir, which never
+# follows them into KIT.
+mirror() {
+    local m=$1 e f n
+    if [ -d "$m" ]; then
+        for e in "$m"/*; do
+            if [ "$e" = "$m/bin" ]; then
+                rm -rf "$e"
+            elif [ -d "$e" ]; then
+                cmd /c rmdir "$(win "$e")" </dev/null
+            else
+                rm -f "$e"
+            fi || exit 2
         done
-    elif [ -d "$e" ]; then
-        cmd /c mklink /J "$(win "$ub/$n")" "$(win "$e")" </dev/null >/dev/null || exit 2
-    else
-        ln "$e" "$ub/" || exit 2
+        rmdir "$m" || exit 2
     fi
-done
-cp "$shell" "$ub/bin/sh.exe" || exit 2
+    mkdir -p "$m/bin" || exit 2
+    for e in "$kit"/*; do
+        n=${e##*/}
+        if [ "$n" = bin ]; then
+            for f in "$e"/*; do
+                [ "${f##*/}" = sh.exe ] || ln "$f" "$m/bin/" || exit 2
+            done
+        elif [ -d "$e" ]; then
+            cmd /c mklink /J "$(win "$m/$n")" "$(win "$e")" </dev/null >/dev/null || exit 2
+        else
+            ln "$e" "$m/" || exit 2
+        fi
+    done
+    cp "$2" "$m/bin/sh.exe" || exit 2
+}
+# Both shells get a mirror, since reaching lib and libexec through the
+# junctions costs gcc a few milliseconds a run
+mirror "$work/kit-bb" "$kit/bin/sh.exe"
+mirror "$work/kit-ub" "$shell"
 
 # run VARIANT KIT PHASE NAME COMMAND: one phase in the sandbox, timed.
 # Path, SystemRoot and ComSpec are spelled as Windows does: busybox (and
@@ -107,8 +119,9 @@ run() {
         >"$dir/$name.$phase.log" 2>&1 </dev/null
     rc=$?
     t1=$(now)
+    ms=$(( (t1-t0)/1000000 ))
     printf '%-4s %-12s %-10s %8d ms  status %d\n' \
-        "$v" "$name" "$phase" $(( (t1-t0)/1000000 )) $rc
+        "$v" "$name" "$phase" $ms $rc
     [ $rc = 0 ] || status=1
     return $rc
 }
@@ -117,8 +130,7 @@ for tarball; do
     tarball=$(cd "$(dirname "$tarball")" && pwd)/$(basename "$tarball")
     name=$(basename "$tarball" .tar.gz)
     for v in bb ub; do
-        k=$kit
-        [ $v = ub ] && k=$ub
+        k=$work/kit-$v
         rm -rf "$work/$v/$name" "$work/$v/$name-inst" "$work/$v/$name".*.norm
         run $v "$k" extract   "$name" "tar xzf '$tarball'" || continue
         # busybox fails gnulib's POSIX shell test ($(umask) is a new
@@ -127,13 +139,13 @@ for tarball; do
         pre=
         [ $v = bb ] && pre=gl_cv_posix_shell=/bin/sh
         run $v "$k" configure "$name" "cd $name && $pre ./configure --prefix='$work/$v/$name-inst'" || continue
+        echo "$pre" >"$work/$v/$name.pre"
         run $v "$k" make      "$name" "cd $name && make -j$jobs" || continue
         run $v "$k" check     "$name" "cd $name && make -j$jobs check" || continue
     done
     for f in config.h config.status; do
         for v in bb ub; do
-            k=$kit
-            [ $v = ub ] && k=$ub
+            k=$work/kit-$v
             b=$work/$v/$name
             p=$b/$f
             if [ $f = config.h ] && [ -f "$b/config.status" ]; then
@@ -154,6 +166,26 @@ for tarball; do
             diff "$work/bb/$name.$f.norm" "$work/ub/$name.$f.norm" | head -20
             status=1
         fi
+    done
+done
+for tarball; do
+    [ $runs -gt 0 ] || break
+    name=$(basename "$tarball" .tar.gz)
+    for v in bb ub; do : >"$work/$v/$name.times"; done
+    r=0
+    while [ $r -lt $runs ]; do
+        for v in bb ub; do
+            k=$work/kit-$v
+            pre=$(cat "$work/$v/$name.pre" 2>/dev/null)
+            run $v "$k" reconf "$name" "cd $name && $pre ./configure --prefix='$work/$v/$name-inst'" &&
+                echo $ms >>"$work/$v/$name.times"
+        done
+        r=$((r+1))
+    done
+    for v in bb ub; do
+        med=$(sort -n "$work/$v/$name.times" | sed -n "$(( (runs+1)/2 ))p")
+        printf '%-4s %-12s configure median of %d: %d ms (all: %s)\n' "$v" "$name" \
+            $runs "${med:-0}" "$(sort -n "$work/$v/$name.times" | tr '\n' ' ')"
     done
 done
 [ $status = 0 ] && echo "w64trial: all phases passed, configurations equal"

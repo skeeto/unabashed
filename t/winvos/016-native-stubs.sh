@@ -1,7 +1,7 @@
 # personality: native
 # Hand-checked baseline, not recorded from an oracle (M5a step 7).
 # A w64devkit alias stub (a small CRT-free image beside busybox.exe,
-# naming it in UTF-16) is bypassed: busybox.exe runs directly with the
+# naming it in a message) is bypassed: busybox.exe runs directly with the
 # applet as argv[0], unless BB_OVERRIDE_APPLETS names the applet ("-"
 # for all). Other
 # small CRT-free programs there run as themselves (argvk.exe, as
