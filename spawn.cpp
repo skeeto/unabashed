@@ -462,6 +462,18 @@ static Located locate(Shell *sh, Arena *a, Str path)
             l.st     = x;
         }
     }
+    if (l.st.err==E_NOENT && sh->pathmode==PM_NATIVE && !knownext(l.native)) {
+        // busybox-w32's add_win32_extension, also for explicit paths
+        for (iz e = 0; e < countof(winexts); e++) {
+            Str  cand = concat(a, l.native, winexts[e]);
+            Stat x    = os_stat(sh->os, *a, cand, 1);
+            if (!x.err && x.type==FT_FILE) {
+                l.native = cand;
+                l.st     = x;
+                break;
+            }
+        }
+    }
     l.err = l.st.err ? l.st.err : l.st.type==FT_DIR ? E_ACCES : 0;
     return l;
 }
@@ -560,7 +572,12 @@ static Target imagetarget(Shell *sh, Arena *a, Str native, Stat st, Sniff s,
             for (iz i = 0; i < argv.len; i++) v = push(a, v, i==1 ? Str("/c") : argv[i]);
             argv = v;
         }
-        t.cmdline = cmdline(a, argv, SPLIT_MSVCRT);
+        // spawnveq: argv[0] with backslashes (recorded: ./x runs as .\x)
+        Slice<Str> v = {};
+        for (iz i = 0; i < argv.len; i++) {
+            v = push(a, v, i ? argv[i] : slashify(a, argv[i], '\\'));
+        }
+        t.cmdline = cmdline(a, v, SPLIT_MSVCRT);
         t.env     = env;
         return t;
     }

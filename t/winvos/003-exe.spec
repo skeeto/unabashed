@@ -1,4 +1,4 @@
-== stdout 210
+== stdout 264
 plain -
 tool.EXE x
 run.bat x
@@ -7,8 +7,11 @@ y.com x
 shebang x
 mz -
 C:/w64/bin/ls.exe x
-cmdline = <./mine.exe b>
-argv[0] = <./mine.exe>
+cmdline = <.\mine a>
+argv[0] = <.\mine>
+argv[1] = <a>
+cmdline = <.\mine.exe b>
+argv[0] = <.\mine.exe>
 argv[1] = <b>
 cmdline = <mine c>
 argv[0] = <mine>
@@ -16,10 +19,9 @@ argv[1] = <c>
 script d
 shebang e
 
-== stderr 49
-bash: line 18: ./mine: No such file or directory
+== stderr 0
 
-== merged 259
+== merged 264
 plain -
 tool.EXE x
 run.bat x
@@ -28,9 +30,11 @@ y.com x
 shebang x
 mz -
 C:/w64/bin/ls.exe x
-bash: line 18: ./mine: No such file or directory
-cmdline = <./mine.exe b>
-argv[0] = <./mine.exe>
+cmdline = <.\mine a>
+argv[0] = <.\mine>
+argv[1] = <a>
+cmdline = <.\mine.exe b>
+argv[0] = <.\mine.exe>
 argv[1] = <b>
 cmdline = <mine c>
 argv[0] = <mine>

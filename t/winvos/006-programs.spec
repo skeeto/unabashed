@@ -5,8 +5,8 @@ status 127
 *.txt {x,y} @a.txt
 a.txt
 b.txt
-cmdline = <C:/w64/bin/argv.exe here>
-argv[0] = <C:/w64/bin/argv.exe>
+cmdline = <C:\w64\bin\argv.exe here>
+argv[0] = <C:\w64\bin\argv.exe>
 argv[1] = <here>
 C:/work/sub
 cmdline = <argv>
@@ -36,8 +36,8 @@ status 127
 *.txt {x,y} @a.txt
 a.txt
 b.txt
-cmdline = <C:/w64/bin/argv.exe here>
-argv[0] = <C:/w64/bin/argv.exe>
+cmdline = <C:\w64\bin\argv.exe here>
+argv[0] = <C:\w64\bin\argv.exe>
 argv[1] = <here>
 C:/work/sub
 cmdline = <argv>

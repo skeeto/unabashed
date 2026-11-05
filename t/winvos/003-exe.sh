@@ -3,7 +3,9 @@
 # from an oracle (M5a step 4); steps 5 and 7 change it on purpose.
 # No execute bit: an executable extension, #! or a PE image (not
 # merely MZ, as busybox-w32 checks the header) makes a file
-# executable, and a name without one is found with .exe added.
+# executable, and a name without one is found with .exe added, also
+# as ./mine (busybox-w32's add_win32_extension), argv[0] getting
+# backslashes as spawnveq gives them (checked against busybox sh).
 : >plain
 : >tool.EXE
 : >run.bat

@@ -18,8 +18,8 @@ status 0
 cmdline = <argv32 x>
 argv[0] = <argv32>
 argv[1] = <x>
-cmdline = <C:/w64/bin/argv.exe y>
-argv[0] = <C:/w64/bin/argv.exe>
+cmdline = <C:\w64\bin\argv.exe y>
+argv[0] = <C:\w64\bin\argv.exe>
 argv[1] = <y>
 status 127
 C:\Windows\System32
@@ -49,8 +49,8 @@ status 0
 cmdline = <argv32 x>
 argv[0] = <argv32>
 argv[1] = <x>
-cmdline = <C:/w64/bin/argv.exe y>
-argv[0] = <C:/w64/bin/argv.exe>
+cmdline = <C:\w64\bin\argv.exe y>
+argv[0] = <C:\w64\bin\argv.exe>
 argv[1] = <y>
 bash: line 15: /c/w64/bin/argv: No such file or directory
 bash: line 16: nosuch: command not found
