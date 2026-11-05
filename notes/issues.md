@@ -24,9 +24,20 @@ gets checked. Rules:
 - **Programs cannot open `/dev/fd/N` on Win32**, so `diff <(a) <(b)`
   fails there: pass a named pipe path bridged by a pump
   (`os_pipe(named)`, ConnectNamedPipe in a helper). (m3a.md)
-- **Time zones**: TZ unset or unexported means UTC, on Windows too; use
-  the system zone. Zone names glibc reads from zoneinfo files are read
-  as POSIX strings (DST before 2007 can differ). (m4.md)
+- **Time zone gaps** (step 9): no Windows-to-IANA mapping (Cygwin's
+  tzmap, for an MSYS2 install that has zoneinfo); glibc's cache of an
+  unchanged TZ value and bash's stale export environment right after
+  `export TZ=x` are not emulated (the recordings avoid both); native
+  mode's `%Z` for a TZ busybox-w32/msvcrt would read differently (a
+  zone name, a long Windows name) is unverified. (m5a.md, step 9)
+- **Startup gaps** (step 9): a syntax error in a native-mode profile is
+  not fatal and is reported bash's way (busybox exits 2); native mode
+  accepts `--noprofile`/`--norc` and has `logout` (busybox has
+  neither); long options after short ones are accepted (bash prints
+  its usage, 2); bash's bashrc for ssh/rshd-started shells
+  (SSH_CLIENT) is not done; the `-i` job-control complaints test
+  stdin and stderr for a terminal, not a controlling terminal.
+  (m5a.md, step 9)
 - **lpReserved2 slot width unverified** (step 8): `encodecrtfds` and
   `decodecrtfds` are only checked against the documented layout. Check
   with real msvcrt and UCRT children, x64 to i686 and back, that the
@@ -41,8 +52,8 @@ gets checked. Rules:
   PointerToRawData to 512 bytes and DLL names over 63 bytes; reads at
   most 1024 section headers. None matters for the binaries tried.
   (m5a.md, step 2)
-- **t/msys is not yet all green**: unabashed.exe passes 59 of 63; all
-  44 `# vos` scripts pass in tests.exe (m5a.md, "Step 7"). Exit
+- **t/msys is not yet all green**: unabashed.exe passes 68 of 72; all
+  45 `# vos` scripts pass in tests.exe (m5a.md, "Step 9"). Exit
   criterion 1. Left: 007 (/proc, below) and 018, 034, 037 (next).
 - **MSYS2 children we start see the Windows environment**: Git Bash
   hands its MSYS2 children POSIX values through the cygheap; ours
@@ -340,6 +351,9 @@ gets checked. Rules:
 
 ## Test infrastructure
 
+- t/unit/fakes_test.cpp no longer builds: vos.cpp uses paths.cpp
+  (equalfold, hasdrive, winnorm, ...) and pe.cpp's PeInfo since M5a
+  steps 4-7, and the test does not include them. (m5a.md, step 9)
 - The chaos fuzzer flags every run in which two writer groups (a
   procsub, a pipeline stage before the last, and the command that
   started them; m3a.md) write one pipe or capture, even where their

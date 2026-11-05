@@ -937,3 +937,115 @@ its environment from the Windows block (Git Bash hands its children
 POSIX values through the cygheap): `HOME='C:\Windows'` arrives
 converted, and the child's /tmp is the real %TEMP% rather than the
 test's TEMP (issues.md).
+
+### Step 9: startup files and the time zone
+
+Startup files (unabashed.cpp, "Startup files"), read after `$0` and the
+positional parameters are bound, as in both bash and busybox:
+- bash and msys modes follow bash: a login shell (`-l`, `--login`) reads
+  /etc/profile and the first existing of ~/.bash_profile,
+  ~/.bash_login, ~/.profile (a directory counts and says "is a
+  directory"); a leading `-` in `$0` makes a login shell, whose files
+  are read only when it is also interactive; an interactive non-login
+  shell reads ~/.bashrc, or `--rcfile`/`--init-file`'s file, unless
+  `--norc`; a non-interactive one `$BASH_ENV`. `--noprofile` skips the
+  login files. Named sh: /etc/profile and ~/.profile for a login shell,
+  `$ENV` for an interactive one (also with `--norc`), then POSIX mode;
+  `--posix` reads no login files and only `$ENV`. In msys mode /etc
+  goes through the mount table, and as in Git Bash an interactive shell
+  reads /etc/bash.bashrc before ~/.bashrc (also with `--rcfile`, not
+  with `--norc`). Recorded from bash 5.3 (t/exec/870-873) and Git Bash
+  (t/msys/070-076).
+- `return N` in a startup file leaves `$?` as it was before the return
+  (bash's behaviour, recorded); a syntax error leaves 2 and the shell
+  goes on; `exit` there exits. An interactive shell's errors are
+  prefixed by the shell's name alone, as bash's.
+- Logout: a login shell's `exit` (also inside a function, never in a
+  subshell, not at the end of `-c`) reads ~/.bash_logout and in msys
+  mode /etc/bash.bash_logout, before the EXIT trap; the status stays
+  unless the file exits. `logout` outside a login shell: "logout: not
+  login shell: use `exit'", 1. `shopt -s/-u login_shell` is ignored
+  quietly (read-only).
+- `bash -i` with no terminal on stdin or stderr prints bash's two
+  job-control complaints, as the recordings show; a terminal on either
+  stream stands in for bash's /dev/tty (t/win32/008 has the console on
+  stdin and stderr in a file).
+- Native mode follows busybox-w32 (hand-checked against w64devkit's
+  busybox sh): a login shell (`-l`, `--login`, `$0` starting with `-`,
+  or a name starting with `l`, as lash) reads `<system
+  drive>/etc/profile`, `<exe dir>/../etc/profile` and `$HOME/.profile`
+  (no tilde; none when HOME is unset), missing files and directories
+  quietly; an interactive shell then reads `$ENV` (expanded); no
+  BASH_ENV, no job-control messages. personaof now strips a leading
+  `-`, so `-sh` is native too. Deviations: `--noprofile`/`--norc` are
+  accepted and honoured (busybox: "bad option", 2) and `logout` exists;
+  a syntax error in a profile is not fatal (busybox exits 2).
+
+The system zone:
+- `os_localtz` returns the system zone as a TZ value. Win32:
+  GetDynamicTimeZoneInformation (resolved at run time, for
+  DynamicDaylightTimeDisabled) else GetTimeZoneInformation (XP),
+  rendered by the core's `wintz` (b_printf.cpp) as a POSIX TZ string:
+  each name's capitals when there are at least three (Cygwin's rule:
+  "Eastern Standard Time" is EST), else `<+hhmm>`; offsets from Bias
+  plus StandardBias/DaylightBias; rules `Mm.w.d` for day-of-week
+  dates, `Jn` for fixed ones, `/time` unless 02:00. POSIX:
+  `:/etc/localtime` when it is a regular file (through links), else
+  UTC0. The vos: `Vos.localtz`, set by a spec's `# localtz:` line,
+  else UTC0.
+- `shellzone` (exec.cpp) picks the zone for printf `%(...)T` and the
+  prompt's time escapes: the exported TZ, else the system zone (which
+  is never exported). Outside native mode a TZ naming a file
+  (absolute, `:` prefix, or under TZDIR in POSIX mode, else
+  /usr/share/zoneinfo) is read as a whole TZif file (`parsetzif`: v1
+  or v2+, transitions up to the last, the footer after, glibc's
+  first-standard-type rule before the first), so historical dates
+  agree with glibc, which the old footer-only read got wrong.
+  Unparsable: GMT in msys mode (Cygwin), UTC otherwise. Native mode
+  has no zoneinfo; TZ is a POSIX string.
+- Git Bash has no zoneinfo, so its zone names are GMT (recorded, 078),
+  and with TZ unset it shows the GetTimeZoneInformation capitals
+  (077 compares with `date`).
+- On the XP laptop the registry's DaylightName is "Eastern Standard
+  Time" (an XP quirk after the DST updates), so summer shows EST at
+  -0400, as Cygwin's same rule would; its rule is the pre-2007 US one,
+  which is XP's own data.
+
+Tests:
+- t/exec/870-874 (recorded from bash 5.3): login files and their order,
+  dash login, `--noprofile`, `return` and errors in profiles;
+  interactive rc files, `--rcfile`, `--norc`, BASH_ENV; sh-named and
+  `--posix` rules with ENV; logout cases; TZif files with history,
+  footers, TZDIR. The vos's Linux tree gains the effect of the oracle's
+  /etc/profile (Debian's PATH).
+- t/msys/070-078 (recorded from Git Bash, which passes them): login,
+  login with `-c`, interactive, rcfile, logout, BASH_ENV, norc, the
+  local zone, TZ strings. lib.sh gains NAME.d trees, a private install
+  for tests with their own etc, and `# env:` lines (tools/README.md).
+- t/winvos (hand-checked): 020-native-startup (busybox's three
+  profiles, lash, dash, ENV, no BASH_ENV, return status, missing and
+  directory profiles, unset HOME), 021-msys-startup (/etc through the
+  mounts, bash.bashrc, rcfile, norc, logout files, sh-named),
+  022-msys-localtz and 023-native-localtz (`# localtz:`, the GMT
+  fallback, no export to children).
+- printf_test: `wintz` table cases (DST and not, southern hemisphere,
+  half hours, fixed dates, odd times, a bad month), each parsed back;
+  `parsetzif` on synthetic TZif files (v1, v2, no transitions, bad
+  footers, truncation, bad indices and order) and 100000 random
+  mutations of them.
+
+Results: tests.exe 149/0; t/exec 659 specs 3438/0, with --chaos 20
+42858/0; t/parse 3045/0; t/winvos 21 specs 252/0, with --chaos 20
+1512/0; t/msys vos 45/45; printf_test 837/0; paths_test 1124310/0;
+t/win32 -x 28/0; unabashed.exe and unabashed32.exe without warnings,
+importing KERNEL32.dll only; the WSL POSIX build (tests.exe, t/exec,
+t/winvos, t/msys 0 failed; printf and the prompt agree with `date` for
+/etc/localtime and a TZ name). XP laptop: unabashed32.exe shows the
+system zone (EST, above) and reads ~/.profile for `-l`. (fakes_test
+does not build, before this step too: vos.cpp needs paths.cpp.)
+
+| t/msys            | vos   | real           |
+|-------------------|-------|----------------|
+| startup (070-076) | -     | 7/7            |
+| tz (077-078)      | 1/1   | 2/2            |
+| all               | 45/45 | 59/63 -> 68/72 |
