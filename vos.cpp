@@ -1268,8 +1268,9 @@ static void edcheck(Editor *ed, Shell *sh, i32 how)
         // Off the margin, or over old text: output with escapes in it
         // (an error message quoting what was typed) can move the
         // cursor up, and the editor, as readline, draws a new line as
-        // though on blank rows
-        y->edoff = t->col!=0 || t->wrapnext;
+        // though on blank rows. A UTF-8 sequence cut short (a lead byte
+        // typed ahead and echoed) becomes U+FFFD before the prompt.
+        y->edoff = t->col!=0 || t->wrapnext || t->need;
         for (i32 i = t->row*t->cols; i < t->rows*t->cols; i++) {
             y->edoff |= t->cells[i].c > 0;
         }

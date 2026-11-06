@@ -1,0 +1,26 @@
+== snap 1
+$ echo hi
+hi
+$ echo !zz /home/oracle
+@ 2,23
+== snap 2
+$ echo hi
+hi
+$ echo !zz
+bash: !zz: event not found
+$ echo !zz
+@ 4,10
+== snap 3
+$ echo hi
+hi
+$ echo !zz
+bash: !zz: event not found
+$ echo echo hi /home/oracle
+@ 4,27
+== snap 4
+$ echo hi
+hi
+$ echo !zz
+bash: !zz: event not found
+$ echo echo hi /home/oracle
+@ 4,27

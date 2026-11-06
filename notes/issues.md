@@ -88,6 +88,9 @@ Moved from M5a: needs the completion engine.
   is read; bash reads the password file. Hosts are read from
   HOSTFILE or /etc/hosts without `$include`. (step 10)
 - dabbrev-expand and export-completions are not implemented. (step 10)
+- shell-expand-line on a line ending in an unterminated `$(` with
+  nothing after it: bash expands it to nothing; ours reports the
+  command substitution's unexpected EOF and gives up the line. (M7)
 - Command position at PS2 inside a compound command: bash asks the
   parser whether a command word is expected; ours treats only the first
   line of a command as able to start one. (step 10)

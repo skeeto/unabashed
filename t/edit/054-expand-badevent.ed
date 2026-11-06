@@ -1,0 +1,14 @@
+# shell-expand-line with a history event that is not found: unlike
+# history-expand-line (M-^), no message; the line keeps the event and
+# the rest is expanded
+size 12 50
+rc PS1='$ '
+keys echo hi\r
+keys echo !zz $HOME\e\C-e
+snap
+keys \C-a\C-k
+keys echo !zz\e^
+snap
+keys \C-a\C-k
+keys echo !ec $HOME\e\C-e
+snap

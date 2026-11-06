@@ -2118,8 +2118,8 @@ static void edhistsearch(Editor *ed, Shell *sh, i32 fn, i32 count)
 
 // History expansion of the line, as bash's pre_process_line without
 // verification: false on an error or a :p, which are shown under the
-// line, the line then drawn again.
-static b32 edhistexpand(Editor *ed, Shell *sh, Arena *a, Str *out)
+// line, the line then drawn again. Quiet: the line as it is instead.
+static b32 edhistexpand(Editor *ed, Shell *sh, Arena *a, Str *out, b32 quiet = 0)
 {
     Hist *h = &sh->hist;
     Str line = edtext(ed);
@@ -2130,6 +2130,7 @@ static b32 edhistexpand(Editor *ed, Shell *sh, Arena *a, Str *out)
         if (r.r) *out = r.line;
         return 1;
     }
+    if (quiet) return 1;  // the line as it is
     edput(ed, "\r\n");
     edflush(ed, sh);
     if (r.r < 0) {
@@ -2250,10 +2251,8 @@ static void edshellexpand(Editor *ed, Shell *sh)
     i32   depth = ++sh->capdepth;
     Arena a     = *scratchat(sh, depth);
     Str   r     = {};
-    if (!edhistexpand(ed, sh, &a, &r)) {
-        sh->capdepth = depth - 1;
-        return;
-    }
+    // As bash's shell-expand-line: an event not found is kept, unsaid
+    edhistexpand(ed, sh, &a, &r, 1);
     if (sh->shopt[S_EXPAND_ALIASES]) r = edaliases(sh, &a, r);
     iz  oldpoint = ed->point;
     b32 atend    = ed->point == ed->line.len;
