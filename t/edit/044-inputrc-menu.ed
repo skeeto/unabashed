@@ -1,0 +1,28 @@
+# Menu completion bound in the inputrc, with and without its prefix
+# display
+size 24 40
+rc PS1='$ '
+rc mkdir w; cd w; mkdir aaa_long_dir; : > aaa_long_1; : > aaa_long_2; : > aaa_long_33
+rc cat > ~/.inputrc <<'EOF'
+rc "\C-o": menu-complete
+rc "\C-xp": menu-complete-backward
+rc set menu-complete-display-prefix on
+rc Control-t: possible-completions
+rc EOF
+rc printf '%s\n' 'set menu-complete-display-prefix off' > ~/v2
+keys ls aaa\C-o
+snap
+keys \C-o
+snap
+keys \C-o\C-o\C-o
+snap
+keys \C-o
+snap
+keys \C-xp
+snap
+keys \C-a\C-kls aaa\C-t
+snap
+keys \C-a\C-kcp ~/v2 ~/.inputrc\r\C-x\C-r\C-lls aaa\C-o
+snap
+keys \C-o\C-o
+snap

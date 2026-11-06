@@ -176,6 +176,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "history.cpp"
 #include "edit.cpp"
 #include "complete.cpp"
+#include "inputrc.cpp"
 
 
 // Startup

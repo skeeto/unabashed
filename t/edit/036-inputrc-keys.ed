@@ -1,0 +1,56 @@
+# inputrc key bindings: tty characters off, \M- unreachable without
+# force-meta-prefix, key names and their quirks, a prefix bound with
+# its shadow, an inputrc arrow key; a re-read with force-meta-prefix
+size 20 80
+rc PS1='$ '
+rc cat > ~/.inputrc <<'EOF'
+rc set bind-tty-special-chars off
+rc "\C-w": backward-char
+rc "\M-t": beginning-of-line
+rc Meta-u: end-of-line
+rc Home: beginning-of-line
+rc C-o : end-of-line
+rc Control-y beginning-of-line
+rc ctrl-r: Forward-Char
+rc "\x14": end-of-line
+rc "\C-x": backward-char
+rc "": end-of-line
+rc "\e[A": beginning-of-line
+rc EOF
+rc cat > ~/v2 <<'EOF'
+rc set force-meta-prefix on
+rc "\M-t": beginning-of-line
+rc "\M-\C-f": beginning-of-line
+rc EOF
+keys ab cd\C-w
+snap
+keys \C-a\C-kab cd\et
+snap
+keys \C-a\C-kab cd\C-a\eu
+snap
+keys \C-a\C-kab cdH
+snap
+keys \C-a\C-kab cd\C-o
+snap
+keys \C-a\C-kab cd\C-y
+snap
+keys \C-a\C-kab cd\C-a\C-r
+snap
+keys \C-a\C-kab cd\C-a\C-t
+snap
+keys \C-e\C-a\C-kab cd\C-xZ
+snap
+keys \C-a\C-kab cd\C-x
+pause 1000
+keys Z
+snap
+keys \C-a\C-kab cd\C-x\C-x
+snap
+keys \C-a\C-kab cd\e[A
+snap
+keys \C-e\C-a\C-kcp ~/v2 ~/.inputrc\r
+keys \C-x\C-r\C-l
+keys ab cd\et
+snap
+keys \C-a\C-kab cd\e\C-f
+snap

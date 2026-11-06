@@ -1,0 +1,109 @@
+== snap 1
+$ ls
+Makefile      dir1/
+aaa_long_1    exe1*
+aaa_long_2    fifo1|
+aaa_long_33   link1@
+aaa_long_dir/ plain1
+dangle1@
+$ ls
+@ 7,5
+== snap 2
+$ ls
+Makefile      dir1
+aaa_long_1    exe1
+aaa_long_2    fifo1
+aaa_long_33   link1
+aaa_long_dir  plain1
+dangle1
+$ ls
+@ 7,5
+== snap 3
+$ ls
+Makefile      dir1
+aaa_long_1    exe1
+aaa_long_2    fifo1
+aaa_long_33   link1
+aaa_long_dir  plain1
+dangle1
+$ ls dir1
+@ 7,9
+== snap 4
+$ ls link1/
+@ 0,11
+== snap 5
+$ ls dangle1
+@ 0,13
+== snap 6
+$ ls aaa_long_
+...1    ...2    ...33   ...dir/
+$ ls aaa_long_
+@ 2,14 bell 2
+== snap 7
+$ ls aaa_long_
+...1    ...2    ...33   ...dir/
+$ ls
+Makefile      aaa_long_1
+aaa_long_2    aaa_long_33
+aaa_long_dir/ dangle1
+dir1/         exe1
+fifo1         link1/
+plain1
+$ ls
+@ 9,5 bell 2
+== snap 8
+$ ls
+Makefile
+aaa_long_1
+aaa_long_2
+aaa_long_33
+aaa_long_dir/
+dangle1
+dir1/
+exe1
+fifo1
+link1/
+plain1
+$ ls
+@ 12,5 bell 2
+== snap 9
+$ ls aaa
+...1
+...2
+...33
+...dir/
+$ ls aaa
+@ 5,8 bell 2
+== snap 10
+$ ls aaa
+aaa_long_1    aaa_long_33
+aaa_long_2    aaa_long_dir/
+$ ls aaa_long_
+@ 3,14 bell 2
+== snap 11
+$ ls aaa_long_
+@ 0,14 bell 2
+== snap 12
+$ ls aaa_long_
+aaa_long_1    aaa_long_33
+aaa_long_2    aaa_long_dir/
+$ ls aaa_long_
+@ 3,14 bell 2
+== snap 13
+$ ls aaa_long_
+aaa_long_1    aaa_long_33
+aaa_long_2    aaa_long_dir/
+$ ls aaa_long_
+aaa_long_1    aaa_long_33
+aaa_long_2    aaa_long_dir/
+$ ls aaa_long_
+@ 6,14 bell 2
+== snap 14
+$ ls aa z
+@ 0,9 bell 2
+== snap 15
+$ ls Makefile
+@ 0,14 bell 2
+== snap 16
+$ ls Makefile
+@ 0,14 bell 2

@@ -1,0 +1,40 @@
+# Boolean values, a re-read that keeps what it doesn't mention, a
+# quoted string value, keymaps and editing-mode
+size 20 80
+rc PS1='$ '
+rc : > Makefile
+rc for v in '' 1 yes ON 0 'On garbage'; do printf 'set completion-ignore-case %s\n' "$v" > ~/"v${v%% *}"; done
+rc printf '%s\n' 'set mark-directories on' > ~/vmd
+rc cat > ~/.inputrc <<'EOF'
+rc set comment-begin "# x" trailing
+rc set keymap emacs-ctlx
+rc "q": beginning-of-line
+rc set keymap vi-insert
+rc "\C-t": end-of-line
+rc set editing-mode emacs
+rc "\C-o": beginning-of-line
+rc EOF
+keys ls ma\t
+snap
+keys \C-a\C-kcp ~/v ~/.inputrc\r\C-x\C-r\C-lls ma\t
+snap
+keys \C-a\C-kcp ~/vyes ~/.inputrc\r\C-x\C-r\C-lls ma\t
+snap
+keys \C-a\C-kcp ~/v1 ~/.inputrc\r\C-x\C-r\C-lls ma\t
+snap
+keys \C-a\C-kcp ~/v0 ~/.inputrc\r\C-x\C-r\C-lls ma\t
+snap
+keys \C-a\C-kcp ~/vON ~/.inputrc\r\C-x\C-r\C-lls ma\t
+snap
+keys \C-a\C-kcp ~/vmd ~/.inputrc\r\C-x\C-r\C-lls ma\t
+snap
+keys \C-a\C-kcp ~/vOn ~/.inputrc\r\C-x\C-r\C-lls ma\t
+snap
+keys \C-a\C-kab cd\C-xq
+snap
+keys \C-a\C-kab cd\C-t
+snap
+keys \C-a\C-kab cd\C-o
+snap
+keys \C-e\C-a\C-kab cd\e#
+snap

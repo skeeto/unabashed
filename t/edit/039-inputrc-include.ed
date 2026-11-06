@@ -1,0 +1,32 @@
+# $include: relative and tilde names, a trailing comment, a missing
+# file, the location lost after an include, an unbalanced $if
+size 30 100
+rc PS1='$ '
+rc INPUTRC=~/ira; export -n INPUTRC
+rc cat > ~/ira <<'EOF'
+rc "\C-t": beginning-of-line
+rc set probe-ira-1
+rc $include ~/inc1
+rc set probe-ira-2
+rc $include ~/inc1 # trailing comment
+rc $include ~/missing
+rc $include inc1
+rc set probe-ira-3
+rc $if Bash
+rc $include ~/inc2
+rc set probe-ira-4
+rc $endif
+rc set probe-ira-5
+rc EOF
+rc cat > ~/inc1 <<'EOF'
+rc set probe-inc1-a
+rc "\C-o": end-of-line
+rc set probe-inc1-b
+rc EOF
+rc cat > ~/inc2 <<'EOF'
+rc $if foo
+rc set probe-inc2
+rc EOF
+snap
+keys abc\C-tX\C-o
+snap

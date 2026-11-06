@@ -1,0 +1,21 @@
+# C-x C-r: no fallback from INPUTRC, INPUTRC when nothing was read,
+# then the remembered file; history-size apart from HISTSIZE
+size 20 80
+rc PS1='$ '
+rc INPUTRC=~/nothere
+rc printf '%s\n' '"\C-t": beginning-of-line' > ~/.inputrc
+rc printf '%s\n' '"\C-t": end-of-line' 'set history-size 3' > ~/ir2
+rc printf '%s\n' '"\C-t": backward-char' > ~/ir3
+keys abc\C-tX
+snap
+keys \C-a\C-kINPUTRC=~/ir2\r
+keys \C-x\C-r
+keys abc\C-a\C-tX
+snap
+keys \C-a\C-kINPUTRC=~/ir3\r
+keys \C-x\C-r
+keys abc\C-tY
+snap
+keys \C-a\C-k: one\r: two\r: three\r
+keys \C-lhistory; echo $HISTSIZE\r
+snap

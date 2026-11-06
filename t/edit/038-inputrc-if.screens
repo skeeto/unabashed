@@ -1,0 +1,48 @@
+== snap 1
+readline: ~/.inputrc: line 2: T-mode-emacs: unknown variable name
+readline: ~/.inputrc: line 10: T-term-xterm: unknown variable name
+readline: ~/.inputrc: line 13: T-term-full: unknown variable name
+readline: ~/.inputrc: line 16: T-term-upper: unknown variable name
+readline: ~/.inputrc: line 22: T-version-eq: unknown variable name
+readline: ~/.inputrc: line 25: T-version-lt-810: unknown variable name
+readline: ~/.inputrc: line 28: T-version-gt-8: unknown variable name
+readline: ~/.inputrc: line 34: T-version-ne-9: unknown variable name
+readline: ~/.inputrc: line 37: T-bash: unknown variable name
+readline: ~/.inputrc: line 40: T-bash-extra: unknown variable name
+readline: ~/.inputrc: line 47: T-cic-on: unknown variable name
+readline: ~/.inputrc: line 53: T-md-not-off: unknown variable name
+readline: ~/.inputrc: line 56: T-bell-audible: unknown variable name
+readline: ~/.inputrc: line 59: T-mode-var: unknown variable name
+readline: ~/.inputrc: line 62: T-keymap: unknown variable name
+readline: ~/.inputrc: line 65: T-comment: unknown variable name
+readline: ~/.inputrc: line 68: T-histsize: unknown variable name
+readline: ~/.inputrc: line 71: T-timeout: unknown variable name
+readline: ~/.inputrc: line 80: T-outer-else: unknown variable name
+readline: ~/.inputrc: line 85: trailing garbage on line: ` junk'
+readline: ~/.inputrc: line 88: equality comparison operator expected, found `< 600'
+$
+@ 21,2
+== snap 2
+readline: ~/.inputrc: line 2: T-mode-emacs: unknown variable name
+readline: ~/.inputrc: line 10: T-term-xterm: unknown variable name
+readline: ~/.inputrc: line 13: T-term-full: unknown variable name
+readline: ~/.inputrc: line 16: T-term-upper: unknown variable name
+readline: ~/.inputrc: line 22: T-version-eq: unknown variable name
+readline: ~/.inputrc: line 25: T-version-lt-810: unknown variable name
+readline: ~/.inputrc: line 28: T-version-gt-8: unknown variable name
+readline: ~/.inputrc: line 34: T-version-ne-9: unknown variable name
+readline: ~/.inputrc: line 37: T-bash: unknown variable name
+readline: ~/.inputrc: line 40: T-bash-extra: unknown variable name
+readline: ~/.inputrc: line 47: T-cic-on: unknown variable name
+readline: ~/.inputrc: line 53: T-md-not-off: unknown variable name
+readline: ~/.inputrc: line 56: T-bell-audible: unknown variable name
+readline: ~/.inputrc: line 59: T-mode-var: unknown variable name
+readline: ~/.inputrc: line 62: T-keymap: unknown variable name
+readline: ~/.inputrc: line 65: T-comment: unknown variable name
+readline: ~/.inputrc: line 68: T-histsize: unknown variable name
+readline: ~/.inputrc: line 71: T-timeout: unknown variable name
+readline: ~/.inputrc: line 80: T-outer-else: unknown variable name
+readline: ~/.inputrc: line 85: trailing garbage on line: ` junk'
+readline: ~/.inputrc: line 88: equality comparison operator expected, found `< 600'
+$
+@ 21,2

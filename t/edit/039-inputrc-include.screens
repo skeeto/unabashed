@@ -1,0 +1,33 @@
+== snap 1
+readline: /home/oracle/ira: line 2: probe-ira-1: unknown variable name
+readline: ~/inc1: line 1: probe-inc1-a: unknown variable name
+readline: ~/inc1: line 3: probe-inc1-b: unknown variable name
+readline: probe-ira-2: unknown variable name
+readline: inc1: line 1: probe-inc1-a: unknown variable name
+readline: inc1: line 3: probe-inc1-b: unknown variable name
+readline: probe-ira-3: unknown variable name
+readline: probe-ira-5: unknown variable name
+$
+@ 8,2
+== snap 2
+readline: /home/oracle/ira: line 2: probe-ira-1: unknown variable name
+readline: ~/inc1: line 1: probe-inc1-a: unknown variable name
+readline: ~/inc1: line 3: probe-inc1-b: unknown variable name
+readline: probe-ira-2: unknown variable name
+readline: inc1: line 1: probe-inc1-a: unknown variable name
+readline: inc1: line 3: probe-inc1-b: unknown variable name
+readline: probe-ira-3: unknown variable name
+readline: probe-ira-5: unknown variable name
+$ Xabc
+@ 8,6
+== snap 3
+readline: /home/oracle/ira: line 2: probe-ira-1: unknown variable name
+readline: ~/inc1: line 1: probe-inc1-a: unknown variable name
+readline: ~/inc1: line 3: probe-inc1-b: unknown variable name
+readline: probe-ira-2: unknown variable name
+readline: inc1: line 1: probe-inc1-a: unknown variable name
+readline: inc1: line 3: probe-inc1-b: unknown variable name
+readline: probe-ira-3: unknown variable name
+readline: probe-ira-5: unknown variable name
+$ Xabc
+@ 8,6

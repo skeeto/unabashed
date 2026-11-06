@@ -1,0 +1,47 @@
+# Completion marks and layout from the inputrc: visible-stats,
+# mark-directories, mark-symlinked-directories, horizontal listings,
+# prefix display, display width, show-all, disable-completion,
+# skip-completed-text
+size 24 40
+rc PS1='$ '
+rc mkdir w; cd w; mkdir dir1 aaa_long_dir; ln -s dir1 link1; : > exe1; chmod +x exe1; mkfifo fifo1; ln -s nowhere dangle1; : > plain1; : > aaa_long_1; : > aaa_long_2; : > aaa_long_33; : > Makefile
+rc printf '%s\n' 'set visible-stats on' > ~/.inputrc
+rc printf '%s\n' 'set visible-stats off' 'set mark-directories off' > ~/v2
+rc printf '%s\n' 'set mark-directories on' 'set mark-symlinked-directories on' > ~/v3
+rc printf '%s\n' 'set print-completions-horizontally on' 'set completion-prefix-display-length 3' > ~/v4
+rc printf '%s\n' 'set completion-display-width 12' > ~/v5
+rc printf '%s\n' 'set completion-display-width 0' > ~/v6
+rc printf '%s\n' 'set completion-display-width -1' 'set completion-prefix-display-length 0' 'set print-completions-horizontally off' 'set show-all-if-ambiguous on' > ~/v7
+rc printf '%s\n' 'set show-all-if-ambiguous off' 'set show-all-if-unmodified on' > ~/v8
+rc printf '%s\n' 'set show-all-if-unmodified off' 'set disable-completion on' > ~/v9
+rc printf '%s\n' 'set disable-completion off' 'set skip-completed-text on' > ~/v10
+keys ls \e?
+snap
+keys \C-a\C-kcp ~/v2 ~/.inputrc\r\C-x\C-r\C-lls \e?
+snap
+keys \C-a\C-kls dir\t
+snap
+keys \C-a\C-kcp ~/v3 ~/.inputrc\r\C-x\C-r\C-lls lin\t
+snap
+keys \C-a\C-kls dan\t
+snap
+keys \C-a\C-kcp ~/v4 ~/.inputrc\r\C-x\C-r\C-lls aaa\t\t\t
+snap
+keys \C-a\C-kls \e?
+snap
+keys \C-a\C-kcp ~/v5 ~/.inputrc\r\C-x\C-r\C-lls \e?
+snap
+keys \C-a\C-kcp ~/v6 ~/.inputrc\r\C-x\C-r\C-lls aaa\e?
+snap
+keys \C-a\C-kcp ~/v7 ~/.inputrc\r\C-x\C-r\C-lls aaa\t
+snap
+keys \C-a\C-kcp ~/v8 ~/.inputrc\r\C-x\C-r\C-lls aaa\t
+snap
+keys \t
+snap
+keys \C-a\C-kls aaa_long_\t
+snap
+keys \C-a\C-kcp ~/v9 ~/.inputrc\r\C-x\C-r\C-lls aa\tz
+snap
+keys \C-a\C-kcp ~/v10 ~/.inputrc\r\C-x\C-r\C-lls Makefile\C-b\C-b\C-b\C-b\t
+snap

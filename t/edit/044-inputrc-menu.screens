@@ -1,0 +1,30 @@
+== snap 1
+$ ls aaa_long_
+@ 0,14 bell 1
+== snap 2
+$ ls aaa_long_1
+@ 0,16 bell 1
+== snap 3
+$ ls aaa_long_dir/
+@ 0,18 bell 1
+== snap 4
+$ ls aaa_long_
+@ 0,14 bell 2
+== snap 5
+$ ls aaa_long_dir/
+@ 0,18 bell 2
+== snap 6
+$ ls aaa
+aaa_long_1    aaa_long_33
+aaa_long_2    aaa_long_dir/
+$ ls aaa
+@ 3,8 bell 2
+== snap 7
+$ ls aaa_long_1
+@ 0,16 bell 2
+== snap 8
+$ ls aaa_long_33
+@ 0,17 bell 2
+== snap 9
+$ ls aaa_long_33
+@ 0,17 bell 2

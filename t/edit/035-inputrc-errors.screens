@@ -1,0 +1,96 @@
+== snap 1
+readline: ~/.inputrc: line 1: no-such-var: unknown variable name
+readline: ~/.inputrc: line 2: bell-style: could not set value to `loud'
+readline: ~/.inputrc: line 3: "\C-q: beginning-of-line: no closing `"' in key binding
+readline: ~/.inputrc: line 4: foo: unknown parser directive
+readline: ~/.inputrc: line 5: $endif without matching $if
+readline: ~/.inputrc: line 6: $else found without matching $if
+readline: ~/.inputrc: line 7: nokey: no key sequence terminator
+readline: ~/.inputrc: line 8: trailing garbage on line: `x'
+readline: ~/.inputrc: line 10: `:x': invalid key binding: missing key sequence
+readline: ~/.inputrc: line 11: : unknown variable name
+readline: ~/.inputrc: line 12: `"macro': missing closing quote for macro
+readline: ~/.inputrc: line 13: foo-a: unknown key modifier
+readline: ~/.inputrc: line 14: comparison operator expected, found `8.3'
+readline: ~/.inputrc: line 16: numeric argument expected, found `x'
+readline: ~/.inputrc: line 18: equality comparison operator expected, found `end-of-line'
+readline: ~/.inputrc: line 20: argument expected, found `'
+readline: ~/.inputrc: line 22: comment-begin: could not set value to `'
+readline: ~/.inputrc: line 23: bell-style: could not set value to `none # comment'
+readline: ~/.inputrc: line 24: editing-mode: could not set value to `foo'
+readline: ~/.inputrc: line 25: keymap: could not set value to `foo'
+readline: ~/.inputrc: line 26: "\C-t": no key sequence terminator
+$
+@ 21,2
+== snap 2
+readline: ~/.inputrc: line 1: no-such-var: unknown variable name
+readline: ~/.inputrc: line 2: bell-style: could not set value to `loud'
+readline: ~/.inputrc: line 3: "\C-q: beginning-of-line: no closing `"' in key binding
+readline: ~/.inputrc: line 4: foo: unknown parser directive
+readline: ~/.inputrc: line 5: $endif without matching $if
+readline: ~/.inputrc: line 6: $else found without matching $if
+readline: ~/.inputrc: line 7: nokey: no key sequence terminator
+readline: ~/.inputrc: line 8: trailing garbage on line: `x'
+readline: ~/.inputrc: line 10: `:x': invalid key binding: missing key sequence
+readline: ~/.inputrc: line 11: : unknown variable name
+readline: ~/.inputrc: line 12: `"macro': missing closing quote for macro
+readline: ~/.inputrc: line 13: foo-a: unknown key modifier
+readline: ~/.inputrc: line 14: comparison operator expected, found `8.3'
+readline: ~/.inputrc: line 16: numeric argument expected, found `x'
+readline: ~/.inputrc: line 18: equality comparison operator expected, found `end-of-line'
+readline: ~/.inputrc: line 20: argument expected, found `'
+readline: ~/.inputrc: line 22: comment-begin: could not set value to `'
+readline: ~/.inputrc: line 23: bell-style: could not set value to `none # comment'
+readline: ~/.inputrc: line 24: editing-mode: could not set value to `foo'
+readline: ~/.inputrc: line 25: keymap: could not set value to `foo'
+readline: ~/.inputrc: line 26: "\C-t": no key sequence terminator
+$ Xabc
+@ 21,3
+== snap 3
+readline: ~/.inputrc: line 1: no-such-var: unknown variable name
+readline: ~/.inputrc: line 2: bell-style: could not set value to `loud'
+readline: ~/.inputrc: line 3: "\C-q: beginning-of-line: no closing `"' in key binding
+readline: ~/.inputrc: line 4: foo: unknown parser directive
+readline: ~/.inputrc: line 5: $endif without matching $if
+readline: ~/.inputrc: line 6: $else found without matching $if
+readline: ~/.inputrc: line 7: nokey: no key sequence terminator
+readline: ~/.inputrc: line 8: trailing garbage on line: `x'
+readline: ~/.inputrc: line 10: `:x': invalid key binding: missing key sequence
+readline: ~/.inputrc: line 11: : unknown variable name
+readline: ~/.inputrc: line 12: `"macro': missing closing quote for macro
+readline: ~/.inputrc: line 13: foo-a: unknown key modifier
+readline: ~/.inputrc: line 14: comparison operator expected, found `8.3'
+readline: ~/.inputrc: line 16: numeric argument expected, found `x'
+readline: ~/.inputrc: line 18: equality comparison operator expected, found `end-of-line'
+readline: ~/.inputrc: line 20: argument expected, found `'
+readline: ~/.inputrc: line 22: comment-begin: could not set value to `'
+readline: ~/.inputrc: line 23: bell-style: could not set value to `none # comment'
+readline: ~/.inputrc: line 24: editing-mode: could not set value to `foo'
+readline: ~/.inputrc: line 25: keymap: could not set value to `foo'
+readline: ~/.inputrc: line 26: "\C-t": no key sequence terminator
+$
+@ 21,2 bell 1
+== snap 4
+readline: ~/.inputrc: line 1: no-such-var: unknown variable name
+readline: ~/.inputrc: line 2: bell-style: could not set value to `loud'
+readline: ~/.inputrc: line 3: "\C-q: beginning-of-line: no closing `"' in key binding
+readline: ~/.inputrc: line 4: foo: unknown parser directive
+readline: ~/.inputrc: line 5: $endif without matching $if
+readline: ~/.inputrc: line 6: $else found without matching $if
+readline: ~/.inputrc: line 7: nokey: no key sequence terminator
+readline: ~/.inputrc: line 8: trailing garbage on line: `x'
+readline: ~/.inputrc: line 10: `:x': invalid key binding: missing key sequence
+readline: ~/.inputrc: line 11: : unknown variable name
+readline: ~/.inputrc: line 12: `"macro': missing closing quote for macro
+readline: ~/.inputrc: line 13: foo-a: unknown key modifier
+readline: ~/.inputrc: line 14: comparison operator expected, found `8.3'
+readline: ~/.inputrc: line 16: numeric argument expected, found `x'
+readline: ~/.inputrc: line 18: equality comparison operator expected, found `end-of-line'
+readline: ~/.inputrc: line 20: argument expected, found `'
+readline: ~/.inputrc: line 22: comment-begin: could not set value to `'
+readline: ~/.inputrc: line 23: bell-style: could not set value to `none # comment'
+readline: ~/.inputrc: line 24: editing-mode: could not set value to `foo'
+readline: ~/.inputrc: line 25: keymap: could not set value to `foo'
+readline: ~/.inputrc: line 26: "\C-t": no key sequence terminator
+$
+@ 21,2 bell 1

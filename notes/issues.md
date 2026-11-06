@@ -42,8 +42,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   needs fc's editor run from inside the editor. (step 10)
 - shell-expand-line does not translate `$'...'` or expand aliases as
   bash's does. (step 10)
-- The search-ignore-case variable and the isearch-terminators string
-  are not implemented (inputrc, step 6).
 - The history file is overwritten in place; readline writes a
   `FILE-NNNNN.tmp` beside it and renames it over (keeping a symlink's
   target and the owner). Needs a rename in the platform API. (step 10)
@@ -75,16 +73,34 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 - Win32: the editor's reads now always go through the console helper
   (to be woken by a resize); check on a real console in step 8.
 
+- inputrc variables kept for `$if` (and M8's `bind -v`) but without
+  effect: blink-matching-paren, colored-stats and
+  colored-completion-prefix, echo-control-characters, enable-keypad,
+  enable-meta-key, expand-tilde, history-preserve-point,
+  horizontal-scroll-mode, mark-modified-lines, revert-all-at-newline,
+  show-mode-in-prompt and the mode strings, the active region colours,
+  byte-oriented, input-meta, output-meta and convert-meta. (step 10)
+- editing-mode vi is recorded and vi keymaps take bindings, but the
+  editor stays in emacs mode; vi-* and other unimplemented function
+  names (dabbrev-expand, paste-from-clipboard, ...) bind nothing, so
+  they ring and do not shadow. (M8)
+- inputrc binding nothing to a prefix (`"\C-x":` alone): readline
+  stores a do-nothing shadow, and folds an emptied keymap back into
+  its parent; ours leaves the prefix unbound. Bash's own keys and the
+  arrow keys are bound before the inputrc rather than after it "if
+  unbound", which differs only when the inputrc unbinds one. (step 10)
+- inputrc with CRLF lines: msys mode strips the CR, POSIX keeps it, as
+  readline does; not recorded (the vos runs one personality), and the
+  install's /etc/inputrc under msys is untested. (step 8)
+- bell-style visible writes `\e[?5h\e[?5l`, xterm's flash without its
+  100 ms delay; not compared with readline's termcap vb. The tty
+  special characters are rebound on each line, but characters that
+  were special on an earlier line are not reset to self-insert. (step 7)
+
 Moved from M5a: needs the completion engine.
 
 - completion_strip_exe strips `.exe` from PATH command matches, but
   not from file name matches, and is untested on Windows. (step 8)
-- Completion settings (ignore-case, map-case, show-all-if-*,
-  visible-stats, mark-*, skip-completed-text, the display widths and
-  prefix length, print-completions-horizontally, menu-complete and its
-  display-prefix, disable-completion) are implemented with readline's
-  defaults but have no recorded scenarios until inputrc can set them
-  (completion.md §12, scenarios 10-14). (step 6)
 - User name completion (`~user`, M-~) finds nothing: no user database
   is read; bash reads the password file. Hosts are read from
   HOSTFILE or /etc/hosts without `$include`. (step 10)

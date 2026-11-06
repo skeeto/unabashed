@@ -103,6 +103,8 @@ enum : i32 {
     EF_MENU_COMPLETE,
     EF_MENU_COMPLETE_BACKWARD,
     EF_DELETE_CHAR_OR_LIST,
+    EF_RE_READ_INIT_FILE,
+    EF_MACRO,  // a key bound to text (inputrc)
     EF_COUNT,
 };
 
@@ -199,6 +201,8 @@ static Str edfuncs[EF_COUNT] = {
     "menu-complete",
     "menu-complete-backward",
     "delete-char-or-list",
+    "re-read-init-file",
+    "",
 };
 
 static iz readstdin(Shell *, File *, u8 *, iz);  // unabashed.cpp
@@ -209,6 +213,7 @@ static iz readstdin(Shell *, File *, u8 *, iz);  // unabashed.cpp
 struct KeyNode {
     KeyNode *kids;
     KeyNode *sib;
+    Str      macro; // EF_MACRO: the text
     i32      fn;    // EF_*, or EF_NONE
     u8       key;
 };
@@ -221,19 +226,23 @@ static KeyNode *keychild(KeyNode *n, u8 key)
     return 0;
 }
 
+// The child for key, made if missing
+static KeyNode *keyget(Arena *a, KeyNode *n, u8 key)
+{
+    KeyNode *k = keychild(n, key);
+    if (!k) {
+        k = alloc<KeyNode>(a);
+        k->key  = key;
+        k->sib  = n->kids;
+        n->kids = k;
+    }
+    return k;
+}
+
 static void keybind(Arena *a, KeyNode *root, Str seq, i32 fn)
 {
     KeyNode *n = root;
-    for (iz i = 0; i < seq.len; i++) {
-        KeyNode *k = keychild(n, seq[i]);
-        if (!k) {
-            k = alloc<KeyNode>(a);
-            k->key  = seq[i];
-            k->sib  = n->kids;
-            n->kids = k;
-        }
-        n = k;
-    }
+    for (iz i = 0; i < seq.len; i++) n = keyget(a, n, seq[i]);
     n->fn = fn;
 }
 
@@ -268,8 +277,8 @@ struct Layout {
 
 enum : i32 { KILLMAX = 10 };
 
-// Readline's variables (readline.md �5) that completion reads; inputrc
-// sets them (step 6)
+// Readline's variables (readline.md §5, inputrc.md §8), which the
+// init file sets. Many are only kept, for $if.
 struct EdVars {
     b32 ignorecase;     // completion-ignore-case
     b32 mapcase;        // completion-map-case
@@ -287,6 +296,39 @@ struct EdVars {
     b32 skipcompleted;  // skip-completed-text
     b32 nocompletion;   // disable-completion
     b32 menuprefix;     // menu-complete-display-prefix
+    b32 ttyspecial;     // bind-tty-special-chars
+    b32 blink;          // blink-matching-paren
+    b32 byteoriented;
+    b32 colprefix;      // colored-completion-prefix
+    b32 colstats;       // colored-stats
+    b32 convertmeta;
+    b32 echoctl;        // echo-control-characters
+    b32 activeregion;   // enable-active-region
+    b32 bracketpaste;   // enable-bracketed-paste
+    b32 keypad;         // enable-keypad
+    b32 metakey;        // enable-meta-key
+    b32 expandtilde;
+    b32 forcemeta;      // force-meta-prefix
+    b32 histpoint;      // history-preserve-point
+    b32 hscrollmode;    // horizontal-scroll-mode
+    b32 inputmeta;      // input-meta, meta-flag
+    b32 markmodified;   // mark-modified-lines
+    b32 outputmeta;
+    b32 visiblebell;    // prefer-visible-bell, as reported
+    b32 revertall;      // revert-all-at-newline
+    b32 searchcase;     // search-ignore-case
+    b32 showmode;       // show-mode-in-prompt
+    i32 bellstyle;      // 0 none, 1 visible, 2 audible
+    Str comment;        // comment-begin
+    i32 histsize;       // history-size
+    Str isterm;         // isearch-terminators, null for ESC and C-j
+    Str regionstart;    // active-region-start-color
+    Str regionend;
+    Str emacsstr;       // emacs-mode-string
+    Str vicmdstr;
+    Str viinsstr;
+    i32 vimode;         // editing-mode vi
+    i32 keymap;         // KM_*: where bindings go
 };
 
 struct Comp;
@@ -296,9 +338,19 @@ struct Editor {
     Arena    lay[2];    // layouts: the one on screen and the next
     i32      cur;       // which of lay is on screen
     KeyNode  root;
-    i32      keytimeout;  // keyseq-timeout, ms
+    KeyNode  vimove;    // vi bindings, kept for nothing yet
+    KeyNode  viins;
+    i32      keytimeout;  // keyseq-timeout, ms, 0 forever
     u8       pushed[32];  // keys read ahead and put back, the next last
     i32      unread;    // how many
+    Str      macro;     // a macro's keys, read before the terminal's
+    iz       macropos;
+    // The init file
+    b32      inited;
+    Str      rllast;    // the file last read, for C-x C-r
+    b32      rlreading; // messages give the file and line
+    b32      ifoff;     // in a false $if
+    Slice<b32> ifstack; // the enclosing $ifs' ifoff, never reset
     // The line being edited
     Buf      line;
     iz       point;
@@ -388,8 +440,10 @@ static void edbindings(Editor *ed)
         if (c != 0x7f) keybind(a, r, {&k, 1}, EF_SELF_INSERT);
     }
     for (u8 c = 'A'; c <= 'Z'; c++) {
-        u8 seq[] = {0x1b, c};
-        keybind(a, r, {seq, 2}, EF_DO_LOWERCASE_VERSION);
+        u8 meta[] = {0x1b, c};
+        keybind(a, r, {meta, 2}, EF_DO_LOWERCASE_VERSION);
+        u8 ctlx[] = {0x18, c};
+        keybind(a, r, {ctlx, 2}, EF_DO_LOWERCASE_VERSION);
     }
     for (u8 c = '0'; c <= '9'; c++) {
         u8 seq[] = {0x1b, c};
@@ -464,6 +518,7 @@ static void edbindings(Editor *ed)
         {"\x18!", EF_POSSIBLE_COMMAND_COMPLETIONS},
         {"\x1b\t", EF_DYNAMIC_COMPLETE_HISTORY},
         {"\x1b" "g", EF_GLOB_COMPLETE_WORD},
+        {"\x18\x12", EF_RE_READ_INIT_FILE},
     };
     for (iz i = 0; i < countof(map); i++) {
         iz  len = map[i].seq[0] ? (iz)__builtin_strlen(map[i].seq) : 1;
@@ -492,6 +547,21 @@ static Editor *editor(Shell *sh)
         ed->vars.displaywidth = -1;
         ed->vars.markdirs     = 1;
         ed->vars.matchhidden  = 1;
+        ed->vars.ttyspecial   = 1;
+        ed->vars.echoctl      = 1;
+        ed->vars.activeregion = 1;
+        ed->vars.bracketpaste = 1;
+        ed->vars.metakey      = 1;
+        ed->vars.inputmeta    = 1;
+        ed->vars.outputmeta   = 1;
+        ed->vars.visiblebell  = 1;
+        ed->vars.bellstyle    = 2;
+        ed->vars.comment      = "#";
+        ed->vars.regionstart  = "\x1b[7m";
+        ed->vars.regionend    = "\x1b[27m";
+        ed->vars.emacsstr     = "@";
+        ed->vars.vicmdstr     = "(cmd)";
+        ed->vars.viinsstr     = "(ins)";
         ed->getnext    = -1;
         edbindings(ed);
         sh->editor = ed;
@@ -891,9 +961,14 @@ static void edpush(Editor *ed, i32 c)
     if (ed->unread < countof(ed->pushed)) ed->pushed[ed->unread++] = (u8)c;
 }
 
+// The bell, as bell-style says: a flash of reverse video for visible
 static void edbell(Editor *ed)
 {
-    edput(ed, "\a");
+    switch (ed->vars.bellstyle) {
+    case 0: break;
+    case 1: edput(ed, "\x1b[?5h\x1b[?5l"); break;
+    case 2: edput(ed, "\a"); break;
+    }
 }
 
 static b32 edwordchar(u8 c)
@@ -1478,6 +1553,9 @@ static void edcharsearch(Editor *ed, Shell *sh, i32 count, i32 dir)
 
 static void edrun(Editor *, Shell *, i32 fn, u8 key);
 static void edcomplete(Editor *, Shell *, i32 fn, i32 count);  // complete.cpp
+static void rlinit(Editor *, Shell *);       // inputrc.cpp
+static void rlstart(Editor *, Shell *);
+static void rlttychars(Editor *);
 
 // Bracketed paste: the bytes up to ESC [ 201 ~, CR as LF.
 static Str edpaste(Editor *ed, Shell *sh, Arena *a)
@@ -1506,6 +1584,19 @@ static void edactivate(Editor *ed)
 // keys, the prompt replaced by the search's message, the match shown in
 // the line it was found in. Ending it moves through the history to that
 // entry; C-g puts everything back.
+// Equal, or equal but for ASCII case (search-ignore-case)
+static b32 edsame(Str a, Str b, b32 fold)
+{
+    if (!fold) return a == b;
+    if (a.len != b.len) return 0;
+    for (iz i = 0; i < a.len; i++) {
+        u8 x = a[i]>='A' && a[i]<='Z' ? a[i]+32 : a[i];
+        u8 y = b[i]>='A' && b[i]<='Z' ? b[i]+32 : b[i];
+        if (x != y) return 0;
+    }
+    return 1;
+}
+
 static void edisearch(Editor *ed, Shell *sh, i64 count)
 {
     Hist *h = &sh->hist;
@@ -1529,6 +1620,7 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
     i32  dir       = count>=0 ? 1 : -1;  // C-r passes -count
     b32  failed    = 0;
     Buf  str(&ed->linemem, 64);
+    b32  fold      = ed->vars.searchcase;
 
     for (;;) {
         // The message in place of the prompt
@@ -1557,7 +1649,10 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
         i32 op  = OP_ADD;
         u8  seq[16] = {(u8)c};
         i32 nseq    = 1;
-        if (c==0x1b || c=='\n') {
+        Str term = ed->vars.isterm.data ? ed->vars.isterm : Str("\x1b\n");
+        b32 isterm = 0;
+        for (iz i = 0; i < term.len; i++) isterm |= term[i] == c;
+        if (isterm) {
             op = OP_END;
             if (c == 0x1b) {
                 // More keys soon after ESC: the search ends and they run
@@ -1569,8 +1664,9 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
             }
         } else {
             KeyNode *k = keychild(&ed->root, (u8)c);
+            i64 wait   = ed->keytimeout>0 ? ed->keytimeout : -1;
             while (k && k->kids && nseq<countof(seq)) {
-                i32 n = edkey(ed, sh, k->fn ? ed->keytimeout : -1);
+                i32 n = edkey(ed, sh, k->fn ? wait : -1);
                 if (n == -3) break;
                 if (n < 0) return;
                 seq[nseq++] = (u8)n;
@@ -1707,7 +1803,7 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
             }
             iz limit = sline.len - s.len + 1;
             while (dir<0 ? idx>=0 : idx<limit) {
-                if (idx>=0 && idx+s.len<=sline.len && Str{sline.data+idx, s.len}==s) {
+                if (idx>=0 && idx+s.len<=sline.len && edsame(Str{sline.data+idx, s.len}, s, fold)) {
                     found = 1;
                     break;
                 }
@@ -1751,7 +1847,7 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
 // Search the history from entry pos in direction dir for one holding s
 // (at its start if s starts with ^): its index, -1 if none, and where in
 // it the match is (backward: the last in the line).
-static iz edfindhist(Shell *sh, Str s, iz pos, i32 dir, iz *at)
+static iz edfindhist(Shell *sh, Str s, iz pos, i32 dir, iz *at, b32 fold)
 {
     Hist *h  = &sh->hist;
     b32   anchor = s.len && s[0]=='^';
@@ -1759,7 +1855,7 @@ static iz edfindhist(Shell *sh, Str s, iz pos, i32 dir, iz *at)
     for (; pos>=0 && pos<h->len; pos += dir) {
         Str line = h->ents[pos]->line;
         if (anchor) {
-            if (line.len>=s.len && Str{line.data, s.len}==s) {
+            if (line.len>=s.len && edsame(Str{line.data, s.len}, s, fold)) {
                 *at = 0;
                 return pos;
             }
@@ -1768,7 +1864,7 @@ static iz edfindhist(Shell *sh, Str s, iz pos, i32 dir, iz *at)
         if (s.len > line.len) continue;
         for (iz i = 0; i <= line.len-s.len; i++) {
             iz j = dir<0 ? line.len-s.len-i : i;
-            if (Str{line.data+j, s.len} == s) {
+            if (edsame(Str{line.data+j, s.len}, s, fold)) {
                 *at = j;
                 return pos;
             }
@@ -1853,7 +1949,7 @@ static void ednoninc(Editor *ed, Shell *sh, i32 dir)
         ed->noninc = clone(&ed->perm, typed);
     }
     iz at  = 0;
-    iz got = edfindhist(sh, ed->noninc, from+dir, dir, &at);
+    iz got = edfindhist(sh, ed->noninc, from+dir, dir, &at, ed->vars.searchcase);
     if (got < 0) {
         edbell(ed);
         return;
@@ -1893,7 +1989,7 @@ static void edhistsearch(Editor *ed, Shell *sh, i32 fn, i32 count)
     b32 any = 0;
     while (n) {
         iz at  = 0;
-        iz got = edfindhist(sh, ed->hsprefix, ed->hspos+dir, dir, &at);
+        iz got = edfindhist(sh, ed->hsprefix, ed->hspos+dir, dir, &at, ed->vars.searchcase);
         if (got < 0) break;
         ed->hspos = got;
         any = 1;
@@ -2084,6 +2180,9 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
     case EF_MENU_COMPLETE:
     case EF_MENU_COMPLETE_BACKWARD:
         edcomplete(ed, sh, fn, ed->argset ? ed->count : 1);
+        break;
+    case EF_RE_READ_INIT_FILE:
+        rlinit(ed, sh);
         break;
     case EF_DELETE_CHAR_OR_LIST:
         if (ed->point<ed->line.len || !ed->line.len) {
@@ -2390,7 +2489,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         ed->point = b;
     } break;
     case EF_INSERT_COMMENT: {
-        Str com = "#";
+        Str com = ed->vars.comment;
         ed->point = 0;
         if (!ed->argset) {
             edinsert(ed, com);
@@ -2535,6 +2634,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
 static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
 {
     if (ed->unread) return ed->pushed[--ed->unread];
+    if (ed->macropos < ed->macro.len) return ed->macro[ed->macropos++];
     if (!timeout && !taskreadable(sh->sched, ed->fin->h)) return -3;
     Task *self = sh->sched->cur;
     i64   when = timeout<0 ? 0 : os_now(sh->os) + timeout*1000000;
@@ -2559,6 +2659,7 @@ static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
 // A key sequence read and looked up: its function and last key, or a
 // status (ED_EOF at the end of input, ED_INTR on an interrupt).
 struct EdSeq {
+    Str macro;   // EF_MACRO
     i32 fn;
     u8  key;
     u8  first;   // its first key
@@ -2591,8 +2692,9 @@ static EdSeq edreadseq(Editor *ed, Shell *sh)
     KeyNode *parent = &ed->root;
     KeyNode *n      = keychild(parent, (u8)c);
     u8 last = (u8)c;
+    i64 wait = ed->keytimeout>0 ? ed->keytimeout : -1;
     while (n && n->kids) {
-        i32 next = edkey(ed, sh, n->fn ? ed->keytimeout : -1);
+        i32 next = edkey(ed, sh, n->fn ? wait : -1);
         if (next == -3) break;  // the prefix's own binding
         if (next == -2) {
             r.status = ED_INTR;
@@ -2603,7 +2705,12 @@ static EdSeq edreadseq(Editor *ed, Shell *sh)
             return r;
         }
         KeyNode *k = keychild(n, (u8)next);
-        if (!k) {
+        if (!k && n->fn) {
+            // The prefix's own binding, shadowed by longer ones, and
+            // the key runs after it
+            edpush(ed, next);
+            break;
+        } else if (!k) {
             // An unbound sequence: the bell, the rest dropped
             n = 0;
             break;
@@ -2612,12 +2719,21 @@ static EdSeq edreadseq(Editor *ed, Shell *sh)
         n      = k;
         last   = (u8)next;
     }
-    r.fn  = n ? n->fn : EF_NONE;
-    r.key = last;
+    r.fn    = n ? n->fn : EF_NONE;
+    r.macro = n ? n->macro : Str{};
+    r.key   = last;
     if (r.fn==EF_DO_LOWERCASE_VERSION && last>='A' && last<='Z') {
         KeyNode *k = keychild(parent, last+0x20);
-        r.fn  = k ? k->fn : EF_NONE;
-        r.key = last + 0x20;
+        r.fn    = k ? k->fn : EF_NONE;
+        r.macro = k ? k->macro : Str{};
+        r.key   = last + 0x20;
+        if (!k && parent->fn) {
+            // The prefix's shadowed binding, then the lower-case key
+            edpush(ed, last+0x20);
+            r.fn    = parent->fn;
+            r.macro = parent->macro;
+            r.key   = parent->key;
+        }
         if (r.fn == EF_DO_LOWERCASE_VERSION) r.fn = EF_NONE;
     }
     return r;
@@ -2654,6 +2770,12 @@ static b32 eddispatch(Editor *ed, Shell *sh)
     case EF_DIGIT_ARGUMENT:
         edarg(ed, sh, s.key);
         break;
+    case EF_MACRO: {
+        // Its keys come next, before the rest of any running macro
+        Str rest = cuthead(ed->macro, ed->macropos);
+        ed->macro    = rest.len ? concat(&ed->perm, s.macro, rest) : s.macro;
+        ed->macropos = 0;
+    } break;
     case EF_UNIVERSAL_ARGUMENT:
         ed->count *= 4;
         edarg(ed, sh, -1);
@@ -2792,6 +2914,12 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     ed->silent  = opts->silent;
     ed->hscroll = ed->tty.rows<=1 || getvar(sh, &ed->linemem, "TERM").value=="dumb";
     ed->lmargin = ed->hshown = ed->unread = 0;
+    if (!ed->inited) {
+        ed->inited = 1;
+        if (ed->hscroll) ed->vars.bracketpaste = ed->vars.activeregion = 0;
+        rlstart(ed, sh);
+    }
+    rlttychars(ed);
     print(&ed->line, opts->init);
     ed->point   = ed->line.len;
     ed->eof     = ed->tty.eof ? ed->tty.eof : 0x04;
@@ -2828,7 +2956,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     }
     // Bracketed paste, as readline's enable-bracketed-paste, except where
     // there are no escape sequences
-    b32 bracket = !ed->hscroll && !ed->tty.legacy;
+    b32 bracket = !ed->hscroll && !ed->tty.legacy && ed->vars.bracketpaste;
     if (bracket) edput(ed, "\x1b[?2004h");
 
     // As readline, the first draw starts wherever the cursor is, taken

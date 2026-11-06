@@ -1,0 +1,46 @@
+== snap 1
+$ ab cd
+@ 0,6
+== snap 2
+$ cd ab
+@ 0,7
+== snap 3
+$ AB cd
+@ 0,4
+== snap 4
+$ ab cd
+@ 0,2
+== snap 5
+$ ab cd
+@ 0,7 bell 1
+== snap 6
+$ ab cd
+@ 0,2 bell 1
+== snap 7
+$ ab cd
+@ 0,3 bell 1
+== snap 8
+$ ab cd
+@ 0,7 bell 1
+== snap 9
+$ ab czd
+@ 0,7 bell 1
+== snap 10
+$ ab cZd
+@ 0,7 bell 1
+== snap 11
+$ ab cd
+~  rrrrr
+@ 0,2 bell 1
+== snap 12
+$ ab cd
+@ 0,2 bell 1
+== snap 13
+$ ab cd
+@ 0,2 bell 1
+== snap 14
+$ ab cd
+@ 0,2 bell 1
+== snap 15
+$ ab cd
+@ 0,2 bell 1

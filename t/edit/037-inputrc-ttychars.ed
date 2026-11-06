@@ -1,0 +1,11 @@
+# The terminal's special characters win over the inputrc's bindings
+size 12 60
+rc PS1='$ '
+rc cat > ~/.inputrc <<'EOF'
+rc "\C-w": backward-char
+rc "\C-u": backward-char
+rc EOF
+keys ab cd\C-w
+snap
+keys \C-a\C-kab cd\C-u
+snap

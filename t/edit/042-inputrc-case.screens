@@ -1,0 +1,45 @@
+== snap 1
+$ ls make
+@ 0,9 bell 1
+== snap 2
+$ ls Make
+@ 0,9 bell 2
+== snap 3
+$ ls Makefile
+@ 0,14 bell 2
+== snap 4
+$ ls Mdir/
+@ 0,10 bell 2
+== snap 5
+$ ls foo
+@ 0,8 bell 3
+== snap 6
+$ ls
+Makefile        foo-bar         makedepend.txt
+Mdir/           foo_baz
+$ ls
+@ 3,5 bell 4
+== snap 7
+$ ls
+Makefile        foo-bar         makedepend.txt
+Mdir/           foo_baz
+$ ls .
+./    ../   .hid
+$ ls .
+@ 5,6 bell 5
+== snap 8
+$ ls
+Makefile        foo-bar         makedepend.txt
+Mdir/           foo_baz
+$ ls .
+./    ../   .hid
+$ ls ../
+@ 5,8 bell 5
+== snap 9
+$ ls
+Makefile        foo-bar         makedepend.txt
+Mdir/           foo_baz
+$ ls .
+./    ../   .hid
+$ ls ../
+@ 5,8 bell 5

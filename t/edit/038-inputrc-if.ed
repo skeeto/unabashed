@@ -1,0 +1,98 @@
+# $if: modes, terminal names, versions, the application, variables,
+# nesting in a false branch, errors; true probes show as messages
+size 50 100
+rc PS1='$ '
+rc TERM=xterm-256color
+rc cat > ~/.inputrc <<'EOF'
+rc $if mode=emacs
+rc set T-mode-emacs
+rc $else
+rc set F-mode-emacs-else
+rc $endif
+rc $if mode=vi
+rc set F-mode-vi
+rc $endif
+rc $if term=xterm
+rc set T-term-xterm
+rc $endif
+rc $if term=xterm-256color
+rc set T-term-full
+rc $endif
+rc $if term=XTERM
+rc set T-term-upper
+rc $endif
+rc $if term=256color
+rc set F-term-tail
+rc $endif
+rc $if version==8.3
+rc set T-version-eq
+rc $endif
+rc $if version < 8.10
+rc set T-version-lt-810
+rc $endif
+rc $if version >8
+rc set T-version-gt-8
+rc $endif
+rc $if version = 8.
+rc set F-version-eq-8dot
+rc $endif
+rc $if version != 9 # comment
+rc set T-version-ne-9
+rc $endif
+rc $if bash
+rc set T-bash
+rc $endif
+rc $if Bash extra words
+rc set T-bash-extra
+rc $endif
+rc $if other
+rc set F-other
+rc $endif
+rc set completion-ignore-case on
+rc $if completion-ignore-case == on
+rc set T-cic-on
+rc $endif
+rc $if completion-ignore-case==on
+rc set F-cic-glued
+rc $endif
+rc $if mark-directories != Off
+rc set T-md-not-off
+rc $endif
+rc $if bell-style == audible
+rc set T-bell-audible
+rc $endif
+rc $if editing-mode == emacs
+rc set T-mode-var
+rc $endif
+rc $if keymap == emacs
+rc set T-keymap
+rc $endif
+rc $if comment-begin = #
+rc set T-comment
+rc $endif
+rc $if history-size == 500
+rc set T-histsize
+rc $endif
+rc $if keyseq-timeout = 500
+rc set T-timeout
+rc $endif
+rc $if mode=vi
+rc $if Bash
+rc set F-nested
+rc $else
+rc set F-nested-else
+rc $endif
+rc $else
+rc set T-outer-else
+rc $endif
+rc $if
+rc set F-empty
+rc $endif
+rc $if version >= 8.3 junk
+rc set F-junk
+rc $endif
+rc $if keyseq-timeout < 600
+rc set F-lt
+rc $endif
+rc EOF
+snap

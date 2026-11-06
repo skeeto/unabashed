@@ -1,0 +1,24 @@
+# Completion settings from the inputrc: ignore-case, map-case,
+# match-hidden-files
+size 24 60
+rc PS1='$ '
+rc mkdir w; cd w; : > Makefile; : > makedepend.txt; : > foo-bar; : > foo_baz; mkdir Mdir; : > .hid
+rc printf '%s\n' 'set completion-ignore-case on' > ~/.inputrc
+rc printf '%s\n' 'set completion-map-case on' > ~/v2
+rc printf '%s\n' 'set completion-ignore-case off' 'set completion-map-case off' 'set match-hidden-files off' > ~/v3
+keys ls ma\t
+snap
+keys \C-a\C-kls MA\t
+snap
+keys \C-a\C-kls mAKEF\t
+snap
+keys \C-a\C-kls md\t
+snap
+keys \C-a\C-kcp ~/v2 ~/.inputrc\r\C-x\C-r\C-lls foo_b\t
+snap
+keys \C-a\C-kcp ~/v3 ~/.inputrc\r\C-x\C-r\C-lls \t\t
+snap
+keys \C-a\C-kls .\t\t
+snap
+keys \C-a\C-kls ..\t
+snap

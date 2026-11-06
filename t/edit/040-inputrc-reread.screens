@@ -1,0 +1,28 @@
+== snap 1
+$ acbX
+@ 0,6
+== snap 2
+$ INPUTRC=~/ir2
+$ abcX
+@ 1,6
+== snap 3
+$ INPUTRC=~/ir2
+$ INPUTRC=~/ir3
+$ abcY
+@ 2,6
+== snap 4
+$ history; echo $HISTSIZE
+    4  : two
+    5  : three
+    6  history; echo $HISTSIZE
+500
+$
+@ 5,2
+== snap 5
+$ history; echo $HISTSIZE
+    4  : two
+    5  : three
+    6  history; echo $HISTSIZE
+500
+$
+@ 5,2

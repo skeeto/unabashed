@@ -1,0 +1,44 @@
+# inputrc error messages, each with its line, before the first prompt;
+# silent lines; a directive with blanks; an unknown function name
+size 40 110
+rc PS1='$ '
+rc cat > ~/.inputrc <<'EOF'
+rc set no-such-var on
+rc set bell-style loud
+rc "\C-q: beginning-of-line
+rc $foo
+rc $endif
+rc $else
+rc nokey
+rc $if version > 8.3x
+rc $endif
+rc :x
+rc set
+rc "\C-q": "macro
+rc foo-a: end-of-line
+rc $if version 8.3
+rc $endif
+rc $if version == x
+rc $endif
+rc $if bell-style
+rc $endif
+rc $if bell-style ==
+rc $endif
+rc set comment-begin
+rc set bell-style none # comment
+rc set editing-mode foo
+rc set keymap foo
+rc "\C-t"
+rc a:=b
+rc set isearch-terminators
+rc set completion-query-items abc
+rc   $ if Bash
+rc "\C-t": beginning-of-line
+rc $ENDIF
+rc "\C-o": no-such-function
+rc EOF
+snap
+keys abc\C-tX
+snap
+keys \C-a\C-k\C-o
+snap
