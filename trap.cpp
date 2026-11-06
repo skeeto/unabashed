@@ -402,10 +402,23 @@ static b32 ossignals(Sched *s)
 {
     u64 own = os_sigpending(s->os);
     u64 grp = os_siggroup(s->os);
-    if (own && s->top) {
-        // interrupting a wait builtin, or ending a read
-        s->top->pending |= own;
-        if (s->top->task) taskinterrupt(s, s->top->task, 0);
+    if (own && s->top && s->top->execpid) {
+        // the process is its program, as bash would have exec'd it
+        for (u64 m = own; m; m &= m-1) {
+            os_kill(s->os, s->top->execpid, __builtin_ctzll(m)+1);
+        }
+    } else if (own && s->top) {
+        // interrupting a wait builtin, or ending a read; one that kills
+        // the level ends whatever it waits for (its program runs on)
+        Sigproc *p  = s->top;
+        Shell   *sh = p->sh;
+        b32 dies = 0;
+        for (u64 m = own; m && sh->sig==p; m &= m-1) {
+            i32 sig = __builtin_ctzll(m) + 1;
+            dies |= !trapignored(sh, sig) && !trapset(sh, sig) && !signoop(sh, sig);
+        }
+        p->pending |= own;
+        if (p->task) taskinterrupt(s, p->task, dies);
     }
     b32 levels = 0;
     for (LevelSig m; (m = os_levelsig(s->os)).sig;) {
@@ -485,6 +498,10 @@ static b32 sigtaken(Shell *sh)
 static void sigsend(Shell *sh, Sigproc *p, i32 sig)
 {
     if (!sig) return;
+    if (p->execpid) {
+        os_kill(sh->os, p->execpid, sig);  // as to the program bash exec'd
+        return;
+    }
     p->pending |= sigbit(sig);
     Shell *target = p->sh;
     if (target->sig != p) return;  // an outer level, busy with its child
@@ -519,6 +536,7 @@ static void sigenter(Shell *sh, Sigproc *p, i64 pid, Task *task)
     p->sh      = sh;
     p->waitsig = 0;
     p->fgwait  = 0;
+    p->execpid = 0;
     p->next    = s->sigprocs;
     s->sigprocs = p;
     sh->sig    = p;

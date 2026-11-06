@@ -96,6 +96,8 @@ struct Sigproc {
     u64      waitsig;  // terminal signals that came while it waited
                        // for a foreground child (see waitdone)
     b32      fgwait;   // waiting for a foreground program or stages
+    i64      execpid;  // the program in its place, which bash would have
+                       // exec'd (its tail command): signals go to it
 };
 
 struct Sched {
@@ -656,11 +658,10 @@ static i32 taskconnect(Sched *s, Handle h)
     return io->err;
 }
 
+// Always asynchronously, even as the only task: a signal that comes
+// meanwhile must interrupt it (os_wait returns early, os_waitproc not).
 static i32 taskwaitproc(Sched *s, Handle proc)
 {
-    if (s->ntasks == 1) {
-        return os_waitproc(s->os, proc);
-    }
     Io *io = &s->cur->io;
     *io = {};
     io->op = IO_PROC;

@@ -1,0 +1,11 @@
+caught TERM
+trapped 3
+plain 143
+level got USR2
+level done
+kid TERM
+kid end
+kid 0
+top USR1
+end
+status 0

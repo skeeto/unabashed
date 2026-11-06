@@ -1749,8 +1749,10 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         os_close(sh->os, capread);
     }
     takeossigs(sh);  // those from before the wait are this level's own
-    sh->sig->fgwait = !r.err;
+    sh->sig->fgwait  = !r.err;
+    sh->sig->execpid = sh->attail && !r.err ? r.pid : 0;
     i32 status = r.err ? -r.err : taskwaitproc(s, r.proc);
+    sh->sig->execpid = 0;
     sh->childsig = 0;
     if (!r.err) {
         // A signal the program missed is the level's own, as its
@@ -2687,7 +2689,9 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         }
         sh->childsig = 0;
         sh->spawnto = direct;
+        sh->attail  = n==sh->tailnode && sh->taillevel==sh->subshell+1;
         sh->status = runexternal(sh, scratch, argv.data, argv.len, env);
+        sh->attail  = 0;
         for (iz i = nassign-1; i >= 0; i--) poptemp(sh, as[i].name);
         reportchild(sh, scratch, n);
     }

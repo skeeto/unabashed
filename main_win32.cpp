@@ -73,6 +73,8 @@ enum : i32 {
     OPEN_EXISTING                = 3,
     PAGE_NOACCESS                = 1,
     PAGE_READWRITE               = 4,
+    FILE_MAP_WRITE               = 2,
+    EVENT_MODIFY_STATE           = 2,
     PIPE_ACCESS_INBOUND          = 1,
     PIPE_ACCESS_OUTBOUND         = 2,
     PIPE_REJECT_REMOTE_CLIENTS   = 8,
@@ -238,6 +240,11 @@ W32(b32,    CloseHandle(uz));
 W32(uz,     CreateIoCompletionPort(uz, uz, uz, i32));
 W32(uz,     CreateJobObjectW(uz, c16 *));
 W32(uz,     CreateEventW(uz, b32, b32, c16 *));
+W32(uz,     CreateFileMappingW(uz, uz, i32, i32, i32, c16 *));
+W32(uz,     OpenFileMappingW(i32, b32, c16 *));
+W32(void *, MapViewOfFile(uz, i32, i32, i32, iz));
+W32(b32,    UnmapViewOfFile(void *));
+W32(uz,     OpenEventW(i32, b32, c16 *));
 W32(uz,     CreateThread(uz, uz, u32 (__stdcall *)(void *), void *, i32, i32 *));
 W32(uz,     CreateFileW(c16 *, i32, i32, uz, i32, i32, uz));
 W32(uz,     CreateNamedPipeW(c16 *, i32, i32, i32, i32, i32, i32, uz));
@@ -528,6 +535,26 @@ struct PipeLocalInfo {  // FILE_PIPE_LOCAL_INFORMATION
 using NtQueryInformationFileFn = i32 (__stdcall *)(uz, IoStatusBlock *, void *, u32, i32);
 using NtQueryInformationProcessFn = i32 (__stdcall *)(uz, i32, void *, u32, u32 *);
 
+// The signal channel (notes/m5b.md, step 6): every shell maps a
+// section named for its pid, where another of our shells (32- or
+// 64-bit alike) sets signals for it, and sets an event named likewise.
+enum : u32 { CHANMAGIC = 0x75736967 };  // "usig"
+
+struct ChanSig {
+    i64 level;  // 0: the process itself
+    i32 sig;
+    i32 pad;
+};
+
+struct SigChan {
+    u32     magic;
+    u32     pid;
+    u64     own;       // atomic: signals for the process
+    i32     lock;      // atomic: spin lock over the queue
+    i32     nlevels;   // atomic to look at
+    ChanSig levels[32];
+};
+
 struct Os {
     Fibers fibers;
     void (__stdcall *now)(Filetime *);  // precise clock where available
@@ -552,6 +579,8 @@ struct Os {
     Pwait     *freepwait;
     Interpose *freeip;
     u64        sigown;     // atomic: signals for the process
+    SigChan   *chan;       // this shell's signal channel, or null
+    uz         chanwait;   // its registered wait
     u64        siggrp;     // atomic: signals for the console group
     uz         mainthread;
     i32        mainio;     // atomic: odd while the main thread blocks in
@@ -731,8 +760,11 @@ static void wakepush(Os *os, Wnode *n)
 
 static b32 sigwaiting(Os *os)
 {
+    SigChan *c = os->chan;
     return (__atomic_load_n(&os->sigown, __ATOMIC_SEQ_CST) |
-            __atomic_load_n(&os->siggrp, __ATOMIC_SEQ_CST)) != 0;
+            __atomic_load_n(&os->siggrp, __ATOMIC_SEQ_CST)) != 0 ||
+           (c && (__atomic_load_n(&c->own, __ATOMIC_SEQ_CST) ||
+                  __atomic_load_n(&c->nlevels, __ATOMIC_SEQ_CST)));
 }
 
 static Hent **hslot(Os *os, uz h)
@@ -2067,6 +2099,104 @@ static void notemissedspawn(Os *os, uz proc, i32 pid)
     }
 }
 
+// From another thread: wake the main thread's wait, and end a blocking
+// read it is in (where it can be cancelled), so that it takes signals.
+static void wakemain(Os *os)
+{
+    SetEvent(os->wake);
+    i32 t = __atomic_load_n(&os->mainio, __ATOMIC_SEQ_CST);
+    if ((t&1) && os->cancelsync) {
+        for (i32 i = 0; i<1000 && __atomic_load_n(&os->mainio, __ATOMIC_SEQ_CST)==t; i++) {
+            if (os->cancelsync(os->mainthread)) break;
+            Sleep(1);
+        }
+    }
+}
+
+// Another of our shells signalled this one through its channel.
+static void __stdcall onchan(void *arg, u8)
+{
+    wakemain((Os *)arg);
+}
+
+// The channel's names for pid: the section's, or with ev its event's.
+static c16 *channame(c16 *buf, i64 pid, b32 ev)
+{
+    c16 *p = buf;
+    for (char const *s = ev ? "Local\\unabashed-sigev-" : "Local\\unabashed-sig-"; *s; s++) {
+        *p++ = (c16)*s;
+    }
+    c16 digits[24];
+    i32 n = 0;
+    do {
+        digits[n++] = (c16)('0' + pid%10);
+    } while (pid /= 10);
+    while (n) *p++ = digits[--n];
+    *p = 0;
+    return buf;
+}
+
+// Make this shell's signal channel; without one (a Low integrity
+// process may not name objects) signals end it outright.
+static void chanopen(Os *os, i64 pid)
+{
+    c16 name[64];
+    uz  m = CreateFileMappingW(INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0,
+                               sizeof(SigChan), channame(name, pid, 0));
+    if (!m) return;
+    SigChan *c = (SigChan *)MapViewOfFile(m, FILE_MAP_WRITE, 0, 0, sizeof(SigChan));
+    uz ev = c ? CreateEventW(0, 0, 0, channame(name, pid, 1)) : 0;
+    if (!ev || !RegisterWaitForSingleObject(&os->chanwait, ev, onchan, os, INFINITE, 0)) {
+        if (ev) CloseHandle(ev);
+        if (c) UnmapViewOfFile(c);
+        CloseHandle(m);
+        return;
+    }
+    c->pid   = (u32)pid;
+    c->magic = CHANMAGIC;
+    os->chan = c;  // the mapping and event live as long as the process
+}
+
+// Send sig to pid's level (0: the process) through its channel.
+// Returns E_SRCH where pid has none (not one of our shells).
+static i32 chansend(i64 pid, i64 level, i32 sig)
+{
+    c16 name[64];
+    uz  m = OpenFileMappingW(FILE_MAP_WRITE, 0, channame(name, pid, 0));
+    if (!m) return E_SRCH;
+    SigChan *c = (SigChan *)MapViewOfFile(m, FILE_MAP_WRITE, 0, 0, sizeof(SigChan));
+    i32 err = E_SRCH;
+    if (c && c->magic==CHANMAGIC && c->pid==(u32)pid) {
+        err = 0;
+        if (!level) {
+            __atomic_fetch_or(&c->own, (u64)1<<(sig-1), __ATOMIC_SEQ_CST);
+        } else {
+            while (__atomic_exchange_n(&c->lock, 1, __ATOMIC_ACQUIRE)) Sleep(0);
+            i32 n = c->nlevels;
+            b32 dup = 0;
+            for (i32 i = 0; i < n; i++) {
+                dup |= c->levels[i].level==level && c->levels[i].sig==sig;
+            }
+            if (!dup && n<countof(c->levels)) {
+                c->levels[n].level = level;
+                c->levels[n].sig   = sig;
+                __atomic_store_n(&c->nlevels, n+1, __ATOMIC_SEQ_CST);
+            } else if (!dup) {
+                err = E_AGAIN;
+            }
+            __atomic_store_n(&c->lock, 0, __ATOMIC_RELEASE);
+        }
+        uz ev = OpenEventW(EVENT_MODIFY_STATE, 0, channame(name, pid, 1));
+        if (ev) {
+            SetEvent(ev);
+            CloseHandle(ev);
+        }
+    }
+    if (c) UnmapViewOfFile(c);
+    CloseHandle(m);
+    return err;
+}
+
 static b32 __stdcall onctrl(u32 type)
 {
     Os *os = ctrlos;
@@ -2083,14 +2213,7 @@ static b32 __stdcall onctrl(u32 type)
         watch = notemissed(os);
     }
     __atomic_fetch_or(&os->siggrp, (u64)1<<(sig-1), __ATOMIC_SEQ_CST);
-    SetEvent(os->wake);
-    i32 t = __atomic_load_n(&os->mainio, __ATOMIC_SEQ_CST);
-    if ((t&1) && os->cancelsync) {
-        for (i32 i = 0; i<1000 && __atomic_load_n(&os->mainio, __ATOMIC_SEQ_CST)==t; i++) {
-            if (os->cancelsync(os->mainthread)) break;
-            Sleep(1);
-        }
-    }
+    wakemain(os);
     if (watch) watchjob(os);
     if (type == 2) {
         Sleep(10000);  // the shell exits meanwhile, else the system ends it
@@ -2933,13 +3056,16 @@ static i32 exitstatus(u32 code)
     return (i32)(code & 0xff);
 }
 
-// Signals (M3a's minimum; the signal channel to our own shells is
-// M5b): a signal ends another process outright, as killed by it (see
-// SIGEXIT). Nothing arrives through os_sigpending yet.
+// Signals: one of our shells gets it through its channel (but KILL,
+// and STOP, which it could not act on); any other process is ended
+// outright by it, as killed by it (see SIGEXIT).
 static i32 os_kill(Os *, i64 pid, i32 sig)
 {
     if (pid<=0 || pid>(i64)0x7fffffff) return E_SRCH;
     if (sig<0 || sig>=NSIGNAL) return E_INVAL;
+    if (sig && sig!=9 && sig!=19 && !chansend(pid, 0, sig)) {
+        return 0;  // one of our shells: its traps decide
+    }
     i32 access = sig ? 0x0001 : 0x100000;  // PROCESS_TERMINATE, SYNCHRONIZE
     uz  h = OpenProcess(access, 0, (i32)pid);
     if (!h) {
@@ -2957,20 +3083,41 @@ static i32 os_kill(Os *, i64 pid, i32 sig)
     return ok ? 0 : E_PERM;
 }
 
-// No signal channel to another process's levels yet (M5b step 6).
-static i32 os_siglevel(Os *, i64, i64, i32)
+static i32 os_siglevel(Os *, i64 pid, i64 level, i32 sig)
 {
-    return E_NOSYS;
+    if (pid<=0 || pid>(i64)0x7fffffff || level<=0) return E_SRCH;
+    if (sig<0 || sig>=NSIGNAL) return E_INVAL;
+    if (!sig) {
+        c16 name[64];
+        uz  m = OpenFileMappingW(FILE_MAP_WRITE, 0, channame(name, pid, 0));
+        if (m) CloseHandle(m);
+        return m ? 0 : E_SRCH;
+    }
+    return chansend(pid, level, sig);
 }
 
-static LevelSig os_levelsig(Os *)
+static LevelSig os_levelsig(Os *os)
 {
-    return {};
+    LevelSig r = {};
+    SigChan *c = os->chan;
+    if (!c || !__atomic_load_n(&c->nlevels, __ATOMIC_SEQ_CST)) return r;
+    while (__atomic_exchange_n(&c->lock, 1, __ATOMIC_ACQUIRE)) Sleep(0);
+    i32 n = c->nlevels;
+    if (n) {
+        r.level = c->levels[0].level;
+        r.sig   = c->levels[0].sig;
+        for (i32 i = 1; i < n; i++) c->levels[i-1] = c->levels[i];
+        __atomic_store_n(&c->nlevels, n-1, __ATOMIC_SEQ_CST);
+    }
+    __atomic_store_n(&c->lock, 0, __ATOMIC_RELEASE);
+    return r;
 }
 
 static u64 os_sigpending(Os *os)
 {
-    return __atomic_exchange_n(&os->sigown, (u64)0, __ATOMIC_SEQ_CST);
+    u64 r = __atomic_exchange_n(&os->sigown, (u64)0, __ATOMIC_SEQ_CST);
+    if (os->chan) r |= __atomic_exchange_n(&os->chan->own, (u64)0, __ATOMIC_SEQ_CST);
+    return r;
 }
 
 // Also notes how many Ctrl-C events the core has seen, after taking
@@ -3473,6 +3620,7 @@ void mainCRTStartup()
 
     info.windows = 1;
     info.pid  = GetCurrentProcessId();
+    chanopen(&os, info.pid);
     info.uid  = info.euid = 1000;
     info.gid  = info.egid = 1000;
     using NtQueryInformationProcess = i32 (__stdcall *)(uz, i32, void *, i32, i32 *);
