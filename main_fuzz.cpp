@@ -41,7 +41,9 @@
 //   the one a background job prints, which runs from an image of the
 //   shell adopted by a vos child (notes/m5b.md), except for the
 //   variables naming the job (imagenoise); and no image escapes its
-//   region (the vos's audit, vimageescape, at every spawn).
+//   region (the vos's audit, vimageescape, at every spawn). Scripts
+//   naming coproc are left out: a coprocess reaped between the dumps
+//   takes its variables with it, as in bash.
 //
 // Background jobs run from images in the run and image modes, as the
 // shell's default; chaos and isolate keep them fibers.
@@ -161,7 +163,9 @@ static byte *os_reserve(Os *os, iz len)
     }
     byte *r = os->heap + os->heapused + pad;
     os->heapused += pad + len;
-    if (os->shells && os->owner!=os->vos.cur) os->pinned = os->heapused;
+    if (os->shells && (os->owner!=os->vos.cur || os->vos.imaging)) {
+        os->pinned = os->heapused;
+    }
     // As main_test.cpp: expose reads of uninitialized memory, and leave
     // no earlier run's pointers for the image audit (vimageescape)
     memset(r, 0x55, (uz)len);
@@ -199,7 +203,8 @@ static void fiberunstack(Os *, byte *p, iz)
 }
 
 // Nested shells run in-process with their memory released afterward,
-// unless another process reserved memory meanwhile.
+// unless another process, or an image for one, reserved memory
+// meanwhile.
 static i32 fake_bash(Os *os, FakeCtx *ctx)
 {
     iz save = os->heapused;
@@ -533,6 +538,7 @@ static b32 imagesame(Str a, Str b)
 
 static void fuzzimage(Os *os, Arena scratch, Str src)
 {
+    if (find(src, "coproc") >= 0) return note("coproc");
     // DEBUG, which a job does not inherit (as in bash), would run around
     // the shell's dump only: it goes first
     Str sep    = "\x01image\x01\n";
