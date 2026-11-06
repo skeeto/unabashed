@@ -2254,6 +2254,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     eo.delim  = delim=='\n' ? -1 : delim;
     eo.nchars = nchars>0 ? nchars : 0;
     eo.silent = silent;
+    eo.deadline = deadline;
 
     // Read the raw line, keeping track of which bytes were escaped
     Buf line(&scratch, 128);
@@ -2379,7 +2380,10 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                 runsigs(sh, scratch);
                 return 128 + 2;
             }
-            if (r != ED_LINE) {
+            if (r == ED_TIMEOUT) {
+                timedout = 1;
+                break;
+            } else if (r != ED_LINE) {
                 c = -1;
             } else {
                 if (delim) putbyte(&got, (u8)delim);

@@ -26,7 +26,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 
 ## M6 (editor)
 
-- `read -e -t`: the timeout does not apply while the editor reads.
   (step 2)
 - `read -s` in a non-interactive script killed by Ctrl-C: the terminal
   is restored on the escape out of read, but not tested on a real

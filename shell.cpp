@@ -447,7 +447,7 @@ struct Hist {      // in the Shell by value: a subshell's changes roll back
 
 // editline results, and what read -e asks of it (edit.cpp). ED_ABORT:
 // an error abandoned the line, its message ending on a new line.
-enum : i32 { ED_LINE, ED_EOF, ED_INTR, ED_NOTTY, ED_ABORT };
+enum : i32 { ED_LINE, ED_EOF, ED_INTR, ED_NOTTY, ED_ABORT, ED_TIMEOUT };
 
 struct EdRead {   // what read -e asks of the editor
     Str init;     // -i: the line to start with
@@ -457,6 +457,7 @@ struct EdRead {   // what read -e asks of the editor
     b32 silent;   // -s: the line is not shown
     b32 shell;    // not read -e: the shell's own line, with init preloaded
     b32 ps1;      // and the first of a command
+    i64 deadline; // -t: os_now time when reading gives up, or 0
 };
 
 struct Shell {

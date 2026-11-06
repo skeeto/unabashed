@@ -1,0 +1,16 @@
+# read -e -t: the timeout applies while the editor reads; the cursor
+# goes back to the line's start, the line goes unused, and the status is
+# above 128
+size 10 40
+rc PS1='$ '
+keys read -e -t 1 -p 'in> ' x; echo "st $? [$x]"\r
+keys abcdefghijklmnopqrstuv
+pause 1500
+snap
+keys read -e -t 1 -p 'in> ' x; echo "st $? [$x]"\r
+keys 0123456789012345678901234567890123456789xyz\C-b\C-b
+pause 1500
+snap
+keys read -e -t 5 -p 'in> ' x; echo "st $? [$x]"\r
+keys def\r
+snap

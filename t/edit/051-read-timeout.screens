@@ -1,0 +1,40 @@
+== snap 1
+$ read -e -t 1 -p 'in> ' x; echo "st $?
+[$x]"
+st 142 []fghijklmnopqrstuv
+$
+@ 3,2
+== snap 2
+$ read -e -t 1 -p 'in> ' x; echo "st $?
+[$x]"
+st 142 []fghijklmnopqrstuv
+$ read -e -t 1 -p 'in> ' x; echo "st $?
+[$x]"
+in> 012345678901234567890123456789012345
+st 142 []
+$
+@ 7,2
+== snap 3
+st 142 []fghijklmnopqrstuv
+$ read -e -t 1 -p 'in> ' x; echo "st $?
+[$x]"
+in> 012345678901234567890123456789012345
+st 142 []
+$ read -e -t 5 -p 'in> ' x; echo "st $?
+[$x]"
+in> def
+st 0 [def]
+$
+@ 9,2
+== snap 4
+st 142 []fghijklmnopqrstuv
+$ read -e -t 1 -p 'in> ' x; echo "st $?
+[$x]"
+in> 012345678901234567890123456789012345
+st 142 []
+$ read -e -t 5 -p 'in> ' x; echo "st $?
+[$x]"
+in> def
+st 0 [def]
+$
+@ 9,2

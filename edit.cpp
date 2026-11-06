@@ -341,6 +341,8 @@ struct Editor {
     KeyNode  vimove;    // vi bindings, kept for nothing yet
     KeyNode  viins;
     i32      keytimeout;  // keyseq-timeout, ms, 0 forever
+    i64      deadline;    // read -t: os_now time when reading ends, or 0
+    b32      timedout;    // and it has
     u8       pushed[32];  // keys read ahead and put back, the next last
     i32      unread;    // how many
     Str      macro;     // a macro's keys, read before the terminal's
@@ -2859,9 +2861,12 @@ static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
 {
     if (ed->unread) return ed->pushed[--ed->unread];
     if (ed->macropos < ed->macro.len) return ed->macro[ed->macropos++];
+    if (ed->timedout) return -1;
     if (!timeout && !taskreadable(sh->sched, ed->fin->h)) return -3;
     Task *self = sh->sched->cur;
     i64   when = timeout<0 ? 0 : os_now(sh->os) + timeout*1000000;
+    b32   last = ed->deadline && (!when || ed->deadline<=when);
+    if (last) when = ed->deadline;
     u8    c;
     iz    n;
     for (;;) {
@@ -2875,7 +2880,9 @@ static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
     self->deadline = 0;
     if (self->timedout) {
         self->timedout = 0;
-        return -3;
+        if (!last) return -3;
+        ed->timedout = 1;  // read -t: as at the end of input
+        return -1;
     }
     return n==1 ? c : n==-2 ? -2 : -1;
 }
@@ -3199,6 +3206,8 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     ed->delim   = opts->delim;
     ed->nchars  = opts->nchars;
     ed->silent  = opts->silent;
+    ed->deadline = opts->deadline;
+    ed->timedout = 0;
     ed->hscroll = ed->tty.rows<=1 || eddumb(sh, ed->linemem);
     ed->lmargin = ed->hshown = ed->unread = 0;
     if (!ed->inited) {
@@ -3266,6 +3275,10 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         } else {
             ed->active = 0;
         }
+        if (ed->timedout) {
+            ed->result = ED_TIMEOUT;
+            break;
+        }
         if (!ok) {
             ed->result = ED_EOF;
             break;
@@ -3286,6 +3299,12 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     b32 crlf = 1;
     if (ed->result == ED_ABORT) {
         ed->line.len = ed->point = 0;  // the message is past the line
+        crlf = 0;
+    } else if (ed->result == ED_TIMEOUT) {
+        // As readline's timeout: the line goes unused, and what follows
+        // is written over it from the cursor's row
+        ed->line.len = ed->point = 0;
+        edput(ed, "\r");
         crlf = 0;
     } else if (ed->hscroll) {
         if (ed->result == ED_INTR) edput(ed, "^C");
