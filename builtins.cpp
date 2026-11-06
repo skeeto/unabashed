@@ -3756,6 +3756,7 @@ static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 b_trap(Shell *, Str *, iz, Arena);  // trap.cpp
 static i32 b_history(Shell *, Str *, iz, Arena);  // history.cpp
+static i32 b_fc(Shell *, Str *, iz, Arena);       // history.cpp
 static i32 b_kill(Shell *, Str *, iz, Arena);
 static i32 b_jobs(Shell *, Str *, iz, Arena);  // jobs.cpp
 static i32 b_wait(Shell *, Str *, iz, Arena);
@@ -3785,6 +3786,7 @@ static Builtin builtins[] = {
     {"exit",     b_exit,     B_SPECIAL},
     {"export",   b_export,   B_SPECIAL|B_DECL},
     {"false",    b_false,    0},
+    {"fc",       b_fc,       0},
     {"fg",       b_fg,       0},
     {"getopts",  b_getopts,  0},
     {"hash",     b_hash,     0},

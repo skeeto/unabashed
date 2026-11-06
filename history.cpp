@@ -70,14 +70,14 @@ static void histreplace(Shell *sh, iz i, Str line)
     freehistent(sh, old);
 }
 
-// The time stamp a new entry gets: the comment character and the
-// epoch seconds, or nothing while there is no comment character.
-static Str histstamp(Shell *sh, Arena *a)
+// The time stamp a new entry gets: the comment character and the epoch
+// seconds. As readline's, a NUL comment character is a NUL byte, which
+// leaves the stamp empty to C (never written to a file) but still
+// readable as a time while the comment character stays NUL.
+static Str histstamp(Shell *sh, Arena *a, u8 com)
 {
-    Hist *h = &sh->hist;
-    if (!h->comchar) return {};
     Buf b(a, 24);
-    putbyte(&b, h->comchar);
+    putbyte(&b, com);
     print(&b, dynnow(sh) / 1000000000);
     return finish(&b);
 }
@@ -89,7 +89,7 @@ static void histpush(Shell *sh, Str line, Str stamp)
     Hist *h = &sh->hist;
     if (!h->max) return;
     if (h->max>0 && h->len>=h->max) {
-        histremove(sh, 0, h->len-h->max+1);
+        histremove(sh, 0, (iz)(h->len-h->max+1));
         h->base++;
     }
     histown(sh, 1);
@@ -103,7 +103,7 @@ static void reallyadd(Shell *sh, Str line)
     Arena a = {mem, mem+sizeof(mem)};
     h->lastadded  = 1;
     h->lastpushed = 0;
-    histpush(sh, line, histstamp(sh, &a));
+    histpush(sh, line, histstamp(sh, &a, h->comchar));
     h->session++;
 }
 
@@ -138,6 +138,7 @@ static void histvarchanged(Shell *sh, Str name)
 {
     Hist *h = &sh->hist;
     Arena none = {};
+    if (!h->ready) return;  // not from the environment
     if (name == "HISTSIZE") {
         Got g = getvar(sh, &none, name);
         i64 n = 0;
@@ -176,7 +177,9 @@ static void histvarchanged(Shell *sh, Str name)
     } else if (name == "HISTFILESIZE") {
         histfilesize(sh);
     } else if (name == "HISTTIMEFORMAT") {
-        if (getvar(sh, &none, name).set && !h->comchar) h->comchar = '#';
+        b32 set = getvar(sh, &none, name).set;
+        if (set && !h->comchar) h->comchar = '#';
+        h->writets = set;
     }
 }
 
@@ -189,6 +192,7 @@ static void histinit(Shell *sh)
     h->expchar = '!';
     h->subchar = '^';
     h->expinhibit = !sh->interactive;
+    h->ready   = 1;
 }
 
 
@@ -473,11 +477,14 @@ static Str histline(void *ctx, Lexer *L, Str line, b32 heredoc)
 
 static void histload(Shell *sh);
 
-// set -o history, set -H and their shopt -o forms.
+// set -o history, set -H and their shopt -o forms. (Also set -n, which
+// an interactive shell ignores, though not as its own -n argument.)
 static void histoption(Shell *sh, i32 opt, b32 on)
 {
     Hist *h = &sh->hist;
-    if (opt == O_HISTORY) {
+    if (opt==O_NOEXEC && sh->interactive) {
+        sh->opt[O_NOEXEC] = 0;
+    } else if (opt == O_HISTORY) {
         h->expinhibit = !on;
         if (on) {
             histvarchanged(sh, "HISTCONTROL");
@@ -723,18 +730,23 @@ static i32 b_history(Shell *sh, Str *args, iz nargs, Arena scratch)
 }
 
 
-// Time stamps in listings: HISTTIMEFORMAT's strftime format, ?? for an
-// entry without a stamp.
+// Time stamps in listings: HISTTIMEFORMAT's strftime format for a stamp
+// that starts with the comment character, else the stamp as invalid, or
+// ?? for one empty to C.
 static Str histtime(Shell *sh, Arena *a, Str stamp, Str fmt)
 {
-    if (!stamp.len) return "??";
     i64 t = 0;
-    b32 ok = stamp[0] == sh->hist.comchar;
-    iz  i  = 1;
-    for (; ok && i<stamp.len && digit(stamp[i]) && t<(i64)1<<50; i++) {
-        t = t*10 + stamp[i] - '0';
+    if (stamp.len && stamp[0]==sh->hist.comchar) {
+        for (iz i = 1; i<stamp.len && digit(stamp[i]) && t<(i64)1<<50; i++) {
+            t = t*10 + stamp[i] - '0';
+        }
     }
-    if (!ok || !t) return concat(a, cuthead(stamp, 1), ": invalid timestamp");
+    if (!t && (!stamp.len || !stamp[0])) return "??";
+    if (!t) {
+        Str s = stamp[0]=='#' ? cuthead(stamp, 1) : stamp;
+        Cut c = cut(s, 0);  // as a C string
+        return concat(a, c.head, ": invalid timestamp");
+    }
     PfTm   tm  = localtm(t, shellzone(sh, a));
     PfTout out = {};
     fmttime(&out, fmt, &tm);
@@ -867,58 +879,98 @@ static HWords histwords(Arena *a, Str s, u8 com, iz pos)
     return r;
 }
 
-// Bash's veto: is the ! at s[i] quoted, as bash's scanner sees quoting?
-static b32 hquoted(Shell *sh, Str s, iz i)
+// Past a quoted string opening before s[i], or the end.
+static iz hskipquoted(Str s, iz i, u8 q)
 {
-    b32 posix = sh->opt[O_POSIX];
-    b32 dq    = 0;
-    u8  saved[64];   // double-quote state outside each $( or `
-    i32 parens[64];  // and the parentheses open within it
-    u8  kind[64];
-    i32 depth = 0;
-    for (iz j = 0; j < i; j++) {
-        u8 c = s[j];
-        u8 n = j+1<s.len ? s[j+1] : 0;
-        if (c == '\\') {
-            j++;
-        } else if (c=='\'' && !dq) {
-            iz k = j + 1;
-            for (; k<s.len && s[k]!='\''; k++) {}
-            if (k >= i) return 1;
-            j = k;
-        } else if (c=='"' && posix) {
-            iz k = j + 1;
-            for (; k<s.len && s[k]!='"'; k++) {
-                if (s[k] == '\\') k++;
-            }
-            if (k >= i) return 1;
-            j = k;
-        } else if (c == '"') {
-            dq = !dq;
-        } else if ((c=='$' && n=='(') || c=='`') {
-            if (c=='`' && depth && kind[depth-1]=='`') {
-                dq = saved[--depth];
-                continue;
-            }
-            if (depth < 64) {
-                saved[depth]  = (u8)dq;
-                parens[depth] = 0;
-                kind[depth]   = c;
-                depth++;
-            }
-            dq = 0;
-            j += c == '$';
-        } else if (c=='(' && depth) {
-            parens[depth-1]++;
-        } else if (c==')' && depth && kind[depth-1]=='$') {
-            if (parens[depth-1]) {
-                parens[depth-1]--;
-            } else {
-                dq = saved[--depth];
-            }
+    for (; i < s.len; i++) {
+        if (q=='"' && s[i]=='\\') {
+            i++;
+        } else if (s[i] == q) {
+            return i + 1;
         }
     }
-    return dq && i+1<s.len && s[i+1]=='"';  // a ! closing its quotes
+    return s.len;
+}
+
+// The next ! at or after start that bash's scanner finds unquoted, or
+// the end of the line. Each scan starts outside any quotes.
+static iz hnextbang(Shell *sh, Str s, iz start, u8 bang)
+{
+    b32 posix  = sh->opt[O_POSIX];
+    b32 pass   = 0;
+    b32 backq  = 0;
+    b32 dq     = 0;
+    b32 olddq  = 0;
+    i32 comsub = 0;
+    iz  i      = start;
+    while (i < s.len) {
+        u8 c  = s[i];
+        u8 n  = i+1<s.len ? s[i+1] : 0;
+        u8 n2 = i+2<s.len ? s[i+2] : 0;
+        if (pass) {
+            pass = 0;
+            i++;
+        } else if (c == '\\') {
+            pass = 1;
+            i++;
+        } else if (backq && c=='`') {
+            backq = 0;
+            dq    = olddq;
+            i++;
+        } else if (c == '`') {
+            backq = 1;
+            olddq = dq;  // one level only, as bash
+            dq    = 0;
+            i++;
+        } else if (dq && c==bang && n=='"') {
+            i++;
+        } else if (c == bang) {
+            return i;
+        } else if (dq && c=='\'') {
+            i++;
+        } else if (c == '\'') {
+            i = hskipquoted(s, i+1, '\'');
+        } else if (!posix && c=='"') {
+            dq = !dq;
+            i++;
+        } else if (c == '"') {
+            i = hskipquoted(s, i+1, '"');
+        } else if ((c=='$' || c=='<' || c=='>') && n=='(' && n2!='(') {
+            if (i+2 >= s.len) return i + 2;
+            i += 2;
+            comsub++;
+            olddq = dq;
+            dq    = 0;
+        } else if (comsub && c==')') {
+            comsub--;
+            dq = olddq;
+            i++;
+        } else {
+            i++;
+        }
+    }
+    return i;
+}
+
+// Bash's veto by quoting: does its scanner, hopping from one unquoted !
+// to the next, step over the one at s[i]? quote is the parser's open
+// quote the line continues.
+static b32 hquoted(Shell *sh, Str s, iz i, u8 quote)
+{
+    u8 bang = sh->hist.expchar;
+    iz si   = 0;
+    if (quote == '\'') {
+        for (; si<s.len && s[si]!='\''; si++) {}
+        if (si>=s.len || si>=i) return 1;
+        si++;
+    }
+    iz t = hnextbang(sh, s, si, bang);
+    if (t <= 0) return 0;
+    while (t < i) {
+        t = hnextbang(sh, s, t+1, bang);
+        if (t <= 0) return 0;
+    }
+    return t > i;
 }
 
 static b32 hhas(Str s, iz from, u8 c)
@@ -930,14 +982,14 @@ static b32 hhas(Str s, iz from, u8 c)
 }
 
 // Does bash keep the ! at s[i] from expanding?
-static b32 hveto(Shell *sh, Str s, iz i)
+static b32 hveto(Shell *sh, Str s, iz i, u8 quote)
 {
     if (i>0 && s[i-1]=='[' && hhas(s, i+1, ']')) return 1;
     if (i>1 && s[i-1]=='{' && s[i-2]=='$' && hhas(s, i+1, '}')) return 1;
-    if (i>0 && s[i-1]=='$') return 1;
+    if (i>1 && s[i-1]=='$') return 1;
     if (sh->shopt[S_EXTGLOB] && i>1 && i+1<s.len && s[i+1]=='(' &&
             hhas(s, i+2, ')')) return 1;
-    return hquoted(sh, s, i);
+    return hquoted(sh, s, i, quote);
 }
 
 struct HExp {
@@ -964,14 +1016,6 @@ static iz hrfind(Str s, Str pat)
 {
     for (iz i = s.len-pat.len; i >= 0; i--) {
         if (!pat.len || takehead(cuthead(s, i), pat.len) == pat) return i;
-    }
-    return -1;
-}
-
-static iz hfind(Str s, Str pat, iz from)
-{
-    for (iz i = from; i+pat.len <= s.len; i++) {
-        if (takehead(cuthead(s, i), pat.len) == pat) return i;
     }
     return -1;
 }
@@ -1390,13 +1434,13 @@ static HResult histexpand(Shell *sh, Arena *a, Str line, iz hlen, u8 quote)
                       n=='>' || (dq && n=='"');
         b32 veto = 0;
         if (!literal && !pass) {
-            veto = hveto(sh, line, i);
+            veto = hveto(sh, line, i, quote);
         } else if (!literal) {
             Buf v(a, x.out.len+2);
             print(&v, Str{x.out.data, x.out.len});
             putbyte(&v, c);
             putbyte(&v, n);
-            veto = hveto(sh, finish(&v), x.out.len);
+            veto = hveto(sh, finish(&v), x.out.len, quote);
         }
         if (literal || veto) {
             putbyte(&x.out, c);
@@ -1515,8 +1559,7 @@ static b32 isstamp(Str s, iz i, u8 com)
 
 static b32 writestamps(Shell *sh)
 {
-    Arena none = {};
-    return getvar(sh, &none, "HISTTIMEFORMAT").set;
+    return sh->hist.writets;
 }
 
 // Append the entries of a file to the list, skipping its first from
@@ -1572,7 +1615,7 @@ static i32 histread(Shell *sh, Str file, i64 from, Arena scratch)
         } else {
             byte  mem[32];
             Arena t = {mem, mem+sizeof(mem)};
-            histpush(sh, text, stamp.data ? stamp : histstamp(sh, &t));
+            histpush(sh, text, stamp.data ? stamp : histstamp(sh, &t, com));
         }
         stamp   = {};
         afterts = 0;
@@ -1595,7 +1638,7 @@ static i32 histwrite(Shell *sh, Str file, iz from, b32 append, Arena scratch)
     Buf b(&scratch, 4096);
     for (iz i = from; i < h->len; i++) {
         HistEnt *e = h->ents[i];
-        if (ts && e->stamp.len) {
+        if (ts && e->stamp.len && e->stamp[0]) {
             print(&b, e->stamp);
             putbyte(&b, '\n');
         }
@@ -1734,4 +1777,305 @@ static i32 histfileop(Shell *sh, i32 op, Str *args, iz nargs, iz i, Arena scratc
     } break;
     }
     return err ? 1 : 0;
+}
+
+
+// The fc builtin
+
+enum : i32 { FC_NOTFOUND = -1, FC_INVALID = -2 };
+
+// An fc operand as an entry index (bash's fc_gethnum): last is the
+// newest entry it may name, real the newest of all.
+static iz fcentry(Shell *sh, Str spec, iz last, iz real, b32 first, b32 listing)
+{
+    Hist *h = &sh->hist;
+    if (last < 0) return FC_NOTFOUND;
+    if (!spec.data) return last;
+    b32 neg = spec.len && spec[0]=='-';
+    Str num = cuthead(spec, neg);
+    if (num.len && digit(num[0])) {
+        i64 n = 0;
+        for (iz k = 0; k<num.len && digit(num[k]); k++) {
+            n = n*10 + (num[k]-'0');
+            if (n > (i64)1<<40) n = (i64)1<<40;
+        }
+        if (neg) {
+            if (!n) return listing ? real : (iz)FC_INVALID;
+            i64 idx = last + 1 - n;
+            return idx<0 ? 0 : (iz)idx;
+        }
+        if (!n) return last;
+        i64 idx = n - h->base;
+        if (idx<0 || idx>=last) return first ? 0 : last;
+        return (iz)idx;
+    }
+    for (iz i = last; i >= 0; i--) {
+        if (startswith(h->ents[i]->line, spec)) return i;
+    }
+    return FC_NOTFOUND;
+}
+
+static b32 fcnumber(Str s)
+{
+    iz i = s.len && s[0]=='-';
+    if (i >= s.len) return 0;
+    for (; i < s.len; i++) {
+        if (!digit(s[i])) return 0;
+    }
+    return 1;
+}
+
+// Every occurrence of pat replaced by rep; an empty pat replaces each
+// character.
+static Str fcreplace(Arena *a, Str s, Str pat, Str rep)
+{
+    Buf b(a, s.len);
+    for (iz i = 0; i < s.len;) {
+        if (!pat.len) {
+            print(&b, rep);
+            i++;
+        } else if (pat.len<=s.len-i && takehead(cuthead(s, i), pat.len)==pat) {
+            print(&b, rep);
+            i += pat.len;
+        } else {
+            putbyte(&b, s[i++]);
+        }
+    }
+    return finish(&b);
+}
+
+// Run a string with history off, as bash's parse_and_execute does.
+static i32 fcrun(Shell *sh, Str src, Arena scratch)
+{
+    b32 saved = sh->opt[O_HISTORY];
+    sh->opt[O_HISTORY] = 0;
+    sh->evaldepth++;
+    i32 line   = sh->line;
+    i32 status = runsource(sh, src, "fc", scratch, 0, line);
+    sh->line = line;
+    sh->evaldepth--;
+    sh->opt[O_HISTORY] = saved;
+    return status;
+}
+
+// A new file in TMPDIR (or /tmp) for fc to edit: its name, or an error.
+static Opened fctemp(Shell *sh, Arena *a, Str *name)
+{
+    Str dir = getvar(sh, a, "TMPDIR").value;
+    if (!dir.len || pathstat(sh, *a, dir, 1).type!=FT_DIR) dir = "/tmp";
+    Opened o = {};
+    for (i32 try_ = 0; try_ < 100; try_++) {
+        u64 r = (u64)dynnow(sh) ^ (u64)sh->bashpid*0x9e3779b97f4a7c15u ^
+                (u64)try_*0x2545f4914f6cdd1du;
+        Buf b(a, dir.len+24);
+        print(&b, dir);
+        print(&b, "/bash-fc-");
+        for (i32 k = 0; k < 10; k++) {
+            putbyte(&b, (u8)"abcdefghijklmnopqrstuvwxyz0123456789"[r%36]);
+            r /= 36;
+        }
+        *name = finish(&b);
+        Arena t = *a;
+        o = os_open(sh->os, t, absolute(sh, &t, *name), OF_WRITE|OF_CREATE|OF_EXCL, 0600);
+        if (o.err != E_EXIST) break;
+    }
+    return o;
+}
+
+static i32 b_fc(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    Hist *h = &sh->hist;
+    Str  ename   = {};
+    b32  listing = 0;
+    b32  nonum   = 0;
+    b32  reverse = 0;
+    b32  exec    = 0;
+    iz   i       = 1;
+    for (; i < nargs; i++) {
+        Str a = args[i];
+        if (a == "--") {
+            i++;
+            break;
+        }
+        if (a.len<2 || a[0]!='-' || fcnumber(a)) break;
+        for (iz k = 1; k < a.len; k++) {
+            switch (a[k]) {
+            case 'l': listing = 1; break;
+            case 'n': nonum   = 1; break;
+            case 'r': reverse = 1; break;
+            case 's': exec    = 1; break;
+            case 'e':
+                if (k+1 < a.len) {
+                    ename = cuthead(a, k+1);
+                } else if (i+1 < nargs) {
+                    ename = args[++i];
+                } else {
+                    builtinerror(sh, scratch, "fc", "-e: option requires an argument");
+                    usageerror(sh, scratch, "fc");
+                    return 2;
+                }
+                k = a.len;
+                break;
+            default:
+                invalidoption(sh, scratch, "fc", span(a.data+k-1, a.data+k+1));
+                return 2;
+            }
+        }
+    }
+    if (ename == "-") exec = 1;
+
+    iz real = h->len - 1;
+    iz last = h->len - (sh->opt[O_HISTORY] ? 1 : 0) - (iz)h->lastadded;
+    if (last < 0) last = 0;
+    if (!sh->opt[O_HISTORY]) last = h->len - 1;
+
+    if (exec) {
+        Str *pats = alloc<Str>(&scratch, nargs);
+        Str *reps = alloc<Str>(&scratch, nargs);
+        iz   npairs = 0;
+        for (; i < nargs; i++) {
+            Cut c = cut(args[i], '=');
+            if (!c.ok) break;
+            pats[npairs]   = c.head;
+            reps[npairs++] = c.tail;
+        }
+        Str spec = i<nargs ? args[i++] : Str{};
+        iz  e    = h->len ? fcentry(sh, spec, last, real, 0, 0) : (iz)FC_NOTFOUND;
+        if (e < 0) {
+            builtinerror(sh, scratch, "fc", "no command found");
+            return 1;
+        }
+        if (sh->opt[O_POSIX] && i<nargs) {
+            builtinerror(sh, scratch, "fc", "too many arguments");
+            return 1;
+        }
+        Str cmd = h->ents[e]->line;
+        for (iz k = 0; k < npairs; k++) {
+            cmd = fcreplace(&scratch, cmd, pats[k], reps[k]);
+        }
+        flushbout(sh);
+        fdwrite(sh, 2, concat(&scratch, cmd, "\n"));
+        if (sh->opt[O_HISTORY]) {
+            Str add = cmd;
+            if (add.len && add[add.len-1]=='\n') add.len--;
+            if (h->len) {
+                histremove(sh, h->len-1, 1);
+                h->session -= h->session > 0;
+            }
+            Arena t = scratch;
+            checkadd(sh, 0, clone(&t, add), 1, t);
+        }
+        return fcrun(sh, cmd, scratch);
+    }
+
+    if (!h->len) return 0;
+    Str fspec = i<nargs ? args[i++] : Str{};
+    Str lspec = i<nargs ? args[i++] : Str{};
+    iz first = 0;
+    iz end   = 0;
+    if (fspec.data) {
+        first = fcentry(sh, fspec, last, real, 1, listing);
+        if (lspec.data) {
+            end = fcentry(sh, lspec, last, real, 0, listing);
+        } else {
+            end = listing ? last : first;
+            if (first == real) end = real;
+        }
+    } else if (listing) {
+        first = last>15 ? last-15 : 0;
+        end   = last;
+    } else {
+        first = end = last;
+    }
+    if (first==FC_INVALID || end==FC_INVALID) {
+        builtinerror(sh, scratch, "fc", "history specification out of range");
+        return 1;
+    }
+    if (first<0 || end<0) {
+        builtinerror(sh, scratch, "fc", "no command found");
+        return 1;
+    }
+
+    if (!listing && sh->opt[O_HISTORY] && h->lastadded) {
+        // The fc line itself goes before editing
+        histremove(sh, h->len-1, 1);
+        h->session -= h->session > 0;
+        h->lastadded = 0;
+        iz top = h->len - 1;
+        if (top < 0) return 0;
+        if (first > top) first = top;
+        if (end > top)   end   = top;
+    }
+    if (first > end) {
+        iz t  = first;
+        first = end;
+        end   = t;
+        reverse = 1;
+    }
+
+    if (listing) {
+        for (iz k = 0; k <= end-first; k++) {
+            iz n = reverse ? end-k : first+k;
+            HistEnt *ent = h->ents[n];
+            if (!nonum) bprinti(sh, h->base+n);
+            bprint(sh, "\t");
+            if (!sh->opt[O_POSIX]) bprint(sh, ent->edited ? Str("*") : " ");
+            bprint(sh, ent->line);
+            bprint(sh, "\n");
+        }
+        return 0;
+    }
+
+    // Edit the lines in a file, then run it
+    Str    file = {};
+    Opened o    = fctemp(sh, &scratch, &file);
+    if (o.err) {
+        Str msg = concat3(&scratch, file, ": cannot open temp file: ", errtext(o.err));
+        builtinerror(sh, scratch, "fc", msg);
+        return 1;
+    }
+    {
+        Arena t = scratch;
+        Buf   b(&t, 256);
+        for (iz k = 0; k <= end-first; k++) {
+            print(&b, h->ents[reverse ? end-k : first+k]->line);
+            putbyte(&b, '\n');
+        }
+        if (b.len) os_write(sh->os, o.h, b.data, b.len);
+        os_close(sh->os, o.h);
+    }
+    Str editor = ename;
+    if (!editor.data) {
+        editor = getvar(sh, &scratch, "FCEDIT").value;
+        if (!editor.len) editor = getvar(sh, &scratch, "EDITOR").value;
+        if (!editor.len) editor = sh->opt[O_POSIX] ? Str("ed") : "vi";
+    }
+    Str cmd    = concat3(&scratch, editor, " ", file);
+    i32 status = fcrun(sh, cmd, scratch);
+    if (!status) {
+        i32 err = 0;
+        Str src = readwholefile(sh, &scratch, file, &err);
+        if (!err) {
+            b32 hist    = sh->opt[O_HISTORY];
+            b32 verbose = sh->opt[O_VERBOSE];
+            b32 noexp   = h->noexpand;
+            sh->opt[O_HISTORY] = 1;
+            sh->opt[O_VERBOSE] = 1;
+            h->noexpand = 1;
+            sh->evaldepth++;
+            i32 line = sh->line;
+            status = runsource(sh, src, file, scratch, 0, 1, 0, 0, 0, 1);
+            sh->line = line;
+            sh->evaldepth--;
+            h->noexpand = noexp;
+            sh->opt[O_VERBOSE] = verbose;
+            sh->opt[O_HISTORY] = hist;
+        } else {
+            status = 1;
+        }
+    } else {
+        status = 1;
+    }
+    os_unlink(sh->os, scratch, absolute(sh, &scratch, file));
+    return status;
 }

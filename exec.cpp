@@ -3863,6 +3863,9 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
         }
         L->cmdlines = 0;
         if (L->hist) sh->hist.cmdlines = 0;
+        // With history, set -v echoes the lines as expanded
+        L->echoing = L->hist && sh->opt[O_VERBOSE];
+        if (L->echoing) L->echo = Buf(L->a, 128);
         Parsed r = parseunit(L);
         if (r.status != PARSE_EOF) {
             sh->lexeof = L->current == T_EOF;
@@ -3871,8 +3874,9 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             // set -v: echo the input lines as they are read, each
             // with a newline as the lexer sees it
             Str text = span(L->src.data+pos, L->src.data+L->srcpos);
-            fdwrite(sh, 2, text);
-            if (text[text.len-1] != '\n') fdwrite(sh, 2, "\n");
+            if (L->echoing) text = finish(&L->echo);
+            if (text.len) fdwrite(sh, 2, text);
+            if (text.len && text[text.len-1]!='\n') fdwrite(sh, 2, "\n");
         }
         // Report parser messages
         Arena msgarena = *L->a;
@@ -3922,7 +3926,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             sh->status = 1;
             continue;
         }
-        if (r.cmd && !(sh->opt[O_NOEXEC] && !sh->interactive)) {
+        if (r.cmd && !sh->opt[O_NOEXEC]) {
             // As in bash, LINENO is where the parser stopped until a
             // command sets it: a compound command's redirections cite
             // its last line

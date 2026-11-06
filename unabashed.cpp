@@ -1394,6 +1394,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             }
             histvarchanged(sh, "HISTCONTROL");
             histvarchanged(sh, "histchars");
+            histvarchanged(sh, "HISTTIMEFORMAT");
             // As bash, it takes SIGINT even if ignored on entry, and
             // acts on INT, QUIT and TERM itself
             sh->hardign &= ~sigbit(2);
@@ -1409,7 +1410,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             if (!getvar(sh, &scratch, "PS1").set) setvar(sh, scratch, "PS1", "\\s-\\v\\$ ");
             if (!getvar(sh, &scratch, "PS2").set) setvar(sh, scratch, "PS2", "> ");
             b32 tty = os_isatty(os, info->std[0]) || os_isatty(os, info->std[2]);
-            if (!st.busybox && !tty) {
+            if (!st.busybox && !tty && !sh->opt[O_NOEXEC]) {
                 // As bash finding no terminal for job control (a
                 // terminal on either stream stands in for /dev/tty)
                 Str name = progbase(sh->shellname);

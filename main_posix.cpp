@@ -141,6 +141,11 @@ static Opened os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode)
     return r;
 }
 
+static i32 os_unlink(Os *, Arena scratch, Str path)
+{
+    return unlink(cpath(&scratch, path)) ? errno : 0;
+}
+
 static Opened os_tempfile(Os *os, Arena scratch)
 {
     // As bash: created in TMPDIR (or /tmp), then unlinked, readable

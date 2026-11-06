@@ -253,6 +253,8 @@ static Opened  os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode);
 // deleted once its last handle closes (large here-documents).
 static Opened  os_tempfile(Os *, Arena scratch);
 static void    os_close(Os *, Handle);
+// Remove a file (not a directory) by absolute path: an error, or 0.
+static i32     os_unlink(Os *, Arena scratch, Str path);
 // A second handle to the same open file.
 static Handle  os_dup(Os *, Handle);
 static OsPipe  os_pipe(Os *);

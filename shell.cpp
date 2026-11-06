@@ -427,6 +427,8 @@ struct Hist {      // in the Shell by value: a subshell's changes roll back
     b32       lastpushed;  // that entry came from history -s
     b32       lastheredoc; // a here-document starts on the last line
     b32       expinhibit;  // history expansion off with history
+    b32       ready;       // set up: variables now steer it
+    b32       writets;     // HISTTIMEFORMAT set: files get time stamps
     u8        expchar;     // histchars
     u8        subchar;
     u8        comchar;

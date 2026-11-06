@@ -335,6 +335,8 @@ struct Lexer {
     void    *histctx;
     i32      cmdlines;   // lines read for this command
     b32      heredocfirst;   // reading the first here-document line
+    Buf      echo;       // set -v with hist: the lines as hist left them
+    b32      echoing;
 
     // Token history and state
     i32      current;
@@ -623,6 +625,10 @@ static void nextline(Lexer *L, b32 remove)
             Str t = {allocbytes(L->a, s.len+1), s.len};
             copybytes(t.data, s.data, s.len);
             s = t;
+        }
+        if (L->echoing) {
+            print(&L->echo, s);
+            if (c.ok) putbyte(&L->echo, '\n');
         }
         b32 bs = 0;
         for (iz i = 0; i < s.len; i++) bs = !bs && s[i]=='\\';
@@ -1612,6 +1618,7 @@ static void readheredoc(Lexer *L, Redir *r, i32 lineno)
                 L->cmdlines++;
                 L->hist(L->histctx, L, line, 1);
             }
+            if (L->echoing) print(&L->echo, line);
         }
         L->heredocfirst = 0;
         if (strip && line.len) {
