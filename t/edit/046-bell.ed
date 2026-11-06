@@ -1,0 +1,12 @@
+# bell-style: visible flashes (no bell), none is silent, audible rings
+size 8 40
+rc PS1='$ '
+rc printf '%s\n' 'set bell-style visible' > ~/.inputrc
+rc printf '%s\n' 'set bell-style none' > ~/v2
+rc printf '%s\n' 'set bell-style audible' > ~/v3
+keys \C-g
+snap
+keys cp ~/v2 ~/.inputrc\r\C-x\C-r\C-g
+snap
+keys cp ~/v3 ~/.inputrc\r\C-x\C-r\C-g
+snap

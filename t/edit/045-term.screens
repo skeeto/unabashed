@@ -1,0 +1,34 @@
+== snap 1
+<jklmnopqrstuvwxyz
+@ 0,18
+== snap 2
+<jklmnopqrstuvwxyz
+0123456789abcdefghijklmnopqrst
+uvwxyz
+$ TERM=nosuchterm
+<jklmnopqrstuvwxyz
+@ 4,18
+== snap 3
+<jklmnopqrstuvwxyz
+0123456789abcdefghijklmnopqrst
+uvwxyz
+$ TERM=nosuchterm
+<jklmnopqrstuvwxyz
+0123456789abcdefghijklmnopqrst
+uvwxyz
+$ TERM=xterm-256color
+$ echo 0123456789abcdefghijklm
+nopqrstuvwxyz
+@ 9,13
+== snap 4
+$ TERM=nosuchterm
+<jklmnopqrstuvwxyz
+0123456789abcdefghijklmnopqrst
+uvwxyz
+$ TERM=xterm-256color
+$ echo 0123456789abcdefghijklm
+nopqrstuvwxyz
+0123456789abcdefghijklmnopqrst
+uvwxyz
+$
+@ 9,2

@@ -1,0 +1,17 @@
+== snap 1
+$
+@ 0,2
+== snap 2
+$ cp ~/v2 ~/.inputrc
+$
+@ 1,2
+== snap 3
+$ cp ~/v2 ~/.inputrc
+$ cp ~/v3 ~/.inputrc
+$
+@ 2,2 bell 1
+== snap 4
+$ cp ~/v2 ~/.inputrc
+$ cp ~/v3 ~/.inputrc
+$
+@ 2,2 bell 1

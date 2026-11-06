@@ -3449,6 +3449,11 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes, b32 win = 0)
         "PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games\n"
         "export PATH\n");
     vmkdirs(v, "dev");
+    // The terminal database entries the editor looks for (eddumb)
+    vputfile(v, "usr/share/terminfo/x", "xterm", "");
+    vputfile(v, "usr/share/terminfo/x", "xterm-256color", "");
+    vputfile(v, "usr/share/terminfo/d", "dumb", "");
+    vputfile(v, "usr/share/terminfo/v", "vt100", "");
     VNode *bin = vnew(v, v->root, "bin", FT_LINK, 0777);
     bin->data = "usr/bin";
     for (iz i = 0; i < nfakes; i++) {

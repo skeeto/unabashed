@@ -1,0 +1,16 @@
+# The terminal database: TERM unset, or naming no terminfo entry, draws
+# as a dumb terminal (one row, scrolled sideways); a known name wraps
+size 10 30
+rc PS1='$ '
+rc unset TERM
+keys echo 0123456789abcdefghijklmnopqrstuvwxyz
+snap
+keys \r
+keys TERM=nosuchterm\r
+keys echo 0123456789abcdefghijklmnopqrstuvwxyz
+snap
+keys \r
+keys TERM=xterm-256color\r
+keys echo 0123456789abcdefghijklmnopqrstuvwxyz
+snap
+keys \r

@@ -740,12 +740,17 @@ static void rlttychars(Editor *ed)
         {ed->tty.lnext,  EF_QUOTED_INSERT},
         {ed->tty.werase, EF_UNIX_WORD_RUBOUT},
     };
-    for (iz i = 0; i < countof(m); i++) {
-        if (!m[i].c) continue;
-        KeyNode *k = keychild(&ed->root, m[i].c);
-        if (k && k->kids) continue;
-        k = keyget(&ed->perm, &ed->root, m[i].c);
-        k->fn    = m[i].fn;
-        k->macro = {};
+    // The last line's characters become self-insert, then this line's
+    // are bound, touching only keys bound to functions
+    for (i32 pass = 0; pass < 2; pass++) {
+        for (iz i = 0; i < countof(m); i++) {
+            u8 c = pass ? m[i].c : ed->ttysaved[i];
+            if (!c) continue;
+            KeyNode *k = keychild(&ed->root, c);
+            if (k && (k->kids || k->fn==EF_MACRO)) continue;
+            k = keyget(&ed->perm, &ed->root, c);
+            k->fn = pass ? m[i].fn : EF_SELF_INSERT;
+        }
     }
+    for (iz i = 0; i < countof(m); i++) ed->ttysaved[i] = m[i].c;
 }

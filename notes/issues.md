@@ -52,10 +52,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   sh_mktmpfp's form; a failed editor leaves no message, as bash. (step 10)
 - `bash -i` whose input is not a terminal still reads with readline
   and echoes each line it reads; ours reads plainly. (step 2)
-- An unknown or unset TERM: readline draws as on a dumb terminal
-  (one row, scrolled sideways); ours does that only for TERM=dumb,
-  since a Windows console usually has no TERM. Decide with the
-  terminal database question at step 7. (step 7)
 - Unbound key sequences: readline's handling (bell, which bytes are
   dropped or inserted) not yet checked against recordings. (step 2)
 - A byte that breaks a UTF-8 sequence in self-insert is dropped;
@@ -92,10 +88,9 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 - inputrc with CRLF lines: msys mode strips the CR, POSIX keeps it, as
   readline does; not recorded (the vos runs one personality), and the
   install's /etc/inputrc under msys is untested. (step 8)
-- bell-style visible writes `\e[?5h\e[?5l`, xterm's flash without its
-  100 ms delay; not compared with readline's termcap vb. The tty
-  special characters are rebound on each line, but characters that
-  were special on an earlier line are not reset to self-insert. (step 7)
+- A terminal special character that stops being one (stty) becomes
+  self-insert on the next line, as readline; untested, since neither
+  the vos nor the oracle's PATH has stty. (step 10)
 
 Moved from M5a: needs the completion engine.
 

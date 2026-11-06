@@ -351,6 +351,8 @@ struct Editor {
     b32      rlreading; // messages give the file and line
     b32      ifoff;     // in a false $if
     Slice<b32> ifstack; // the enclosing $ifs' ifoff, never reset
+    u8       ttysaved[4];  // the terminal's erase, kill, lnext, werase
+                           // as last bound
     // The line being edited
     Buf      line;
     iz       point;
@@ -2885,6 +2887,66 @@ static i64 edchars(Editor *ed)
 // Read a line on the terminal with the editor, the prompt shown first.
 // ED_NOTTY if the input (descriptor 0, or opts->fd) and descriptor 2
 // are not one terminal. With opts, for read -e.
+// Whether to draw as on a dumb terminal: TERM=dumb and, as readline
+// does when the terminal database knows no such terminal, on POSIX an
+// unset TERM or one without a terminfo entry. A Windows console needs
+// no TERM.
+static b32 eddumb(Shell *sh, Arena a)
+{
+    Got term = getvar(sh, &a, "TERM");
+    Str name = term.value;
+    if (name == "dumb") return 1;
+    if (sh->pathmode != PM_POSIX) return 0;
+    if (!name.len) return 1;
+    for (iz i = 0; i < name.len; i++) {
+        if (name[i] == '/') return 1;
+    }
+
+    // ncurses's search: TERMINFO, ~/.terminfo, TERMINFO_DIRS (an empty
+    // element and an unset variable meaning the system's), the system's
+    Str dirs[16];
+    i32 ndirs = 0;
+    Got ti = getvar(sh, &a, "TERMINFO");
+    if (ti.value.len) dirs[ndirs++] = ti.value;
+    Got home = getvar(sh, &a, "HOME");
+    if (home.value.len) dirs[ndirs++] = concat(&a, home.value, "/.terminfo");
+    Str sys[] = {"/etc/terminfo", "/lib/terminfo", "/usr/share/terminfo"};
+    Got td = getvar(sh, &a, "TERMINFO_DIRS");
+    b32 addsys = !td.set;
+    for (Str rest = td.value; td.set;) {
+        Cut c = cut(rest, ':');
+        if (!c.head.len) {
+            addsys = 1;
+        } else if (ndirs < countof(dirs)-countof(sys)) {
+            dirs[ndirs++] = c.head;
+        }
+        if (!c.ok) break;
+        rest = c.tail;
+    }
+    if (addsys) {
+        for (iz i = 0; i < countof(sys); i++) dirs[ndirs++] = sys[i];
+    }
+
+    u8 hex[] = "0123456789abcdef";
+    for (i32 i = 0; i < ndirs; i++) {
+        u8  c = name[0];
+        Str sub[] = {{&c, 1}, {}};
+        u8  h[2] = {hex[c>>4], hex[c&15]};
+        sub[1] = {h, 2};
+        for (iz j = 0; j < countof(sub); j++) {
+            Arena t = a;
+            Buf   b(&t, 64);
+            print(&b, dirs[i]);
+            print(&b, "/");
+            print(&b, sub[j]);
+            print(&b, "/");
+            print(&b, name);
+            if (!pathstat(sh, t, finish(&b), 1).err) return 0;
+        }
+    }
+    return 1;
+}
+
 static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
 {
     EdRead none = {};
@@ -2912,7 +2974,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     ed->delim   = opts->delim;
     ed->nchars  = opts->nchars;
     ed->silent  = opts->silent;
-    ed->hscroll = ed->tty.rows<=1 || getvar(sh, &ed->linemem, "TERM").value=="dumb";
+    ed->hscroll = ed->tty.rows<=1 || eddumb(sh, ed->linemem);
     ed->lmargin = ed->hshown = ed->unread = 0;
     if (!ed->inited) {
         ed->inited = 1;
