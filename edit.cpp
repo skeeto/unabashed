@@ -2936,17 +2936,20 @@ static void edarg(Editor *ed, Shell *sh, i32 key)
             }
         }
         if (c>='0' && c<='9') {
-            i32 d = c - '0';
-            ed->count  = ed->argset ? ed->count*10+d : d;
+            // An argument already negated (M-- then a key) grows away
+            // from zero too; past a million in size, as readline, none
+            i64 d = c - '0';
+            i64 n = !ed->argset ? d : ed->count<0 ? ed->count*10-d : ed->count*10+d;
             ed->argset = 1;
             sawdigits  = 1;
-            if (ed->count > 1000000) {
+            if (n<-1000000 || n>1000000) {
                 edbell(ed);
                 edresetarg(ed);
                 ed->count = 0;
                 ed->prompt = prompt;
                 return;
             }
+            ed->count = (i32)n;
         } else if (c=='-' && !ed->argset) {
             ed->count  = 1;
             ed->argneg = 1;

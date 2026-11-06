@@ -1245,8 +1245,9 @@ static b32 os_con(Os *os, Handle out, ConOp *o)
 // The editor's check (EDIT_CHECK): what a redisplay leaves on the
 // screen, from the prompt's row down, equals its layout drawn on a
 // blank screen, with the cursor at point. Not checked: a line started
-// past the left margin or with attributes on (as readline, it draws as
-// though it had not), one that ever got taller than the screen (its
+// past the left margin, over old text or with attributes on (as
+// readline, it draws as though it had not), one that ever got taller
+// than the screen (its
 // top is lost) or that others wrote over (shell-expand-line's command
 // substitutions), until a redraw from the margin; sideways scrolling.
 static b32 edcellsame(VCell a, VCell b)
@@ -1264,7 +1265,14 @@ static void edcheck(Editor *ed, Shell *sh, i32 how)
     if (!t || !vistty(v, ed->out)) return;
     switch (how) {
     case EDCHECK_START:
-        y->edoff     = t->col!=0 || t->wrapnext;
+        // Off the margin, or over old text: output with escapes in it
+        // (an error message quoting what was typed) can move the
+        // cursor up, and the editor, as readline, draws a new line as
+        // though on blank rows
+        y->edoff = t->col!=0 || t->wrapnext;
+        for (i32 i = t->row*t->cols; i < t->rows*t->cols; i++) {
+            y->edoff |= t->cells[i].c > 0;
+        }
         y->edattr    = t->attr != 0;
         y->edlost    = 0;
         y->edforeign = 0;
@@ -1284,16 +1292,25 @@ static void edcheck(Editor *ed, Shell *sh, i32 how)
     }
     Layout *l    = &ed->shown;
     i32     need = l->nrows;  // rows that must be on the screen
-    if (need>1 && !l->rows[need-1].ncells && l->prow<need-1) {
-        need--;  // as readline, the empty row past a full one is not drawn
+    while (need>1 && !l->rows[need-1].ncells && l->prow<need-1) {
+        // Empty rows below the cursor (after a newline in the line, or
+        // past a full row) are not drawn: the editor reaches them with
+        // newlines, which scroll
+        need--;
     }
-    if (need > t->rows) y->edlost = 1;
+    if (l->nrows > t->rows) y->edlost = 1;  // even an empty row may be drawn
     if (y->edoff || y->edattr || y->edlost || y->edforeign || ed->hscroll) return;
     if (t->rows!=ed->tty.rows || t->cols!=ed->tty.cols) return;  // unseen resize
 
-    Arena  a   = v->a;
-    i32    top = t->row - ed->crow;
-    VTerm *r   = vtnew(&a, l->nrows+t->rows, t->cols, t->xenl);
+    i32 top = t->row - ed->crow;
+    if (top < 0) {
+        // Its top scrolled away: as readline, a full last row's wrap
+        // can take one more row than the screen has
+        y->edlost = 1;
+        return;
+    }
+    Arena  a = v->a;
+    VTerm *r = vtnew(&a, l->nrows+t->rows, t->cols, t->xenl);
     for (i32 i = 0; i < l->nrows; i++) {
         vtmoveto(r, i, 0);
         r->wrapnext = 0;
@@ -1303,12 +1320,12 @@ static void edcheck(Editor *ed, Shell *sh, i32 how)
         // vtcon draws no underline
         for (iz i = 0; i < (iz)r->rows*r->cols; i++) r->cells[i].attr &= ~VA_UNDER;
     }
-    b32 ok = top>=0 && top+need<=t->rows;
+    b32 ok = top+need <= t->rows;
     ok = ok && ed->crow==l->prow && ed->ccol==l->pcol && !ed->pending;
     ok = ok && t->col==l->pcol && !t->wrapnext;
     i32 badrow = -1;
     i32 badcol = -1;
-    for (i32 row = top<0 ? 0 : top; ok && row < t->rows; row++) {
+    for (i32 row = top; ok && row < t->rows; row++) {
         for (i32 c = 0; ok && c < t->cols; c++) {
             ok = edcellsame(*vtcell(t, row, c), *vtcell(r, row-top, c));
             badrow = ok ? -1 : row;

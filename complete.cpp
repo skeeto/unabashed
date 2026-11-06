@@ -250,10 +250,13 @@ static b32 compexists(Shell *sh, Arena a, Str path)
 // substitution); null if expansion fails.
 static Str compexpdir(Shell *sh, Arena *a, Str dir)
 {
-    // Parameters only: never a command substitution
+    // Parameters only: never a command substitution, nor ${ cmd; } and
+    // ${| cmd; }, which run in the shell itself
     if (!compin(dir, '$') || compin(dir, '`')) return dir;
     for (iz i = 0; i+1 < dir.len; i++) {
-        if (dir[i]=='$' && dir[i+1]=='(') return dir;
+        if (dir[i] != '$') continue;
+        if (dir[i+1] == '(') return dir;
+        if (dir[i+1]=='{' && i+2<dir.len && compin(" \t\n|", dir[i+2])) return dir;
     }
     if (compexists(sh, *a, dir)) return dir;
     Escape e = {};
