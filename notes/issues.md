@@ -26,7 +26,12 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 
 ## M6 (editor)
 
-- `read -p/-s/-e/-i` do nothing yet (need the terminal layer). (m4.md)
+- `read -e -t`: the timeout does not apply while the editor reads.
+  (step 2)
+- `read -s` in a non-interactive script killed by Ctrl-C: the terminal
+  is restored on the escape out of read, but not tested on a real
+  terminal; Windows `read -n` echoes the bytes itself (the console
+  echoes only whole lines). (step 2)
 - An interactive shell started with Ctrl-C ignored (Win32: the
   inherited ConsoleFlags bit, from a parent's SetConsoleCtrlHandler(0,
   1); POSIX: SIGINT ignored on entry) never sees Ctrl-C, so typing it

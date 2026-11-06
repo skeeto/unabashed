@@ -234,6 +234,8 @@ static i32 b_test(Shell *sh, Str *args, iz nargs, Arena scratch)
 // Control flow
 
 static void logoutfiles(Shell *, Arena);  // unabashed.cpp
+static i32  editline(Shell *, Str prompt, Buf *out, EdRead *);  // edit.cpp
+static void sigsend(Shell *, Sigproc *, i32);  // trap.cpp
 
 static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
@@ -2112,6 +2114,8 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     i64 timeout = 0;
     Str prompt = {};
     Str arrname = {};
+    Str itext = {};
+    b32 edit = 0;
     iz  i = 1;
     for (; i<nargs && args[i].len>1 && args[i][0]=='-'; i++) {
         Str a = args[i];
@@ -2135,7 +2139,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             switch (c) {
             case 'r': raw = 1; break;
             case 's': silent = 1; break;
-            case 'e': case 'E': break;
+            case 'e': case 'E': edit = 1; break;
             case 'p': prompt = val; break;
             case 'd': delim = val.len ? val[0] : 0; break;
             case 'n':
@@ -2166,17 +2170,20 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                 fd = (i32)v;
             } break;
             case 'a': arrname = val; break;
-            case 'i': break;
+            case 'i': itext = val; break;
             default:
                 invalidoption(sh, scratch, "read", span(a.data+k-1, a.data+k+1));
                 return 2;
             }
         }
     }
-    // The prompt and -s apply only to a terminal, which input never is
-    (void)silent;
-    (void)prompt;
-    File *in = sh->fds->fd[fd];
+    // The prompt, -e, -i and -s apply only to a terminal
+    File *in  = sh->fds->fd[fd];
+    b32   tty = in && in->kind==F_OS && os_isatty(sh->os, in->h);
+    if (!tty) {
+        prompt = itext = {};
+        edit = silent = 0;
+    }
     if (timed && !timeout) {
         return !inputready(sh, in);  // -t 0: is there input?
     }
@@ -2198,6 +2205,48 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         notident(sh, scratch, "read", args[i]);
         return 1;
     }
+
+    // On a terminal without the editor, its own line editing reads,
+    // echoing or not; with -n or -d, a byte at a time
+    i32    ttymode = 0;
+    Handle ttyout  = 0;
+    b32    selfecho = 0;  // a Windows console cannot echo single bytes
+    if (tty && !edit) {
+        if (nchars>0 || delim!='\n') {
+            ttymode = silent ? TTY_CHARSNOECHO : TTY_CHARS;
+        } else if (silent) {
+            ttymode = TTY_NOECHO;
+        }
+        File *ferr = sh->fds->fd[2];
+        ttyout = ferr && ferr->kind==F_OS ? ferr->h : in->h;
+    }
+    Escape te = {};
+    if (ttymode) {
+        Tty t = os_tty(sh->os, in->h, ttyout, ttymode);
+        if (t.err) {
+            ttymode = 0;
+        } else {
+            // restored on the way out, however it goes
+            selfecho = t.noecho;
+            te.up    = sh->esc;
+            te.bout  = sh->bout;
+            te.undo  = sh->undo;
+            te.frame = sh->frame;
+            sh->esc  = &te;
+            if (__builtin_setjmp(te.jmp)) {
+                sh->esc = te.up;
+                os_tty(sh->os, in->h, ttyout, TTY_RESTORE);
+                escape(sh, te.why);
+            }
+        }
+    }
+    if (prompt.len && !edit) fdwrite(sh, 2, prompt);
+    EdRead eo = {};
+    eo.init   = itext;
+    eo.fd     = fd;
+    eo.delim  = delim=='\n' ? -1 : delim;
+    eo.nchars = nchars>0 ? nchars : 0;
+    eo.silent = silent;
 
     // Read the raw line, keeping track of which bytes were escaped
     Buf line(&scratch, 128);
@@ -2248,7 +2297,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     // delimiter: a regular file in blocks, then seeking back to just
     // past it, as bash does, and a pipe the platform can look into
     // (os_peek), exactly through it. Otherwise a byte at a time.
-    b32 peekable = in && in->kind==F_OS && (in->flags & OF_READ);
+    b32 peekable = in && in->kind==F_OS && (in->flags & OF_READ) && !edit;
     b32 seekable = 0;
     if (peekable && os_peek(sh->os, in->h, 0, 0)<0) {
         peekable = 0;
@@ -2310,12 +2359,38 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             }
         } else if (aoff < alen) {
             c = ahead[aoff++];
+        } else if (edit) {
+            // read -e: the next line from the editor, as typed, and its
+            // delimiter
+            Buf got(&scratch, 128);
+            i32 r = editline(sh, prompt, &got, &eo);
+            eo.init = {};
+            if (r == ED_INTR) {
+                // as the terminal's SIGINT would
+                sigsend(sh, sh->sig, 2);
+                sigfatal(sh);
+                runsigs(sh, scratch);
+                return 128 + 2;
+            }
+            if (r != ED_LINE) {
+                c = -1;
+            } else {
+                if (delim) putbyte(&got, (u8)delim);
+                ahead = got.data;
+                alen  = got.len;
+                aoff  = 0;
+                c = alen ? ahead[aoff++] : delim;
+            }
         } else {
             sh->intrread = self->introk = 1;
             self->deadline = deadline;
             c = readbyte(sh, fd);
             self->deadline = 0;
             sh->intrread = self->introk = 0;
+            if (selfecho && c>=0) {
+                u8 b = (u8)c;
+                os_write(sh->os, ttyout, b=='\n' ? (u8 *)"\r\n" : &b, b=='\n' ? 2 : 1);
+            }
         }
         if (self->timedout) {
             self->timedout = 0;
@@ -2323,6 +2398,10 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             break;
         }
         if (c == -2) {
+            if (ttymode) {
+                sh->esc = te.up;
+                os_tty(sh->os, in->h, ttyout, TTY_RESTORE);
+            }
             Str msg = concat(&scratch, fmti64(&scratch, fd), ": read error: Bad file descriptor");
             builtinerror(sh, scratch, "read", msg);
             return 1;
@@ -2360,7 +2439,13 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                 eof = 1;
                 break;
             }
-            if (d == '\n') continue;  // line continuation
+            if (d == '\n') {
+                // a line continuation, prompted for as bash does
+                if (sh->interactive && tty && !edit) {
+                    fdwrite(sh, 2, getvar(sh, &scratch, "PS2").value);
+                }
+                continue;
+            }
             putbyte(&line, (u8)d);
             putbyte(&esc, 1);
             count += !sh->utf8 || charstart((u8)d, &pend);
@@ -2371,6 +2456,10 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         putbyte(&line, (u8)c);
         putbyte(&esc, 0);
         count += !sh->utf8 || charstart((u8)c, &pend);
+    }
+    if (ttymode) {
+        sh->esc = te.up;
+        os_tty(sh->os, in->h, ttyout, TTY_RESTORE);
     }
     if (!done) {
         s = finish(&line);

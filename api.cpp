@@ -211,7 +211,13 @@ enum : i32 {  // os_tty
     TTY_RAW,      // bytes as typed, no echo, no line editing, no
                   // signals from keys; output interprets the VT subset,
                   // and \n may or may not return the carriage
-    TTY_RESTORE,  // back to the mode it had before TTY_RAW
+    TTY_RESTORE,  // back to the mode it had before any change
+    // For the read builtin: the terminal's own line editing and signals
+    // from keys stay, CR still arrives as 
+
+    TTY_NOECHO,   // lines, not echoed (read -s)
+    TTY_CHARS,    // each byte as typed, echoed (read -n, -d)
+    TTY_CHARSNOECHO,  // each byte as typed, not echoed (read -sn)
 };
 
 struct Tty {
@@ -221,6 +227,8 @@ struct Tty {
     b32 xenl;   // deferred wrap: a write to the last column leaves the
                 // cursor there until the next character
     b32 legacy; // a Windows console without VT processing (vtcon.cpp)
+    b32 noecho; // TTY_CHARS asked for an echo the terminal cannot give
+                // (a Windows console): the caller echoes what it reads
     u8  intr;   // the terminal's special characters, 0 if none
     u8  eof;
     u8  erase;

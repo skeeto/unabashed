@@ -1,0 +1,30 @@
+# read -e: the editor with -p, -i, -n, -d, Ctrl-C and Ctrl-D
+size 16 40
+rc PS1='$ '
+keys read -e -p 'edit> ' -i 'some text' x; echo "[$x]"\r
+snap
+keys \C-a\C-dS\r
+snap
+keys read -e -n 3 x; echo "[$x]"\r
+keys abc
+snap
+keys read -e -d , x; echo "[$x]"\r
+keys a b,
+snap
+keys clear\r
+keys read -e x; echo "[$? $x]"\r
+keys part\C-c
+snap
+keys echo $?\r
+snap
+keys read -e x; echo "[$? $x]"\r
+keys \C-d
+snap
+keys read -ers -p 'quiet> ' x; echo "[$x]"\r
+keys hidden\r
+snap
+keys read -e -p 'p> ' x\r
+keys abcdef\C-b\C-b\C-c
+snap
+keys read -e x <<< 'not a tty'; echo "[$x]"\r
+snap

@@ -1,0 +1,160 @@
+== snap 1
+$ read -e -p 'edit> ' -i 'some text' x;
+echo "[$x]"
+edit> some text
+@ 2,15
+== snap 2
+$ read -e -p 'edit> ' -i 'some text' x;
+echo "[$x]"
+edit> Some text
+[Some text]
+$
+@ 4,2
+== snap 3
+$ read -e -p 'edit> ' -i 'some text' x;
+echo "[$x]"
+edit> Some text
+[Some text]
+$ read -e -n 3 x; echo "[$x]"
+abc
+[abc]
+$
+@ 7,2
+== snap 4
+$ read -e -p 'edit> ' -i 'some text' x;
+echo "[$x]"
+edit> Some text
+[Some text]
+$ read -e -n 3 x; echo "[$x]"
+abc
+[abc]
+$ read -e -d , x; echo "[$x]"
+a b
+[a b]
+$
+@ 10,2
+== snap 5
+$ read -e -p 'edit> ' -i 'some text' x;
+echo "[$x]"
+edit> Some text
+[Some text]
+$ read -e -n 3 x; echo "[$x]"
+abc
+[abc]
+$ read -e -d , x; echo "[$x]"
+a b
+[a b]
+$ clear
+bash: clear: command not found
+$ read -e x; echo "[$? $x]"
+^C
+$
+@ 14,2
+== snap 6
+echo "[$x]"
+edit> Some text
+[Some text]
+$ read -e -n 3 x; echo "[$x]"
+abc
+[abc]
+$ read -e -d , x; echo "[$x]"
+a b
+[a b]
+$ clear
+bash: clear: command not found
+$ read -e x; echo "[$? $x]"
+^C
+$ echo $?
+130
+$
+@ 15,2
+== snap 7
+$ read -e -n 3 x; echo "[$x]"
+abc
+[abc]
+$ read -e -d , x; echo "[$x]"
+a b
+[a b]
+$ clear
+bash: clear: command not found
+$ read -e x; echo "[$? $x]"
+^C
+$ echo $?
+130
+$ read -e x; echo "[$? $x]"
+
+[1 ]
+$
+@ 15,2
+== snap 8
+$ read -e -d , x; echo "[$x]"
+a b
+[a b]
+$ clear
+bash: clear: command not found
+$ read -e x; echo "[$? $x]"
+^C
+$ echo $?
+130
+$ read -e x; echo "[$? $x]"
+
+[1 ]
+$ read -ers -p 'quiet> ' x; echo "[$x]"
+quiet>
+[hidden]
+$
+@ 15,2
+== snap 9
+[a b]
+$ clear
+bash: clear: command not found
+$ read -e x; echo "[$? $x]"
+^C
+$ echo $?
+130
+$ read -e x; echo "[$? $x]"
+
+[1 ]
+$ read -ers -p 'quiet> ' x; echo "[$x]"
+quiet>
+[hidden]
+$ read -e -p 'p> ' x
+p> ^C
+$
+@ 15,2
+== snap 10
+bash: clear: command not found
+$ read -e x; echo "[$? $x]"
+^C
+$ echo $?
+130
+$ read -e x; echo "[$? $x]"
+
+[1 ]
+$ read -ers -p 'quiet> ' x; echo "[$x]"
+quiet>
+[hidden]
+$ read -e -p 'p> ' x
+p> ^C
+$ read -e x <<< 'not a tty'; echo "[$x]"
+[not a tty]
+$
+@ 15,2
+== snap 11
+bash: clear: command not found
+$ read -e x; echo "[$? $x]"
+^C
+$ echo $?
+130
+$ read -e x; echo "[$? $x]"
+
+[1 ]
+$ read -ers -p 'quiet> ' x; echo "[$x]"
+quiet>
+[hidden]
+$ read -e -p 'p> ' x
+p> ^C
+$ read -e x <<< 'not a tty'; echo "[$x]"
+[not a tty]
+$
+@ 15,2

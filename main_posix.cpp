@@ -32,7 +32,7 @@ struct Os {
     u64    changed;     // signals whose disposition the shell changed
     iz     reserve;     // OsInfo.reserve, for a forked image child
     iz     stack;       // OsInfo.stack, likewise
-    b32    ttyraw;      // os_tty: the terminal is in raw mode
+    i32    ttyraw;      // os_tty: the mode set (TTY_*), 0 if never changed
     termios ttysave;    // and its mode before
 };
 
@@ -331,19 +331,35 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
         r.err = E_NOTTY;
         return r;
     }
-    if (how==TTY_RAW && !os->ttyraw) {
-        os->ttyraw  = 1;
-        os->ttysave = t;
-        termios raw = t;
-        raw.c_lflag &= ~(tcflag_t)(ICANON|ECHO|ISIG|IEXTEN);
-        raw.c_iflag &= ~(tcflag_t)(ICRNL|INLCR|IGNCR|IXON);
-        raw.c_cc[VMIN]  = 1;
-        raw.c_cc[VTIME] = 0;
-        tcsetattr((i32)in, TCSADRAIN, &raw);
+    if (how==TTY_RAW && os->ttyraw==TTY_RAW) {
+        t = os->ttysave;  // already
+    } else if (how!=TTY_QUERY && how!=TTY_RESTORE) {
+        if (!os->ttyraw) os->ttysave = t;
+        os->ttyraw = how;
+        termios m = os->ttysave;
+        switch (how) {
+        case TTY_RAW:
+            m.c_lflag &= ~(tcflag_t)(ICANON|ECHO|ISIG|IEXTEN);
+            m.c_iflag &= ~(tcflag_t)(ICRNL|INLCR|IGNCR|IXON);
+            break;
+        case TTY_NOECHO:
+            m.c_lflag &= ~(tcflag_t)(ECHO|ECHOE|ECHOK|ECHONL);
+            break;
+        case TTY_CHARS:
+            m.c_lflag &= ~(tcflag_t)ICANON;
+            break;
+        case TTY_CHARSNOECHO:
+            m.c_lflag &= ~(tcflag_t)(ICANON|ECHO|ECHOE|ECHOK|ECHONL);
+            break;
+        }
+        m.c_cc[VMIN]  = 1;
+        m.c_cc[VTIME] = 0;
+        tcsetattr((i32)in, TCSADRAIN, &m);
+        t = os->ttysave;
         // A resize is a signal (SIGWINCH), unless something else
         // already handles it (a trap)
         struct sigaction sa = {};
-        if (!sigaction(SIGWINCH, 0, &sa) && sa.sa_handler==SIG_DFL) {
+        if (how==TTY_RAW && !sigaction(SIGWINCH, 0, &sa) && sa.sa_handler==SIG_DFL) {
             sigemptyset(&sa.sa_mask);
             sa.sa_flags   = SA_RESTART;
             sa.sa_handler = onsignal;

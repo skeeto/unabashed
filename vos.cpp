@@ -133,7 +133,7 @@ struct VProc {
 // take the script's keys. A snapshot of the screen (vtdump) is taken
 // at each VKEY_SNAP, and at the end of the script, which then reads as
 // end of file. In its cooked mode it does what a line discipline does
-// (echo, erase, kill, ^C, ^D); raw, as os_tty(TTY_RAW) describes.
+// (echo, erase, kill, ^C, ^D); the other modes as os_tty describes.
 struct VTty {
     VTerm *term;   // null: no such terminal
     VKey  *keys;
@@ -141,7 +141,7 @@ struct VTty {
     iz     next;   // the step in progress
     iz     pos;    // within its text
     i64    until;  // a pause in progress: its end, or 0
-    b32    raw;
+    i32    mode;   // TTY_*, 0 for the cooked mode it starts in
     b32    ended;  // the script ran out: its snapshot is taken
     Str    snaps;  // the snapshots, each after a "== snap N" line
     iz     snapcap;
@@ -898,8 +898,14 @@ static void vttysignal(Os *os, Vos *v, i32 sig)
     }
 }
 
+static b32 vnocanon(VTty *y)
+{
+    return y->mode==TTY_RAW || y->mode==TTY_CHARS || y->mode==TTY_CHARSNOECHO;
+}
+
 static void vttyecho(Vos *v, u8 c)
 {
+    if (v->tty.mode == TTY_NOECHO) return;
     if (c<0x20 && c!='\t' && c!='\n') {
         u8 s[2] = {'^', (u8)(c + '@')};
         vttyout(v, s, 2);
@@ -919,7 +925,7 @@ static void vttyrubout(Vos *v)
     iz  i = beg;
     i32 c = utf8decode({y->line, end}, &i);
     i32 w = c<0x20 ? 2 : cpwidth(c);
-    for (i32 k = 0; k < w; k++) vttyout(v, (u8 *)"\b \b", 3);
+    for (i32 k = 0; k<w && y->mode!=TTY_NOECHO; k++) vttyout(v, (u8 *)"\b \b", 3);
     y->linelen = beg;
 }
 
@@ -983,7 +989,7 @@ static b32 vttyready(Vos *v)
 {
     VTty *y = &v->tty;
     if (!y->term || y->settling) return 0;
-    if (!y->raw && (y->readylen || y->eof)) return 1;
+    if (!vnocanon(y) && (y->readylen || y->eof)) return 1;
     if (y->next >= y->nkeys) return 1;
     VKey *k = y->keys + y->next;
     if (k->kind != VKEY_PAUSE) return 1;
@@ -997,14 +1003,14 @@ static iz vttyget(Os *os, Vos *v, u8 *buf, iz len)
 {
     VTty *y = &v->tty;
     for (;;) {
-        if (!y->raw && y->readylen) {
+        if (!vnocanon(y) && y->readylen) {
             iz n = len<y->readylen ? len : y->readylen;
             copybytes(buf, y->ready, n);
             y->readylen -= n;
             for (iz i = 0; i < y->readylen; i++) y->ready[i] = y->ready[i+n];
             return n;
         }
-        if (!y->raw && y->eof) {
+        if (!vnocanon(y) && y->eof) {
             y->eof = 0;
             return 0;
         }
@@ -1022,12 +1028,24 @@ static iz vttyget(Os *os, Vos *v, u8 *buf, iz len)
             if (y->pos == k->text.len) {
                 y->next++;
                 y->pos = 0;
-            } else if (y->raw) {
+            } else if (y->mode == TTY_RAW) {
                 iz n = k->text.len - y->pos;
                 n = n<len ? n : len;
                 copybytes(buf, k->text.data+y->pos, n);
                 y->pos += n;
                 return n;
+            } else if (vnocanon(y)) {
+                // A byte at a time, with ^C, CR as \n and the echo
+                u8 c = k->text[y->pos++];
+                c = c=='\r' ? '\n' : c;
+                if (c == 0x03) {
+                    vttyout(v, (u8 *)"^C", 2);
+                    vttysignal(os, v, 2);
+                    continue;
+                }
+                if (y->mode == TTY_CHARS) vttyecho(v, c);
+                buf[0] = c;
+                return 1;
             } else {
                 vcooked(os, v, k->text[y->pos++]);
             }
@@ -1101,8 +1119,11 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
         r.err = E_NOTTY;
         return r;
     }
-    if (how == TTY_RAW)     y->raw = 1;
-    if (how == TTY_RESTORE) y->raw = 0;
+    if (how == TTY_RESTORE) {
+        y->mode = 0;
+    } else if (how != TTY_QUERY) {
+        y->mode = how;
+    }
     r.rows   = y->term->rows;
     r.cols   = y->term->cols;
     r.xenl   = y->term->xenl;

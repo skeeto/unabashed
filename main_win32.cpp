@@ -612,7 +612,7 @@ struct Os {
     i64        youngticks; // 100 ms: programs judged at a Ctrl-C
     Recent     recent[32];
     uz         jobport;    // job messages for watched programs
-    b32        ttyraw;     // os_tty: the console is in raw mode
+    b32        ttyraw;     // os_tty: the console's modes were changed
     i32        ttyinmode;  // and its modes before
     i32        ttyoutmode;
     uz         jobkeys;    // completion keys handed out
@@ -2732,16 +2732,32 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
         r.err = E_NOTTY;
         return r;
     }
-    if (how==TTY_RAW && !os->ttyraw) {
-        os->ttyraw     = 1;
-        os->ttyinmode  = imode;
-        os->ttyoutmode = omode;
-        i32 raw = imode & ~(CM_PROCESSED_INPUT|CM_LINE_INPUT|CM_ECHO_INPUT);
-        raw |= CM_WINDOW_INPUT;
-        if (!SetConsoleMode(in, raw|CM_VT_INPUT)) SetConsoleMode(in, raw);
-        i32 vt = omode | CM_PROCESSED_OUTPUT | CM_WRAP_AT_EOL | CM_VT_OUTPUT;
-        if (!SetConsoleMode(out, vt|CM_NO_AUTO_RETURN) && !SetConsoleMode(out, vt)) {
-            SetConsoleMode(out, omode);
+    if (how!=TTY_QUERY && how!=TTY_RESTORE) {
+        if (!os->ttyraw) {
+            os->ttyraw     = 1;
+            os->ttyinmode  = imode;
+            os->ttyoutmode = omode;
+        }
+        i32 base = os->ttyinmode;
+        switch (how) {
+        case TTY_RAW: {
+            i32 raw = base & ~(CM_PROCESSED_INPUT|CM_LINE_INPUT|CM_ECHO_INPUT);
+            raw |= CM_WINDOW_INPUT;
+            if (!SetConsoleMode(in, raw|CM_VT_INPUT)) SetConsoleMode(in, raw);
+            i32 vt = omode | CM_PROCESSED_OUTPUT | CM_WRAP_AT_EOL | CM_VT_OUTPUT;
+            if (!SetConsoleMode(out, vt|CM_NO_AUTO_RETURN) && !SetConsoleMode(out, vt)) {
+                SetConsoleMode(out, omode);
+            }
+        } break;
+        case TTY_NOECHO:
+            SetConsoleMode(in, base & ~CM_ECHO_INPUT);
+            break;
+        case TTY_CHARS:
+        case TTY_CHARSNOECHO:
+            // The console echoes only whole lines
+            SetConsoleMode(in, base & ~(CM_LINE_INPUT|CM_ECHO_INPUT));
+            r.noecho = how == TTY_CHARS;
+            break;
         }
     } else if (how==TTY_RESTORE && os->ttyraw) {
         os->ttyraw = 0;

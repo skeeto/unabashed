@@ -141,6 +141,10 @@ struct Editor {
     i32      setcols;
     // The display
     Str      prompt;    // the prompt's last line, \1 \2 marking the invisible
+    File    *fin;       // where keys come from
+    i32      delim;     // read -d: this byte accepts, CR inserts; or -1
+    i64      nchars;    // read -n: accept at this many characters, or 0
+    b32      silent;    // read -s: the line is not shown
     Layout   shown;
     i32      crow;      // where the cursor is, relative to the prompt's row
     i32      ccol;
@@ -150,8 +154,6 @@ struct Editor {
     b32      done;
     i32      result;    // ED_*
 };
-
-enum : i32 { ED_LINE, ED_EOF, ED_INTR, ED_NOTTY };
 
 static void edbindings(Editor *ed)
 {
@@ -459,7 +461,9 @@ static void redisplay(Editor *ed, Shell *sh)
     Arena *a = &ed->lay[!ed->cur];
     *a = {a->mem ? (byte *)(a->mem+1) : a->beg, a->end, a->mem};
     Str line = {ed->line.data, ed->line.len};
-    Layout nl = layout(a, ed->prompt, line, ed->point, ed->width);
+    iz  point = ed->point;
+    if (ed->silent) line = {}, point = 0;
+    Layout nl = layout(a, ed->prompt, line, point, ed->width);
     edupdate(ed, &nl);
     ed->cur = !ed->cur;
     edflush(ed, sh);
@@ -725,7 +729,7 @@ static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
     for (;;) {
         self->deadline = when;
         self->introk   = self->anysig = sh->intredit = 1;
-        n = readstdin(sh, sh->fds->fd[0], &c, 1);
+        n = readstdin(sh, ed->fin, &c, 1);
         self->introk   = self->anysig = sh->intredit = 0;
         if (n != -4) break;
         edresize(ed, sh);
@@ -752,6 +756,14 @@ static b32 eddispatch(Editor *ed, Shell *sh)
     if (c == ed->tty.intr) {
         ed->done   = 1;
         ed->result = ED_INTR;
+        return 1;
+    }
+    if (c == ed->delim) {
+        ed->done   = 1;
+        ed->result = ED_LINE;
+        return 1;
+    } else if (c=='\r' && ed->delim>=0) {
+        edrun(ed, sh, EF_SELF_INSERT, '\r');
         return 1;
     }
     KeyNode *n = keychild(&ed->root, (u8)c);
@@ -786,11 +798,23 @@ static void edsize(Editor *ed, Shell *sh, Tty t)
     setvar(sh, a, "COLUMNS", fmti64(&a, t.cols));
 }
 
-// Read a line on the terminal with the editor, the prompt shown first.
-// ED_NOTTY if descriptors 0 and 2 are not one terminal.
-static i32 editline(Shell *sh, Str prompt, Buf *out)
+// The number of characters in the line, for read -n.
+static i64 edchars(Editor *ed)
 {
-    File *fin  = sh->fds->fd[0];
+    i64 n = 0;
+    for (iz i = 0; i < ed->line.len; i++) n += (ed->line.data[i]&0xc0) != 0x80;
+    return n;
+}
+
+// Read a line on the terminal with the editor, the prompt shown first.
+// ED_NOTTY if the input (descriptor 0, or opts->fd) and descriptor 2
+// are not one terminal. With opts, for read -e.
+static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
+{
+    EdRead none = {};
+    none.delim = -1;
+    opts = opts ? opts : &none;
+    File *fin  = sh->fds->fd[opts->fd];
     File *ferr = sh->fds->fd[2];
     if (!fin || !ferr || fin->kind!=F_OS || ferr->kind!=F_OS) return ED_NOTTY;
     Editor *ed = editor(sh);
@@ -805,8 +829,13 @@ static i32 editline(Shell *sh, Str prompt, Buf *out)
     ed->linemem = {(byte *)(ed->linemem.mem+1), ed->linemem.end, ed->linemem.mem};
     ed->line    = Buf(&ed->linemem, 256);
     ed->out_    = Buf(&ed->linemem, 256);
-    ed->point   = 0;
     ed->done    = 0;
+    ed->fin     = fin;
+    ed->delim   = opts->delim;
+    ed->nchars  = opts->nchars;
+    ed->silent  = opts->silent;
+    print(&ed->line, opts->init);
+    ed->point   = ed->line.len;
 
     // Lines of the prompt before its last are written once
     iz nl = prompt.len;
@@ -823,21 +852,37 @@ static i32 editline(Shell *sh, Str prompt, Buf *out)
             ed->result = ED_EOF;
             break;
         }
-        if (ed->done) break;
+        if (!ed->done && ed->nchars && edchars(ed)>=ed->nchars) {
+            ed->done   = 1;  // shown first
+            ed->result = ED_LINE;
+        }
+        if (ed->done && ed->result!=ED_LINE) break;
         redisplay(ed, sh);
+        if (ed->done) break;
     }
 
     // Leave the cursor past the line
     Layout *l = &ed->shown;
+    b32 crlf = 1;
     if (ed->result == ED_INTR) {
+        if (opts != &none) {
+            // read -e: as readline on SIGINT, the line goes first
+            ed->line.len = ed->point = 0;
+            redisplay(ed, sh);
+        }
         // Echoed at the cursor, over the rest of the line, as by the
         // terminal's own line discipline
         edput(ed, "^C");
         if (ed->crow < l->nrows-1) edmove(ed, l->nrows-1, 0);
+    } else if (l->nrows>1 && !l->rows[l->nrows-1].ncells && !ed->ccol && !ed->pending) {
+        // As readline: the cursor alone at the start of the empty row
+        // past a full one is already past the line
+        edmove(ed, l->nrows-1, 0);
+        crlf = 0;
     } else {
         edmove(ed, l->nrows-1, l->rows[l->nrows-1].width);
     }
-    edput(ed, "\r\n");
+    if (crlf) edput(ed, "\r\n");
     edflush(ed, sh);
     edsize(ed, sh, os_tty(sh->os, ed->in, ed->out, TTY_RESTORE));
     print(out, {ed->line.data, ed->line.len});

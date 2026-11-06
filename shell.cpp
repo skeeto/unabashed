@@ -400,6 +400,17 @@ struct Coproc {       // bash 5.3 allows several
 struct SniffCache;  // spawn.cpp
 struct Editor;      // edit.cpp
 
+// editline results, and what read -e asks of it (edit.cpp)
+enum : i32 { ED_LINE, ED_EOF, ED_INTR, ED_NOTTY };
+
+struct EdRead {   // what read -e asks of the editor
+    Str init;     // -i: the line to start with
+    i32 fd;       // the input descriptor
+    i32 delim;    // -d: accepts the line, or -1 for none (a newline)
+    i64 nchars;   // -n: accept at this many characters, 0 for no limit
+    b32 silent;   // -s: the line is not shown
+};
+
 struct Shell {
     Os      *os;
     Sched   *sched;        // shared by every vproc of the process

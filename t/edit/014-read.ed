@@ -1,0 +1,25 @@
+# read on the terminal without the editor: -p, -s, -n, a backslash
+# continuation, a delimiter
+size 16 40
+rc PS1='$ '
+keys read -p 'name? ' x; echo "[$x]"\r
+snap
+keys ab\x7fc d\r
+snap
+keys read -s -p 'pw: ' x; echo; echo "[$x]"\r
+keys secret\r
+snap
+keys read -n 3 -p 'three: ' x; echo; echo "[$x]"\r
+keys abc
+snap
+keys read -sn2 x; echo "[$x]"\r
+keys xy
+snap
+keys read x; echo "[$x]"\r
+keys one \\\r
+snap
+keys two\r
+snap
+keys read -d , x; echo "[$x]"\r
+keys a b,
+snap

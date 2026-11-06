@@ -1,0 +1,118 @@
+== snap 1
+$ read -p 'name? ' x; echo "[$x]"
+name?
+@ 1,6
+== snap 2
+$ read -p 'name? ' x; echo "[$x]"
+name? ac d
+[ac d]
+$
+@ 3,2
+== snap 3
+$ read -p 'name? ' x; echo "[$x]"
+name? ac d
+[ac d]
+$ read -s -p 'pw: ' x; echo; echo "[$x]"
+pw:
+[secret]
+$
+@ 6,2
+== snap 4
+$ read -p 'name? ' x; echo "[$x]"
+name? ac d
+[ac d]
+$ read -s -p 'pw: ' x; echo; echo "[$x]"
+pw:
+[secret]
+$ read -n 3 -p 'three: ' x; echo; echo "
+[$x]"
+three: abc
+[abc]
+$
+@ 10,2
+== snap 5
+$ read -p 'name? ' x; echo "[$x]"
+name? ac d
+[ac d]
+$ read -s -p 'pw: ' x; echo; echo "[$x]"
+pw:
+[secret]
+$ read -n 3 -p 'three: ' x; echo; echo "
+[$x]"
+three: abc
+[abc]
+$ read -sn2 x; echo "[$x]"
+[xy]
+$
+@ 12,2
+== snap 6
+$ read -p 'name? ' x; echo "[$x]"
+name? ac d
+[ac d]
+$ read -s -p 'pw: ' x; echo; echo "[$x]"
+pw:
+[secret]
+$ read -n 3 -p 'three: ' x; echo; echo "
+[$x]"
+three: abc
+[abc]
+$ read -sn2 x; echo "[$x]"
+[xy]
+$ read x; echo "[$x]"
+one \
+>
+@ 14,2
+== snap 7
+name? ac d
+[ac d]
+$ read -s -p 'pw: ' x; echo; echo "[$x]"
+pw:
+[secret]
+$ read -n 3 -p 'three: ' x; echo; echo "
+[$x]"
+three: abc
+[abc]
+$ read -sn2 x; echo "[$x]"
+[xy]
+$ read x; echo "[$x]"
+one \
+> two
+[one two]
+$
+@ 15,2
+== snap 8
+$ read -s -p 'pw: ' x; echo; echo "[$x]"
+pw:
+[secret]
+$ read -n 3 -p 'three: ' x; echo; echo "
+[$x]"
+three: abc
+[abc]
+$ read -sn2 x; echo "[$x]"
+[xy]
+$ read x; echo "[$x]"
+one \
+> two
+[one two]
+$ read -d , x; echo "[$x]"
+a b,[a b]
+$
+@ 15,2
+== snap 9
+$ read -s -p 'pw: ' x; echo; echo "[$x]"
+pw:
+[secret]
+$ read -n 3 -p 'three: ' x; echo; echo "
+[$x]"
+three: abc
+[abc]
+$ read -sn2 x; echo "[$x]"
+[xy]
+$ read x; echo "[$x]"
+one \
+> two
+[one two]
+$ read -d , x; echo "[$x]"
+a b,[a b]
+$
+@ 15,2
