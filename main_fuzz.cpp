@@ -575,6 +575,9 @@ static void fuzzimage(Os *os, Arena scratch, Str src)
         #endif
         __builtin_trap();
     }
+    // A dump past the capture's capacity fails part way, and S's ERR
+    // trap may run on the failure (a long variable)
+    if (os->vos.outfull) return note("output full");
     Str out = os->vos.out;
     iz  i   = find(out, sep);
     if (i < 0) return note("no dump");  // exit, exec, closed stdout

@@ -147,6 +147,7 @@ struct Vos {
     Str     err;
     Str     merged;
     iz      outcap;
+    b32     outfull;     // a write to them was refused at outcap
     Str     in;          // its standard input
     iz      inpos;
     b32     ttyin;       // or else a terminal that never delivers input
@@ -1031,6 +1032,7 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
         if (len > v->outcap - dst->len) {
             // As a reader gone: which task it cuts off is up to timing
             if (v->trace && vconcurrent(v)) v->racy = 1;
+            v->outfull = 1;
             return 0;
         }
         copybytes(dst->data+dst->len, buf, len);

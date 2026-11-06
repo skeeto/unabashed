@@ -522,3 +522,80 @@ a nested shell's blocks that its stack rewind cannot release (448a7eb).
 Found on the way: `read -t` never times out on an endless stream with
 no newline (`read -t 0.01 x </dev/zero` hangs on POSIX; bash gives
 142), in issues.md.
+
+
+### Step 9: the image fuzzer
+
+`FUZZ_IMAGE` (main_fuzz.cpp, `tools/fuzz image`) runs `eval S`, then
+prints a state dump (variables, functions, aliases, traps, options,
+dirs) twice: in the shell, and in a background job, which runs from an
+image of the shell adopted by a vos child. The dumps must match, bar
+BASHPID and BASH_SUBSHELL, and the vos audits every image at its spawn
+for pointers outside its region. Jobs run from images in the run mode
+too; chaos, isolate and parse keep fibers. The fuzz heap is poisoned
+with 0x55 between runs, and a reused image region when it is handed
+out, so a stale pointer reads garbage rather than an earlier run's
+state.
+
+First campaign (4 fuzzers, about an hour): 1806 crash and 707 hang
+files. The causes:
+
+- An image reserved by a nested shell (`bash -c '0&'` after another
+  command) belongs to its job, which outlives the nested shell; when
+  that shell's memory was released, the job's own reservations
+  overlapped and poisoned its image. The vos flags image
+  reservations and both test layers pin them (0fce8e3, 102fa5f).
+- `-O -s` at startup ran `shopt -s -s` before the builtin output buffer
+  existed. Startup `-o`/`-O` now list with no name and stop with status
+  2 on an unknown one, as bash (e6ac9de).
+- Loops of jobs ran the heap out: image regions are now recycled,
+  exited children reaped at a spawn, and a spawn at the process limit
+  waits (448a7eb, from step 8's read failure, which the fuzzer hit
+  too).
+- Most of the rest were not faults. A coprocess reaped between the two
+  dumps takes its variables with it, as in bash (about 1450 files): the
+  fuzzer skips scripts naming coproc. And what S leaves behind could
+  run the two dumps differently: an alias for `{` or `echo`, a function
+  shadowing a builtin the dump uses, a DEBUG trap (not inherited by a
+  job), S's own jobs writing or signaling between the dumps. The
+  harness now neutralizes these after the eval, the same for both
+  dumps, and skips scripts with `disown`, or procsubs plus `kill`
+  (d8ea6a4).
+
+Replayed with the final build (WSL, plain g++): crashes 1451 coproc,
+90 async (skipped), 259 same, 6 out of memory or no dump (the fuzz
+heap's limits), no traps. Hangs at 60 s: 67 async, 37 out of memory, 10
+coproc, 1 same, 592 still running. Stack samples of 30 of those found
+only ordinary execution (the mutated scripts' `while :` loops, the
+`yes` fake), never the scheduler or the vos waiting.
+
+Under FUZZ_WIN (the vos's Windows mode, built with w64devkit's g++ and
+a 32 MiB stack), the same 2513 files: no traps or mismatches. The
+crash files all end same, coproc, async or out of memory; only hang
+files time out (at 10 s, and at 30 s for those an older build had
+stopped on).
+
+Second campaign, with those fixes (4 fuzzers, an hour): 23 crashes,
+741 hangs. 21 were a real closure break: shellcopy printed
+`$BASH_COMMAND`'s text in a copy of the arena it allocates from, in an
+image the store's own, so the printer's words (pointers into the
+parent's memory) stayed in the region behind the short strings cloned
+over them, and the store's copy of the text overlapped its source. The
+audit caught one such word next to a one-byte name (minimized:
+`p(){ p&'';}` run a few times with IFS changes between). The text now
+moves past the temporaries, which are then zeroed (f2689fe). The other
+two were harness artifacts: `set -x` with BASH_XTRACEFD=1 traced the
+harness's `wait` between the dumps, and `IFS=0` split the job pid in
+`wait $!`, whose failure ran S's ERR trap. The harness turns xtrace off
+and quotes the pids. All 23 then replay clean.
+
+Third campaign (4 fuzzers, an hour): 1 crash, 426 hangs. The crash was
+the harness again: the fuzz build captures 64 KiB of stdout, and with
+a 64 KiB variable the shell's `declare -p` failed at that limit, S's
+ERR trap printing into the dump, while the job's dump was cut off
+elsewhere (minimized: `trap '' pipe; b=$(printf '%65536d'); trap
+'echo e' ERR`). The vos now notes a refused write to the captured
+streams, and the fuzzer skips such runs ("output full"). The hangs at
+10 s: 18 out of memory, 408 still running; stack samples of 7 found
+only the scripts' own loops and `yes`. No traps, no mismatches: the
+image fuzzer is clean.
