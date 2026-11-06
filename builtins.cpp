@@ -1620,12 +1620,18 @@ static void setpathmode(Shell *sh, Arena scratch, PathMode mode)
 
 static i32 b_shopt(Shell *, Str *, iz, Arena);
 
-// shopt -s or -u by name, as the -O and +O options give it, reporting
-// an unknown name.
-static void setshoptbyname(Shell *sh, Arena scratch, Str name, b32 on)
+// shopt -s or -u by name, as the -O and +O options give it. Returns
+// false, changing nothing, for an unknown name.
+static b32 setshoptbyname(Shell *sh, Arena scratch, Str name, b32 on)
 {
-    Str args[] = {"shopt", on ? Str("-s") : Str("-u"), name};
+    b32 known = msysshopt(sh, name);
+    for (i32 k = 0; k < S_COUNT; k++) {
+        known |= hasshopt(sh, k) && shoptnames[k]==name;
+    }
+    if (!known) return 0;
+    Str args[] = {"shopt", on ? Str("-s") : Str("-u"), "--", name};
     b_shopt(sh, args, countof(args), scratch);
+    return 1;
 }
 
 static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)

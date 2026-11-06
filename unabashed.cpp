@@ -1002,6 +1002,37 @@ static void startfds(Shell *sh, OsInfo *info)
     }
 }
 
+// The -o and -O options (or +o, +O) at startup, as set -o and shopt -s
+// do it. Without a name they list the options, in the reusable form
+// for +; an unknown name ends the shell with status 2, as bash.
+static void startoption(Shell *sh, Arena scratch, u8 c, b32 on, Str *name)
+{
+    BOut out = {};
+    out.b    = Buf(&scratch, (iz)1<<12);
+    sh->bout = &out;
+    b32 ok = 1;
+    if (!name && c=='o') {
+        listsetoptions(sh, !on);
+    } else if (!name) {
+        Str args[] = {"shopt", "-p"};
+        b_shopt(sh, args, on ? 1 : 2, scratch);
+    } else if (c == 'o') {
+        ok = setoptionbyname(sh, *name, on);
+    } else {
+        ok = setshoptbyname(sh, scratch, *name, on);
+    }
+    flushbout(sh);
+    sh->bout = 0;
+    if (!ok) {
+        Str msg = c=='o' ? Str(": invalid option name") : Str(": invalid shell option name");
+        // bash names itself, as the builtin, for -o only
+        Str cmd = c=='o' ? sh->name : Str{};
+        builtinerror(sh, scratch, cmd, concat(&scratch, *name, msg));
+        sh->status = 2;
+        escape(sh, ESC_FATAL);
+    }
+}
+
 // A self-spawned background shell: take over the parent's image
 // (proc.cpp, imagebuild) and run its command, as vprocmain would.
 static i32 imagemain(Os *os, OsInfo *info)
@@ -1194,10 +1225,9 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                     sh->sflag = 1;
                 } else if (c == 'i') {
                     sh->interactive = 1;
-                } else if (c == 'o') {
-                    if (i+1 < info->nargs) setoptionbyname(sh, info->args[++i], on);
-                } else if (c == 'O') {
-                    if (i+1 < info->nargs) setshoptbyname(sh, scratch, info->args[++i], on);
+                } else if (c=='o' || c=='O') {
+                    Str *name = i+1<info->nargs ? &info->args[++i] : 0;
+                    startoption(sh, scratch, c, on, name);
                 } else if (c == 'l') {
                     st.login = 1;
                 } else if (c=='r' || c=='D') {
