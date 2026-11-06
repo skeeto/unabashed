@@ -400,7 +400,7 @@ static Str vtdump(VTerm *t, Arena *a)
         VCell *line = vtcell(t, r, 0);
         i32 end   = t->cols;
         i32 aend  = t->cols;
-        for (; end>0 && line[end-1].c<=0; end--) {}
+        for (; end>0 && (line[end-1].c<=0 || line[end-1].c==' ') && !line[end-1].comb; end--) {}
         for (; aend>0 && !line[aend-1].attr; aend--) {}
         for (i32 c = 0; c < end; c++) {
             if (line[c].c == -1) continue;

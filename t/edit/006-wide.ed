@@ -1,0 +1,13 @@
+# Wide and combining characters, near the margin too
+size 6 20
+rc PS1='$ '
+keys echo 中文字符 e\xcc\x81
+snap
+keys \C-b\C-b\C-b
+snap
+keys 漢字漢字漢字
+snap
+keys \C-e\x7f\x7f
+snap
+keys \r
+snap

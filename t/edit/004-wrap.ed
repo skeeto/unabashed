@@ -1,0 +1,15 @@
+# A line longer than the terminal is wide, edited in its middle
+size 6 20
+rc PS1='prompt$ '
+keys echo abcdefghijklmnopqrstuvwxyz0123456789
+snap
+keys \C-a\ef\ef\ef\C-fXYZ
+snap
+keys \C-k
+snap
+keys 1234567890ABCDEFGHIJKL
+snap
+keys \C-u
+snap
+keys \r
+snap

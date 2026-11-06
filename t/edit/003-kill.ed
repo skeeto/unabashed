@@ -1,0 +1,14 @@
+# Deleting: to the end, to the start, words
+rc PS1='$ '
+keys echo one two three four\C-b\C-b\C-b\C-b\C-b\C-k
+snap
+keys \C-w
+snap
+keys \ebx\ed
+snap
+keys \C-e\e\x7f
+snap
+keys \C-u
+snap
+keys echo done\r
+snap

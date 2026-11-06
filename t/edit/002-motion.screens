@@ -1,0 +1,22 @@
+== snap 1
+$ hello echo world!
+@ 0,19
+== snap 2
+$ hello echo worlX!
+@ 0,18
+== snap 3
+$ hello echo worl_X!
+@ 0,18
+== snap 4
+$ heo echo worl_X!
+@ 0,4
+== snap 5
+$ heo echo worl_X!
+bash: heo: command not found
+$
+@ 2,2
+== snap 6
+$ heo echo worl_X!
+bash: heo: command not found
+$
+@ 2,2

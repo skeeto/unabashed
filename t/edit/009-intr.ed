@@ -1,0 +1,12 @@
+# Ctrl-C abandons the line, Ctrl-D ends input on an empty one only
+rc PS1='$ '
+keys echo partial\C-b\C-b
+snap
+keys \C-c
+snap
+keys echo $?\r
+snap
+keys abc\C-a\C-d\C-d
+snap
+keys \C-k\C-d
+snap

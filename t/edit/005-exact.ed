@@ -1,0 +1,13 @@
+# Lines that fill a row exactly: the cursor on the next row
+size 6 20
+rc PS1='$ '
+keys echo 456789012345
+snap
+keys 6
+snap
+keys \x7f
+snap
+keys 67890123456789012345678
+snap
+keys \r
+snap

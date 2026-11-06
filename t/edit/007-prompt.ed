@@ -1,0 +1,6 @@
+# Prompts with invisible parts, colors and several lines
+rc PS1='\[\e[1m\]first\n\[\e[0m\]second> '
+keys echo hi\C-a
+snap
+keys \r
+snap

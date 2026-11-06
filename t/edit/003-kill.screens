@@ -1,0 +1,25 @@
+== snap 1
+$ echo one two three
+@ 0,20
+== snap 2
+$ echo one two
+@ 0,15
+== snap 3
+$ echo one x
+@ 0,12
+== snap 4
+$ echo one
+@ 0,11
+== snap 5
+$
+@ 0,2
+== snap 6
+$ echo done
+done
+$
+@ 2,2
+== snap 7
+$ echo done
+done
+$
+@ 2,2

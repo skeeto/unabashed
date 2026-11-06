@@ -35,6 +35,20 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   SetConsoleCtrlHandler(0, 0) at startup when interactive; anything
   run from Claude Code's shell starts that way. (m3b.md)
 - history and histexpand oracles.
+- `bash -i` whose input is not a terminal still reads with readline
+  and echoes each line it reads; ours reads plainly. (step 2)
+- TERM=dumb (and an unknown TERM): readline scrolls the line
+  horizontally in one row; ours always wraps. (step 2)
+- Unbound key sequences: readline's handling (bell, which bytes are
+  dropped or inserted) not yet checked against recordings. (step 2)
+- A byte that breaks a UTF-8 sequence in self-insert is dropped;
+  readline's handling of invalid sequences not yet checked. (step 2)
+- Ctrl-D at PS2 (inside an unfinished command): bash reports the
+  unexpected end of file and returns to PS1; ours ends the shell.
+  (step 2)
+- Still to do in step 2: PROMPT_COMMAND, PS0, checkwinsize
+  (LINES/COLUMNS), SIGWINCH redraw, and the static editor across the
+  image copier and subshells.
 
 Moved from M5a: needs the completion engine.
 

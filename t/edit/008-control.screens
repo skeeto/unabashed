@@ -1,0 +1,19 @@
+== snap 1
+$ echo a^Gbxc
+@ 0,13
+== snap 2
+$ echo a^Gbxc   z
+@ 0,17
+== snap 3
+$ echo a^Gbxc   z
+@ 0,12
+== snap 4
+$ c     z
+bash: c: command not found
+$
+@ 2,2
+== snap 5
+$ c     z
+bash: c: command not found
+$
+@ 2,2

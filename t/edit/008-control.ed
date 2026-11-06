@@ -1,0 +1,10 @@
+# Control characters shown as ^X, quoted insert, tabs
+rc PS1='$ '
+keys echo a\C-v\C-gb\C-vxc
+snap
+keys \C-v\tz
+snap
+keys \C-b\C-b\C-b
+snap
+keys \C-u\r
+snap

@@ -173,6 +173,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "builtins.cpp"
 #include "trap.cpp"
 #include "jobs.cpp"
+#include "edit.cpp"
 
 
 // Startup
@@ -282,6 +283,7 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
 
 struct Startup {
     Str rcfile;     // --rcfile, --init-file
+    b32 noediting;  // --noediting
     b32 login;      // -l, --login
     b32 noprofile;  // --noprofile
     b32 norc;       // --norc
@@ -777,13 +779,13 @@ static File *stdfile(Shell *sh, Handle h, i32 flags)
 struct StdinSource {
     Shell *sh;
     Buf    buf;
+    i32    eofs;  // ends of input in a row ignored for IGNOREEOF
 };
 
-// Show PS1 or PS2 on standard error, expanded as ${PS1@P} would be. An
-// expansion error shows nothing.
-static void showprompt(Shell *sh, b32 first)
+// PS1 or PS2 expanded as ${PS1@P} would be, \1 and \2 around the
+// invisible parts while editing. An expansion error gives nothing.
+static Str promptstr(Shell *sh, Arena *a, b32 first)
 {
-    Arena  a = *scratchat(sh, sh->capdepth+1);
     Escape e = {};
     e.up    = sh->esc;
     e.bout  = sh->bout;
@@ -791,14 +793,27 @@ static void showprompt(Shell *sh, b32 first)
     e.frame = sh->frame;
     sh->esc = &e;
     i32 status = sh->status;
+    Str ps = {};
     if (!__builtin_setjmp(e.jmp)) {
-        Str ps = expandstring(sh, &a, first ? Str("${PS1@P}") : "${PS2@P}");
-        fdwrite(sh, 2, ps);
+        ps = expandstring(sh, a, first ? Str("${PS1@P}") : "${PS2@P}");
     } else {
         unwind(sh, e.undo);
     }
     sh->esc    = e.up;
     sh->status = status;
+    return ps;
+}
+
+// Show PS1 or PS2 on standard error, without the editor's markers.
+static void showprompt(Shell *sh, b32 first)
+{
+    Arena a  = *scratchat(sh, sh->capdepth+1);
+    Str   ps = promptstr(sh, &a, first);
+    iz    n  = 0;
+    for (iz i = 0; i < ps.len; i++) {
+        if (ps[i]!=1 && ps[i]!=2) ps.data[n++] = ps[i];
+    }
+    fdwrite(sh, 2, takehead(ps, n));
 }
 
 // Read the next bytes of the command input. At an interactive shell's
@@ -822,7 +837,7 @@ static iz readstdin(Shell *sh, File *f, u8 *buf, iz len)
     return n;
 }
 
-static b32 fillstdin(void *ctx, Lexer *L)
+static b32 fillline(void *ctx, Lexer *L)
 {
     StdinSource *in = (StdinSource *)ctx;
     Shell *sh    = in->sh;
@@ -830,6 +845,24 @@ static b32 fillstdin(void *ctx, Lexer *L)
     Buf   *b     = &in->buf;
     iz     start = b->len;
     b32 seekable = f && f->kind==F_OS && os_seek(sh->os, f->h, 0, 1)>=0;
+    if (sh->interactive && (sh->opt[O_EMACS] || sh->opt[O_VI])) {
+        Arena a  = *scratchat(sh, sh->capdepth+1);
+        Str   ps = promptstr(sh, &a, L->newunit);
+        i32   r  = editline(sh, ps, b);
+        if (r != ED_NOTTY) {
+            L->newunit = 0;
+            if (r == ED_LINE) {
+                putbyte(b, '\n');
+            } else if (r == ED_INTR) {
+                // Ctrl-C at the prompt: an empty line instead, status 130
+                sh->status = 128 + 2;
+                b->len = start;
+                putbyte(b, '\n');
+            }
+            L->src = {b->data, b->len};
+            return b->len > start;
+        }
+    }
     if (sh->interactive) {
         showprompt(sh, L->newunit);
         L->newunit = 0;
@@ -872,6 +905,47 @@ static b32 fillstdin(void *ctx, Lexer *L)
     b->len  = start + squeezecr(got.data, got, crmode(sh));
     L->src  = {b->data, b->len};
     return b->len > start;
+}
+
+// The interactive shell's input, where an end of input at the start of
+// a command prints exit, or asks for exit as many times as IGNOREEOF
+// says (its value as atoi reads it, 10 if empty).
+static b32 fillstdin(void *ctx, Lexer *L)
+{
+    StdinSource *in = (StdinSource *)ctx;
+    Shell *sh = in->sh;
+    for (;;) {
+        b32 first = L->newunit;
+        if (fillline(ctx, L)) {
+            in->eofs = 0;
+            return 1;
+        }
+        if (!sh->interactive || !first) return 0;
+        Str   word = sh->login ? Str("logout") : "exit";
+        byte  mem[64];
+        Arena a = {mem, mem+sizeof(mem)};
+        if (sh->opt[O_IGNOREEOF]) {
+            Arena none = {};
+            Str v = getvar(sh, &none, "IGNOREEOF").value;
+            i64 limit = v.len ? 0 : 10;
+            iz  i     = 0;
+            for (; i<v.len && (v[i]==' ' || (v[i]>='\t' && v[i]<='\r')); i++) {}
+            b32 neg = i<v.len && v[i]=='-';
+            i += i<v.len && (v[i]=='-' || v[i]=='+');
+            for (; i<v.len && v[i]>='0' && v[i]<='9' && limit<1000000000; i++) {
+                limit = limit*10 + v[i] - '0';
+            }
+            if (neg) limit = -limit;
+            if (in->eofs < limit) {
+                in->eofs++;
+                fdwrite(sh, 2, concat3(&a, "Use \"", word, "\" to leave the shell.\n"));
+                L->newunit = 1;
+                continue;
+            }
+        }
+        fdwrite(sh, 2, concat(&a, word, "\n"));
+        return 0;
+    }
 }
 
 // Cygwin's glob for a CYG_GLOB argument: braces, a leading ~ when HOME
@@ -1197,6 +1271,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                 st.login = 1;
                 continue;
             } else if (a == "--noediting") {
+                st.noediting = 1;
                 continue;
             } else if (a=="--rcfile" || a=="--init-file") {
                 if (i+1 == info->nargs) {
@@ -1243,6 +1318,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
 
         if (sh->interactive) {
             sh->shopt[S_EXPAND_ALIASES] = 1;
+            if (!st.noediting && !sh->opt[O_VI]) sh->opt[O_EMACS] = 1;
             if (!getvar(sh, &scratch, "PS1").set) setvar(sh, scratch, "PS1", "\\s-\\v\\$ ");
             if (!getvar(sh, &scratch, "PS2").set) setvar(sh, scratch, "PS2", "> ");
             b32 tty = os_isatty(os, info->std[0]) || os_isatty(os, info->std[2]);

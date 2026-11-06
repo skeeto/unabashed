@@ -1,0 +1,20 @@
+== snap 1
+$ echo one
+one
+$ echo two
+two
+$ echo three
+@ 4,11
+== snap 2
+$ echo three
+@ 0,11
+== snap 3
+$ echo three
+three
+$
+@ 2,2
+== snap 4
+$ echo three
+three
+$
+@ 2,2

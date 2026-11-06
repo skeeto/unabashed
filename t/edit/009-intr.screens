@@ -1,0 +1,27 @@
+== snap 1
+$ echo partial
+@ 0,12
+== snap 2
+$ echo parti^C
+$
+@ 1,2
+== snap 3
+$ echo parti^C
+$ echo $?
+130
+$
+@ 3,2
+== snap 4
+$ echo parti^C
+$ echo $?
+130
+$ c
+@ 3,2
+== snap 5
+$ echo parti^C
+$ echo $?
+130
+$
+exit
+
+@ 5,0

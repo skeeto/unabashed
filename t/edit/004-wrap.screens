@@ -1,0 +1,32 @@
+== snap 1
+prompt$ echo abcdefg
+hijklmnopqrstuvwxyz0
+123456789
+@ 2,9
+== snap 2
+prompt$ echo abcdefg
+hijklmnopqrstuvwxyz0
+123456789XYZ
+@ 2,12 bell 1
+== snap 3
+prompt$ echo abcdefg
+hijklmnopqrstuvwxyz0
+123456789XYZ
+@ 2,12 bell 1
+== snap 4
+prompt$ echo abcdefg
+hijklmnopqrstuvwxyz0
+123456789XYZ12345678
+90ABCDEFGHIJKL
+@ 3,14 bell 1
+== snap 5
+prompt$
+@ 0,8 bell 1
+== snap 6
+prompt$
+prompt$
+@ 1,8 bell 1
+== snap 7
+prompt$
+prompt$
+@ 1,8 bell 1

@@ -1,0 +1,12 @@
+# Motion and insertion within the line
+rc PS1='$ '
+keys echo world\C-ahello \C-e!
+snap
+keys \C-b\C-b\C-dX
+snap
+keys \e[D\e[D\e[C_
+snap
+keys \C-a\C-f\C-f\C-f\C-f\x7f\x7f
+snap
+keys \r
+snap

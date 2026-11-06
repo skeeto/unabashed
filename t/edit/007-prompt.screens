@@ -1,0 +1,23 @@
+== snap 1
+first
+~bbbbb
+second> echo hi
+@ 1,8
+== snap 2
+first
+~bbbbb
+second> echo hi
+hi
+first
+~bbbbb
+second>
+@ 4,8
+== snap 3
+first
+~bbbbb
+second> echo hi
+hi
+first
+~bbbbb
+second>
+@ 4,8

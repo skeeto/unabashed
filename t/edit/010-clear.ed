@@ -1,0 +1,11 @@
+# Ctrl-L clears the screen and redraws the line
+size 8 30
+rc PS1='$ '
+keys echo one\r
+keys echo two\r
+keys echo three\C-b
+snap
+keys \C-l
+snap
+keys \C-e\r
+snap
