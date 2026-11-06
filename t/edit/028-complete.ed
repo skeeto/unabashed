@@ -1,0 +1,35 @@
+# Completion: TAB, TAB TAB (only after a TAB that changed nothing), the
+# common prefix, the append character, point mid-line, undo, M-? M-*
+size 16 60
+rc PS1='$ '
+rc mkdir dir1 dir2; : > file.c; : > file.h; : > fileonly.txt
+keys ls fi\t
+snap
+keys \t
+snap
+keys \t
+snap
+keys o\t
+snap
+keys \C-_
+snap
+keys \C-_
+snap
+keys \C-a\C-kls nothing\t\t
+snap
+keys \C-a\C-kls d\t
+snap
+keys 1\t
+snap
+keys \t
+snap
+keys \C-a\C-kls fileo xyz\C-b\C-b\C-b\C-b\t
+snap
+keys \C-a\C-kls dir2 xyz\C-b\C-b\C-b\C-b\t
+snap
+keys \C-a\C-kls filXonly\C-b\C-b\C-b\C-b\C-b\t
+snap
+keys \C-a\C-kls fileo\e?
+snap
+keys \C-a\C-kls fi\e*
+snap

@@ -77,8 +77,25 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 
 Moved from M5a: needs the completion engine.
 
-- **completion_strip_exe does nothing**: msys mode lists and sets it
-  (053), but there is no completion engine yet to strip `.exe` from.
+- completion_strip_exe strips `.exe` from PATH command matches, but
+  not from file name matches, and is untested on Windows. (step 8)
+- Completion settings (ignore-case, map-case, show-all-if-*,
+  visible-stats, mark-*, skip-completed-text, the display widths and
+  prefix length, print-completions-horizontally, menu-complete and its
+  display-prefix, disable-completion) are implemented with readline's
+  defaults but have no recorded scenarios until inputrc can set them
+  (completion.md §12, scenarios 10-14). (step 6)
+- User name completion (`~user`, M-~) finds nothing: no user database
+  is read; bash reads the password file. Hosts are read from
+  HOSTFILE or /etc/hosts without `$include`. (step 10)
+- complete-into-braces (M-{), glob-expand-word (C-x *),
+  glob-list-expansions (C-x g), dabbrev-expand and export-completions
+  are not implemented. (step 10)
+- Command position at PS2 inside a compound command: bash asks the
+  parser whether a command word is expected; ours treats only the first
+  line of a command as able to start one. (step 10)
+- The completion stat hook does not canonicalize against `$PWD`, and
+  dirspell is not done. (step 10)
 
 
 ## M7 (job control and fidelity)

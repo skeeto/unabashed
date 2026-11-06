@@ -86,6 +86,23 @@ enum : i32 {
     EF_MAGIC_SPACE,
     EF_EDIT_AND_EXECUTE_COMMAND,
     EF_BRACKETED_PASTE_BEGIN,
+    EF_POSSIBLE_COMPLETIONS,
+    EF_INSERT_COMPLETIONS,
+    EF_COMPLETE_FILENAME,
+    EF_POSSIBLE_FILENAME_COMPLETIONS,
+    EF_COMPLETE_USERNAME,
+    EF_POSSIBLE_USERNAME_COMPLETIONS,
+    EF_COMPLETE_HOSTNAME,
+    EF_POSSIBLE_HOSTNAME_COMPLETIONS,
+    EF_COMPLETE_VARIABLE,
+    EF_POSSIBLE_VARIABLE_COMPLETIONS,
+    EF_COMPLETE_COMMAND,
+    EF_POSSIBLE_COMMAND_COMPLETIONS,
+    EF_DYNAMIC_COMPLETE_HISTORY,
+    EF_GLOB_COMPLETE_WORD,
+    EF_MENU_COMPLETE,
+    EF_MENU_COMPLETE_BACKWARD,
+    EF_DELETE_CHAR_OR_LIST,
     EF_COUNT,
 };
 
@@ -165,6 +182,23 @@ static Str edfuncs[EF_COUNT] = {
     "magic-space",
     "edit-and-execute-command",
     "bracketed-paste-begin",
+    "possible-completions",
+    "insert-completions",
+    "complete-filename",
+    "possible-filename-completions",
+    "complete-username",
+    "possible-username-completions",
+    "complete-hostname",
+    "possible-hostname-completions",
+    "complete-variable",
+    "possible-variable-completions",
+    "complete-command",
+    "possible-command-completions",
+    "dynamic-complete-history",
+    "glob-complete-word",
+    "menu-complete",
+    "menu-complete-backward",
+    "delete-char-or-list",
 };
 
 static iz readstdin(Shell *, File *, u8 *, iz);  // unabashed.cpp
@@ -233,6 +267,29 @@ struct Layout {
 };
 
 enum : i32 { KILLMAX = 10 };
+
+// Readline's variables (readline.md §5) that completion reads; inputrc
+// sets them (step 6)
+struct EdVars {
+    b32 ignorecase;     // completion-ignore-case
+    b32 mapcase;        // completion-map-case
+    i32 queryitems;     // completion-query-items
+    b32 pagecompl;      // page-completions
+    i32 displaywidth;   // completion-display-width
+    i32 prefixdisplay;  // completion-prefix-display-length
+    b32 horizontal;     // print-completions-horizontally
+    b32 showall;        // show-all-if-ambiguous
+    b32 showunmod;      // show-all-if-unmodified
+    b32 markdirs;       // mark-directories
+    b32 marksymdirs;    // mark-symlinked-directories
+    b32 matchhidden;    // match-hidden-files
+    b32 visiblestats;   // visible-stats
+    b32 skipcompleted;  // skip-completed-text
+    b32 nocompletion;   // disable-completion
+    b32 menuprefix;     // menu-complete-display-prefix
+};
+
+struct Comp;
 
 struct Editor {
     Arena    perm;      // bindings, settings
@@ -309,6 +366,17 @@ struct Editor {
     i32      ylcount;
     b32      ylarg;
     b32      ylundo;
+    // Completion
+    EdVars   vars;
+    Str      phead;     // the prompt's lines before its last
+    b32      shellline; // the shell's own line, not read -e
+    b32      ps1;       // and its first: a command word may start it
+    b32      cchanged;  // the last completion changed the line
+    b32      cfailed;   // and found nothing
+    Arena    cmem;      // menu completion's matches
+    Comp    *menu;
+    i32      menuidx;
+    b32      menudone;
 };
 
 static void edbindings(Editor *ed)
@@ -383,6 +451,19 @@ static void edbindings(Editor *ed)
         {"\x1b[5~", EF_HISTORY_SEARCH_BACKWARD},
         {"\x1b[6~", EF_HISTORY_SEARCH_FORWARD},
         {"\x1b[200~", EF_BRACKETED_PASTE_BEGIN},
+        {"\x1b?", EF_POSSIBLE_COMPLETIONS},  {"\x1b=", EF_POSSIBLE_COMPLETIONS},
+        {"\x1b*", EF_INSERT_COMPLETIONS},    {"\x1b/", EF_COMPLETE_FILENAME},
+        {"\x18/", EF_POSSIBLE_FILENAME_COMPLETIONS},
+        {"\x1b~", EF_COMPLETE_USERNAME},
+        {"\x18~", EF_POSSIBLE_USERNAME_COMPLETIONS},
+        {"\x1b@", EF_COMPLETE_HOSTNAME},
+        {"\x18@", EF_POSSIBLE_HOSTNAME_COMPLETIONS},
+        {"\x1b$", EF_COMPLETE_VARIABLE},
+        {"\x18$", EF_POSSIBLE_VARIABLE_COMPLETIONS},
+        {"\x1b!", EF_COMPLETE_COMMAND},
+        {"\x18!", EF_POSSIBLE_COMMAND_COMPLETIONS},
+        {"\x1b\t", EF_DYNAMIC_COMPLETE_HISTORY},
+        {"\x1b" "g", EF_GLOB_COMPLETE_WORD},
     };
     for (iz i = 0; i < countof(map); i++) {
         iz  len = map[i].seq[0] ? (iz)__builtin_strlen(map[i].seq) : 1;
@@ -405,6 +486,12 @@ static Editor *editor(Shell *sh)
         ed->kmem[0]    = newarena(sh->os, (iz)1<<24);
         ed->kmem[1]    = newarena(sh->os, (iz)1<<24);
         ed->keytimeout = 500;
+        ed->cmem       = newarena(sh->os, (iz)1<<24);
+        ed->vars.queryitems   = 100;
+        ed->vars.pagecompl    = 1;
+        ed->vars.displaywidth = -1;
+        ed->vars.markdirs     = 1;
+        ed->vars.matchhidden  = 1;
         ed->getnext    = -1;
         edbindings(ed);
         sh->editor = ed;
@@ -1390,6 +1477,7 @@ static void edcharsearch(Editor *ed, Shell *sh, i32 count, i32 dir)
 // Searching the history
 
 static void edrun(Editor *, Shell *, i32 fn, u8 key);
+static void edcomplete(Editor *, Shell *, i32 fn, i32 count);  // complete.cpp
 
 // Bracketed paste: the bytes up to ESC [ 201 ~, CR as LF.
 static Str edpaste(Editor *ed, Shell *sh, Arena *a)
@@ -1978,7 +2066,32 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
     i32 count = ed->count;
     switch (fn) {
     case EF_NONE:
-    case EF_COMPLETE:            // step 5
+    case EF_COMPLETE:
+    case EF_POSSIBLE_COMPLETIONS:
+    case EF_INSERT_COMPLETIONS:
+    case EF_COMPLETE_FILENAME:
+    case EF_POSSIBLE_FILENAME_COMPLETIONS:
+    case EF_COMPLETE_USERNAME:
+    case EF_POSSIBLE_USERNAME_COMPLETIONS:
+    case EF_COMPLETE_HOSTNAME:
+    case EF_POSSIBLE_HOSTNAME_COMPLETIONS:
+    case EF_COMPLETE_VARIABLE:
+    case EF_POSSIBLE_VARIABLE_COMPLETIONS:
+    case EF_COMPLETE_COMMAND:
+    case EF_POSSIBLE_COMMAND_COMPLETIONS:
+    case EF_DYNAMIC_COMPLETE_HISTORY:
+    case EF_GLOB_COMPLETE_WORD:
+    case EF_MENU_COMPLETE:
+    case EF_MENU_COMPLETE_BACKWARD:
+        edcomplete(ed, sh, fn, ed->argset ? ed->count : 1);
+        break;
+    case EF_DELETE_CHAR_OR_LIST:
+        if (ed->point<ed->line.len || !ed->line.len) {
+            edrun(ed, sh, EF_DELETE_CHAR, key);
+        } else {
+            edcomplete(ed, sh, fn, 1);
+        }
+        break;
     default:
         edbell(ed);
         break;
@@ -2702,6 +2815,11 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         if (head[i]!=1 && head[i]!=2) putbyte(&ed->out_, head[i]);
     }
     ed->prompt = cuthead(prompt, nl);
+    ed->phead  = head;
+    ed->shellline = opts->shell;
+    ed->ps1       = opts->ps1;
+    ed->cchanged  = ed->cfailed = 0;
+    ed->menudone  = 1;
     if (ed->getnext >= 0) {
         // operate-and-get-next: start on the entry after the one run
         i64 count = sh->hist.base + sh->hist.len - ed->getnext;

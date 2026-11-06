@@ -1,0 +1,97 @@
+== snap 1
+$ echo
+@ 0,7
+== snap 2
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ t
+@ 3,3 bell 1
+== snap 3
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ tdir/
+@ 3,7 bell 1
+== snap 4
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ tdir
+@ 3,6 bell 1
+== snap 5
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ tex
+@ 3,5 bell 2
+== snap 6
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ ./texe
+@ 3,9 bell 2
+== snap 7
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ sub/prog
+@ 3,11 bell 2
+== snap 8
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ if ecfile
+@ 3,12 bell 2
+== snap 9
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ : ; echo
+@ 3,11 bell 2
+== snap 10
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ (echo
+@ 3,8 bell 2
+== snap 11
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ FOO=1 echo
+@ 3,13 bell 2
+== snap 12
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ FOO=ecfile
+@ 3,13 bell 2
+== snap 13
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ : `echo
+@ 3,9 bell 2
+== snap 14
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ echo
+@ 3,7 bell 2
+== snap 15
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ ech
+echo
+$ ech
+@ 5,5 bell 2
+== snap 16
+$ t
+tail     tee      tfoo     time     touch    trap     type
+tbar     test     then     times    tr       true     typeset
+$ ech
+echo
+$ ech
+@ 5,5 bell 2

@@ -1,0 +1,130 @@
+== snap 1
+f1   f23  f37  f50  f64  f78  f91
+f10  f24  f38  f51  f65  f79  f92
+f11  f25  f39  f52  f66  f8   f93
+f12  f26  f4   f53  f67  f80  f94
+f13  f27  f40  f54  f68  f81  f95
+f14  f28  f41  f55  f69  f82  f96
+f15  f29  f42  f56  f7   f83  f97
+--More--
+@ 7,8 bell 1
+== snap 2
+f1   f23  f37  f50  f64  f78  f91
+f10  f24  f38  f51  f65  f79  f92
+f11  f25  f39  f52  f66  f8   f93
+f12  f26  f4   f53  f67  f80  f94
+f13  f27  f40  f54  f68  f81  f95
+f14  f28  f41  f55  f69  f82  f96
+f15  f29  f42  f56  f7   f83  f97
+--More--
+@ 7,8 bell 2
+== snap 3
+f10  f24  f38  f51  f65  f79  f92
+f11  f25  f39  f52  f66  f8   f93
+f12  f26  f4   f53  f67  f80  f94
+f13  f27  f40  f54  f68  f81  f95
+f14  f28  f41  f55  f69  f82  f96
+f15  f29  f42  f56  f7   f83  f97
+f16  f3   f43  f57  f70  f84  f98
+--More--
+@ 7,8 bell 2
+== snap 4
+f17  f30  f44  f58  f71  f85  f99
+f18  f31  f45  f59  f72  f86
+f19  f32  f46  f6   f73  f87
+f2   f33  f47  f60  f74  f88
+f20  f34  f48  f61  f75  f89
+f21  f35  f49  f62  f76  f9
+f22  f36  f5   f63  f77  f90
+$ ls f
+@ 7,6 bell 2
+== snap 5
+f1   f23  f37  f50  f64  f78  f91
+f10  f24  f38  f51  f65  f79  f92
+f11  f25  f39  f52  f66  f8   f93
+f12  f26  f4   f53  f67  f80  f94
+f13  f27  f40  f54  f68  f81  f95
+f14  f28  f41  f55  f69  f82  f96
+f15  f29  f42  f56  f7   f83  f97
+$ ls f
+@ 7,6 bell 3
+== snap 6
+f1   f23  f37  f50  f64  f78  f91
+f10  f24  f38  f51  f65  f79  f92
+f11  f25  f39  f52  f66  f8   f93
+f12  f26  f4   f53  f67  f80  f94
+f13  f27  f40  f54  f68  f81  f95
+f14  f28  f41  f55  f69  f82  f96
+f15  f29  f42  f56  f7   f83  f97
+$ ls f
+@ 7,6 bell 4
+== snap 7
+f10  f24  f38  f51  f65  f79  f92
+f11  f25  f39  f52  f66  f8   f93
+f12  f26  f4   f53  f67  f80  f94
+f13  f27  f40  f54  f68  f81  f95
+f14  f28  f41  f55  f69  f82  f96
+f15  f29  f42  f56  f7   f83  f97
+$ ls ../r/g
+Display all 120 possibilities? (y or n)
+@ 7,39 bell 5
+== snap 8
+f10  f24  f38  f51  f65  f79  f92
+f11  f25  f39  f52  f66  f8   f93
+f12  f26  f4   f53  f67  f80  f94
+f13  f27  f40  f54  f68  f81  f95
+f14  f28  f41  f55  f69  f82  f96
+f15  f29  f42  f56  f7   f83  f97
+$ ls ../r/g
+Display all 120 possibilities? (y or n)
+@ 7,39 bell 6
+== snap 9
+f11  f25  f39  f52  f66  f8   f93
+f12  f26  f4   f53  f67  f80  f94
+f13  f27  f40  f54  f68  f81  f95
+f14  f28  f41  f55  f69  f82  f96
+f15  f29  f42  f56  f7   f83  f97
+$ ls ../r/g
+Display all 120 possibilities? (y or n)
+$ ls ../r/g
+@ 7,11 bell 6
+== snap 10
+f12  f26  f4   f53  f67  f80  f94
+f13  f27  f40  f54  f68  f81  f95
+f14  f28  f41  f55  f69  f82  f96
+f15  f29  f42  f56  f7   f83  f97
+$ ls ../r/g
+Display all 120 possibilities? (y or n)
+$ ls ../r/g
+Display all 120 possibilities? (y or n)
+@ 7,39 bell 6
+== snap 11
+g1    g117  g27   g45   g63   g81
+g10   g118  g28   g46   g64   g82
+g100  g119  g29   g47   g65   g83
+g101  g12   g3    g48   g66   g84
+g102  g120  g30   g49   g67   g85
+g103  g13   g31   g5    g68   g86
+g104  g14   g32   g50   g69   g87
+--More--
+@ 7,8 bell 6
+== snap 12
+g1    g117  g27   g45   g63   g81
+g10   g118  g28   g46   g64   g82
+g100  g119  g29   g47   g65   g83
+g101  g12   g3    g48   g66   g84
+g102  g120  g30   g49   g67   g85
+g103  g13   g31   g5    g68   g86
+g104  g14   g32   g50   g69   g87
+$ ls ../r/g
+@ 7,11 bell 6
+== snap 13
+g1    g117  g27   g45   g63   g81
+g10   g118  g28   g46   g64   g82
+g100  g119  g29   g47   g65   g83
+g101  g12   g3    g48   g66   g84
+g102  g120  g30   g49   g67   g85
+g103  g13   g31   g5    g68   g86
+g104  g14   g32   g50   g69   g87
+$ ls ../r/g
+@ 7,11 bell 6

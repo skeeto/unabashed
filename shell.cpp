@@ -455,6 +455,7 @@ struct EdRead {   // what read -e asks of the editor
     i64 nchars;   // -n: accept at this many characters, 0 for no limit
     b32 silent;   // -s: the line is not shown
     b32 shell;    // not read -e: the shell's own line, with init preloaded
+    b32 ps1;      // and the first of a command
 };
 
 struct Shell {

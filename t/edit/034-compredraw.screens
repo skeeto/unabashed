@@ -1,0 +1,36 @@
+== snap 1
+top
+$ ls file
+file.c        fileonly.txt
+file.h
+top
+$ ls file
+@ 5,9 bell 2
+== snap 2
+top
+$ ls file
+file.c        fileonly.txt
+file.h
+top
+$ echo file 012345678901234567
+8901234567890
+file.c        fileonly.txt
+file.h
+top
+$ echo file 012345678901234567
+8901234567890
+@ 10,11 bell 3
+== snap 3
+top
+$ ls file
+file.c        fileonly.txt
+file.h
+top
+$ echo file 012345678901234567
+8901234567890
+file.c        fileonly.txt
+file.h
+top
+$ echo file 012345678901234567
+8901234567890
+@ 10,11 bell 3

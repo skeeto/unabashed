@@ -1,0 +1,35 @@
+# Command words: aliases, functions, builtins, PATH; reserved words do
+# not start a command, separators and assignments do; M-! and C-x !
+size 30 100
+rc PS1='$ '
+rc alias tfoo=ls; tbar() { :; }; mkdir tdir sub; : > texe; chmod +x texe; : > ecfile; : > sub/prog; chmod +x sub/prog; : > sub/data
+keys ec\t
+snap
+keys \C-a\C-kt\t\t
+snap
+keys \C-a\C-ktdi\t
+snap
+keys \C-a\C-ktdir\t
+snap
+keys \C-a\C-ktex\t
+snap
+keys \C-a\C-k./te\t
+snap
+keys \C-a\C-ksub/\t
+snap
+keys \C-a\C-kif ec\t
+snap
+keys \C-a\C-k: ; ec\t
+snap
+keys \C-a\C-k(ec\t
+snap
+keys \C-a\C-kFOO=1 ec\t
+snap
+keys \C-a\C-kFOO=ec\t
+snap
+keys \C-a\C-k: `ec\t
+snap
+keys \C-a\C-kech\e!
+snap
+keys \C-a\C-kech\x18!
+snap

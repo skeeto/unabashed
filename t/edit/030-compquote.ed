@@ -1,0 +1,34 @@
+# Quoting completed file names: backslashes, an open quote continued
+# and closed, history's ! dropping a double quote, earlier quoting on
+# the line, $ and ~ in the directory
+size 24 100
+rc PS1='$ '
+rc mkdir q; cd q; : > 'A z'; : > "B'z"; : > 'C"z'; : > 'D$z'; : > 'L!z'; : > 'I,z'; : > 'm z1'; : > 'm z2'; mkdir 'sp dir'; : > 'P\z'
+keys : A\t
+snap
+keys \C-a\C-k: I\t
+snap
+keys \C-a\C-k: a\x5c b I\t
+snap
+keys \C-a\C-k: 'A\t 'B\t 'D\t
+snap
+keys \C-a\C-k: "A\t "B\t "C\t "D\t "P\t
+snap
+keys \C-a\C-k: "L\t
+snap
+keys \C-a\C-k: x"A\t
+snap
+keys \C-a\C-k: m\t
+snap
+keys \C-a\C-k: "m\t
+snap
+keys \C-a\C-k: 'm\t
+snap
+keys \C-a\C-k: "sp\t
+snap
+keys \C-a\C-k: $HOME/q/A\t
+snap
+keys \C-a\C-k: ~/q/A\t
+snap
+keys \C-a\C-k: B\t C\t D\t
+snap

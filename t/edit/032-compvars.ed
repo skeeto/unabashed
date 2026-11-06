@@ -1,0 +1,36 @@
+# Variables (a directory gets /), globs, and the specific commands:
+# M-? M-* M-/ C-x / M-$ M-TAB
+size 16 60
+rc PS1='$ '
+rc mkdir dd; : > dd/f1; : > dd/f2; : > dd/g3; xvar=$HOME/dd; xvas=1; declare xvau; : > ab=cd; : > h:x
+keys echo $xva\t\t
+snap
+keys \C-a\C-kecho $xvar\t
+snap
+keys \t
+snap
+keys \C-a\C-kecho "$xvar\t
+snap
+keys \C-a\C-kecho dd/f\e?
+snap
+keys \C-a\C-kecho dd/f\e*
+snap
+keys \C-a\C-kecho ab=\e/
+snap
+keys \C-a\C-kecho ab=\t
+snap
+keys \C-a\C-kecho h:\e/
+snap
+keys \C-a\C-kecho xv\e$
+snap
+keys \C-a\C-kecho dd/\x18/
+snap
+keys \C-a\C-kecho d*\t
+snap
+keys \C-a\C-kecho dd/f*\t
+snap
+keys \t
+snap
+keys \C-a\C-kecho hello\r
+keys ec\e\t
+snap

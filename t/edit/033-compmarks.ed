@@ -1,0 +1,25 @@
+# Directories and symbolic links: / in listings and after a match, a
+# link to a directory marked only on the second TAB, hidden files, .
+# and .., FIGNORE
+size 16 60
+rc PS1='$ '
+rc mkdir m g; cd g; : > prog.c; : > prog.o; : > only.o; cd ../m; mkdir dir1; ln -s dir1 link1; : > exe1; chmod +x exe1; mkfifo fifo1; ln -s nowhere dangle1; : > plain1; : > .hid
+keys ls lin\t
+snap
+keys \t
+snap
+keys \C-a\C-kls \t\t
+snap
+keys \C-a\C-kls .\t\t
+snap
+keys \C-a\C-kls ..\t
+snap
+keys \C-a\C-kls dan\t
+snap
+keys \C-a\C-kcd ../g; FIGNORE=.o\r
+keys ls pro\t
+snap
+keys \C-a\C-kls onl\t
+snap
+keys \C-a\C-kls pro\e?
+snap

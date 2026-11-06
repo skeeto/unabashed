@@ -1,0 +1,82 @@
+== snap 1
+$ ls file
+@ 0,9 bell 1
+== snap 2
+$ ls file
+@ 0,9 bell 2
+== snap 3
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls file
+@ 2,9 bell 2
+== snap 4
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls fileonly.txt
+@ 2,18 bell 2
+== snap 5
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls fileonly.txt
+@ 2,17 bell 2
+== snap 6
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls fileo
+@ 2,10 bell 2
+== snap 7
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls nothing
+@ 2,12 bell 4
+== snap 8
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls dir
+@ 2,8 bell 5
+== snap 9
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls dir1/
+@ 2,10 bell 5
+== snap 10
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls dir1/
+@ 2,10 bell 6
+== snap 11
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls fileonly.txt xyz
+@ 2,17 bell 6
+== snap 12
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls dir2/ xyz
+@ 2,10 bell 6
+== snap 13
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls fileXonly
+@ 2,9 bell 7
+== snap 14
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls fileo
+fileonly.txt
+$ ls fileo
+@ 4,10 bell 7
+== snap 15
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls fileo
+fileonly.txt
+$ ls file.c file.h fileonly.txt
+@ 4,32 bell 7
+== snap 16
+$ ls file
+file.c        file.h        fileonly.txt
+$ ls fileo
+fileonly.txt
+$ ls file.c file.h fileonly.txt
+@ 4,32 bell 7

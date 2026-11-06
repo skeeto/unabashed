@@ -1,0 +1,29 @@
+# Long listings: the --More-- pager (SPC, RET, q, DEL, other keys) and
+# the Display all N possibilities question
+size 8 40
+rc PS1='$ '
+rc mkdir p r; for i in {1..99}; do : > p/f$i; done; for i in {1..120}; do : > r/g$i; done; cd p
+keys ls f\t\t
+snap
+keys x
+snap
+keys \r
+snap
+keys \x20
+snap
+keys \C-a\C-kls f\t\tq
+snap
+keys \C-a\C-kls f\t\t\x7f
+snap
+keys \C-a\C-kls ../r/g\t\t
+snap
+keys x
+snap
+keys n
+snap
+keys \t
+snap
+keys y
+snap
+keys q
+snap

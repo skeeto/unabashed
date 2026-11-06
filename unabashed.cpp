@@ -175,6 +175,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "jobs.cpp"
 #include "history.cpp"
 #include "edit.cpp"
+#include "complete.cpp"
 
 
 // Startup
@@ -904,6 +905,7 @@ static b32 fillline(void *ctx, Lexer *L)
         EdRead opts = {};
         opts.delim = -1;
         opts.shell = 1;
+        opts.ps1   = L->newunit;
         opts.init  = clone(&a, sh->hist.preload);
         sfreestr(sh->store, sh->hist.preload);
         sh->hist.preload = {};

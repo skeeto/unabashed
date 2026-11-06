@@ -1,0 +1,9 @@
+# The prompt and line drawn again below a listing: a two-line prompt,
+# a wrapped line with point on its first row
+size 12 30
+rc PS1='top\n$ '
+rc : > file.c; : > file.h; : > fileonly.txt
+keys ls fi\t\t\t
+snap
+keys \C-a\C-kecho file 0123456789012345678901234567890\C-a\ef\ef\t\t
+snap
