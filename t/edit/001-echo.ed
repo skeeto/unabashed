@@ -1,0 +1,5 @@
+# A command typed and run, its output, the next prompt
+rc PS1='$ '
+keys echo hi\r
+snap
+keys exit\r

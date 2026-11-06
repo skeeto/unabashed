@@ -515,6 +515,44 @@ static void test_fibers(Test *t)
 
 // Path modes at startup: -O/+O with the hidden msyspath, and the msys
 // shell's own split of its raw command line (globbing, quoting).
+// The terminal model: wrapping with and without deferred wrap, wide
+// characters at the margin, erasing, insert mode, scrolling.
+static void test_vterm(Test *t)
+{
+    heapreset(t->os);
+    Arena a = newarena(t->os, (iz)1<<20);
+    struct {
+        i32         rows, cols;
+        b32         xenl;
+        char const *in;
+        char const *want;
+    } cases[] = {
+        {3, 5, 1, "abcde",                        "abcde\n@ 0,4+\n"},
+        {3, 5, 1, "abcdef",                       "abcde\nf\n@ 1,1\n"},
+        {3, 5, 1, "abcde\r\n",                    "abcde\n\n@ 1,0\n"},
+        {3, 5, 1, "abcde\b",                      "abcde\n@ 0,3\n"},
+        {3, 5, 0, "abcde",                        "abcde\n\n@ 1,0\n"},
+        {3, 5, 1, "abcd\xe4\xb8\xad",             "abcd\n\xe4\xb8\xad\n@ 1,2\n"},
+        {3, 5, 1, "hello\r\x1b[2Cx\x1b[K",        "hex\n@ 0,3\n"},
+        {3, 5, 1, "hello\r\x1b[4hXY\x1b[4l",      "XYhel\n@ 0,2\n"},
+        {3, 5, 1, "ab\x1b[1P",                    "ab\n@ 0,2\n"},
+        {3, 5, 1, "ab\b\x1b[1P",                  "a\n@ 0,1\n"},
+        {2, 5, 1, "a\r\nb\r\nc",                  "b\nc\n@ 1,1\n"},
+        {3, 5, 1, "\x1b[7mab\x1b[27mc",           "abc\n~rr\n@ 0,3\n"},
+        {3, 5, 1, "x\x1b]0;title\x07y\a",         "xy\n@ 0,2 bell 1\n"},
+        {3, 9, 1, "a\tb",                         "a       b\n@ 0,8+\n"},
+        {3, 5, 1, "e\xcc\x81x",                   "e\xcc\x81x\n@ 0,2\n"},
+    };
+    for (iz i = 0; i < countof(cases); i++) {
+        Arena  tmp = a;
+        VTerm *v   = vtnew(&tmp, cases[i].rows, cases[i].cols, cases[i].xenl);
+        Str    in  = {(u8 *)cases[i].in, (iz)strlen(cases[i].in)};
+        vtfeed(v, in.data, in.len);
+        Str want = {(u8 *)cases[i].want, (iz)strlen(cases[i].want)};
+        expect(t, in, vtdump(v, &tmp), want);
+    }
+}
+
 static void test_pathmodes(Test *t)
 {
     Str on[] = {"sh", "-O", "msyspath", "-c", "echo $PATH; shopt -p msyspath"};
@@ -807,6 +845,78 @@ static b32 test_spec(Test *t, char *path)
     }
     free(script.data);
     free(spec.data);
+    return ok;
+}
+
+// Editor sessions (t/edit/*.ed, format in vterm.cpp): an interactive
+// shell on the vos's scripted terminal, its snapshots compared with
+// the .screens file recorded from bash (tools/ptyrun). The shell runs
+// as ptyrun runs bash, with the same environment as specs plus TERM
+// and a UTF-8 locale.
+static Str edenv[] = {
+    "LANG=C.UTF-8", "TZ=UTC", "HOME=/home/oracle", "TERM=xterm",
+    "PATH=/usr/local/bin:/opt/fakes/bin",
+};
+
+static void putvfile(Os *, Arena, Str path, Str data);
+
+static Str runedit(Test *t, EdScript *ed, b32 nowrap)
+{
+    static u8 snapbuf[1<<20];
+    Os *os = t->os;
+    startrun(os, 0, {});
+    Str *env  = alloc<Str>(&os->vos.a, countof(edenv)+ed->nenv);
+    iz   nenv = 0;
+    for (iz i = 0; i < countof(edenv); i++) env[nenv++] = edenv[i];
+    for (iz i = 0; i < ed->nenv; i++) env[nenv++] = ed->env[i];
+    putvfile(os, os->vos.a, "/home/oracle/.edrc", ed->rc);
+    vttyinit(&os->vos, ed->rows, ed->cols, !nowrap, ed->keys, ed->nkeys,
+             snapbuf, countof(snapbuf));
+    static Str args[] = {"bash", "--noprofile", "--rcfile", "/home/oracle/.edrc", "-i"};
+    OsInfo info = baseinfo(os, args, countof(args));
+    info.env  = env;
+    info.nenv = nenv;
+    info.cwd  = "/home/oracle";
+    finishrun(os, &info);
+    if (!os->vos.tty.ended) vsnap(&os->vos);  // the shell exited
+    return os->vos.tty.snaps;
+}
+
+static b32 test_edit(Test *t, char *path)
+{
+    Str  p = {(u8 *)path, (iz)strlen(path)};
+    char screenpath[1024];
+    if (p.len+5 > countof(screenpath)) return 1;
+    memcpy(screenpath, path, (uz)p.len - 3);
+    strcpy(screenpath + p.len - 3, ".screens");
+
+    Str src  = readfile(path);
+    Str want = readfile(screenpath);
+    if (!src.data) {
+        fprintf(stderr, "SKIP: %s (unreadable)\n", path);
+        return 1;
+    }
+    iz    cap = src.len*4 + (1<<16);
+    byte *mem = (byte *)malloc((uz)cap);
+    Arena a   = {mem, mem+cap};
+    EdScript ed = edparse(&a, src);
+    b32 ok = 1;
+    if (ed.err.data) {
+        fprintf(stderr, "SKIP: %s (%.*s)\n", path, (int)ed.err.len, (char *)ed.err.data);
+    } else {
+        Str got = runedit(t, &ed, ed.nowrap);
+        if (want.data) {
+            ok = expect(t, p, got, want);
+        } else {
+            // Not recorded (or vos only): printed for review
+            fprintf(stderr, "SKIP: %s (no .screens)\n", path);
+            printstr(stdout, got);
+            fflush(stdout);
+        }
+    }
+    free(mem);
+    free(src.data);
+    free(want.data);
     return ok;
 }
 
@@ -1504,6 +1614,7 @@ int main(int argc, char **argv)
     t.os = &os;
     test_m0(&t);
     test_fibers(&t);
+    test_vterm(&t);
     test_arena(&t);
     test_sched(&t);
     test_sigpipe(&t);
@@ -1617,6 +1728,10 @@ int main(int argc, char **argv)
         if (endswith(a, ".sh")) {
             specs++;
             specfail += !test_spec(&t, argv[i]);
+        }
+        if (endswith(a, ".ed")) {
+            specs++;
+            specfail += !test_edit(&t, argv[i]);
         }
     }
 

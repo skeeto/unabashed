@@ -26,6 +26,8 @@
 //
 // This is free and unencumbered software released into the public domain.
 
+#include "vterm.cpp"
+
 struct Vos;
 static Vos *osvos(Os *);
 // The layer's memory, from which every reservation comes.
@@ -105,6 +107,7 @@ struct VProc {
     b32     intr;     // resumed by a signal (shells): fail a read or os_wait
     i64     pid;
     u64     sigpend;  // shells: signals not yet taken by os_sigpending
+    u64     grpsig;   // shells: the terminal's, not yet taken by os_siggroup
     LevelSig lsigs[16];  // shells: os_siglevel's, oldest first
     i32     nlsigs;
     u64     sigign;   // fakes: signals they ignore (Spawn.sigign)
@@ -123,6 +126,32 @@ struct VProc {
     u64     ingroup;  // tracing: the writer group it was started in
     FakeCtx ctx;
     Arena   mem;      // a fixed block: the program's memory
+};
+
+// The terminal behind the outermost shell's descriptors 0-2 and
+// /dev/tty, when a test gives one (t/edit): writes draw on term, reads
+// take the script's keys. A snapshot of the screen (vtdump) is taken
+// at each VKEY_SNAP, and at the end of the script, which then reads as
+// end of file. In its cooked mode it does what a line discipline does
+// (echo, erase, kill, ^C, ^D); raw, as os_tty(TTY_RAW) describes.
+struct VTty {
+    VTerm *term;   // null: no such terminal
+    VKey  *keys;
+    iz     nkeys;
+    iz     next;   // the step in progress
+    iz     pos;    // within its text
+    i64    until;  // a pause in progress: its end, or 0
+    b32    raw;
+    b32    ended;  // the script ran out: its snapshot is taken
+    Str    snaps;  // the snapshots, each after a "== snap N" line
+    iz     snapcap;
+    i32    nsnaps;
+    u8     line[1024];  // cooked: the line being typed
+    iz     linelen;
+    u8     ready[1024]; // cooked: lines finished, not yet read
+    iz     readylen;
+    b32    eof;         // cooked: ^D on an empty line, not yet read
+    b32    settling;    // vothersready: leave the terminal out
 };
 
 struct Vos {
@@ -151,6 +180,7 @@ struct Vos {
     Str     in;          // its standard input
     iz      inpos;
     b32     ttyin;       // or else a terminal that never delivers input
+    VTty    tty;         // or a terminal typed at by a script (term)
     // Tracing for the chaos fuzzer: output per writer, as hashes, and
     // whether the run did something whose outcome may depend on the
     // schedule, such as changing a file while tasks run concurrently
@@ -584,6 +614,7 @@ static i32 vaccess(Vos *v, Handle h)
 // Processes
 
 static b32 vioready(Vos *, Io *);
+static b32 vttyready(Vos *);
 
 static b32 vready(Vos *v, VProc *p)
 {
@@ -596,7 +627,7 @@ static b32 vready(Vos *v, VProc *p)
     case VW_PROC:  return v->procs[p->wproc].state == VP_EXIT;
     case VW_YIELD: return 1;
     case VW_SLEEP: return v->clock >= p->until;
-    case VW_TTY:   return p->intr;
+    case VW_TTY:   return p->intr || vttyready(v);
     case VW_IO:
         if (p->intr || (p->until && v->clock>=p->until)) return 1;
         for (Io *io = p->ios; io; io = io->next) {
@@ -619,6 +650,7 @@ static b32 vadvance(Vos *v)
             when = p->until;
         }
     }
+    if (v->tty.until && (when<0 || v->tty.until<when)) when = v->tty.until;
     if (when < 0) return 0;
     v->clock = v->clock>when ? v->clock : when;
     return 1;
@@ -822,15 +854,227 @@ static i32 vdevfd(Str path)
     return n;
 }
 
-// A read from a terminal nobody types at: it blocks until a signal
-// fails it, or the scheduler finds nothing else can ever run.
-static iz vttyread(Os *os, Vos *v)
+// The scripted terminal (VTty)
+
+// Draw output on the terminal, \n as \r\n (output processing).
+static void vttyout(Vos *v, u8 *buf, iz len)
+{
+    VTerm *t = v->tty.term;
+    for (iz i = 0; i < len; i++) {
+        if (buf[i] == '\n') vtbyte(t, '\r');
+        vtbyte(t, buf[i]);
+    }
+}
+
+static void vsnap(Vos *v)
+{
+    VTty *y = &v->tty;
+    Arena scratch = v->a;
+    Buf b(&scratch, 1<<12);
+    print(&b, "== snap ");
+    print(&b, (i64)++y->nsnaps);
+    print(&b, "\n");
+    print(&b, vtdump(y->term, &scratch));
+    Str s = finish(&b);
+    if (s.len <= y->snapcap - y->snaps.len) {
+        copybytes(y->snaps.data+y->snaps.len, s.data, s.len);
+        y->snaps.len += s.len;
+    }
+}
+
+// A signal the terminal sends to every process on it (no process
+// groups here): shells take it through os_siggroup.
+static void vttysignal(Os *os, Vos *v, i32 sig)
+{
+    for (i32 i = 0; i < v->nprocs; i++) {
+        VProc *p = v->procs + i;
+        if (p->state!=VP_RUN && p->state!=VP_BLOCK) continue;
+        if (p->shell) {
+            p->grpsig |= (u64)1 << (sig-1);
+            p->intr = p != v->procs+v->cur;
+        } else {
+            os_kill(os, p->pid, sig);
+        }
+    }
+}
+
+static void vttyecho(Vos *v, u8 c)
+{
+    if (c<0x20 && c!='\t' && c!='\n') {
+        u8 s[2] = {'^', (u8)(c + '@')};
+        vttyout(v, s, 2);
+    } else {
+        vttyout(v, &c, 1);
+    }
+}
+
+// Erase the last character of the line being typed, on screen too.
+static void vttyrubout(Vos *v)
+{
+    VTty *y = &v->tty;
+    if (!y->linelen) return;
+    iz end = y->linelen;
+    iz beg = end - 1;
+    for (; beg>0 && (y->line[beg]&0xc0)==0x80; beg--) {}
+    iz  i = beg;
+    i32 c = utf8decode({y->line, end}, &i);
+    i32 w = c<0x20 ? 2 : cpwidth(c);
+    for (i32 k = 0; k < w; k++) vttyout(v, (u8 *)"\b \b", 3);
+    y->linelen = beg;
+}
+
+// One byte typed at the terminal in its cooked mode.
+static void vcooked(Os *os, Vos *v, u8 c)
+{
+    VTty *y = &v->tty;
+    c = c=='\r' ? '\n' : c;
+    switch (c) {
+    case 0x03:
+        vttyout(v, (u8 *)"^C", 2);
+        y->linelen = 0;
+        vttysignal(os, v, 2);
+        return;
+    case 0x04:
+        if (!y->linelen) {
+            y->eof = 1;
+            return;
+        }
+        break;
+    case 0x7f:
+        vttyrubout(v);
+        return;
+    case 0x15:
+        while (y->linelen) vttyrubout(v);
+        return;
+    case 0x17:
+        while (y->linelen && y->line[y->linelen-1]==' ') vttyrubout(v);
+        while (y->linelen && y->line[y->linelen-1]!=' ') vttyrubout(v);
+        return;
+    default:
+        if (y->linelen < countof(y->line)) y->line[y->linelen++] = c;
+        vttyecho(v, c);
+        if (c != '\n') return;
+    }
+    iz n = y->linelen;
+    n = n<countof(y->ready)-y->readylen ? n : countof(y->ready)-y->readylen;
+    copybytes(y->ready+y->readylen, y->line, n);
+    y->readylen += n;
+    y->linelen   = 0;
+}
+
+static b32 vready(Vos *, VProc *);
+
+// Whether a process other than the current one can run, the terminal
+// left out (a snapshot waits for everything else to settle).
+static b32 vothersready(Vos *v)
+{
+    v->tty.settling = 1;
+    b32 r = 0;
+    for (i32 i = 0; i<v->nprocs && !r; i++) {
+        r = i!=v->cur && vready(v, v->procs+i);
+    }
+    v->tty.settling = 0;
+    return r;
+}
+
+// Whether a read from the terminal has something to do: keys or end
+// of input to deliver, a snapshot to take.
+static b32 vttyready(Vos *v)
+{
+    VTty *y = &v->tty;
+    if (!y->term || y->settling) return 0;
+    if (!y->raw && (y->readylen || y->eof)) return 1;
+    if (y->next >= y->nkeys) return 1;
+    VKey *k = y->keys + y->next;
+    if (k->kind != VKEY_PAUSE) return 1;
+    if (!y->until) y->until = v->clock + k->ms*1000000;
+    return v->clock >= y->until;
+}
+
+// Read typed keys: the count (raw: as typed, cooked: finished lines),
+// 0 at the end of input, -1 if none yet, -2 if others must run first.
+static iz vttyget(Os *os, Vos *v, u8 *buf, iz len)
+{
+    VTty *y = &v->tty;
+    for (;;) {
+        if (!y->raw && y->readylen) {
+            iz n = len<y->readylen ? len : y->readylen;
+            copybytes(buf, y->ready, n);
+            y->readylen -= n;
+            for (iz i = 0; i < y->readylen; i++) y->ready[i] = y->ready[i+n];
+            return n;
+        }
+        if (!y->raw && y->eof) {
+            y->eof = 0;
+            return 0;
+        }
+        if (y->next >= y->nkeys) {
+            if (!y->ended) {
+                if (vothersready(v)) return -2;
+                vsnap(v);
+                y->ended = 1;
+            }
+            return 0;
+        }
+        VKey *k = y->keys + y->next;
+        switch (k->kind) {
+        case VKEY_TEXT:
+            if (y->pos == k->text.len) {
+                y->next++;
+                y->pos = 0;
+            } else if (y->raw) {
+                iz n = k->text.len - y->pos;
+                n = n<len ? n : len;
+                copybytes(buf, k->text.data+y->pos, n);
+                y->pos += n;
+                return n;
+            } else {
+                vcooked(os, v, k->text[y->pos++]);
+            }
+            continue;
+        case VKEY_PAUSE:
+            if (!y->until) y->until = v->clock + k->ms*1000000;
+            if (v->clock < y->until) return -1;
+            y->until = 0;
+            y->next++;
+            continue;
+        case VKEY_SNAP:
+            if (vothersready(v)) return -2;
+            vsnap(v);
+            y->next++;
+            continue;
+        case VKEY_RESIZE:
+            vtresize(y->term, &v->a, k->rows, k->cols);
+            for (i32 i = 0; i < v->nprocs; i++) {
+                VProc *p = v->procs + i;
+                if (p->shell && (p->state==VP_RUN || p->state==VP_BLOCK)) {
+                    os_kill(os, p->pid, 28);
+                }
+            }
+            y->next++;
+            continue;
+        }
+    }
+}
+
+// A read from the terminal. Nobody types at one without a script: it
+// blocks until a signal fails it, or the scheduler finds nothing else
+// can ever run.
+static iz vttyread(Os *os, Vos *v, u8 *buf, iz len)
 {
     VProc *me = v->procs + v->cur;
     for (;;) {
         if (me->intr) {
             me->intr = 0;
             return -1;
+        }
+        if (v->tty.term) {
+            iz n = vttyget(os, v, buf, len);
+            if (n >= 0) return n;
+            if (n == -2) {
+                vyield(os, v);
+                continue;
+            }
         }
         me->wait = VW_TTY;
         if (!vschedule(os, v)) {
@@ -842,9 +1086,47 @@ static iz vttyread(Os *os, Vos *v)
 
 static b32 vistty(Vos *v, Handle h)
 {
-    if (h == 0) return v->ttyin;
+    if (h < 3) return h==0 ? v->ttyin : !!v->tty.term;
     VFile *f = vfile(v, h);
     return f && f->kind==VK_TTY;
+}
+
+static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
+{
+    Vos *v = osvos(os);
+    Tty  r = {};
+    VTty *y = &v->tty;
+    if (!y->term || !vistty(v, in) || !vistty(v, out)) {
+        r.err = E_NOTTY;
+        return r;
+    }
+    if (how == TTY_RAW)     y->raw = 1;
+    if (how == TTY_RESTORE) y->raw = 0;
+    r.rows   = y->term->rows;
+    r.cols   = y->term->cols;
+    r.xenl   = y->term->xenl;
+    r.intr   = 0x03;
+    r.eof    = 0x04;
+    r.erase  = 0x7f;
+    r.kill   = 0x15;
+    r.werase = 0x17;
+    r.lnext  = 0x16;
+    return r;
+}
+
+// Give the outermost shell a terminal typed at by a script, rows by
+// cols, snapshots going to a buffer of snapcap bytes.
+static void vttyinit(Vos *v, i32 rows, i32 cols, b32 xenl, VKey *keys, iz nkeys,
+                     u8 *snapbuf, iz snapcap)
+{
+    VTty *y    = &v->tty;
+    *y         = {};
+    y->term    = vtnew(&v->a, rows, cols, xenl);
+    y->keys    = keys;
+    y->nkeys   = nkeys;
+    y->snaps   = {snapbuf, 0};
+    y->snapcap = snapcap;
+    v->ttyin   = 1;
 }
 
 static Opened vnpopen(Vos *, Str name, i32 flags);
@@ -1028,6 +1310,7 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
     Vos *v = osvos(os);
     if (h==1 || h==2) {
         if (v->trace) vtraceout(v, h, buf, len);
+        if (v->tty.term) vttyout(v, buf, len);
         Str *dst = h==1 ? &v->out : &v->err;
         if (len > v->outcap - dst->len) {
             // As a reader gone: which task it cuts off is up to timing
@@ -1046,8 +1329,10 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
     VFile *f = vfile(v, h);
     if (!f) return 0;
     switch (f->kind) {
-    case VK_NULL:
     case VK_TTY:
+        if (v->tty.term) vttyout(v, buf, len);
+        return 1;
+    case VK_NULL:
         return 1;
     case VK_FILE:
         if (!(f->flags & OF_WRITE)) return 0;
@@ -1093,7 +1378,7 @@ static iz os_read(Os *os, Handle h, u8 *buf, iz len)
 {
     Vos *v = osvos(os);
     if (vistty(v, h)) {
-        return vttyread(os, v);
+        return vttyread(os, v, buf, len);
     }
     if (h == 0) {
         iz n = v->in.len - v->inpos;
@@ -1264,7 +1549,7 @@ static Stat os_fstat(Os *os, Handle h)
     Vos *v = osvos(os);
     Stat r = {};
     if (h < 3) {
-        r.type = h==0 && v->ttyin ? FT_CHAR : FT_PIPE;
+        r.type = vistty(v, h) ? FT_CHAR : FT_PIPE;
         r.mode = 0600;
         r.uid  = r.gid = v->user;  // the user's terminal or pipes
         return r;
@@ -1425,9 +1710,13 @@ static u64 os_sigpending(Os *os)
     return r;
 }
 
-static u64 os_siggroup(Os *)
+static u64 os_siggroup(Os *os)
 {
-    return 0;  // no terminal sends signals to a group
+    Vos   *v  = osvos(os);
+    VProc *me = v->procs + v->cur;
+    u64    r  = me->grpsig;
+    me->grpsig = 0;
+    return r;
 }
 
 static void os_tasktag(Os *os, u64 tag, iz ntasks, u64 group)
@@ -2227,7 +2516,15 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
     VFile *f = io->op==IO_PROC ? 0 : vfile(v, io->h);
     switch (io->op) {
     case IO_READ:
-        if (vistty(v, io->h)) return 0;  // never
+        if (vistty(v, io->h)) {
+            if (!vttyready(v)) return 0;
+            if (perform) {
+                iz n = vttyget(os, v, io->buf, io->len);
+                if (n < 0) return 0;
+                io->n = n;
+            }
+            return 1;
+        }
         if (f && f->kind==VK_PIPEREAD) {
             VPipe *p = f->pipe;
             if (p->len==p->pos && p->writers) return 0;

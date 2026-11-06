@@ -7,3 +7,4 @@ third_party/
 /fuzz
 /debug
 /unabashed
+tools/ptyrun

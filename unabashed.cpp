@@ -149,6 +149,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 
 
 
+#include "unicode.cpp"
 #include "wide.cpp"
 #include "parse.cpp"
 #include "print.cpp"

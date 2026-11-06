@@ -204,6 +204,31 @@ struct Io {
 
 enum : i64 { WAIT_FOREVER = -1, WAIT_POLL = 0 };
 
+// A terminal, as the line editor sees it (os_tty). Input arrives as
+// xterm key bytes; output is the core's VT subset (notes/m6.md).
+enum : i32 {  // os_tty
+    TTY_QUERY,    // only report
+    TTY_RAW,      // bytes as typed, no echo, no line editing, no
+                  // signals from keys; output interprets the VT subset,
+                  // and \n may or may not return the carriage
+    TTY_RESTORE,  // back to the mode it had before TTY_RAW
+};
+
+struct Tty {
+    i32 err;    // E_NOTTY if in and out are not one terminal
+    i32 rows;   // size, 0 if unknown
+    i32 cols;
+    b32 xenl;   // deferred wrap: a write to the last column leaves the
+                // cursor there until the next character
+    b32 legacy; // a Windows console without VT processing (vtcon.cpp)
+    u8  intr;   // the terminal's special characters, 0 if none
+    u8  eof;
+    u8  erase;
+    u8  kill;
+    u8  werase;
+    u8  lnext;
+};
+
 // Reserve address space. Returns null on failure.
 static byte   *os_reserve(Os *, iz);
 // Commit part of a reservation. Returns false on failure.
@@ -240,6 +265,10 @@ static Stat    os_stat(Os *, Arena scratch, Str path, b32 follow);
 static Stat    os_fstat(Os *, Handle);
 // A terminal, as isatty(3): a console on Windows (not a mintty pipe)
 static b32     os_isatty(Os *, Handle);
+// The terminal that in (read) and out (written) are, and its mode
+// changed as how (TTY_*) asks. A resize raises SIGWINCH (28) through
+// os_sigpending.
+static Tty     os_tty(Os *, Handle in, Handle out, i32 how);
 // Directory entries in the platform's order, or null with *err set.
 static Dirent *os_list(Os *, Arena *, Str dir, i32 *err);
 // Start a program. The child's descriptors are exactly those listed.

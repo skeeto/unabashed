@@ -237,6 +237,9 @@ static void logoutfiles(Shell *, Arena);  // unabashed.cpp
 
 static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
+    if (sh->interactive && !sh->subshell) {
+        fdwrite(sh, 2, sh->login ? Str("logout\n") : "exit\n");
+    }
     // In a trap action, the status from before the action (POSIX)
     i32 status = sh->intrap ? sh->trapstatus : sh->status;
     iz  i = skipdashdash(args, nargs, 1);

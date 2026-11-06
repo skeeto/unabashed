@@ -1,0 +1,65 @@
+#!/bin/sh
+# Record bash 5.3's screens for editor tests: t/edit/foo.ed -> foo.screens
+#
+#   tools/edrecord t/edit/foo.ed [...]
+#   EDRECORD_SHELL=unabashed EDRECORD_CHECK=1 tools/edrecord t/edit/*.ed
+#
+# Each script runs in a fresh container from the oracle image, under
+# tools/ptyrun (build it first, static, as its header says, to
+# tools/ptyrun): bash on a pty, the keys typed, the screens rendered.
+# Scripts with "nowrap" are vos only and skipped.
+#
+# Environment:
+#   EDRECORD_IMAGE  oracle image (default unabashed/bash53)
+#   EDRECORD_SHELL  a Linux shell to run in bash's place (our POSIX build)
+#   EDRECORD_CHECK  if set, compare with each .screens instead of writing
+#                   it, printing PASS or FAIL per script
+set -eu
+
+image=${EDRECORD_IMAGE:-unabashed/bash53}
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*';;
+esac
+here=$(cd "$(dirname "$0")" && pwd)
+ptyrun=$here/ptyrun
+if [ ! -x "$ptyrun" ]; then
+    echo "edrecord: build $ptyrun first (see tools/ptyrun.cpp)" >&2
+    exit 1
+fi
+shell=/usr/local/bin/bash
+mount=
+if [ -n "${EDRECORD_SHELL:-}" ]; then
+    host=$(cd "$(dirname "$EDRECORD_SHELL")" && pwd)/$(basename "$EDRECORD_SHELL")
+    mount="--volume=$host:$shell:ro"
+fi
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+
+fail=0
+for script; do
+    screens=${script%.ed}.screens
+    if grep -q '^nowrap' "$script"; then
+        continue
+    fi
+    docker run -i --rm --init --network none --read-only \
+        --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777 \
+        --tmpfs /home/oracle:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=755 \
+        --workdir /home/oracle --user oracle --hostname oracle \
+        --cap-drop ALL --security-opt no-new-privileges \
+        --pids-limit 256 --ulimit nofile=1024:1024 \
+        --volume="$ptyrun:/opt/ptyrun:ro" ${mount:+"$mount"} \
+        -e HOME=/home/oracle "$image" /opt/ptyrun "$shell" - \
+        <"$script" >"$tmp"
+    if [ -n "${EDRECORD_CHECK:-}" ]; then
+        if cmp -s "$tmp" "$screens"; then
+            echo "PASS $script"
+        else
+            echo "FAIL $script"
+            diff "$screens" "$tmp" || true
+            fail=1
+        fi
+    else
+        cp "$tmp" "$screens"
+    fi
+done
+exit $fail

@@ -116,6 +116,20 @@ struct FileInfo {  // BY_HANDLE_FILE_INFORMATION
 };
 static_assert(sizeof(FileInfo) == 52);
 
+struct ConsoleInfo {  // CONSOLE_SCREEN_BUFFER_INFO
+    short width;
+    short height;
+    short x;
+    short y;
+    short attr;
+    short left;
+    short top;
+    short right;
+    short bottom;
+    short maxwidth;
+    short maxheight;
+};
+
 struct FindData {  // WIN32_FIND_DATAW
     u32      attr;
     Filetime ctime;
@@ -261,6 +275,7 @@ W32(b32,    FreeEnvironmentStringsW(c16 *));
 W32(c16 *,  GetCommandLineW());
 W32(b32,    GetComputerNameW(c16 *, i32 *));
 W32(b32,    GetConsoleMode(uz, i32 *));
+W32(b32,    GetConsoleScreenBufferInfo(uz, ConsoleInfo *));
 W32(i32,    GetCurrentDirectoryW(i32, c16 *));
 W32(uz,     GetCurrentProcess());
 W32(uz,     GetCurrentThread());
@@ -306,6 +321,7 @@ W32(b32,    SetHandleInformation(uz, i32, i32));
 W32(uz,     OpenProcess(i32, b32, i32));
 W32(b32,    TerminateProcess(uz, u32));
 W32(b32,    SetConsoleCtrlHandler(void *, b32));
+W32(b32,    SetConsoleMode(uz, i32));
 W32(byte *, VirtualAlloc(byte *, iz, i32, i32));
 W32(byte *, VirtualAllocEx(uz, byte *, iz, i32, i32));
 W32(b32,    VirtualFree(byte *, iz, i32));
@@ -596,6 +612,9 @@ struct Os {
     i64        youngticks; // 100 ms: programs judged at a Ctrl-C
     Recent     recent[32];
     uz         jobport;    // job messages for watched programs
+    b32        ttyraw;     // os_tty: the console is in raw mode
+    i32        ttyinmode;  // and its modes before
+    i32        ttyoutmode;
     uz         jobkeys;    // completion keys handed out
     u32        jobflags;   // limits of each program's job (see newjob)
     c16        self[512];  // this program's image path (see sameimage)
@@ -2692,6 +2711,54 @@ static Stat os_stat(Os *, Arena scratch, Str path, b32 follow)
         r = {};
         r.err = E_NOTDIR;
     }
+    return r;
+}
+
+enum : i32 {  // console modes
+    CM_PROCESSED_INPUT = 0x0001, CM_LINE_INPUT = 0x0002, CM_ECHO_INPUT = 0x0004,
+    CM_WINDOW_INPUT = 0x0008, CM_VT_INPUT = 0x0200,
+    CM_PROCESSED_OUTPUT = 0x0001, CM_WRAP_AT_EOL = 0x0002, CM_VT_OUTPUT = 0x0004,
+    CM_NO_AUTO_RETURN = 0x0008,
+};
+
+static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
+{
+    Tty r = {};
+    i32 imode = 0;
+    i32 omode = 0;
+    ConsoleInfo ci = {};
+    if (!GetConsoleMode(in, &imode) || !GetConsoleMode(out, &omode)
+            || !GetConsoleScreenBufferInfo(out, &ci)) {
+        r.err = E_NOTTY;
+        return r;
+    }
+    if (how==TTY_RAW && !os->ttyraw) {
+        os->ttyraw     = 1;
+        os->ttyinmode  = imode;
+        os->ttyoutmode = omode;
+        i32 raw = imode & ~(CM_PROCESSED_INPUT|CM_LINE_INPUT|CM_ECHO_INPUT);
+        raw |= CM_WINDOW_INPUT;
+        if (!SetConsoleMode(in, raw|CM_VT_INPUT)) SetConsoleMode(in, raw);
+        i32 vt = omode | CM_PROCESSED_OUTPUT | CM_WRAP_AT_EOL | CM_VT_OUTPUT;
+        if (!SetConsoleMode(out, vt|CM_NO_AUTO_RETURN) && !SetConsoleMode(out, vt)) {
+            SetConsoleMode(out, omode);
+        }
+    } else if (how==TTY_RESTORE && os->ttyraw) {
+        os->ttyraw = 0;
+        SetConsoleMode(in, os->ttyinmode);
+        SetConsoleMode(out, os->ttyoutmode);
+    }
+    GetConsoleMode(out, &omode);
+    r.cols   = ci.width;
+    r.rows   = ci.bottom - ci.top + 1;
+    r.legacy = !(omode & CM_VT_OUTPUT);
+    r.xenl   = !!(omode & CM_NO_AUTO_RETURN);
+    r.intr   = 0x03;
+    r.eof    = 0x04;
+    r.erase  = 0x7f;
+    r.kill   = 0x15;
+    r.werase = 0x17;
+    r.lnext  = 0x16;
     return r;
 }
 

@@ -10,9 +10,11 @@
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 #include "unabashed.cpp"
@@ -30,6 +32,8 @@ struct Os {
     u64    changed;     // signals whose disposition the shell changed
     iz     reserve;     // OsInfo.reserve, for a forked image child
     iz     stack;       // OsInfo.stack, likewise
+    b32    ttyraw;      // os_tty: the terminal is in raw mode
+    termios ttysave;    // and its mode before
 };
 
 static u64 volatile sigbits;  // caught signals not yet taken
@@ -315,6 +319,46 @@ static Stat os_fstat(Os *, Handle h)
         return r;
     }
     return tostat(&s);
+}
+
+static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
+{
+    Tty     r = {};
+    termios t;
+    if (!isatty((i32)in) || !isatty((i32)out) || tcgetattr((i32)in, &t)) {
+        r.err = E_NOTTY;
+        return r;
+    }
+    if (how==TTY_RAW && !os->ttyraw) {
+        os->ttyraw  = 1;
+        os->ttysave = t;
+        termios raw = t;
+        raw.c_lflag &= ~(tcflag_t)(ICANON|ECHO|ISIG|IEXTEN);
+        raw.c_iflag &= ~(tcflag_t)(ICRNL|INLCR|IGNCR|IXON);
+        raw.c_cc[VMIN]  = 1;
+        raw.c_cc[VTIME] = 0;
+        tcsetattr((i32)in, TCSADRAIN, &raw);
+    } else if (how==TTY_RESTORE && os->ttyraw) {
+        os->ttyraw = 0;
+        tcsetattr((i32)in, TCSADRAIN, &os->ttysave);
+        t = os->ttysave;
+    } else if (os->ttyraw) {
+        t = os->ttysave;
+    }
+    winsize ws = {};
+    if (!ioctl((i32)out, TIOCGWINSZ, &ws)) {
+        r.rows = ws.ws_row;
+        r.cols = ws.ws_col;
+    }
+    r.xenl = 1;  // as xterm and its kin
+    u8 off = _POSIX_VDISABLE;
+    r.intr   = t.c_cc[VINTR]==off  ? 0 : t.c_cc[VINTR];
+    r.eof    = t.c_cc[VEOF]==off   ? 0 : t.c_cc[VEOF];
+    r.erase  = t.c_cc[VERASE]==off ? 0 : t.c_cc[VERASE];
+    r.kill   = t.c_cc[VKILL]==off  ? 0 : t.c_cc[VKILL];
+    r.werase = t.c_cc[VWERASE]==off ? 0 : t.c_cc[VWERASE];
+    r.lnext  = t.c_cc[VLNEXT]==off ? 0 : t.c_cc[VLNEXT];
+    return r;
 }
 
 static b32 os_isatty(Os *, Handle h)

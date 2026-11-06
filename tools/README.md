@@ -113,6 +113,26 @@ each test (300 seconds). Real bash, given as SHELL (copy
 listing order, no terminal, no en_US.UTF-8, ulimit): results are read
 against its own.
 
+## Editor sessions (t/edit, ptyrun, edrecord)
+
+`t/edit/*.ed` scripts type keys at an interactive shell on a terminal
+and take snapshots of its screen; the format is in `vterm.cpp`. The
+expected snapshots, `*.screens`, come from bash 5.3 with its readline,
+on a pseudo-terminal in the oracle container:
+
+    g++ -std=c++20 -static -O2 -o tools/ptyrun tools/ptyrun.cpp   # WSL
+    tools/edrecord t/edit/foo.ed
+
+`ptyrun SHELL SCRIPT` runs the shell on a pty, types the keys, draws
+the output on the same screen model (`vterm.cpp`) the vos uses, and
+prints the snapshots, each taken once the shell has been quiet for 300
+ms. `tests.exe t/edit/*.ed` runs the scripts on the vos's terminal and
+compares; a script with no `.screens` (or marked `nowrap`, vos only)
+prints its snapshots instead. `EDRECORD_SHELL=unabashed
+EDRECORD_CHECK=1 tools/edrecord ...` runs our POSIX build instead of
+bash and compares. Only the screens are compared, never the bytes
+that drew them (notes/m6.md).
+
 ## fuzz (WSL or Linux, AFL++)
 
     tools/fuzz MODE [MINUTES [CORES]]
