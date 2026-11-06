@@ -22,6 +22,13 @@ kill $!
 wait $!
 echo "kid $?"
 
+# TERM to a shell that exec'd one of ours goes on to that one
+"$U" -c 'exec "$U" -c "trap \"echo exec TERM; exit 4\" TERM; echo r >ex.txt; sleep 3; echo exec end"' &
+while [ ! -e ex.txt ]; do sleep 1; done
+kill $!
+wait $!
+echo "exec $?"
+
 trap 'echo top USR1' USR1
 { kill -USR1 $$; } &
 wait

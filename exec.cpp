@@ -1691,13 +1691,40 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         sp.nenv    = tg.env.len;
         sp.crtslot = tg.crtslot;
     }
-    if (execing && !sh->subshell && !sh->capdepth && s->ntasks==1 &&
-            !npumps && !capfile && !sh->spawnto && !br.n) {
-        // exec while nothing else runs in this process: become the
-        // program (it keeps the shell's pid), else start it as a child
-        i32 err = os_exec(sh->os, a, &sp);
+    if (execing && sh->subshell==sh->procbase && !sh->capdepth &&
+            !capfile && !sh->spawnto && !br.n) {
+        // exec at the process's outermost level: become the program (it
+        // keeps the shell's pid). While other tasks run, a copy of the
+        // process forked first keeps them, as bash's procsubs and jobs
+        // are processes of their own already. Else (no exec, no fork)
+        // start it as a child.
+        b32 alone = s->ntasks==1 && !npumps;
+        i32 err   = alone ? os_exec(sh->os, a, &sp) : os_forkexec(sh->os, a, &sp);
         if (err != E_NOSYS) {
             for (i32 i = 0; i < nclose; i++) os_close(sh->os, closeafter[i]);
+            if (!err) {
+                // The copy: its tasks finish, joined as the shell exits.
+                // A pump feeding the program's pipe runs to its end
+                // rather than with the shell's references (pipeclose),
+                // and only the program holds that pipe's read end.
+                Fdtab *t = sh->fds;
+                for (i32 fd = 0; fd < t->top; fd++) {
+                    File *f = t->fd[fd];
+                    if (f && f->kind==F_PIPE && f->pipe->pump) {
+                        Pipe *p = f->pipe;
+                        p->pump->sib = s->orphans;
+                        s->orphans   = p->pump;
+                        p->pump = 0;
+                        os_close(sh->os, p->osr);
+                        p->osr = BADHANDLE;
+                    }
+                }
+                for (i32 i = 0; i < npumps; i++) {
+                    pumps[i]->sib = s->orphans;
+                    s->orphans    = pumps[i];
+                }
+                return 0;
+            }
             return -err;
         }
     }

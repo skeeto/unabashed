@@ -1018,6 +1018,7 @@ static i32 imagemain(Os *os, OsInfo *info)
     sh->sched   = newsched(os, &perm, info->reserve, info->chaos, info->std[2]);
     sh->reserve = info->reserve;
     sh->bashpid = info->pid;
+    sh->procbase = sh->subshell;  // its traps are the process's
     sh->sched->pid = info->pid;
     if (sh->win32) sh->sniffs = newsniffcache(&perm);
     if (sh->paths) sh->paths->pid = info->pid;

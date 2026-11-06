@@ -28,9 +28,18 @@ struct Os {
     b32    pipeign;     // SIGPIPE was ignored on entry, so stays ignored
     u64    entryign;    // signals ignored on entry: they stay ignored
     u64    changed;     // signals whose disposition the shell changed
+    iz     reserve;     // OsInfo.reserve, for a forked image child
+    iz     stack;       // OsInfo.stack, likewise
 };
 
 static u64 volatile sigbits;  // caught signals not yet taken
+
+// Level signals from another of our shells (os_siglevel), queued by
+// the handler of a real-time signal: one producer (the handler, which
+// cannot nest), one consumer (os_levelsig).
+enum : u32 { NLEVELQ = 32 };
+static LevelSig levelq[NLEVELQ];
+static u32 volatile levelhead, leveltail;
 
 static Os *sigos;  // for the signal handler
 
@@ -350,8 +359,11 @@ static void closefds(i32 lo, i32 hi)
 // reports a failed exec through err. Signals stay blocked until the
 // child has reset its dispositions, so no handler of the shell's runs
 // in it.
-static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
+static Spawned forkimage(Os *, Arena, Spawn *);
+
+static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 {
+    if (s->image.base) return forkimage(os, scratch, s);
     Spawned r = {};
     r.proc = BADHANDLE;
     char *path = cpath(&scratch, s->path);
@@ -420,14 +432,157 @@ static Spawned os_spawn(Os *, Arena scratch, Spawn *s)
     return r;
 }
 
-// Self-spawning with a state image: not yet (M5b), so background jobs
-// stay fibers.
-static ImageRef os_imagenew(Os *, iz)
+// Self-spawning with a state image: a plain reservation, which a forked
+// child (forkimage) already has at the same address.
+static ImageRef os_imagenew(Os *os, iz cap)
 {
-    return {};
+    ImageRef r = {};
+    r.base = os_reserve(os, cap);
+    r.cap  = r.base ? cap : 0;
+    return r;
 }
 
-static void os_imagefree(Os *, ImageRef) {}
+static void os_imagefree(Os *, ImageRef im)
+{
+    if (im.base) munmap(im.base, (uz)im.cap);
+}
+
+static Slice<InheritFd> inherited(Arena *);
+static void initasync(Os *);
+static void exitwith(i32 status);
+
+// A forked image child's own fiber: the shell from its image (sh_main
+// takes it to imagemain), on a fresh stack rather than wherever in the
+// parent's call chain (perhaps a fiber's) the fork happened.
+static void imagefiber(Os *os, void *arg)
+{
+    exitwith(sh_main(os, (OsInfo *)arg));
+}
+
+// os_spawn with an image: fork, and in the child give the descriptors
+// listed their numbers, close the rest, start the async machinery
+// afresh (the self-pipe was the parent's), reset the signals the shell
+// changed but those it ignores, and run the image.
+static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
+{
+    Spawned r = {};
+    r.proc = BADHANDLE;
+    char *cwd = cpath(&scratch, s->cwd);
+    i32  *src = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
+    i32  *dst = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
+    for (iz i = 0; i < s->nfds; i++) {
+        src[i] = (i32)s->fds[i].h;
+        dst[i] = s->fds[i].fd;
+    }
+    i32 nfds = (i32)s->nfds;
+
+    sigset_t all, old;
+    sigfillset(&all);
+    sigprocmask(SIG_SETMASK, &all, &old);
+    pid_t pid = fork();
+    if (!pid) {
+        for (i32 i = 0; i < nfds; i++) {
+            src[i] = fcntl(src[i], F_DUPFD, 256);
+        }
+        closefds(0, 255);
+        for (i32 i = 0; i < nfds; i++) dup2(src[i], dst[i]);
+        closefds(256, -1);
+        if (chdir(cwd)) {
+            // as for a program: it runs anyway
+        }
+        for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
+            u64 bit = (u64)1 << (sig-1);
+            if (sig==SIGKILL || sig==SIGSTOP || sig==SIGCHLD) continue;
+            if ((s->sigign | os->entryign) & bit) {
+                signal(sig, SIG_IGN);
+            } else if (os->changed & bit) {
+                signal(sig, sig==SIGPIPE ? SIG_IGN : SIG_DFL);
+            }
+        }
+        os->changed = s->sigign & ~os->entryign;
+        os->pending = 0;
+        os->peekfd[0] = os->peekfd[1] = 0;
+        sigbits = 0;
+        levelhead = 0;
+        leveltail = 0;
+        static OsInfo info;
+        Arena a = newarena(os, (iz)1<<24);
+        Slice<InheritFd> in = inherited(&a);  // before the new self-pipe
+        u64 entryign = os->entryign;
+        initasync(os);
+        os->entryign = entryign;  // as the parent had them
+        sigprocmask(SIG_SETMASK, &old, 0);
+
+        info.image    = s->image;
+        info.inherit  = in.data;
+        info.ninherit = in.len;
+        info.pid      = getpid();
+        info.ppid     = getppid();
+        info.reserve  = os->reserve;
+        info.stack    = os->stack;
+        info.sigign   = os->entryign | s->sigign;
+        for (i32 i = 0; i < 3; i++) info.std[i] = (Handle)i;
+        Fiber *f = os_fiber(os, &a, os->stack, imagefiber, &info);
+        os_switch(os, f);
+        _exit(127);  // never reached
+    }
+    i32 e = pid<0 ? errno : 0;
+    sigprocmask(SIG_SETMASK, &old, 0);
+    if (e) {
+        r.err = e;
+        return r;
+    }
+    munmap(s->image.base, (uz)s->image.cap);  // the child's now
+    r.proc = (Handle)pid;
+    r.pid  = pid;
+    return r;
+}
+
+// Fork, and in the original exec: the copy, which keeps the other
+// tasks, learns how the exec went from a close-on-exec pipe, closed by
+// a successful exec, written to on failure (the copy then vanishes).
+static i32 os_forkexec(Os *os, Arena scratch, Spawn *s)
+{
+    i32 sync[2];
+    if (pipe(sync)) return errno;
+    for (i32 i = 0; i < 2; i++) sync[i] = highfd(sync[i]);
+    if (sync[0]<0 || sync[1]<0) {
+        if (sync[0] >= 0) close(sync[0]);
+        if (sync[1] >= 0) close(sync[1]);
+        return E_MFILE;
+    }
+    sigset_t all, old;
+    sigfillset(&all);
+    sigprocmask(SIG_SETMASK, &all, &old);
+    pid_t pid = fork();
+    if (!pid) {
+        close(sync[1]);
+        u8 c;
+        iz n;
+        do {
+            n = read(sync[0], &c, 1);
+        } while (n<0 && errno==EINTR);
+        if (n) _exit(0);  // the original carries on
+        close(sync[0]);
+        sigbits = 0;  // signals were for the original's pid
+        levelhead = 0;
+        leveltail = 0;
+        sigprocmask(SIG_SETMASK, &old, 0);
+        return 0;
+    }
+    i32 err = pid<0 ? errno : 0;
+    sigprocmask(SIG_SETMASK, &old, 0);
+    close(sync[0]);
+    if (!err) {
+        err = os_exec(os, scratch, s);  // returns only on failure
+        u8 c = 1;
+        if (write(sync[1], &c, 1)) {}
+        i32 status;
+        while (waitpid(pid, &status, 0)<0 && errno==EINTR) {}
+    }
+    close(sync[1]);
+    return err ? err : E_INVAL;
+}
 
 // As os_spawn's child, but in this process. Everything is undone if
 // execve fails (a script without #!, which the shell then runs itself):
@@ -559,15 +714,76 @@ static i32 os_kill(Os *, i64 pid, i32 sig)
     return kill((pid_t)pid, sig) ? errno : 0;
 }
 
-// No signal channel to another process's levels yet (M5b step 6).
+#ifdef SIGRTMAX
+// A level signal travels as a queued real-time signal whose value
+// holds the signal and the level's serial: a vpid of a process is
+// 2^22*(serial+1) + its pid (newvpid), which the receiver rebuilds.
+static i32 siglevelnum()
+{
+    return SIGRTMAX;
+}
+
+static void onlevel(int, siginfo_t *si, void *)
+{
+    i32 saved = errno;
+    u32 t = leveltail;
+    if (t-levelhead < NLEVELQ) {
+        i32 v = si->si_value.sival_int;
+        LevelSig *ls = levelq + t%NLEVELQ;
+        ls->level = ((i64)(v>>8) + 1)<<22 | getpid();
+        ls->sig   = v & 255;
+        __atomic_store_n(&leveltail, t+1, __ATOMIC_RELEASE);
+    }
+    u8 c = 0;
+    if (write(sigos->wakefd[1], &c, 1)) {}
+    errno = saved;
+}
+
+// Whether pid runs this same program, so the real-time signal, deadly
+// to anything else, reaches only another of our shells.
+static b32 ourprocess(i64 pid)
+{
+    char path[64] = "/proc/";
+    i32  len = 6;
+    char digits[24];
+    i32  nd = 0;
+    for (i64 v = pid; v; v /= 10) digits[nd++] = (char)('0' + v%10);
+    while (nd) path[len++] = digits[--nd];
+    __builtin_memcpy(path+len, "/exe", 5);
+    char a[4096], b[4096];
+    ssize_t alen = readlink("/proc/self/exe", a, sizeof(a));
+    ssize_t blen = readlink(path, b, sizeof(b));
+    return alen>0 && alen==blen && !__builtin_memcmp(a, b, (uz)alen);
+}
+
+static i32 os_siglevel(Os *, i64 pid, i64 level, i32 sig)
+{
+    i64 serial = (level>>22) - 1;
+    if (pid<=0 || pid>(i64)0x7fffffff || serial<0 || serial>=(i64)1<<23 ||
+        sig<0 || sig>255 || (level & (((i64)1<<22) - 1))!=pid) {
+        return E_SRCH;
+    }
+    if (!ourprocess(pid)) return E_SRCH;
+    union sigval v = {};
+    v.sival_int = (i32)(serial<<8 | sig);
+    return sigqueue((pid_t)pid, siglevelnum(), v) ? errno : 0;
+}
+#else
 static i32 os_siglevel(Os *, i64, i64, i32)
 {
     return E_NOSYS;
 }
+#endif
 
 static LevelSig os_levelsig(Os *)
 {
-    return {};
+    LevelSig r = {};
+    u32 h = levelhead;
+    if (h != __atomic_load_n(&leveltail, __ATOMIC_ACQUIRE)) {
+        r = levelq[h%NLEVELQ];
+        levelhead = h + 1;
+    }
+    return r;
 }
 
 static u64 os_sigpending(Os *)
@@ -639,6 +855,13 @@ static void initasync(Os *os)
     sa.sa_flags   = SA_RESTART | SA_NOCLDSTOP;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGCHLD, &sa, 0);
+#ifdef SIGRTMAX
+    sa = {};
+    sa.sa_sigaction = onlevel;
+    sa.sa_flags     = SA_RESTART | SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    sigaction(siglevelnum(), &sa, 0);
+#endif
 }
 
 // Complete an operation if it can be done now. For reads and writes,
@@ -742,7 +965,7 @@ static Io *os_wait(Os *os, i64 deadline)
             u8 buf[64];
             while (read(os->wakefd[0], buf, sizeof(buf)) > 0) {}
         }
-        if (sigbits) return 0;  // the core takes the signal first
+        if (sigbits || levelhead!=leveltail) return 0;  // the core first
         i32 k = 1;
         for (Io **p = &os->pending; *p; p = &(*p)->next) {
             Io *io = *p;
@@ -910,7 +1133,13 @@ int main(int argc, char **argv)
         info.std[i] = (Handle)i;
     }
     info.sigign = os.entryign;
-    i32 status = sh_main(&os, &info);
+    os.reserve  = info.reserve;
+    os.stack    = info.stack;
+    exitwith(sh_main(&os, &info));
+}
+
+static void exitwith(i32 status)
+{
     if (status & WSIGNALED) {
         // Killed by a signal: die by it, so that the parent sees that
         i32 sig = (status & 255) - 128;
@@ -921,5 +1150,5 @@ int main(int argc, char **argv)
         sigprocmask(SIG_UNBLOCK, &set, 0);
         kill(getpid(), sig);
     }
-    return status & 255;
+    _exit(status & 255);
 }

@@ -148,11 +148,11 @@ static b32 trapignored(Shell *sh, i32 sig)
     return sig>0 && sig<NSIGNAL && (sh->asyncign & sigbit(sig));
 }
 
-// How the process should handle a real signal, per the main shell's
-// table: caught when trapped, or when an EXIT trap should run first.
+// How the process should handle a real signal, per the table of its
+// outermost level (the shell, or a background job in its process): caught when trapped, or when an EXIT trap should run first.
 static void updatesigmode(Shell *sh, i32 sig)
 {
-    if (sh->subshell || sig<=0 || sig>=NSIGNAL) return;
+    if (sh->subshell!=sh->procbase || sig<=0 || sig>=NSIGNAL) return;
     i32 mode = SIGM_DEFAULT;
     if (trapignored(sh, sig)) {
         mode = SIGM_IGNORE;

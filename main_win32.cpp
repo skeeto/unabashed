@@ -3196,7 +3196,8 @@ static ImageRef imagearg(Str s)
 // No exec on Windows: the program starts as a child in a job that ends
 // it if the shell dies (startproc), and the shell waits and exits with
 // its exit code. Its descendants outlive a normal exit, as after a real
-// exec: the job lets them go first.
+// exec: the job lets them go first. A signal sent to the shell through
+// its channel goes to the program, as it would to the program exec'd.
 static i32 os_exec(Os *os, Arena scratch, Spawn *s)
 {
     uz      job = 0;
@@ -3207,6 +3208,10 @@ static i32 os_exec(Os *os, Arena scratch, Spawn *s)
         i32 w = WaitForMultipleObjects(2, hs, 0, INFINITE);
         if (w != 1) break;
         drainwake(os);
+        u64 own = os->chan ? __atomic_exchange_n(&os->chan->own, (u64)0, __ATOMIC_SEQ_CST) : 0;
+        for (i32 sig = 1; own; sig++, own >>= 1) {
+            if (own & 1) os_kill(os, r.pid, sig);
+        }
     }
     i32 code = 0;
     GetExitCodeProcess(r.proc, &code);
@@ -3216,6 +3221,11 @@ static i32 os_exec(Os *os, Arena scratch, Spawn *s)
         SetInformationJobObject(job, JobObjectExtendedLimitInformation, &l, sizeof(l));
     }
     ExitProcess(code);
+}
+
+static i32 os_forkexec(Os *, Arena, Spawn *)
+{
+    return E_NOSYS;  // no fork: the shell starts the program and waits
 }
 
 // Waits on the process and the wake queue together, so that helpers

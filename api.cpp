@@ -254,6 +254,10 @@ static void    os_imagefree(Os *, ImageRef);
 // descriptors exactly those listed). Returns only on failure, with the
 // process as it was: an E_* error, E_NOSYS where the platform cannot.
 static i32     os_exec(Os *, Arena scratch, Spawn *);
+// As os_exec while other tasks run: first fork a copy of the process
+// that keeps them. Returns 0 in that copy once the program has replaced
+// the original, else an error as os_exec's, with no copy left.
+static i32     os_forkexec(Os *, Arena scratch, Spawn *);
 // Wait for a spawned program: 0-255 on exit, 128+N|WSIGNALED on signal N.
 static i32     os_waitproc(Os *, Handle proc);
 // Begin an operation without blocking. It may complete at once (done

@@ -6,6 +6,8 @@ level done
 kid TERM
 kid end
 kid 0
+exec TERM
+exec 4
 top USR1
 end
 status 0

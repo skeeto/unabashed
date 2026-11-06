@@ -451,6 +451,8 @@ struct Shell {
     i32      loopdepth;
     i32      noerrexit;    // inside a condition: set -e is off
     i32      subshell;     // subshell depth
+    i32      procbase;     // subshell depth of this process's outermost
+                           // level: a background job's, in its process
     i32      simplestages; // of which simple commands as pipeline stages,
                            // which BASH_SUBSHELL leaves out, as bash
     i32      evaldepth;

@@ -1,6 +1,6 @@
 # M5b: real background processes
 
-Status: steps 1-4, 6 and 7 done; implementation in progress (see "Steps").
+Status: steps 1-7 done; implementation in progress (see "Steps").
 
 Scope and exit criteria: plan.md §2 (execution model: "Real process
 from M5b"), §3 (the copier writes the `&` image) and the M5b row of its
@@ -416,3 +416,52 @@ waiting for them. What was left, both M7 items in issues.md until now:
 New spec t/exec/879-bg-jobs-real (recorded; report pids masked).
 Results: vos suites as before (689 specs); t/win32 -x 34/0 on Windows
 11 x64, i686 33/1 (008's Ctrl-C flake).
+
+
+### Step 5: POSIX self-spawn and fork-on-exec
+
+No separate `os_fork`: on POSIX `os_spawn` with an image forks
+(`forkimage`), and the child installs the descriptor map as a vfork
+child would, puts back the signals the shell changed (those it ignores
+stay ignored), restarts the async machinery (self-pipe, SIGCHLD
+handler) and runs `sh_main` on the image from a fresh fiber, so
+`imagemain` adopts the copy of the state already at its address. The
+parent unmaps its image; `exitwith` (the old tail of `main`) dies by a
+signal or exits.
+
+- A job's own traps set the process's dispositions: `updatesigmode`
+  skipped every subshell, and a job's shell is one. `Shell.procbase`
+  (set by `imagemain`) is the subshell depth of the process's outermost
+  level. Win32 hid this: signals there come through the channel.
+- Level signals (`kill` of a subshell's BASHPID in another process) go
+  by `sigqueue` of SIGRTMAX, whose value holds the signal and the
+  vpid's serial, with the receiver's pid making the rest; a handler
+  queues them for `os_levelsig`. Only to a pid whose /proc/PID/exe is
+  ours (the signal kills anything else); E_NOSYS without SIGRTMAX.
+- Fork-on-exec (`os_forkexec`): `exec prog` at the process's outermost
+  level while other tasks run (procsubs, fiber jobs, pumps) forks a
+  copy that keeps them, and the original pid execs, so `exec prog <
+  <(f)` keeps `$$` for prog, as bash. A close-on-exec pipe tells the
+  copy how the exec went; on failure the copy exits at once and the
+  shell goes on as before. The copy returns from `runprogram` as the
+  exec'd shell and exits through the usual path (no EXIT trap), having
+  orphaned the pumps that feed the program so they are joined, and
+  closed its own read end of each so the program's exit stops them.
+  Without the latter it lost the procsub's output after its first
+  program: `pipeclose` stops a pipe's pump with the shell's last reader.
+- Win32: `exec` at a job's outermost level now uses `os_exec` too (the
+  kill-on-close job). And `os_exec`, waiting for the program, passed on
+  nothing sent through the channel: a TERM to a shell that had exec'd
+  was lost; it now goes to the program (017).
+
+POSIX checks, in the bash53 container (`--network none`, non-root,
+tmpfs; the shell built in WSL): background jobs' `$!`/BASHPID, status,
+pipes, inherited descriptors, captures, a job's TERM trap, KILL with
+its report, USR2 to a level of another process, USR1 to `$$`, `sh -c
+'{ sleep 2; ...; } & echo started'` returning at once; fork-on-exec
+with procsubs, programs inside them, an early-exiting reader (`head`),
+an output procsub, execfail, a failed exec, a lingering procsub, a
+job. Output equal to bash 5.3's but for pids and dash's own
+"Terminated" timing. The scripts move into a POSIX tier in step 8.
+Results: vos suites as before; t/win32 17/17, -x 34/0 on Windows 11
+x64, i686 33/1 (008's flake).

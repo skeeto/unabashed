@@ -2142,6 +2142,11 @@ static i32 os_exec(Os *, Arena, Spawn *)
     return E_NOSYS;  // a vos process is a fiber: start a child instead
 }
 
+static i32 os_forkexec(Os *, Arena, Spawn *)
+{
+    return E_NOSYS;
+}
+
 static i32 os_waitproc(Os *os, Handle proc)
 {
     Vos *v = osvos(os);
