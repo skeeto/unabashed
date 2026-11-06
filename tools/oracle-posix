@@ -1,0 +1,99 @@
+#!/bin/sh
+# Run bash 5.3's own run-* tests on our POSIX build, in a container
+#
+#   tools/oracle-posix [-v] SHELL [NAME...]
+#
+# SHELL is a Linux build of unabashed (make unabashed, in WSL or Linux).
+# Each NAME runs as run-all runs it, "sh run-NAME" in the suite's
+# directory with THIS_SH our shell, and passes if it prints nothing but
+# "warning:" lines; -v shows the output of failures. Without names it
+# runs category c (notes/research/tests.md), the tests that need real
+# processes; "all" runs every run-* test.
+#
+# One container from the oracle image (tools/Dockerfile.bash53) for the
+# whole run: --network none, read-only but for tmpfs /tmp and workdir,
+# uid 1000, no capabilities. The suite is unpacked afresh from the
+# repository's bash-5.3.tar.gz for each test, and /tmp emptied. PATH
+# holds bash's helpers and the image's real coreutils, never the fakes.
+#
+# Environment:
+#   ORACLE_IMAGE    oracle image (default unabashed/bash53)
+#   ORACLE_TIMEOUT  seconds per test (default 300)
+set -eu
+
+image=${ORACLE_IMAGE:-unabashed/bash53}
+limit=${ORACLE_TIMEOUT:-300}
+category_c='execscript invocation exportfunc varenv posixexp builtins procsub rsh dynvar glob-bracket'
+
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*';;
+esac
+
+verbose=
+if [ "${1:-}" = -v ]; then
+    verbose=1
+    shift
+fi
+if [ $# -lt 1 ] || [ ! -f "$1" ]; then
+    echo "usage: tools/oracle-posix [-v] SHELL [NAME...|all]" >&2
+    exit 2
+fi
+here=$(cd "$(dirname "$0")/.." && pwd)
+shell=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
+tarball=$here/bash-5.3.tar.gz
+shift
+if [ ! -f "$tarball" ]; then
+    echo "oracle-posix: $tarball not found" >&2
+    exit 1
+fi
+if command -v cygpath >/dev/null 2>&1; then
+    shell=$(cygpath -w "$shell")
+    tarball=$(cygpath -w "$tarball")
+fi
+names=${*:-$category_c}
+
+# Runs inside the container, with the test names as arguments
+inner='
+B=/home/oracle/bash-5.3
+pass=0
+total=0
+if [ "$*" = all ]; then
+    set -- $(tar -tzf /opt/src/bash-5.3.tar.gz | sed -n "s,^bash-5.3/tests/run-,,p" |
+             grep -v "^all\$\|^minimal\$\|^gprof\$")
+fi
+for name; do
+    rm -rf "$B" /tmp/* /tmp/.[!.]* 2>/dev/null
+    tar -xzf /opt/src/bash-5.3.tar.gz -C /home/oracle bash-5.3/tests bash-5.3/y.tab.c
+    head -c 20000 /dev/zero | tr "\0" "x" >$B/config.h
+    head -c 2000 /dev/zero | tr "\0" "x" >$B/version.h
+    cp /opt/under/bash $B/bash
+    cd $B/tests
+    out=$(env -i LANG=C TZ=UTC HOME=/home/oracle TMPDIR=/tmp \
+          PATH=.:/usr/local/bin:/usr/bin:/bin THIS_SH=$B/bash BUILD_DIR=$B \
+          BASH_TSTOUT=/tmp/bashtst-1 timeout "$ORACLE_TIMEOUT" sh run-$name 2>&1 </dev/null)
+    st=$?
+    bad=$(printf "%s\n" "$out" | grep -v "^warning: \|^\$" | head -c 1)
+    total=$((total + 1))
+    if [ -z "$bad" ] && [ $st -ne 124 ]; then
+        pass=$((pass + 1))
+        printf "%-20s PASS\n" "$name"
+    else
+        [ $st -eq 124 ] && out="$out
+(timed out after ${ORACLE_TIMEOUT}s)"
+        printf "%-20s FAIL (%d bytes)\n" "$name" ${#out}
+        [ -z "$ORACLE_VERBOSE" ] || printf "%s\n" "$out"
+    fi
+done
+echo "$pass of $total pass"
+'
+
+exec docker run -i --rm --init --network none --read-only \
+    --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777 \
+    --tmpfs /home/oracle:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=755 \
+    --workdir /home/oracle --user oracle --hostname oracle \
+    --cap-drop ALL --security-opt no-new-privileges \
+    --pids-limit 512 --ulimit nofile=1024:1024 \
+    --volume="$shell:/opt/under/bash:ro" \
+    --volume="$tarball:/opt/src/bash-5.3.tar.gz:ro" \
+    -e ORACLE_TIMEOUT="$limit" -e ORACLE_VERBOSE="$verbose" \
+    "$image" /bin/sh -c "$inner" sh $names </dev/null

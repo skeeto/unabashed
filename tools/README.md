@@ -60,6 +60,18 @@ Settings come from environment variables: `RECORD_IMAGE` (default
 nonzero if any script failed to record. A failed script keeps its old
 spec.
 
+### Specs on the POSIX build
+
+    RECORD_SHELL=unabashed RECORD_CHECK=1 tools/record t/exec/*.sh
+
+`RECORD_SHELL` runs a Linux build of our shell (`make unabashed`, in WSL
+or Linux) in bash's place, mounted read-only over `/usr/local/bin/bash`
+in the same container, so that scripts' own `bash -c` run it too;
+`RECORD_CHECK` compares the result with each spec instead of writing
+it, printing `PASS` or `FAIL` per script. Several instances can share
+the work: `ls t/exec/*.sh | xargs -P 6 -n 25 env RECORD_SHELL=...
+RECORD_CHECK=1 tools/record`.
+
 ### Spec format
 
 A spec is a series of blocks in this order: `stdout`, `stderr`,
@@ -82,6 +94,24 @@ output follow, then one `\n` that is not part of the output. The count
 keeps the format exact when output has no final newline or contains
 `==` lines. `== status N` is a single line holding the exit status;
 death by signal records 128+N.
+
+## bash's test suite on the POSIX build (oracle-posix)
+
+    tools/oracle-posix [-v] SHELL [NAME...|all]
+
+Runs bash 5.3's run-NAME tests (category c of notes/research/tests.md
+by default, the ones needing real processes; `all` for every one) as
+run-all does, `sh run-NAME` in the suite's directory with `THIS_SH` the
+given Linux build of our shell. A test passes if it prints nothing but
+`warning:` lines; `-v` prints a failure's output. One container from
+the oracle image, as for recording (`--network none`, read-only root,
+tmpfs `/tmp` and workdir, uid 1000, no capabilities); the suite is
+unpacked from `bash-5.3.tar.gz` afresh for each test. PATH has bash's
+helpers and Debian's coreutils, not the fakes. `ORACLE_TIMEOUT` limits
+each test (300 seconds). Real bash, given as SHELL (copy
+`/usr/local/bin/bash` out of the image), fails a few here too (signal
+listing order, no terminal, no en_US.UTF-8, ulimit): results are read
+against its own.
 
 ## fuzz (WSL or Linux, AFL++)
 

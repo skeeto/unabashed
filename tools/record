@@ -2,6 +2,7 @@
 # Record bash 5.3 behaviour for test scripts: t/foo.sh -> t/foo.spec
 #
 #   tools/record t/foo.sh [t/bar.sh ...]
+#   RECORD_SHELL=unabashed RECORD_CHECK=1 tools/record t/foo.sh ...
 #
 # Each script runs twice, each time in a fresh container from the
 # oracle image (tools/Dockerfile.bash53): once with stdout and stderr
@@ -13,6 +14,10 @@
 #   RECORD_IMAGE    oracle image (default unabashed/bash53)
 #   RECORD_PATH     PATH inside the container (default below)
 #   RECORD_TIMEOUT  seconds per run before the container is killed (60)
+#   RECORD_SHELL    a Linux shell to run in bash's place (our POSIX build),
+#                   mounted over /usr/local/bin/bash
+#   RECORD_CHECK    if set, compare with each spec instead of writing it,
+#                   printing PASS or FAIL per script
 set -eu
 
 image=${RECORD_IMAGE:-unabashed/bash53}
@@ -28,6 +33,17 @@ if [ $# -eq 0 ]; then
     echo "usage: tools/record SCRIPT..." >&2
     exit 2
 fi
+shell=/usr/local/bin/bash
+mount=
+if [ -n "${RECORD_SHELL:-}" ]; then
+    if [ ! -f "$RECORD_SHELL" ]; then
+        echo "record: $RECORD_SHELL: no such file" >&2
+        exit 1
+    fi
+    host=$(cd "$(dirname "$RECORD_SHELL")" && pwd)/$(basename "$RECORD_SHELL")
+    if command -v cygpath >/dev/null 2>&1; then host=$(cygpath -w "$host"); fi
+    mount="--volume=$host:$shell:ro"  # bash's own place: scripts run it too
+fi
 if ! docker image inspect "$image" >/dev/null 2>&1; then
     echo "record: image $image not found; build it per tools/README.md" >&2
     exit 1
@@ -40,7 +56,7 @@ trap 'exit 143' TERM
 
 # Runs inside the container. Read the script from stdin, keeping its
 # trailing newlines, then replace this shell with bash.
-inner='s=$(cat; echo .) && s=${s%.} && exec /usr/bin/env -i LANG=C TZ=UTC HOME=/home/oracle PATH="$RECORD_PATH" /usr/local/bin/bash --norc --noprofile -c "$s" bash </dev/null'
+inner='s=$(cat; echo .) && s=${s%.} && exec /usr/bin/env -i LANG=C TZ=UTC HOME=/home/oracle PATH="$RECORD_PATH" "$RECORD_BASH" --norc --noprofile -c "$s" bash </dev/null'
 
 # run SCRIPT OUT ERR [MERGE]: run one fresh container; sets $status
 run() {
@@ -59,6 +75,7 @@ run() {
         --workdir /home/oracle --user oracle --hostname oracle \
         --cap-drop ALL --security-opt no-new-privileges \
         --pids-limit 256 --ulimit nofile=1024:1024 \
+        ${mount:+"$mount"} -e RECORD_BASH="$shell" \
         -e RECORD_PATH="$path" "$image" /bin/sh -c "$cmd" \
         <"$1" >"$2" 2>"$3"
     set -e
@@ -91,6 +108,11 @@ block() {
     printf '\n'
 }
 
+# checked RESULT: report a check (RECORD_CHECK)
+checked() {
+    [ -z "${RECORD_CHECK:-}" ] || echo "$1 $script"
+}
+
 n=0
 fail=0
 for script; do
@@ -100,10 +122,10 @@ for script; do
         fail=1
         continue
     fi
-    run "$script" "$tmp/out" "$tmp/err" || { fail=1; continue; }
+    run "$script" "$tmp/out" "$tmp/err" || { checked FAIL; fail=1; continue; }
     apart=$status
-    run "$script" "$tmp/all" "$tmp/all.err" merge || { fail=1; continue; }
-    if [ "$status" != "$apart" ]; then
+    run "$script" "$tmp/all" "$tmp/all.err" merge || { checked FAIL; fail=1; continue; }
+    if [ "$status" != "$apart" ] && [ -z "${RECORD_CHECK:-}" ]; then
         echo "record: $script: status $apart apart, $status merged" >&2
         fail=1
         continue
@@ -114,6 +136,15 @@ for script; do
         block merged "$tmp/all"
         printf '== status %d\n' "$status"
     } >"$tmp/spec"
+    if [ -n "${RECORD_CHECK:-}" ]; then
+        if cmp -s "$tmp/spec" "$spec"; then
+            checked PASS
+        else
+            checked FAIL
+            fail=1
+        fi
+        continue
+    fi
     mv "$tmp/spec" "$spec"
     echo "$spec"
 done

@@ -1,7 +1,9 @@
 # Signals between our own shells go through the signal channel (M5b):
 # a background job's traps run, a level of another process gets its
 # own, and a job's lone program, which bash would have exec'd, gets
-# the signal itself
+# the signal itself. The sandbox lets a job's exec job break away from
+# its own, since XP and 7 have no nested jobs.
+# sandbox: -B
 { trap 'echo caught TERM; exit 3' TERM; echo r >ready.txt; while :; do sleep 1; done; } &
 while [ ! -e ready.txt ]; do sleep 1; done
 kill $!
