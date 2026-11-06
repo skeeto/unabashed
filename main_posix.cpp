@@ -328,6 +328,11 @@ static Stat os_fstat(Os *, Handle h)
 
 static void onsignal(int);
 
+static b32 os_con(Os *, Handle, ConOp *)
+{
+    return 0;  // no legacy consoles here
+}
+
 static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
 {
     Tty     r = {};

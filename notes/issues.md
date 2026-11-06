@@ -32,10 +32,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   is restored on the escape out of read, but not tested on a real
   terminal; Windows `read -n` echoes the bytes itself (the console
   echoes only whole lines). (step 2)
-- Ctrl-C claimed by an interactive shell that started with it
-  ignored (SIGM_CLAIM): tested on a pty and in the vos, not yet on a
-  real Windows console, where it calls SetConsoleCtrlHandler(0, 0).
-  (step 8)
 - run-history: history4 and history7 both need readline on a
   non-terminal under `-i` (the item below). (step 2)
 - edit-and-execute-command (C-x C-e) is bound but rings the bell: it
@@ -66,8 +62,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 - A WINCH trap: the editor only catches SIGWINCH itself (POSIX) when
   its disposition is the default, and its trap action runs later than
   bash's. (step 2)
-- Win32: the editor's reads now always go through the console helper
-  (to be woken by a resize); check on a real console in step 8.
 
 - inputrc variables kept for `$if` (and M8's `bind -v`) but without
   effect: blink-matching-paren, colored-stats and
@@ -94,8 +88,8 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 
 Moved from M5a: needs the completion engine.
 
-- completion_strip_exe strips `.exe` from PATH command matches, but
-  not from file name matches, and is untested on Windows. (step 8)
+- completion_strip_exe strips `.exe` from PATH command matches (checked
+  on a Windows console), but not from file name matches. (step 10)
 - User name completion (`~user`, M-~) finds nothing: no user database
   is read; bash reads the password file. Hosts are read from
   HOSTFILE or /etc/hosts without `$include`. (step 10)

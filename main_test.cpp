@@ -553,6 +553,79 @@ static void test_vterm(Test *t)
     }
 }
 
+// Console key events as xterm bytes (vtcon.cpp, conkey)
+static void test_conkey(Test *t)
+{
+    enum { RA = CK_RALT, LA = CK_LALT, LC = CK_LCTRL, SH = CK_SHIFT };
+    struct {
+        b32         down;
+        i32         vk, ch, state;
+        char const *want;
+        i32         len;  // for a NUL, else 0
+    } cases[] = {
+        {1, 'A',  'a',  0,     "a", 0},
+        {1, 'A',  'A',  SH,    "A", 0},
+        {1, 'A',  'a',  LA,    "\x1b" "a", 0},
+        {1, 'A',  0x01, LC,    "\x01", 0},
+        {1, 'A',  0x01, LC|LA, "\x1b\x01", 0},
+        {1, 'Q',  '@',  RA|LC, "@", 0},            // AltGr: text
+        {1, 0x26, 0,    0,     "\x1b[A", 0},
+        {1, 0x25, 0,    LC,    "\x1b[1;5D", 0},
+        {1, 0x27, 0,    LA,    "\x1b[1;3C", 0},
+        {1, 0x24, 0,    SH,    "\x1b[1;2H", 0},
+        {1, 0x23, 0,    0,     "\x1b[F", 0},
+        {1, 0x2e, 0,    0,     "\x1b[3~", 0},
+        {1, 0x2e, 0,    LC,    "\x1b[3;5~", 0},
+        {1, 0x2d, 0,    0,     "\x1b[2~", 0},
+        {1, 0x21, 0,    0,     "\x1b[5~", 0},
+        {1, 0x22, 0,    0,     "\x1b[6~", 0},
+        {1, 0x70, 0,    0,     "\x1bOP", 0},
+        {1, 0x71, 0,    LC,    "\x1b[1;5Q", 0},
+        {1, 0x74, 0,    0,     "\x1b[15~", 0},
+        {1, 0x7b, 0,    SH,    "\x1b[24;2~", 0},
+        {1, 0x08, 0x08, 0,     "\x7f", 0},
+        {1, 0x08, 0x7f, LC,    "\x08", 0},
+        {1, 0x08, 0x08, LA,    "\x1b\x7f", 0},
+        {1, 0x09, '\t', 0,     "\t", 0},
+        {1, 0x09, '\t', SH,    "\x1b[Z", 0},
+        {1, 0x0d, '\r', 0,     "\r", 0},
+        {1, 0x1b, 0x1b, 0,     "\x1b", 0},
+        {1, 0x20, ' ',  LC,    "", 1},          // C-SPC: NUL
+        {1, '2',  0,    LC|SH, "", 1},          // C-@
+        {1, 0xbd, 0,    LC,    "\x1f", 0},
+        {1, 0x10, 0,    SH,    "", 0},             // shift alone
+        {0, 'A',  'a',  0,     "", 0},             // key up
+        {0, 0x12, 0xe9, 0,     "\xc3\xa9", 0},     // Alt+numpad on release
+        {1, 0xe7, 0x4e2d, 0,   "\xe4\xb8\xad", 0}, // VK_PACKET
+    };
+    for (iz i = 0; i < countof(cases); i++) {
+        ConKey k = {};
+        k.down  = cases[i].down;
+        k.vk    = cases[i].vk;
+        k.ch    = cases[i].ch;
+        k.state = cases[i].state;
+        u8  out[16];
+        i32 hi = 0;
+        i32 n  = conkey(k, &hi, out);
+        Str want = {(u8 *)cases[i].want, (iz)strlen(cases[i].want)};
+        if (cases[i].len) want = {(u8 *)"\0", cases[i].len};
+        char name[32];
+        snprintf(name, sizeof(name), "conkey %d", (int)i);
+        expect(t, {(u8 *)name, (iz)strlen(name)}, {out, n}, want);
+    }
+    // A surrogate pair, one event each
+    i32 hi = 0;
+    u8  out[16];
+    ConKey k = {};
+    k.down = 1;
+    k.vk   = 0xe7;
+    k.ch   = 0xd83d;
+    i32 n  = conkey(k, &hi, out);
+    k.ch   = 0xde00;
+    n     += conkey(k, &hi, out+n);
+    expect(t, "conkey surrogates", {out, n}, "\xf0\x9f\x98\x80");
+}
+
 static void test_pathmodes(Test *t)
 {
     Str on[] = {"sh", "-O", "msyspath", "-c", "echo $PATH; shopt -p msyspath"};
@@ -860,7 +933,7 @@ static Str edenv[] = {
 
 static void putvfile(Os *, Arena, Str path, Str data);
 
-static Str runedit(Test *t, EdScript *ed, b32 nowrap)
+static Str runedit(Test *t, EdScript *ed, b32 nowrap, b32 legacy)
 {
     static u8 snapbuf[1<<20];
     Os *os = t->os;
@@ -872,6 +945,7 @@ static Str runedit(Test *t, EdScript *ed, b32 nowrap)
     putvfile(os, os->vos.a, "/home/oracle/.edrc", ed->rc);
     vttyinit(&os->vos, ed->rows, ed->cols, !nowrap, ed->keys, ed->nkeys,
              snapbuf, countof(snapbuf));
+    os->vos.tty.legacy = legacy;
     static Str args[] = {"bash", "--noprofile", "--rcfile", "/home/oracle/.edrc", "-i"};
     OsInfo info = baseinfo(os, args, countof(args));
     info.env  = env;
@@ -904,9 +978,13 @@ static b32 test_edit(Test *t, char *path)
     if (ed.err.data) {
         fprintf(stderr, "SKIP: %s (%.*s)\n", path, (int)ed.err.len, (char *)ed.err.data);
     } else {
-        Str got = runedit(t, &ed, ed.nowrap);
+        Str got = runedit(t, &ed, ed.nowrap, 0);
         if (want.data) {
             ok = expect(t, p, got, want);
+            // Again on a console without VT, drawn through vtcon
+            Str lp = concat(&a, p, " (vtcon)");
+            got = runedit(t, &ed, ed.nowrap, 1);
+            ok &= expect(t, lp, got, want);
         } else {
             // Not recorded (or vos only): printed for review
             fprintf(stderr, "SKIP: %s (no .screens)\n", path);
@@ -1615,6 +1693,7 @@ int main(int argc, char **argv)
     test_m0(&t);
     test_fibers(&t);
     test_vterm(&t);
+    test_conkey(&t);
     test_arena(&t);
     test_sched(&t);
     test_sigpipe(&t);

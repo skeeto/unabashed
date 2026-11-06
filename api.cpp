@@ -239,6 +239,23 @@ struct Tty {
     u8  lnext;
 };
 
+// A Windows console without VT processing (Tty.legacy), as vtcon.cpp
+// drives it (os_con). Cells count from the top left of the window.
+enum : i32 { CON_INFO, CON_MOVE, CON_WRITE, CON_FILL, CON_ATTR };
+
+struct ConOp {
+    i32 op;     // CON_*
+    i32 x;      // CON_MOVE, CON_FILL: a cell; CON_INFO: the cursor's
+    i32 y;
+    iz  n;      // CON_FILL: cells, row after row
+    Str text;   // CON_WRITE: UTF-8 at the cursor, CR LF BS BEL acted
+                // on, wrapping and scrolling as the console does
+    i32 attr;   // CON_ATTR: for writes; CON_FILL: for the cells;
+                // CON_INFO: the current one
+    i32 cols;   // CON_INFO: the window's size
+    i32 rows;
+};
+
 // Reserve address space. Returns null on failure.
 static byte   *os_reserve(Os *, iz);
 // Commit part of a reservation. Returns false on failure.
@@ -281,6 +298,9 @@ static b32     os_isatty(Os *, Handle);
 // changed as how (TTY_*) asks. A resize raises SIGWINCH (28) through
 // os_sigpending.
 static Tty     os_tty(Os *, Handle in, Handle out, i32 how);
+// Operate on a legacy console (ConOp): false on error, or where out
+// is no such console.
+static b32     os_con(Os *, Handle out, ConOp *);
 // Directory entries in the platform's order, or null with *err set.
 static Dirent *os_list(Os *, Arena *, Str dir, i32 *err);
 // Start a program. The child's descriptors are exactly those listed.

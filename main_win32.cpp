@@ -116,6 +116,17 @@ struct FileInfo {  // BY_HANDLE_FILE_INFORMATION
 };
 static_assert(sizeof(FileInfo) == 52);
 
+struct InputRecord {  // INPUT_RECORD, read as a key event
+    short type;       // 1 KEY_EVENT, 4 WINDOW_BUFFER_SIZE_EVENT
+    short pad;
+    i32   down;
+    short repeat;
+    short vk;
+    short scan;
+    c16   ch;
+    i32   state;
+};
+
 struct ConsoleInfo {  // CONSOLE_SCREEN_BUFFER_INFO
     short width;
     short height;
@@ -300,6 +311,7 @@ W32(i32,    GetSystemWindowsDirectoryW(c16 *, i32));
 W32(void,   GetSystemTimeAsFileTime(Filetime *));
 W32(i32,    GetTimeZoneInformation(TzInfo *));
 W32(b32,    ReadConsoleW(uz, c16 *, i32, i32 *, uz));
+W32(b32,    ReadConsoleInputW(uz, InputRecord *, i32, i32 *));
 W32(i32,    GetConsoleProcessList(i32 *, i32));
 W32(b32,    GetProcessTimes(uz, Filetime *, Filetime *, Filetime *, Filetime *));
 W32(b32,    GetQueuedCompletionStatus(uz, i32 *, uz *, void **, i32));
@@ -333,6 +345,11 @@ W32(void,   Sleep(i32));
 W32(i32,    WaitForMultipleObjects(i32, uz *, b32, i32));
 W32(i32,    WaitForSingleObject(uz, i32));
 W32(b32,    WriteConsoleW(uz, c16 *, i32, i32 *, uz));
+// A COORD passes as one 32-bit value: x low, y high
+W32(b32,    SetConsoleCursorPosition(uz, i32));
+W32(b32,    SetConsoleTextAttribute(uz, i32));
+W32(b32,    FillConsoleOutputCharacterW(uz, i32, i32, i32, i32 *));
+W32(b32,    FillConsoleOutputAttribute(uz, i32, i32, i32, i32 *));
 W32(b32,    WriteFile(uz, u8 *, i32, i32 *, uz));
 
 // GCC emits calls to these even without a CRT. Defining them keeps
@@ -614,6 +631,7 @@ struct Os {
     Recent     recent[32];
     uz         jobport;    // job messages for watched programs
     b32        ttyraw;     // os_tty: the console's modes were changed
+    i32        ttykeys;    // atomic: reads give keys (TK_*), not lines
     i32        ttyinmode;  // and its modes before
     i32        ttyoutmode;
     uz         jobkeys;    // completion keys handed out
@@ -945,11 +963,60 @@ static iz conconvert(c16 *tmp, i32 n, u8 *out)
 
 enum : i32 { CONUNITS = 1024 };  // UTF-16 units per console read
 
+enum : i32 { TK_LINES, TK_VT, TK_EVENTS };  // Os.ttykeys
+
+static void wakemain(Os *);
+
+// Keys from a console in the editor's raw mode, as xterm bytes into
+// out (3*CONUNITS bytes): with VT input the console's own characters,
+// else key events turned into them (conkey). A resize raises SIGWINCH
+// and the read goes on. -1 on error with *code set.
+static iz conkeys(Os *os, uz h, u8 *out, i32 *code, b32 vtin)
+{
+    InputRecord recs[64];
+    i32 hi = 0;
+    for (;;) {
+        i32 n = 0;
+        if (!ReadConsoleInputW(h, recs, countof(recs), &n)) {
+            *code = GetLastError();
+            return -1;
+        }
+        iz len = 0;
+        for (i32 i = 0; i < n; i++) {
+            InputRecord *r = recs + i;
+            if (r->type == 4) {
+                __atomic_fetch_or(&os->sigown, (u64)1<<27, __ATOMIC_SEQ_CST);
+                wakemain(os);
+                continue;
+            }
+            if (r->type != 1) continue;
+            ConKey k = {};
+            k.down  = !!r->down;
+            k.vk    = r->vk & 0xffff;
+            k.ch    = r->ch;
+            k.state = r->state;
+            u8  b[16];
+            i32 m   = vtin ? conchar(k, &hi, b) : conkey(k, &hi, b);
+            i32 rep = r->repeat<1 ? 1 : r->repeat>4 ? 4 : r->repeat;
+            for (i32 j = 0; m && j<rep; j++) {
+                copybytes(out+len, b, m);
+                len += m;
+            }
+        }
+        if (len) {
+            *code = 0;
+            return len;
+        }
+    }
+}
+
 // Read a console line into out (3*CONUNITS bytes): the byte count, 0
 // at end of file, -1 on error with *code set (ERROR_OPERATION_ABORTED
 // for Ctrl-C, which ends the read with nothing).
-static iz conline(uz h, u8 *out, i32 *code)
+static iz conline(Os *os, uz h, u8 *out, i32 *code)
 {
+    i32 keys = __atomic_load_n(&os->ttykeys, __ATOMIC_SEQ_CST);
+    if (keys != TK_LINES) return conkeys(os, h, out, code, keys==TK_VT);
     c16 tmp[CONUNITS];
     i32 n = 0;
     SetLastError(0);
@@ -972,7 +1039,7 @@ static iz srcread(Helper *hp, iz len)
     iz    r = 0;
     __atomic_store_n(&hp->inio, 1, __ATOMIC_SEQ_CST);
     if (w->kind == K_CONIN) {
-        r = conline(w->own, hp->buf, &hp->code);
+        r = conline(hp->os, w->own, hp->buf, &hp->code);
     } else {
         i32 n = 0;
         if (ReadFile(w->own, hp->buf, (i32)len, &n, 0)) {
@@ -1406,7 +1473,7 @@ static iz conread(Os *os, Wobj *w, uz h)
 {
     reserveahead(w, 3*CONUNITS);
     i32 code = 0;
-    iz  n    = conline(h, w->ahead+w->alen, &code);
+    iz  n    = conline(os, h, w->ahead+w->alen, &code);
     if (n<0 && code==ERROR_OPERATION_ABORTED) {
         // The control handler runs on a thread of its own, perhaps not
         // yet: give it a moment to note the signal
@@ -2750,17 +2817,24 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
         case TTY_RAW: {
             i32 raw = base & ~(CM_PROCESSED_INPUT|CM_LINE_INPUT|CM_ECHO_INPUT);
             raw |= CM_WINDOW_INPUT;
-            if (!SetConsoleMode(in, raw|CM_VT_INPUT)) SetConsoleMode(in, raw);
+            i32 keys = TK_VT;
+            if (!SetConsoleMode(in, raw|CM_VT_INPUT)) {
+                SetConsoleMode(in, raw);
+                keys = TK_EVENTS;
+            }
+            __atomic_store_n(&os->ttykeys, keys, __ATOMIC_SEQ_CST);
             i32 vt = omode | CM_PROCESSED_OUTPUT | CM_WRAP_AT_EOL | CM_VT_OUTPUT;
             if (!SetConsoleMode(out, vt|CM_NO_AUTO_RETURN) && !SetConsoleMode(out, vt)) {
                 SetConsoleMode(out, omode);
             }
         } break;
         case TTY_NOECHO:
+            __atomic_store_n(&os->ttykeys, TK_LINES, __ATOMIC_SEQ_CST);
             SetConsoleMode(in, base & ~CM_ECHO_INPUT);
             break;
         case TTY_CHARS:
         case TTY_CHARSNOECHO:
+            __atomic_store_n(&os->ttykeys, TK_LINES, __ATOMIC_SEQ_CST);
             // The console echoes only whole lines
             SetConsoleMode(in, base & ~(CM_LINE_INPUT|CM_ECHO_INPUT));
             r.noecho = how == TTY_CHARS;
@@ -2768,6 +2842,7 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
         }
     } else if (how==TTY_RESTORE && os->ttyraw) {
         os->ttyraw = 0;
+        __atomic_store_n(&os->ttykeys, TK_LINES, __ATOMIC_SEQ_CST);
         SetConsoleMode(in, os->ttyinmode);
         SetConsoleMode(out, os->ttyoutmode);
     }
@@ -2783,6 +2858,40 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
     r.werase = 0x17;
     r.lnext  = 0x16;
     return r;
+}
+
+static i32 concoord(i32 x, i32 y)
+{
+    return (i32)((u32)(x & 0xffff) | (u32)(y & 0xffff)<<16);
+}
+
+static b32 os_con(Os *os, Handle out, ConOp *o)
+{
+    ConsoleInfo ci = {};
+    if (!GetConsoleScreenBufferInfo(out, &ci)) return 0;
+    switch (o->op) {
+    case CON_INFO:
+        o->cols = ci.width;
+        o->rows = ci.bottom - ci.top + 1;
+        o->x    = ci.x;
+        o->y    = ci.y - ci.top;
+        o->attr = ci.attr & 0xffff;
+        return 1;
+    case CON_MOVE:
+        return SetConsoleCursorPosition(out, concoord(o->x, ci.top+o->y));
+    case CON_WRITE:
+        return os_write(os, out, o->text.data, o->text.len);
+    case CON_FILL: {
+        i32 n = (i32)(o->n<0x7fffffff ? o->n : 0x7fffffff);
+        i32 at = concoord(o->x, ci.top+o->y);
+        i32 done = 0;
+        return FillConsoleOutputCharacterW(out, ' ', n, at, &done)
+            && FillConsoleOutputAttribute(out, o->attr, n, at, &done);
+    }
+    case CON_ATTR:
+        return SetConsoleTextAttribute(out, o->attr);
+    }
+    return 0;
 }
 
 static b32 os_isatty(Os *os, Handle h)

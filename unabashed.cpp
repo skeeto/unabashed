@@ -174,6 +174,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "trap.cpp"
 #include "jobs.cpp"
 #include "history.cpp"
+#include "vtcon.cpp"
 #include "edit.cpp"
 #include "complete.cpp"
 #include "inputrc.cpp"

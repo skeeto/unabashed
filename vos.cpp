@@ -152,6 +152,7 @@ struct VTty {
     iz     readylen;
     b32    eof;         // cooked: ^D on an empty line, not yet read
     b32    settling;    // vothersready: leave the terminal out
+    b32    legacy;      // a console without VT: drawn with os_con
     i64    active;      // the clock at its last output or read
 };
 
@@ -1182,6 +1183,7 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
     r.rows   = y->term->rows;
     r.cols   = y->term->cols;
     r.xenl   = y->term->xenl;
+    r.legacy = y->legacy;
     r.intr   = 0x03;
     r.eof    = 0x04;
     r.erase  = 0x7f;
@@ -1189,6 +1191,45 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
     r.werase = 0x17;
     r.lnext  = 0x16;
     return r;
+}
+
+// The legacy console's primitives over the terminal's screen, which
+// knows only reverse video and bold of the attributes
+static b32 os_con(Os *os, Handle out, ConOp *o)
+{
+    Vos  *v = osvos(os);
+    VTty *y = &v->tty;
+    if (!y->term || !y->legacy || !vistty(v, out)) return 0;
+    VTerm *t = y->term;
+    y->active = v->clock;
+    switch (o->op) {
+    case CON_INFO:
+        o->cols = t->cols;
+        o->rows = t->rows;
+        o->x    = t->col;
+        o->y    = t->row;
+        o->attr = 0x07;  // as at the start: vtcon reads it once
+        break;
+    case CON_MOVE:
+        vtmoveto(t, o->y, o->x);
+        break;
+    case CON_WRITE:
+        vttyout(v, o->text.data, o->text.len);
+        break;
+    case CON_FILL: {
+        iz beg = (iz)o->y*t->cols + o->x;
+        iz end = (iz)t->rows*t->cols;
+        for (iz i = 0; i<o->n && beg+i<end; i++) t->cells[beg+i] = {};
+    } break;
+    case CON_ATTR: {
+        // Black on a color is reverse video; the foreground's
+        // intensity is bold
+        b32 rev = !!(o->attr & 0x70);
+        i32 fg  = rev ? o->attr>>4 : o->attr;
+        t->attr = (u8)((rev ? VA_REVERSE : 0) | (fg&8 ? VA_BOLD : 0));
+    } break;
+    }
+    return 1;
 }
 
 // Give the outermost shell a terminal typed at by a script, rows by

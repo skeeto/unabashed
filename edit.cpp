@@ -359,6 +359,7 @@ struct Editor {
     Arena    linemem;
     // The terminal
     Tty      tty;
+    VtCon    vtcon;     // tty.legacy: the console's interpreter
     i32      width;     // usable columns: one less without deferred wrap
     Handle   in;
     Handle   out;
@@ -788,7 +789,13 @@ static void edwrite(Editor *ed, DRow *r, i32 from)
 static void edflush(Editor *ed, Shell *sh)
 {
     Str s = finish(&ed->out_);
-    if (s.len) fdwrite(sh, 2, s);
+    if (!s.len) {
+        // nothing
+    } else if (ed->tty.legacy) {
+        vtconwrite(sh->os, ed->out, &ed->vtcon, s);
+    } else {
+        fdwrite(sh, 2, s);
+    }
     ed->out_ = Buf(&ed->linemem, 256);
 }
 
