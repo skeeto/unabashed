@@ -276,6 +276,7 @@ W32(uz,     CreateNamedPipeW(c16 *, i32, i32, i32, i32, i32, i32, uz));
 W32(b32,    ConnectNamedPipe(uz, uz));
 W32(b32,    CreatePipe(uz *, uz *, uz, i32));
 W32(b32,    DeleteFileW(c16 *));
+W32(b32,    MoveFileExW(c16 *, c16 *, i32));
 W32(b32,    CreateProcessW(c16 *, c16 *, uz, uz, b32, i32, c16 *, c16 *,
                            StartupInfo *, ProcessInfo *));
 W32(b32,    DuplicateHandle(uz, uz, uz, uz *, i32, b32, i32));
@@ -2430,6 +2431,14 @@ static i32 os_unlink(Os *, Arena scratch, Str path)
 {
     Str16 w = widepath(&scratch, path);
     return DeleteFileW(w.data) ? 0 : errnum(GetLastError());
+}
+
+static i32 os_rename(Os *, Arena scratch, Str from, Str to)
+{
+    enum { MOVEFILE_REPLACE_EXISTING = 1 };
+    Str16 f = widepath(&scratch, from);
+    Str16 t = widepath(&scratch, to);
+    return MoveFileExW(f.data, t.data, MOVEFILE_REPLACE_EXISTING) ? 0 : errnum(GetLastError());
 }
 
 static Opened os_tempfile(Os *os, Arena)

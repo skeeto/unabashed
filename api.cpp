@@ -272,6 +272,9 @@ static Opened  os_tempfile(Os *, Arena scratch);
 static void    os_close(Os *, Handle);
 // Remove a file (not a directory) by absolute path: an error, or 0.
 static i32     os_unlink(Os *, Arena scratch, Str path);
+// Rename a file by absolute paths, replacing any file at to: an error,
+// or 0.
+static i32     os_rename(Os *, Arena scratch, Str from, Str to);
 // A second handle to the same open file.
 static Handle  os_dup(Os *, Handle);
 static OsPipe  os_pipe(Os *);

@@ -1643,17 +1643,43 @@ static i32 histread(Shell *sh, Str file, i64 from, Arena scratch)
     return 0;
 }
 
+// Replace a history file's contents, as readline does: written to
+// FILE-PID.tmp beside it, then renamed over it, so the file is new (mode
+// 0600). A symbolic link, which readline follows to write beside its
+// target, is written through in place (the core cannot read links). An
+// error, or 0.
+static i32 histreplace(Shell *sh, Str file, Str data, Arena scratch)
+{
+    Str  path = absolute(sh, &scratch, file);
+    Stat ls   = os_stat(sh->os, scratch, path, 0);
+    Str  tmp  = path;
+    if (ls.err || ls.type!=FT_LINK) {
+        Buf t(&scratch, path.len+24);
+        print(&t, path);
+        print(&t, "-");
+        print(&t, (i64)sh->pid);
+        print(&t, ".tmp");
+        tmp = finish(&t);
+    }
+    Opened o = os_open(sh->os, scratch, tmp, OF_WRITE|OF_CREATE|OF_TRUNC, 0600);
+    if (o.err) return o.err;
+    b32 ok = !data.len || os_write(sh->os, o.h, data.data, data.len);
+    os_close(sh->os, o.h);
+    i32 err = ok ? 0 : E_IO;
+    if (tmp.data != path.data) {
+        if (!err) err = os_rename(sh->os, scratch, tmp, path);
+        if (err) os_unlink(sh->os, scratch, tmp);
+    }
+    return err;
+}
+
 // Write entries [from, len) to a file, each after its time stamp line
 // when HISTTIMEFORMAT is set: appended to a file that must exist, or
-// replacing its contents. An error, or 0.
+// replacing it. An error, or 0.
 static i32 histwrite(Shell *sh, Str file, iz from, b32 append, Arena scratch)
 {
-    Hist *h     = &sh->hist;
-    b32   ts    = writestamps(sh);
-    i32   flags = append ? OF_WRITE|OF_APPEND : OF_WRITE|OF_CREATE|OF_TRUNC;
-    Str   path  = absolute(sh, &scratch, file);
-    Opened o = os_open(sh->os, scratch, path, flags, 0600);
-    if (o.err) return o.err;
+    Hist *h  = &sh->hist;
+    b32   ts = writestamps(sh);
     Buf b(&scratch, 4096);
     for (iz i = from; i < h->len; i++) {
         HistEnt *e = h->ents[i];
@@ -1664,7 +1690,12 @@ static i32 histwrite(Shell *sh, Str file, iz from, b32 append, Arena scratch)
         print(&b, e->line);
         putbyte(&b, '\n');
     }
-    b32 ok = !b.len || os_write(sh->os, o.h, b.data, b.len);
+    Str data = finish(&b);
+    if (!append) return histreplace(sh, file, data, scratch);
+    Str    path = absolute(sh, &scratch, file);
+    Opened o    = os_open(sh->os, scratch, path, OF_WRITE|OF_APPEND, 0600);
+    if (o.err) return o.err;
+    b32 ok = !data.len || os_write(sh->os, o.h, data.data, data.len);
     os_close(sh->os, o.h);
     return ok ? 0 : E_IO;
 }
@@ -1699,11 +1730,7 @@ static void histtruncate(Shell *sh, Str file, i64 n, Arena scratch)
         if (i <= 0) return;  // no more lines than that
         keep = cuthead(buf, i);
     }
-    Str    path = absolute(sh, &scratch, file);
-    Opened o    = os_open(sh->os, scratch, path, OF_WRITE|OF_TRUNC, 0600);
-    if (o.err) return;
-    if (keep.len) os_write(sh->os, o.h, keep.data, keep.len);
-    os_close(sh->os, o.h);
+    histreplace(sh, file, keep, scratch);
 }
 
 // HISTFILESIZE: a number of 0 or more cuts the file at once.

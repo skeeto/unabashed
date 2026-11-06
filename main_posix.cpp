@@ -17,6 +17,7 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+extern "C" int rename(char const *, char const *);  // stdio.h, whose macros collide
 #include "unabashed.cpp"
 #include "fibers.cpp"
 
@@ -144,6 +145,13 @@ static Opened os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode)
 static i32 os_unlink(Os *, Arena scratch, Str path)
 {
     return unlink(cpath(&scratch, path)) ? errno : 0;
+}
+
+static i32 os_rename(Os *, Arena scratch, Str from, Str to)
+{
+    char *f = cpath(&scratch, from);
+    char *t = cpath(&scratch, to);
+    return rename(f, t) ? errno : 0;
 }
 
 static Opened os_tempfile(Os *os, Arena scratch)

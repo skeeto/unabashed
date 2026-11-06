@@ -32,9 +32,10 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   echoes only whole lines). (step 2)
 - run-history: history4 and history7 both need readline on a
   non-terminal under `-i` (the item below). (step 2)
-- The history file is overwritten in place; readline writes a
-  `FILE-NNNNN.tmp` beside it and renames it over (keeping a symlink's
-  target and the owner). Needs a rename in the platform API. (step 10)
+- A history file that is a symbolic link is written through in place
+  (the core cannot read links), so its target keeps its mode; readline
+  writes beside the target and renames over it (mode 0600). The owner
+  is not restored after a rename, as readline does as root. (M7)
 - `bash -i` whose input is not a terminal still reads with readline
   and echoes each line it reads; ours reads plainly. (step 2)
 - Unbound key sequences: readline's handling (bell, which bytes are
