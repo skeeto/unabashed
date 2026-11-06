@@ -117,6 +117,8 @@ struct Sched {
     i32     budget;      // safe points until the next yield check
     Sigproc *sigprocs;   // every live virtual process
     Sigproc *top;        // the outermost shell's, for the process's signals
+    i64      pid;        // this process's real pid
+    i64      nvpid;      // virtual pids handed out (newvpid)
     Task   *orphans;     // jobs whose level ended, to join (jobs.cpp)
     iz      nbg;         // job vprocs not yet joined, orphans included
     u64     chaos;       // random state for chaos mode, 0 if off

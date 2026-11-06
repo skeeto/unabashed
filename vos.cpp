@@ -105,6 +105,8 @@ struct VProc {
     b32     intr;     // resumed by a signal (shells): fail a read or os_wait
     i64     pid;
     u64     sigpend;  // shells: signals not yet taken by os_sigpending
+    LevelSig lsigs[16];  // shells: os_siglevel's, oldest first
+    i32     nlsigs;
     u64     sigign;   // fakes: signals they ignore (Spawn.sigign)
     i64     until;    // VW_SLEEP, VW_IO with a deadline: time to wake at
     Fiber  *fiber;    // where to resume it
@@ -1370,6 +1372,41 @@ static i32 os_kill(Os *os, i64 pid, i32 sig)
     return 0;
 }
 
+static i32 os_siglevel(Os *os, i64 pid, i64 level, i32 sig)
+{
+    Vos *v = osvos(os);
+    if (sig<0 || sig>=NSIGNAL) return E_INVAL;
+    VProc *p = 0;
+    for (i32 i = 0; i < v->nprocs; i++) {
+        VProc *q = v->procs + i;
+        if (q->pid==pid && (q->state==VP_RUN || q->state==VP_BLOCK)) p = q;
+    }
+    if (!p || !p->shell || pid<=0) return E_SRCH;
+    if (!sig) return 0;
+    for (i32 i = 0; i < p->nlsigs; i++) {
+        if (p->lsigs[i].level==level && p->lsigs[i].sig==sig) return 0;
+    }
+    if (p->nlsigs == countof(p->lsigs)) return E_AGAIN;
+    p->lsigs[p->nlsigs].level = level;
+    p->lsigs[p->nlsigs].sig   = sig;
+    p->nlsigs++;
+    p->intr = p != v->procs+v->cur;  // fail its blocked read or wait
+    return 0;
+}
+
+static LevelSig os_levelsig(Os *os)
+{
+    Vos     *v  = osvos(os);
+    VProc   *me = v->procs + v->cur;
+    LevelSig r  = {};
+    if (me->nlsigs) {
+        r = me->lsigs[0];
+        me->nlsigs--;
+        for (i32 i = 0; i < me->nlsigs; i++) me->lsigs[i] = me->lsigs[i+1];
+    }
+    return r;
+}
+
 static u64 os_sigpending(Os *os)
 {
     Vos   *v  = osvos(os);
@@ -2065,6 +2102,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     p->intr   = 0;
     p->pid    = v->nextpid++;
     p->sigpend = 0;
+    p->nlsigs  = 0;
     p->sigign = s->sigign;
     p->wait   = VW_NONE;
     if (s->image.base) {

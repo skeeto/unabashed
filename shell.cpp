@@ -481,7 +481,6 @@ struct Shell {
     // Process
     i64      pid;
     i64      bashpid;      // BASHPID: differs in subshells
-    i64      lastpid;      // the last pid handed to a subshell
     Str      argv0;        // store copy of $0 after BASH_ARGV0=
     HashCmd **cmdhash;     // NHASHCMD buckets in the store, or null
     b32      inhandler;    // running command_not_found_handle

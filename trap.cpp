@@ -369,6 +369,28 @@ static void runsigs(Shell *sh, Arena scratch)
 }
 
 static void sigsend(Shell *, Sigproc *, i32);
+static Sigproc *findsigproc(Sched *, i64 pid);
+
+// A fresh pid for a level that is not a process of its own (BASHPID of
+// a subshell, a fiber vproc): unique among every process, and naming
+// its own (vpidowner), so that kill reaches it from any of them. A
+// Windows pid is a multiple of 4, so an odd one is never real; a POSIX
+// one is below 2^22 (Linux's pid_max).
+static i64 newvpid(Shell *sh)
+{
+    Sched *s = sh->sched;
+    i64    n = ++s->nvpid;
+    if (sh->win32) return s->pid<<16 | (n<<1 & 0xffff) | 1;
+    return ((i64)1<<22)*(n%((i64)1<<40) + 1) + s->pid;
+}
+
+// The real pid of the process a virtual pid belongs to, or 0 if pid is
+// not virtual.
+static i64 vpidowner(Shell *sh, i64 pid)
+{
+    if (sh->win32) return pid>>16>0 && (pid&1) ? pid>>16 : 0;
+    return pid >= (i64)1<<22 ? pid & (((i64)1<<22) - 1) : 0;
+}
 
 // Take the signals that arrived from outside the process. Those sent
 // to the process belong to its outermost level. Those the terminal
@@ -385,6 +407,13 @@ static b32 ossignals(Sched *s)
         s->top->pending |= own;
         if (s->top->task) taskinterrupt(s, s->top->task, 0);
     }
+    b32 levels = 0;
+    for (LevelSig m; (m = os_levelsig(s->os)).sig;) {
+        // sent from another process to one of this one's levels
+        Sigproc *p = findsigproc(s, m.level);
+        if (p) sigsend(p->sh, p, m.sig);
+        levels = 1;
+    }
     for (Sigproc *p = s->sigprocs; grp && p; p = p->next) {
         if (p->sh->sig!=p || p->fgwait) {
             p->waitsig |= grp;  // an outer level, or waiting for a program
@@ -394,7 +423,7 @@ static b32 ossignals(Sched *s)
             }
         }
     }
-    return own || grp;
+    return own || grp || levels;
 }
 
 static void takeossigs(Shell *sh)
@@ -817,14 +846,21 @@ static i32 killlist(Shell *sh, Arena scratch, Str *args, iz nargs)
 }
 
 // Send a signal to a pid: this process's own virtual processes first
-// ($$ is the outermost level), else the platform's.
+// (its outermost level has its real pid), then a level of another of
+// our shell processes, else the platform's.
 static i32 killpid(Shell *sh, i64 pid, i32 sig)
 {
     Sched *s = sh->sched;
-    Sigproc *p = pid==sh->pid ? s->top : findsigproc(s, pid);
+    Sigproc *p = findsigproc(s, pid);
     if (p) {
         sigsend(sh, p, sig);
         return 0;
+    }
+    i64 owner = vpidowner(sh, pid);
+    if (owner == s->pid) return E_SRCH;  // a level that has ended
+    if (owner) {
+        i32 err = os_siglevel(sh->os, owner, pid, sig);
+        return err==E_NOSYS ? E_SRCH : err;
     }
     return os_kill(sh->os, pid, sig);
 }

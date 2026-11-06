@@ -559,6 +559,17 @@ static i32 os_kill(Os *, i64 pid, i32 sig)
     return kill((pid_t)pid, sig) ? errno : 0;
 }
 
+// No signal channel to another process's levels yet (M5b step 6).
+static i32 os_siglevel(Os *, i64, i64, i32)
+{
+    return E_NOSYS;
+}
+
+static LevelSig os_levelsig(Os *)
+{
+    return {};
+}
+
 static u64 os_sigpending(Os *)
 {
     return __atomic_exchange_n(&sigbits, (u64)0, __ATOMIC_RELAXED);

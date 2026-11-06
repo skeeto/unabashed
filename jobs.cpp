@@ -22,7 +22,7 @@
 //
 // This is free and unencumbered software released into the public domain.
 
-enum { MAXBG = 4 };   // live background vprocs before & waits for one
+enum { MAXBG = 4 };   // live background vprocs (the fallback) before & waits
 
 static b32 ownjob(Shell *sh, Job *j)
 {
@@ -775,7 +775,7 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
         if (proc != BADHANDLE) {
             t = spawnwaiter(s, proc);
         } else if (!retry) {
-            pid = ++sh->lastpid;  // it failed as its own process would
+            pid = newvpid(sh);  // it failed as its own process would
         }
     }
     if (retry) {
@@ -968,7 +968,7 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
         if (proc != BADHANDLE) {
             task = spawnwaiter(s, proc);
         } else if (!retry) {
-            pid = ++sh->lastpid;
+            pid = newvpid(sh);
         }
     }
     if (retry) {

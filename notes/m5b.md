@@ -1,6 +1,6 @@
 # M5b: real background processes
 
-Status: planning done; implementation in progress (see "Steps").
+Status: steps 1-3 done; implementation in progress (see "Steps").
 
 Scope and exit criteria: plan.md §2 (execution model: "Real process
 from M5b"), §3 (the copier writes the `&` image) and the M5b row of its
@@ -295,3 +295,43 @@ Windows 11 (x64 and i686 builds); on XP 29/3 with -x: 003-waits (the
 known XP `wait` flake, passing on a rerun) and 016's "TERM 143" in the
 sandbox (issues.md, also with binaries from before M5b). The vos suites
 unchanged; with `--images` only 692 fails.
+
+
+### Step 3: the vos self-spawns by default, and virtual pids name their process
+
+`tests.exe` now runs background jobs as vos processes from their image
+in every mode; `--fibers` (first argument) runs them as vprocs, as on a
+platform without images. Every t/exec and t/winvos spec passes either
+way, plus chaos, except that 877's job outliving its `bash -c` cannot
+under `--fibers` (a fiber dies with its process).
+
+Virtual pids (BASHPID of a subshell level or a vproc, and the `$!` of a
+spawn that failed) were the parent's counter from `$$` up, so they
+collided with real pids, and two concurrent vprocs could hand out the
+same one. Now `newvpid` (trap.cpp) numbers them per process in the
+Sched and encodes the process: `pid<<16 | 2n+1` on Windows (odd, never
+a real pid), `2^22*(n+1) + pid` on POSIX (above Linux's pid_max), so
+`vpidowner` finds the process. `kill` (`killpid`) sends to a level of
+this process directly, to a level of another of our processes through
+the new `os_siglevel` (the receiver's `ossignals` takes them with
+`os_levelsig` and hands each to that level), and to anything else with
+`os_kill`. A level that has ended is "No such process". `kill $$` from
+a job reaches the parent process (it no longer means the process's
+outermost level). Only the vos has the channel; on Win32 and POSIX
+`os_siglevel` is E_NOSYS, which `kill` reports as "No such process"
+until step 6 (Win32) and step 5 (POSIX, where the fork shares nothing).
+
+That fixes 692 (a job killing the procsub or comsub level that started
+it). `MAXBG` now only throttles the fiber fallback: image jobs are
+waiters, not counted, and at exit the shell drops waiters, so it no
+longer waits for its background jobs.
+
+New spec t/exec/877-bg-process (recorded): `$!` is the job's BASHPID,
+`$$` the parent's; TERM to a job reaches its trap, ignored stays
+ignored; USR1 from the parent to a subshell level inside a job, USR2
+from a job to the parent's level; `bash -c '... &'` returns before its
+job finishes.
+
+Results: tests.exe 159/0, t/exec and t/winvos 687 specs, 0 failed (also
+with `--fibers` but 877, and `--chaos 20`), t/parse, t/unit, t/msys;
+t/win32 -x 32/0 on Windows 11 (x64 and i686).

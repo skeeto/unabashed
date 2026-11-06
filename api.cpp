@@ -153,6 +153,11 @@ struct Spawn {
                       // be gone), else the caller frees it
 };
 
+struct LevelSig {
+    i64 level;  // the virtual process's pid
+    i32 sig;
+};
+
 struct Spawned {
     i32    err;
     Handle proc;
@@ -265,6 +270,14 @@ static b32     os_cancel(Os *, Io *);
 // Send signal sig to process pid, or with 0 check that it exists.
 // Returns 0 or an E_* error (E_SRCH, E_PERM, E_INVAL).
 static i32     os_kill(Os *, i64 pid, i32 sig);
+// Send signal sig to virtual process level (a subshell's BASHPID, not
+// a process of its own) of our own shell process pid, through the
+// signal channel: its os_levelsig returns it. Returns 0 or an E_*
+// error: E_SRCH if no such shell, E_NOSYS where there is no channel.
+static i32     os_siglevel(Os *, i64 pid, i64 level, i32 sig);
+// The next signal sent to one of this process's levels (os_siglevel),
+// taken, or sig 0. os_wait returns null early when one arrives.
+static LevelSig os_levelsig(Os *);
 // Signals sent to this process since the last call, as a mask (bit n-1
 // for signal n), and cleared. os_wait returns null early when one
 // arrives. The core decides what each does (traps, default actions).

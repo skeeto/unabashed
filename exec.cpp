@@ -46,6 +46,7 @@ static b32      rundebugtrap(Shell *, Arena);
 static void     runreturntrap(Shell *, Arena);
 static void     subshelltraps(Shell *);
 static void     sigenter(Shell *, Sigproc *, i64 pid, Task *);
+static i64      newvpid(Shell *);
 static void     sigleave(Shell *, Sigproc *);
 static void     reportsig(Shell *, Arena, i32 sig, i64 pid, Str text);
 static b32      trapignored(Shell *, i32 sig);
@@ -437,7 +438,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     e.frame = sh->frame;
     sh->esc = &e;
     sh->subshell++;
-    sh->bashpid = ++sh->lastpid;
+    sh->bashpid = newvpid(sh);
     sh->psubs   = 0;
     sh->killsig   = 0;
     sh->errexited = 0;
@@ -487,7 +488,6 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     // Keep the scratch arenas the subshell reserved for deeper levels:
     // they are not store memory, and dropping them leaks reservations
     for (i32 i = 0; i < NPOOL; i++) saved.pool[i] = sh->pool[i];
-    saved.lastpid = sh->lastpid;  // pids are not reused
     *sh = saved;
     if (sh->frame) *sh->frame = frame;
     sh->status   = status;
@@ -2001,7 +2001,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->errexited = 0;
         subshelltraps(sh);
         sh->shown   = 0;
-        sh->bashpid = ++sh->lastpid;
+        sh->bashpid = newvpid(sh);
         Sigproc sig;
         sigenter(sh, &sig, sh->bashpid, sh->sched->cur);
         if (!__builtin_setjmp(e.jmp)) {
@@ -2020,7 +2020,6 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         joinpsubs(sh);
         storeleave(sh->store, &w);
         for (i32 i = 0; i < NPOOL; i++) saved.pool[i] = sh->pool[i];
-        saved.lastpid = sh->lastpid;
         *sh = saved;
         if (killed) {
             sh->childsig = killed;

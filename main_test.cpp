@@ -247,7 +247,7 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     return status;
 }
 
-static b32 images;  // --images: os_imagenew self-spawns
+static b32 images = 1;  // os_imagenew self-spawns (--fibers: not)
 
 static Fake testfakes[256];
 static iz   ntestfakes;
@@ -1430,10 +1430,10 @@ int main(int argc, char **argv)
     os.vos.err.data    = (u8 *)malloc((uz)os.vos.outcap);
     os.vos.merged.data = (u8 *)malloc((uz)os.vos.outcap);
     initfakes();
-    if (argc>1 && !strcmp(argv[1], "--images")) {
-        // Background shells as processes of their own (M5b), in every
-        // mode below
-        images = 1;
+    if (argc>1 && !strcmp(argv[1], "--fibers")) {
+        // Background shells as fiber vprocs, as before M5b and as where
+        // a platform has no images, in every mode below
+        images = 0;
         argv[1] = argv[0];
         argc--;
         argv++;

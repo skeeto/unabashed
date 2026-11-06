@@ -1018,7 +1018,7 @@ static i32 imagemain(Os *os, OsInfo *info)
     sh->sched   = newsched(os, &perm, info->reserve, info->chaos, info->std[2]);
     sh->reserve = info->reserve;
     sh->bashpid = info->pid;
-    sh->lastpid = info->pid;
+    sh->sched->pid = info->pid;
     if (sh->win32) sh->sniffs = newsniffcache(&perm);
     if (sh->paths) sh->paths->pid = info->pid;
 
@@ -1093,7 +1093,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     sh->iname   = sh->name;
     sh->pid     = info->pid;
     sh->bashpid = info->pid;
-    sh->lastpid = info->pid;
+    sh->sched->pid = info->pid;
     sh->ppid    = info->ppid;
     sh->uid     = info->uid;
     sh->euid    = info->euid;

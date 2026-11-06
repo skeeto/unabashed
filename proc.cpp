@@ -403,8 +403,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->flow     = FLOW_NONE;
     c->exiting  = 0;
     c->subshell++;
-    c->bashpid  = ++sh->lastpid;
-    c->lastpid  = sh->lastpid;
+    c->bashpid  = newvpid(sh);
     c->killsig  = 0;
     c->childsig = 0;
     c->errexited = 0;
