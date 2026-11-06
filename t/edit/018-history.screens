@@ -1,0 +1,177 @@
+== snap 1
+$ echo one
+one
+$ echo two
+two
+$ echo three
+three
+$ echo three
+@ 6,12
+== snap 2
+$ echo one
+one
+$ echo two
+two
+$ echo three
+three
+$ echo one
+@ 6,10
+== snap 3
+$ echo one
+one
+$ echo two
+two
+$ echo three
+three
+$ echo one
+@ 6,10 bell 1
+== snap 4
+$ echo one
+one
+$ echo two
+two
+$ echo three
+three
+$ echo three
+@ 6,12 bell 1
+== snap 5
+$ echo one
+one
+$ echo two
+two
+$ echo three
+three
+$ par
+@ 6,5 bell 2
+== snap 6
+$ echo one
+one
+$ echo two
+two
+$ echo three
+three
+$ echo three
+@ 6,12 bell 2
+== snap 7
+$ echo one
+one
+$ echo two
+two
+$ echo three
+three
+$ Xecho two
+@ 6,11 bell 2
+== snap 8
+$ echo one
+one
+$ echo two
+two
+$ echo three
+three
+$ echo one
+@ 6,10 bell 2
+== snap 9
+$ echo one
+one
+$ echo two
+two
+$ echo three
+three
+$ par
+@ 6,5 bell 2
+== snap 10
+$ echo one
+one
+$ echo two
+two
+$ echo three
+three
+$ echo one
+@ 6,10 bell 2
+== snap 11
+$ echo one
+one
+$ echo two
+two
+$ echo three
+three
+$
+$ history
+    1  echo one
+    2* Xecho two
+    3  echo three
+    4  history
+$
+@ 12,2 bell 2
+== snap 12
+one
+$ echo two
+two
+$ echo three
+three
+$
+$ history
+    1  echo one
+    2* Xecho two
+    3  echo three
+    4  history
+$ clear
+bash: clear: command not found
+$ Xecho two
+bash: Xecho: command not found
+$ echo three
+@ 15,12 bell 2
+== snap 13
+two
+$ echo three
+three
+$
+$ history
+    1  echo one
+    2* Xecho two
+    3  echo three
+    4  history
+$ clear
+bash: clear: command not found
+$ Xecho two
+bash: Xecho: command not found
+$ echo three
+three
+$ history
+@ 15,9 bell 2
+== snap 14
+$ echo three
+three
+$
+$ history
+    1  echo one
+    2* Xecho two
+    3  echo three
+    4  history
+$ clear
+bash: clear: command not found
+$ Xecho two
+bash: Xecho: command not found
+$ echo three
+three
+$
+$
+@ 15,2 bell 2
+== snap 15
+$ echo three
+three
+$
+$ history
+    1  echo one
+    2* Xecho two
+    3  echo three
+    4  history
+$ clear
+bash: clear: command not found
+$ Xecho two
+bash: Xecho: command not found
+$ echo three
+three
+$
+$
+@ 15,2 bell 2

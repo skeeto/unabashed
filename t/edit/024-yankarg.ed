@@ -1,0 +1,23 @@
+# M-. and M-_ (repeated walks back), with an argument, M-C-y
+size 16 60
+rc PS1='$ '
+keys echo a1 a2 a3\r
+keys echo b1 b2 b3\r
+keys ls \e.
+snap
+keys \e.
+snap
+keys \e.
+snap
+keys \C-u\e1\e.
+snap
+keys \C-u\e-\e.
+snap
+keys \C-u\e\C-y
+snap
+keys \C-u\e3\e\C-y
+snap
+keys \C-u\e_
+snap
+keys \C-u\r
+snap

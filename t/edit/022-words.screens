@@ -1,0 +1,40 @@
+== snap 1
+$ echo hello big world
+@ 0,12
+== snap 2
+$ Echo HELLO big world
+@ 0,16
+== snap 3
+$ Echo HELLO BIG world
+@ 0,16
+== snap 4
+$ Echo HELLO world BIG
+@ 0,22
+== snap 5
+$ Echo HELLO world BIG
+@ 0,2 bell 1
+== snap 6
+$ Echo HELLO world BIG
+@ 0,2 bell 2
+== snap 7
+$ Echo HELLO world BGI
+@ 0,22 bell 2
+== snap 8
+$  echo "a b" 'c d' e
+@ 0,13 bell 2
+== snap 9
+$  echo "a b" 'c d' e
+@ 0,8 bell 2
+== snap 10
+$  echo  'c d' e
+@ 0,8 bell 2
+== snap 11
+$  'c d' e
+bash: c d: command not found
+$
+@ 2,2 bell 2
+== snap 12
+$  'c d' e
+bash: c d: command not found
+$
+@ 2,2 bell 2

@@ -1,0 +1,22 @@
+# Non-incremental search (M-p, M-n) and the history-search keys
+size 16 60
+rc PS1='$ '
+keys echo red one\r
+keys printf green\r
+keys echo red two\r
+keys \epred\r
+snap
+keys \ep\r
+snap
+keys \en\r
+snap
+keys \C-u\epnosuch\r
+snap
+keys \C-u\C-g\C-uecho\e[5~
+snap
+keys \e[5~
+snap
+keys \e[6~
+snap
+keys \C-u\r
+snap

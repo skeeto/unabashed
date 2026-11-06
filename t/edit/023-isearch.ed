@@ -1,0 +1,34 @@
+# Incremental search: C-r, typing, C-r again, failure, DEL, C-g, ESC and
+# C-j to stop, RET to run, C-s, C-w
+size 16 60
+rc PS1='$ '
+keys echo apple one\r
+keys echo banana two\r
+keys echo apple three\r
+keys \C-rap
+snap
+keys \C-r
+snap
+keys \C-r
+snap
+keys z
+snap
+keys \x7f
+snap
+keys \C-g
+snap
+keys \C-ran
+pause 700
+keys \e
+pause 700
+snap
+keys \C-u\C-rtwo\C-j
+snap
+keys \C-u\C-rban\C-s
+snap
+keys \C-g\C-u\C-r\C-r
+snap
+keys \C-g\C-u\C-rech\C-w\C-w
+snap
+keys \C-g\C-u\C-rthree\r
+snap

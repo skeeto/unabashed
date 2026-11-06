@@ -1,0 +1,37 @@
+# History motion: C-p/C-n and arrows, M-< M->, edits kept on a history
+# line, the new line saved while away, C-o
+size 16 50
+rc PS1='$ '
+keys echo one\r
+keys echo two\r
+keys echo three\r
+keys par\C-p
+snap
+keys \C-p\C-p
+snap
+keys \C-p
+snap
+keys \e[B\C-n
+snap
+keys \C-n\C-n
+snap
+keys \C-p\C-p\C-aX\C-n
+snap
+keys \C-p
+snap
+keys \e<
+snap
+keys \e>
+snap
+keys \C-u\e3\C-p
+snap
+keys \C-u\r
+keys history\r
+snap
+keys clear\r
+keys \C-p\C-p\C-p\C-p\C-o
+snap
+keys \C-o
+snap
+keys \C-u\r
+snap

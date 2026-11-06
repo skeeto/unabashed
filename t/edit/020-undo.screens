@@ -1,0 +1,67 @@
+== snap 1
+$ echo first
+first
+$ echo abcdefghijklmnopqrstuvwxyz0123
+@ 2,37
+== snap 2
+$ echo first
+first
+$ echo abcdefghijklmno
+@ 2,22
+== snap 3
+$ echo first
+first
+$
+@ 2,2
+== snap 4
+$ echo first
+first
+$
+@ 2,2 bell 1
+== snap 5
+$ echo first
+first
+$
+@ 2,2 bell 2
+== snap 6
+$ echo first
+first
+$
+@ 2,2 bell 3
+== snap 7
+$ echo first
+first
+$
+@ 2,2 bell 4
+== snap 8
+$ echo first
+first
+$
+@ 2,2 bell 4
+== snap 9
+$ echo first
+first
+$
+@ 2,2 bell 5
+== snap 10
+$ echo first
+first
+$ echo first
+@ 2,12 bell 6
+== snap 11
+$ echo first
+first
+$ echo first
+@ 2,12 bell 7
+== snap 12
+$ echo first
+first
+$
+$
+@ 3,2 bell 7
+== snap 13
+$ echo first
+first
+$
+$
+@ 3,2 bell 7

@@ -46,6 +46,7 @@ static void freehistent(Shell *sh, HistEnt *e)
     if (!e) return;
     sfreestr(sh->store, e->line);
     sfreestr(sh->store, e->stamp);
+    sfreestr(sh->store, e->orig);
     sfree(sh->store, e, sizeof(HistEnt));
 }
 
@@ -66,6 +67,24 @@ static void histreplace(Shell *sh, iz i, Str line)
     HistEnt *old = h->ents[i];
     HistEnt *e   = newhistent(sh, line, old->stamp);
     e->edited = old->edited;
+    h->ents[i] = e;
+    freehistent(sh, old);
+}
+
+// The editor's change to entry i: its line now and the undo list back
+// to the line before the first change, kept with it. No undo list ends
+// the change: the entry is plain again.
+static void histedit(Shell *sh, iz i, Str line, EdUndo *undo)
+{
+    Hist *h = &sh->hist;
+    histown(sh, 0);
+    HistEnt *old = h->ents[i];
+    HistEnt *e   = newhistent(sh, line, old->stamp);
+    if (undo) {
+        e->orig   = sclone(sh->store, old->undo ? old->orig : old->line);
+        e->undo   = undo;
+        e->edited = 1;
+    }
     h->ents[i] = e;
     freehistent(sh, old);
 }

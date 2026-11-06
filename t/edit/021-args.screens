@@ -1,0 +1,35 @@
+== snap 1
+$ echo xxxxx
+@ 0,12
+== snap 2
+$ echo xxxxxyyyyyyyyyyyy
+@ 0,24
+== snap 3
+$ echo xxxxxyyyyyyyyyyyy
+@ 0,5
+== snap 4
+$ echo xxxxxyyyyyyyyyyyy
+@ 0,4
+== snap 5
+$ echo xxxxxyyyyyyyyyyyy
+@ 0,2
+== snap 6
+$  echo a b c d e fecho xxxxxyyyyyyyyyyyy
+@ 0,41 bell 1
+== snap 7
+$  echo a b c d e fecho xxxxxyyyyyyyyyyy
+@ 0,40 bell 1
+== snap 8
+$  echo a b c d e fecho xxxxxyyyyyyyyyyy
+@ 0,40 bell 1
+== snap 9
+$
+@ 0,2 bell 1
+== snap 10
+$
+$
+@ 1,2 bell 2
+== snap 11
+$
+$
+@ 1,2 bell 2

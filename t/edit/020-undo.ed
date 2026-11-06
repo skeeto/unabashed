@@ -1,0 +1,29 @@
+# Undo: typed runs, kills, C-_ and C-x C-u, counts, M-r revert, undo on
+# a history line
+size 16 60
+rc PS1='$ '
+keys echo first\r
+keys echo abcdefghijklmnopqrstuvwxyz0123
+snap
+keys \C-_
+snap
+keys \C-_
+snap
+keys \C-u
+snap
+keys \C-_
+snap
+keys \C-a\ed\ed\C-x\C-u
+snap
+keys \e2\C-_
+snap
+keys \C-e more\er
+snap
+keys \C-_
+snap
+keys \C-u\C-p\C-ex\C-_
+snap
+keys \C-_
+snap
+keys \C-u\r
+snap

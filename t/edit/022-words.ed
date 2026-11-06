@@ -1,0 +1,26 @@
+# Case and transposition: M-c M-u M-l (forward and with M--), M-t, C-t
+# at the start and end, bash's shell-word motions
+size 16 60
+rc PS1='$ '
+keys echo hello big world\C-a\ef\ef
+snap
+keys \C-a\ec\eu\el
+snap
+keys \e-\eu
+snap
+keys \C-e\et
+snap
+keys \C-a\et
+snap
+keys \C-a\C-t
+snap
+keys \C-e\C-t
+snap
+keys \C-u echo "a b" 'c d' e\C-a\e\C-f\e\C-f
+snap
+keys \e\C-b
+snap
+keys \e\C-d
+snap
+keys \C-u\r
+snap

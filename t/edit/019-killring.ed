@@ -1,0 +1,28 @@
+# The kill ring: kills in a row append (or prepend), C-y, M-y rotating,
+# M-y after something else, delete with a count, M-\
+size 16 60
+rc PS1='$ '
+keys echo one two three four\C-w\C-w
+snap
+keys \C-y
+snap
+keys \C-a\ef\ed\ed
+snap
+keys \C-e \C-y\ey
+snap
+keys \ey
+snap
+keys \C-b\ey
+snap
+keys \C-u\C-y\C-y
+snap
+keys \C-u   a   b\C-b\C-b\e\
+snap
+keys \C-u0123456789\C-a\e3\C-d
+snap
+keys \C-e\e2\x7f\C-a\C-y
+snap
+keys \C-x\x7f\C-e\C-y
+snap
+keys \C-u\r
+snap

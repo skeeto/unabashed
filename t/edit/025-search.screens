@@ -1,0 +1,79 @@
+== snap 1
+$ echo red one
+red one
+$ printf green
+green$ echo red two
+red two
+$ echo red two
+~       rrr
+@ 5,7
+== snap 2
+$ echo red one
+red one
+$ printf green
+green$ echo red two
+red two
+$ echo red one
+~       rrr
+@ 5,7
+== snap 3
+$ echo red one
+red one
+$ printf green
+green$ echo red two
+red two
+$ echo red two
+~       rrr
+@ 5,7
+== snap 4
+$ echo red one
+red one
+$ printf green
+green$ echo red two
+red two
+$ red two
+@ 5,2 bell 1
+== snap 5
+$ echo red one
+red one
+$ printf green
+green$ echo red two
+red two
+$ echo red one
+@ 5,6 bell 4
+== snap 6
+$ echo red one
+red one
+$ printf green
+green$ echo red two
+red two
+$ echo red one
+@ 5,6 bell 5
+== snap 7
+$ echo red one
+red one
+$ printf green
+green$ echo red two
+red two
+$ echored two
+@ 5,6 bell 5
+== snap 8
+$ echo red one
+red one
+$ printf green
+green$ echo red two
+red two
+$ red two
+bash: red: command not found
+$
+@ 7,2 bell 5
+== snap 9
+$ echo red one
+red one
+$ printf green
+green$ echo red two
+red two
+$ red two
+bash: red: command not found
+$
+@ 7,2 bell 5

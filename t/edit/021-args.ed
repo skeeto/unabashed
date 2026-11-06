@@ -1,0 +1,24 @@
+# Numeric arguments: M-digits, M--, repeated insert, counts on motion
+# and deletion, negative counts
+size 16 60
+rc PS1='$ '
+keys echo \e5x
+snap
+keys \e1\e2y
+snap
+keys \C-a\e3\C-f
+snap
+keys \e-\C-f
+snap
+keys \e--\ef
+snap
+keys \C-u echo a b c d e f\e-3\eb
+snap
+keys \e2\ef\e-\C-d
+snap
+keys \e0\C-k
+snap
+keys \e-2\C-k
+snap
+keys \C-u\r
+snap

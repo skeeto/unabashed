@@ -1,0 +1,119 @@
+== snap 1
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+(reverse-i-search)`ap': echo apple three
+~                             rr
+@ 6,29
+== snap 2
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+(reverse-i-search)`ap': echo apple one
+~                             rr
+@ 6,29
+== snap 3
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+(failed reverse-i-search)`ap': echo apple one
+@ 6,36 bell 1
+== snap 4
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+(failed reverse-i-search)`apz': echo apple one
+@ 6,37 bell 2
+== snap 5
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+(failed reverse-i-search)`ap': echo apple one
+@ 6,36 bell 3
+== snap 6
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+$
+@ 6,2 bell 3
+== snap 7
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+$ echo banana two
+@ 6,10 bell 3
+== snap 8
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+$ ana two
+@ 6,2 bell 6
+== snap 9
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+$ ana two
+@ 6,2 bell 6
+== snap 10
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+$ ana two
+@ 6,2 bell 6
+== snap 11
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+$ ana two
+@ 6,2 bell 6
+== snap 12
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+$ ana two
+@ 6,2 bell 6
+== snap 13
+$ echo apple one
+apple one
+$ echo banana two
+banana two
+$ echo apple three
+apple three
+$ ana two
+@ 6,2 bell 6

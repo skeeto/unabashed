@@ -1,0 +1,72 @@
+== snap 1
+$ echo a1 a2 a3
+a1 a2 a3
+$ echo b1 b2 b3
+b1 b2 b3
+$ ls b3
+@ 4,7
+== snap 2
+$ echo a1 a2 a3
+a1 a2 a3
+$ echo b1 b2 b3
+b1 b2 b3
+$ ls a3
+@ 4,7
+== snap 3
+$ echo a1 a2 a3
+a1 a2 a3
+$ echo b1 b2 b3
+b1 b2 b3
+$ ls
+@ 4,5 bell 1
+== snap 4
+$ echo a1 a2 a3
+a1 a2 a3
+$ echo b1 b2 b3
+b1 b2 b3
+$ b1
+@ 4,4 bell 1
+== snap 5
+$ echo a1 a2 a3
+a1 a2 a3
+$ echo b1 b2 b3
+b1 b2 b3
+$ b2
+@ 4,4 bell 1
+== snap 6
+$ echo a1 a2 a3
+a1 a2 a3
+$ echo b1 b2 b3
+b1 b2 b3
+$ b1
+@ 4,4 bell 1
+== snap 7
+$ echo a1 a2 a3
+a1 a2 a3
+$ echo b1 b2 b3
+b1 b2 b3
+$ b3
+@ 4,4 bell 1
+== snap 8
+$ echo a1 a2 a3
+a1 a2 a3
+$ echo b1 b2 b3
+b1 b2 b3
+$ b3
+@ 4,4 bell 1
+== snap 9
+$ echo a1 a2 a3
+a1 a2 a3
+$ echo b1 b2 b3
+b1 b2 b3
+$
+$
+@ 5,2 bell 1
+== snap 10
+$ echo a1 a2 a3
+a1 a2 a3
+$ echo b1 b2 b3
+b1 b2 b3
+$
+$
+@ 5,2 bell 1

@@ -1,0 +1,41 @@
+== snap 1
+$ echo one two
+@ 0,15
+== snap 2
+$ echo one two three four
+@ 0,25
+== snap 3
+$ echo three four
+@ 0,6
+== snap 4
+$ echo three four three four
+@ 0,28
+== snap 5
+$ echo three four  one two
+@ 0,26
+== snap 6
+$ echo three four  one two
+@ 0,25 bell 1
+== snap 7
+$ echo three four  one twecho three four  one two
+@ 0,48 bell 1
+== snap 8
+$    abo
+@ 0,6 bell 1
+== snap 9
+$ 3456789bo
+@ 0,2 bell 1
+== snap 10
+$ bo3456789
+@ 0,4 bell 1
+== snap 11
+$ 3456789bo
+@ 0,11 bell 1
+== snap 12
+$
+$
+@ 1,2 bell 1
+== snap 13
+$
+$
+@ 1,2 bell 1

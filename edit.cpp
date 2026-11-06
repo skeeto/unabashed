@@ -37,6 +37,55 @@ enum : i32 {
     EF_PREVIOUS_HISTORY,
     EF_NEXT_HISTORY,
     EF_REDRAW_CURRENT_LINE,
+    EF_DIGIT_ARGUMENT,
+    EF_UNIVERSAL_ARGUMENT,
+    EF_BEGINNING_OF_HISTORY,
+    EF_END_OF_HISTORY,
+    EF_OPERATE_AND_GET_NEXT,
+    EF_YANK,
+    EF_YANK_POP,
+    EF_UNDO,
+    EF_REVERT_LINE,
+    EF_SET_MARK,
+    EF_EXCHANGE_POINT_AND_MARK,
+    EF_CAPITALIZE_WORD,
+    EF_UPCASE_WORD,
+    EF_DOWNCASE_WORD,
+    EF_TRANSPOSE_WORDS,
+    EF_DELETE_HORIZONTAL_SPACE,
+    EF_BACKWARD_KILL_LINE,
+    EF_KILL_WHOLE_LINE,
+    EF_KILL_REGION,
+    EF_COPY_REGION_AS_KILL,
+    EF_COPY_FORWARD_WORD,
+    EF_COPY_BACKWARD_WORD,
+    EF_UNIX_FILENAME_RUBOUT,
+    EF_YANK_LAST_ARG,
+    EF_YANK_NTH_ARG,
+    EF_INSERT_COMMENT,
+    EF_CHARACTER_SEARCH,
+    EF_CHARACTER_SEARCH_BACKWARD,
+    EF_OVERWRITE_MODE,
+    EF_SHELL_FORWARD_WORD,
+    EF_SHELL_BACKWARD_WORD,
+    EF_SHELL_KILL_WORD,
+    EF_SHELL_BACKWARD_KILL_WORD,
+    EF_SHELL_TRANSPOSE_WORDS,
+    EF_DO_LOWERCASE_VERSION,
+    EF_CLEAR_DISPLAY,
+    EF_REVERSE_SEARCH_HISTORY,
+    EF_FORWARD_SEARCH_HISTORY,
+    EF_NON_INCREMENTAL_REVERSE_SEARCH_HISTORY,
+    EF_NON_INCREMENTAL_FORWARD_SEARCH_HISTORY,
+    EF_HISTORY_SEARCH_BACKWARD,
+    EF_HISTORY_SEARCH_FORWARD,
+    EF_HISTORY_SUBSTRING_SEARCH_BACKWARD,
+    EF_HISTORY_SUBSTRING_SEARCH_FORWARD,
+    EF_SHELL_EXPAND_LINE,
+    EF_HISTORY_EXPAND_LINE,
+    EF_MAGIC_SPACE,
+    EF_EDIT_AND_EXECUTE_COMMAND,
+    EF_BRACKETED_PASTE_BEGIN,
     EF_COUNT,
 };
 
@@ -67,6 +116,55 @@ static Str edfuncs[EF_COUNT] = {
     "previous-history",
     "next-history",
     "redraw-current-line",
+    "digit-argument",
+    "universal-argument",
+    "beginning-of-history",
+    "end-of-history",
+    "operate-and-get-next",
+    "yank",
+    "yank-pop",
+    "undo",
+    "revert-line",
+    "set-mark",
+    "exchange-point-and-mark",
+    "capitalize-word",
+    "upcase-word",
+    "downcase-word",
+    "transpose-words",
+    "delete-horizontal-space",
+    "backward-kill-line",
+    "kill-whole-line",
+    "kill-region",
+    "copy-region-as-kill",
+    "copy-forward-word",
+    "copy-backward-word",
+    "unix-filename-rubout",
+    "yank-last-arg",
+    "yank-nth-arg",
+    "insert-comment",
+    "character-search",
+    "character-search-backward",
+    "overwrite-mode",
+    "shell-forward-word",
+    "shell-backward-word",
+    "shell-kill-word",
+    "shell-backward-kill-word",
+    "shell-transpose-words",
+    "do-lowercase-version",
+    "clear-display",
+    "reverse-search-history",
+    "forward-search-history",
+    "non-incremental-reverse-search-history",
+    "non-incremental-forward-search-history",
+    "history-search-backward",
+    "history-search-forward",
+    "history-substring-search-backward",
+    "history-substring-search-forward",
+    "shell-expand-line",
+    "history-expand-line",
+    "magic-space",
+    "edit-and-execute-command",
+    "bracketed-paste-begin",
 };
 
 static iz readstdin(Shell *, File *, u8 *, iz);  // unabashed.cpp
@@ -105,6 +203,18 @@ static void keybind(Arena *a, KeyNode *root, Str seq, i32 fn)
     n->fn = fn;
 }
 
+// EdUndo records, as readline's: an insert, a delete with its text, and
+// the bounds of a group undone as one.
+enum : i32 { U_INSERT, U_DELETE, U_BEGIN, U_END };
+
+struct EdUndo {
+    EdUndo *next;  // older
+    Str   text;  // U_DELETE: what went
+    iz    beg;
+    iz    end;
+    i32   kind;
+};
+
 // One physical row of the display: its cells' bytes, where each cell
 // ends in them and at which column, and its width in columns.
 struct DRow {
@@ -121,6 +231,8 @@ struct Layout {
     i32   prow;  // the cursor's position for point
     i32   pcol;
 };
+
+enum : i32 { KILLMAX = 10 };
 
 struct Editor {
     Arena    perm;      // bindings, settings
@@ -157,6 +269,37 @@ struct Editor {
     Buf      out_;      // output for one redisplay
     b32      done;
     i32      result;    // ED_*
+    u8       eof;       // the terminal's EOF character
+    u8       lastc;     // the first key of the last command
+    // EdUndo, and the kill ring, lasting from line to line
+    Arena    hmem;      // undo lists, which history entries keep
+    EdUndo    *undo;
+    b32      undoing;
+    Arena    kmem[2];   // the kill ring, compacted from one to the other
+    i32      kcur;
+    Str      kills[KILLMAX];  // the oldest first
+    i32      nkills;
+    i32      killidx;   // the one yank inserts
+    iz       mark;
+    b32      overwrite;
+    // The command running and the one before
+    i32      count;     // the numeric argument
+    b32      argset;    // given explicitly
+    b32      argneg;    // while reading it: a minus seen
+    i32      lastfn;
+    b32      killed;    // this command killed
+    b32      lastkill;  // the last command killed: kills join it
+    // History
+    iz       hpos;      // the entry edited, or the list's length
+    b32      hsaved;    // the new line, kept while on an entry
+    Str      hsavedline;
+    EdUndo    *hsavedundo;
+    i64      getnext;   // operate-and-get-next: the entry to start on, or -1
+    i64      ylskip;    // yank-last-arg's walk back
+    i32      yldir;
+    i32      ylcount;
+    b32      ylarg;
+    b32      ylundo;
 };
 
 static void edbindings(Editor *ed)
@@ -167,22 +310,56 @@ static void edbindings(Editor *ed)
         u8 k = (u8)c;
         if (c != 0x7f) keybind(a, r, {&k, 1}, EF_SELF_INSERT);
     }
+    for (u8 c = 'A'; c <= 'Z'; c++) {
+        u8 seq[] = {0x1b, c};
+        keybind(a, r, {seq, 2}, EF_DO_LOWERCASE_VERSION);
+    }
+    for (u8 c = '0'; c <= '9'; c++) {
+        u8 seq[] = {0x1b, c};
+        keybind(a, r, {seq, 2}, EF_DIGIT_ARGUMENT);
+    }
     struct { char const *seq; i32 fn; } map[] = {
+        {"\x00", EF_SET_MARK},
         {"\x01", EF_BEGINNING_OF_LINE},   {"\x02", EF_BACKWARD_CHAR},
         {"\x04", EF_DELETE_CHAR},         {"\x05", EF_END_OF_LINE},
         {"\x06", EF_FORWARD_CHAR},        {"\x07", EF_ABORT},
         {"\x08", EF_BACKWARD_DELETE_CHAR},{"\x09", EF_COMPLETE},
         {"\x0a", EF_ACCEPT_LINE},         {"\x0b", EF_KILL_LINE},
         {"\x0c", EF_CLEAR_SCREEN},        {"\x0d", EF_ACCEPT_LINE},
-        {"\x0e", EF_NEXT_HISTORY},        {"\x10", EF_PREVIOUS_HISTORY},
-        {"\x11", EF_QUOTED_INSERT},       {"\x14", EF_TRANSPOSE_CHARS},
-        {"\x15", EF_UNIX_LINE_DISCARD},   {"\x16", EF_QUOTED_INSERT},
-        {"\x17", EF_UNIX_WORD_RUBOUT},    {"\x7f", EF_BACKWARD_DELETE_CHAR},
-        {"\x1b\x08", EF_BACKWARD_KILL_WORD}, {"\x1b\x7f", EF_BACKWARD_KILL_WORD},
-        {"\x1b\x07", EF_ABORT},
-        {"\x1b" "b", EF_BACKWARD_WORD},   {"\x1b" "f", EF_FORWARD_WORD},
-        {"\x1b" "d", EF_KILL_WORD},
-        {"\x18\x07", EF_ABORT},
+        {"\x0e", EF_NEXT_HISTORY},        {"\x0f", EF_OPERATE_AND_GET_NEXT},
+        {"\x10", EF_PREVIOUS_HISTORY},    {"\x11", EF_QUOTED_INSERT},
+        {"\x12", EF_REVERSE_SEARCH_HISTORY},
+        {"\x13", EF_FORWARD_SEARCH_HISTORY},
+        {"\x14", EF_TRANSPOSE_CHARS},     {"\x15", EF_UNIX_LINE_DISCARD},
+        {"\x16", EF_QUOTED_INSERT},       {"\x17", EF_UNIX_WORD_RUBOUT},
+        {"\x19", EF_YANK},                {"\x1d", EF_CHARACTER_SEARCH},
+        {"\x1f", EF_UNDO},                {"\x7f", EF_BACKWARD_DELETE_CHAR},
+        {"\x18\x07", EF_ABORT},           {"\x18\x15", EF_UNDO},
+        {"\x18\x18", EF_EXCHANGE_POINT_AND_MARK},
+        {"\x18\x7f", EF_BACKWARD_KILL_LINE},
+        {"\x18\x05", EF_EDIT_AND_EXECUTE_COMMAND},
+        {"\x1b\x05", EF_SHELL_EXPAND_LINE},
+        {"\x1b\x02", EF_SHELL_BACKWARD_WORD},
+        {"\x1b\x04", EF_SHELL_KILL_WORD},
+        {"\x1b\x06", EF_SHELL_FORWARD_WORD},
+        {"\x1b\x14", EF_SHELL_TRANSPOSE_WORDS},
+        {"\x1b\x07", EF_ABORT},           {"\x1b\x08", EF_BACKWARD_KILL_WORD},
+        {"\x1b\x0c", EF_CLEAR_DISPLAY},   {"\x1b\x12", EF_REVERT_LINE},
+        {"\x1b\x19", EF_YANK_NTH_ARG},    {"\x1b\x1b", EF_COMPLETE},
+        {"\x1b\x1d", EF_CHARACTER_SEARCH_BACKWARD},
+        {"\x1b ", EF_SET_MARK},           {"\x1b#", EF_INSERT_COMMENT},
+        {"\x1b-", EF_DIGIT_ARGUMENT},     {"\x1b.", EF_YANK_LAST_ARG},
+        {"\x1b<", EF_BEGINNING_OF_HISTORY},
+        {"\x1b>", EF_END_OF_HISTORY},     {"\x1b\\", EF_DELETE_HORIZONTAL_SPACE},
+        {"\x1b^", EF_HISTORY_EXPAND_LINE},{"\x1b_", EF_YANK_LAST_ARG},
+        {"\x1b" "b", EF_BACKWARD_WORD},   {"\x1b" "c", EF_CAPITALIZE_WORD},
+        {"\x1b" "d", EF_KILL_WORD},       {"\x1b" "f", EF_FORWARD_WORD},
+        {"\x1b" "l", EF_DOWNCASE_WORD},
+        {"\x1b" "n", EF_NON_INCREMENTAL_FORWARD_SEARCH_HISTORY},
+        {"\x1b" "p", EF_NON_INCREMENTAL_REVERSE_SEARCH_HISTORY},
+        {"\x1b" "r", EF_REVERT_LINE},     {"\x1b" "t", EF_TRANSPOSE_WORDS},
+        {"\x1b" "u", EF_UPCASE_WORD},     {"\x1b" "y", EF_YANK_POP},
+        {"\x1b\x7f", EF_BACKWARD_KILL_WORD},
         {"\x1b[A", EF_PREVIOUS_HISTORY},  {"\x1b[B", EF_NEXT_HISTORY},
         {"\x1b[C", EF_FORWARD_CHAR},      {"\x1b[D", EF_BACKWARD_CHAR},
         {"\x1b[H", EF_BEGINNING_OF_LINE}, {"\x1b[F", EF_END_OF_LINE},
@@ -193,9 +370,14 @@ static void edbindings(Editor *ed)
         {"\x1b[1;3C", EF_FORWARD_WORD},   {"\x1b[1;3D", EF_BACKWARD_WORD},
         {"\x1b[3;5~", EF_KILL_WORD},      {"\x1b[3~", EF_DELETE_CHAR},
         {"\x1b[1~", EF_BEGINNING_OF_LINE},{"\x1b[4~", EF_END_OF_LINE},
+        {"\x1b[2~", EF_OVERWRITE_MODE},
+        {"\x1b[5~", EF_HISTORY_SEARCH_BACKWARD},
+        {"\x1b[6~", EF_HISTORY_SEARCH_FORWARD},
+        {"\x1b[200~", EF_BRACKETED_PASTE_BEGIN},
     };
     for (iz i = 0; i < countof(map); i++) {
-        Str seq = {(u8 *)map[i].seq, (iz)__builtin_strlen(map[i].seq)};
+        iz  len = map[i].seq[0] ? (iz)__builtin_strlen(map[i].seq) : 1;
+        Str seq = {(u8 *)map[i].seq, len};
         keybind(a, r, seq, map[i].fn);
     }
 }
@@ -210,7 +392,11 @@ static Editor *editor(Shell *sh)
         ed->lay[0]     = newarena(sh->os, (iz)1<<24);
         ed->lay[1]     = newarena(sh->os, (iz)1<<24);
         ed->linemem    = newarena(sh->os, (iz)1<<24);
+        ed->hmem       = newarena(sh->os, (iz)1<<24);
+        ed->kmem[0]    = newarena(sh->os, (iz)1<<24);
+        ed->kmem[1]    = newarena(sh->os, (iz)1<<24);
         ed->keytimeout = 500;
+        ed->getnext    = -1;
         edbindings(ed);
         sh->editor = ed;
     }
@@ -564,6 +750,8 @@ static void edresize(Editor *ed, Shell *sh)
 
 // Editing functions
 
+static i32 edkey(Editor *, Shell *, i64 timeout);
+
 static void edbell(Editor *ed)
 {
     edput(ed, "\a");
@@ -574,11 +762,16 @@ static b32 edwordchar(u8 c)
     return (c>='0' && c<='9') || ((c|0x20)>='a' && (c|0x20)<='z') || c>=0x80;
 }
 
+static Str edtext(Editor *ed)
+{
+    return {ed->line.data, ed->line.len};
+}
+
 // Motion by characters, as readline's: a zero-width character (a
 // combining mark) goes with the one before it.
 static iz edprev(Editor *ed, iz i)  // start of the character before i
 {
-    Str s = {ed->line.data, ed->line.len};
+    Str s = edtext(ed);
     while (i > 0) {
         i--;
         while (i>0 && (s[i]&0xc0)==0x80) i--;
@@ -590,7 +783,7 @@ static iz edprev(Editor *ed, iz i)  // start of the character before i
 
 static iz ednext(Editor *ed, iz i)  // past the character at i
 {
-    Str s = {ed->line.data, ed->line.len};
+    Str s = edtext(ed);
     if (i >= s.len) return s.len;
     utf8decode(s, &i);
     while (i < s.len) {  // and the zero-width ones after it
@@ -601,27 +794,107 @@ static iz ednext(Editor *ed, iz i)  // past the character at i
     return i;
 }
 
-static iz edfwdword(Editor *ed, iz i)
+// Readline's word motions, count words at a time.
+static iz edfwdword(Editor *ed, iz i, i32 count)
 {
     u8 *s = ed->line.data;
-    for (; i<ed->line.len && !edwordchar(s[i]); i++) {}
-    for (; i<ed->line.len && edwordchar(s[i]); i++) {}
+    for (; count > 0; count--) {
+        for (; i<ed->line.len && !edwordchar(s[i]); i++) {}
+        for (; i<ed->line.len && edwordchar(s[i]); i++) {}
+    }
     return i;
 }
 
-static iz edbackword(Editor *ed, iz i)
+static iz edbackword(Editor *ed, iz i, i32 count)
 {
     u8 *s = ed->line.data;
-    for (; i>0 && !edwordchar(s[i-1]); i--) {}
-    for (; i>0 && edwordchar(s[i-1]); i--) {}
+    for (; count > 0; count--) {
+        for (; i>0 && !edwordchar(s[i-1]); i--) {}
+        for (; i>0 && edwordchar(s[i-1]); i--) {}
+    }
     return i;
 }
 
+static iz edwordmove(Editor *ed, iz i, i32 count)  // negative: back
+{
+    return count<0 ? edbackword(ed, i, -count) : edfwdword(ed, i, count);
+}
+
+// Readline's forward-char and backward-char from p (negative count:
+// back), the bell at an end that stops it.
+static iz edcharmove(Editor *ed, iz p, i32 count)
+{
+    if (count > 0) {
+        if (p == ed->line.len) {
+            edbell(ed);
+            return p;
+        }
+        iz q = p;
+        for (i32 i = 0; i<count && q<ed->line.len; i++) q = ednext(ed, q);
+        if (q == p) edbell(ed);
+        return q;
+    }
+    iz q = p;
+    for (; count<0 && q>0; count++) q = edprev(ed, q);
+    if (count) {
+        edbell(ed);
+        return 0;
+    }
+    return q;
+}
+
+static EdUndo *edrecord(Editor *ed, i32 kind, iz beg, iz end)
+{
+    EdUndo *u = alloc<EdUndo>(&ed->hmem);
+    u->kind  = kind;
+    u->beg   = beg;
+    u->end   = end;
+    u->next  = ed->undo;
+    ed->undo = u;
+    return u;
+}
+
+static void edgroup(Editor *ed, i32 kind)  // U_BEGIN or U_END
+{
+    if (!ed->undoing) edrecord(ed, kind, 0, 0);
+}
+
+// Insert at point, past it. As readline's, a single byte inserted where
+// the last insert ended joins its undo record, up to 20 bytes.
+static void edinsert(Editor *ed, Str s)
+{
+    if (!s.len) return;
+    if (!ed->undoing) {
+        EdUndo *u = ed->undo;
+        if (s.len==1 && u && u->kind==U_INSERT && u->end==ed->point &&
+            u->end-u->beg<20) {
+            u->end++;
+        } else {
+            edrecord(ed, U_INSERT, ed->point, ed->point+s.len);
+        }
+    }
+    reserve(&ed->line, s.len);
+    u8 *d = ed->line.data;
+    for (iz i = ed->line.len-1; i >= ed->point; i--) d[i+s.len] = d[i];
+    copybytes(d+ed->point, s.data, s.len);
+    ed->line.len += s.len;
+    ed->point    += s.len;
+}
+
+// Delete [beg, end), either way round; point stays on the same text.
 static void eddelete(Editor *ed, iz beg, iz end)
 {
+    if (beg > end) {
+        iz t = beg; beg = end; end = t;
+    }
+    if (end > ed->line.len) end = ed->line.len;
     iz n = end - beg;
     if (n <= 0) return;
     u8 *s = ed->line.data;
+    if (!ed->undoing) {
+        EdUndo *u = edrecord(ed, U_DELETE, beg, end);
+        u->text = clone(&ed->hmem, {s+beg, n});
+    }
     for (iz i = beg; i+n < ed->line.len; i++) s[i] = s[i+n];
     ed->line.len -= n;
     if (ed->point > end) {
@@ -631,41 +904,487 @@ static void eddelete(Editor *ed, iz beg, iz end)
     }
 }
 
-static void edinsert(Editor *ed, Str s)
+// EdUndo one record or group: false with nothing to undo.
+static b32 edundo1(Editor *ed)
 {
-    reserve(&ed->line, s.len);
-    u8 *d = ed->line.data;
-    for (iz i = ed->line.len-1; i >= ed->point; i--) d[i+s.len] = d[i];
-    copybytes(d+ed->point, s.data, s.len);
-    ed->line.len += s.len;
-    ed->point    += s.len;
+    if (!ed->undo) return 0;
+    ed->undoing = 1;
+    i32 depth = 0;
+    do {
+        EdUndo *u  = ed->undo;
+        ed->undo = u->next;
+        switch (u->kind) {
+        case U_INSERT:
+            eddelete(ed, u->beg, u->end);
+            ed->point = u->beg;
+            break;
+        case U_DELETE:
+            ed->point = u->beg<ed->line.len ? u->beg : ed->line.len;
+            edinsert(ed, u->text);
+            break;
+        case U_END:
+            depth++;
+            break;
+        case U_BEGIN:
+            if (depth) {
+                depth--;
+            } else {
+                edbell(ed);
+            }
+            break;
+        }
+    } while (depth && ed->undo);
+    ed->undoing = 0;
+    return 1;
 }
 
-static i32 edkey(Editor *, Shell *, i64 timeout);
+// The line replaced whole, undone as one, as bash's expansions do.
+static void edreplace(Editor *ed, Str s)
+{
+    if (s == edtext(ed)) return;
+    edrecord(ed, U_BEGIN, 0, 0);
+    eddelete(ed, 0, ed->line.len);
+    ed->point = 0;
+    edinsert(ed, s);
+    edrecord(ed, U_END, 0, 0);
+    ed->mark = 0;
+}
+
+
+// The kill ring
+
+// Kill [from, to): from past to prepends to the last kill when that was
+// the last command, else appends; otherwise a new kill.
+static void edkill(Editor *ed, iz from, iz to)
+{
+    ed->killed = 1;
+    if (from == to) return;
+    iz  beg  = from<to ? from : to;
+    iz  end  = from<to ? to : from;
+    Str text = {ed->line.data+beg, end-beg};
+
+    // Compact into the other arena when this one has grown
+    Arena *k = &ed->kmem[ed->kcur];
+    if (k->end-k->beg < ((iz)1<<23)) {
+        ed->kcur = !ed->kcur;
+        Arena *n = &ed->kmem[ed->kcur];
+        *n = {(byte *)(n->mem+1), n->end, n->mem};
+        for (i32 i = 0; i < ed->nkills; i++) ed->kills[i] = clone(n, ed->kills[i]);
+        k = n;
+    }
+
+    if (ed->lastkill && ed->nkills) {
+        Str *s = &ed->kills[ed->killidx];
+        *s = from<to ? concat(k, *s, text) : concat(k, text, *s);
+    } else {
+        if (ed->nkills == KILLMAX) {
+            for (i32 i = 1; i < KILLMAX; i++) ed->kills[i-1] = ed->kills[i];
+            ed->nkills--;
+        }
+        ed->killidx = ed->nkills;
+        ed->kills[ed->nkills++] = clone(k, text);
+    }
+    eddelete(ed, beg, end);
+}
+
+static void edyank(Editor *ed)
+{
+    if (!ed->nkills) {
+        edbell(ed);
+        return;
+    }
+    ed->mark = ed->point;
+    edinsert(ed, ed->kills[ed->killidx]);
+}
+
+
+// History
+
+// Readline's rl_maybe_replace_line: the entry left keeps its changes.
+static void edkeepline(Editor *ed, Shell *sh)
+{
+    Hist *h = &sh->hist;
+    if (ed->hpos >= h->len) return;
+    if (h->ents[ed->hpos]->undo != ed->undo) {
+        histedit(sh, ed->hpos, edtext(ed), ed->undo);
+    }
+}
+
+static void edload(Editor *ed, Shell *sh, iz i)
+{
+    HistEnt *e = sh->hist.ents[i];
+    ed->hpos     = i;
+    ed->line.len = 0;
+    print(&ed->line, e->line);
+    ed->undo  = e->undo;
+    ed->point = ed->line.len;
+    ed->mark  = 0;
+}
+
+static void edsaveline(Editor *ed)
+{
+    if (ed->hsaved) return;
+    ed->hsaved     = 1;
+    ed->hsavedline = clone(&ed->linemem, edtext(ed));
+    ed->hsavedundo = ed->undo;
+}
+
+static void edunsaveline(Editor *ed)
+{
+    if (!ed->hsaved) {
+        edbell(ed);
+        return;
+    }
+    ed->hsaved   = 0;
+    ed->line.len = 0;
+    print(&ed->line, ed->hsavedline);
+    ed->undo  = ed->hsavedundo;
+    ed->point = ed->line.len;
+    ed->mark  = 0;
+}
+
+static void ednexthist(Editor *, Shell *, i64);
+
+static void edprevhist(Editor *ed, Shell *sh, i64 count)
+{
+    if (count < 0) return ednexthist(ed, sh, -count);
+    Hist *h = &sh->hist;
+    if (!count || !h->len) return;
+    b32 had = ed->hsaved;
+    edsaveline(ed);
+    edkeepline(ed, sh);
+    iz to = count>ed->hpos ? 0 : ed->hpos-(iz)count;
+    if (to == ed->hpos) {
+        ed->hsaved = had;
+        edbell(ed);
+        return;
+    }
+    edload(ed, sh, to);
+}
+
+static void ednexthist(Editor *ed, Shell *sh, i64 count)
+{
+    if (count < 0) return edprevhist(ed, sh, -count);
+    if (!count) return;
+    Hist *h = &sh->hist;
+    edkeepline(ed, sh);
+    if (count >= h->len-ed->hpos) {
+        ed->hpos = h->len;
+        edunsaveline(ed);
+    } else {
+        edload(ed, sh, ed->hpos+(iz)count);
+    }
+}
+
+// Leaving the line: as readline does when it returns one, an entry
+// changed and being accepted gets its own line back (the line goes in
+// as a new entry), and on an interrupt it only loses its undo list.
+static void edleave(Editor *ed, Shell *sh, b32 intr)
+{
+    Hist *h = &sh->hist;
+    if (ed->hpos < h->len) {
+        HistEnt *e = h->ents[ed->hpos];
+        if (intr) {
+            if (e->undo) histedit(sh, ed->hpos, e->line, 0);
+        } else if (ed->undo || e->undo) {
+            histedit(sh, ed->hpos, e->undo ? e->orig : e->line, 0);
+        }
+    }
+    ed->hsaved = 0;
+    ed->undo   = 0;
+}
+
+// The words of the entry skip entries back from the last, for
+// yank-last-arg and yank-nth-arg: n counts from 0, '$' the last, and a
+// negative from the end. False and the bell when there is none.
+static b32 edyankarg(Editor *ed, Shell *sh, i64 n, i64 skip)
+{
+    Hist *h  = &sh->hist;
+    iz    at = ed->hpos - 1 - (iz)skip;
+    if (skip>=ed->hpos || at<0 || at>=h->len) {
+        edbell(ed);
+        return 0;
+    }
+    Arena  a = ed->linemem;
+    HWords w = histwords(&a, h->ents[at]->line, h->comchar, -1);
+    if (n == '$') {
+        n = w.len - 1;
+    } else if (n < 0) {
+        n = w.len + n - 1;
+    }
+    if (n<0 || n>=w.len || !w.word[n].len) {
+        edbell(ed);
+        return 0;
+    }
+    Str arg = clone(&ed->hmem, w.word[n]);
+    edgroup(ed, U_BEGIN);
+    ed->mark = ed->point;
+    edinsert(ed, arg);
+    edgroup(ed, U_END);
+    return 1;
+}
+
+
+// Shell words, as bash's: runs of characters other than unquoted blanks
+// and metacharacters
+
+static b32 edwdelim(u8 c)
+{
+    switch (c) {
+    case ' ': case '\t': case '\n': case '|': case '&': case ';':
+    case '(': case ')': case '<': case '>':
+        return 1;
+    }
+    return 0;
+}
+
+// Past a quoted string opened before i, or the end.
+static iz edskipquote(Str s, iz i, u8 q)
+{
+    for (; i < s.len; i++) {
+        if (s[i]=='\\' && q=='"') {
+            i++;
+        } else if (s[i] == q) {
+            return i + 1;
+        }
+    }
+    return s.len;
+}
+
+// Is s[at] inside quotes or escaped, as bash's char_is_quoted?
+static b32 edquoted(Str s, iz at)
+{
+    for (iz i = 0; i <= at && i < s.len;) {
+        u8 c = s[i];
+        if (c == '\\') {
+            if (i+1 >= at) return i+1 == at;
+            i += 2;
+        } else if (c=='$' && i+2<s.len && s[i+1]=='\'') {
+            i = edskipquote(s, i+2, '\'');
+            if (i > at) return 1;
+        } else if (c=='\'' || c=='"') {
+            i = edskipquote(s, i+1, c);
+            if (i > at) return 1;
+        } else {
+            i++;
+        }
+    }
+    return 0;
+}
+
+// Past one character, or a quoted string, in a scan for shell words.
+static iz edshellstep(Str s, iz p)
+{
+    u8 c = s[p];
+    if (c == '\\') {
+        p = p+2<s.len ? p+2 : s.len;
+    } else if (c=='\'' || c=='"') {
+        p = edskipquote(s, p+1, c);
+    } else {
+        p++;
+    }
+    return p;
+}
+
+static iz edshellfwd(Editor *ed, iz p, i32 count, b32 *bell)
+{
+    Str s = edtext(ed);
+    for (; count > 0; count--) {
+        if (p == s.len) return p;
+        if (edquoted(s, p) && p>0 && s[p-1]!='\\') {
+            do p++; while (p<s.len && edquoted(s, p));
+            continue;
+        }
+        while (p<s.len && edwdelim(s[p])) p = edshellstep(s, p);
+        if (p >= s.len) {
+            *bell = 1;
+            return s.len;
+        }
+        while (p<s.len && !edwdelim(s[p])) p = edshellstep(s, p);
+        if (p >= s.len) return s.len;
+    }
+    return p;
+}
+
+static iz edshellback(Editor *ed, iz p, i32 count)
+{
+    Str s = edtext(ed);
+    for (; count > 0; count--) {
+        if (!p) return 0;
+        p--;
+        while (p>0 && edwdelim(s[p]) && !edquoted(s, p)) p--;
+        if (!p) return 0;
+        iz prev = p;
+        while (p > 0) {
+            if (edwdelim(s[p]) && !edquoted(s, p)) {
+                p = prev;
+                break;
+            }
+            prev = p--;
+        }
+    }
+    return p;
+}
+
+static iz edshellmove(Editor *ed, iz p, i32 count, b32 *bell)
+{
+    return count<0 ? edshellback(ed, p, -count) : edshellfwd(ed, p, count, bell);
+}
+
+// Swap two words found by a pair of motions, as readline's
+// transpose-words and bash's shell-transpose-words.
+static void edtransposewords(Editor *ed, i32 count, b32 shell)
+{
+    if (!count) return;
+    b32 bell = 0;
+    iz  p    = ed->point;
+    iz  w2e  = shell ? edshellmove(ed, p, count, &bell)   : edwordmove(ed, p, count);
+    iz  w2b  = shell ? edshellmove(ed, w2e, -1, &bell)    : edwordmove(ed, w2e, -1);
+    iz  w1b  = shell ? edshellmove(ed, w2b, -count, &bell): edwordmove(ed, w2b, -count);
+    iz  w1e  = shell ? edshellmove(ed, w1b, 1, &bell)     : edwordmove(ed, w1b, 1);
+    if (w1b==w2b || w2b<w1e) {
+        edbell(ed);
+        return;
+    }
+    Str w1 = clone(&ed->hmem, {ed->line.data+w1b, w1e-w1b});
+    Str w2 = clone(&ed->hmem, {ed->line.data+w2b, w2e-w2b});
+    edgroup(ed, U_BEGIN);
+    ed->point = w2b;
+    eddelete(ed, w2b, w2e);
+    edinsert(ed, w1);
+    ed->point = w1b;
+    eddelete(ed, w1b, w1e);
+    edinsert(ed, w2);
+    ed->point = w2e;
+    edgroup(ed, U_END);
+}
+
+// Readline's rl_change_case over count words from point.
+enum : i32 { CASE_UP, CASE_DOWN, CASE_CAP };
+
+static void edcase(Editor *ed, i32 count, i32 op)
+{
+    iz beg = ed->point;
+    iz end = edwordmove(ed, beg, count);
+    if (count < 0) {
+        iz t = beg; beg = end; end = t;
+    }
+    // Recorded as a delete and insert of the span, as rl_modifying
+    if (beg < end) {
+        edgroup(ed, U_BEGIN);
+        if (!ed->undoing) {
+            EdUndo *u = edrecord(ed, U_DELETE, beg, end);
+            u->text = clone(&ed->hmem, {ed->line.data+beg, end-beg});
+            edrecord(ed, U_INSERT, beg, end);
+        }
+        edgroup(ed, U_END);
+    }
+    b32 inword = 0;
+    for (iz i = beg; i < end; i++) {
+        u8 *c = ed->line.data + i;
+        if (!edwordchar(*c)) {
+            inword = 0;
+            continue;
+        }
+        i32 nop = op==CASE_CAP ? (inword ? CASE_DOWN : CASE_UP) : op;
+        inword  = 1;
+        if (nop==CASE_UP && *c>='a' && *c<='z') {
+            *c -= 0x20;
+        } else if (nop==CASE_DOWN && *c>='A' && *c<='Z') {
+            *c += 0x20;
+        }
+    }
+    ed->point = end;
+}
+
+// Readline's character search for the next key's character, count
+// times: the cursor on it.
+static void edcharsearch(Editor *ed, Shell *sh, i32 count, i32 dir)
+{
+    i32 c = edkey(ed, sh, -1);
+    if (c < 0) return;
+    u8  buf[4] = {(u8)c};
+    iz  n = c>=0xf0 ? 4 : c>=0xe0 ? 3 : c>=0xc0 ? 2 : 1;
+    iz  len = 1;
+    while (len < n) {
+        i32 k = edkey(ed, sh, -1);
+        if (k<0 || (k&0xc0)!=0x80) break;
+        buf[len++] = (u8)k;
+    }
+    Str ch = {buf, len};
+    if (count < 0) {
+        count = -count;
+        dir   = -dir;
+    }
+    iz pos = ed->point;
+    for (; count > 0; count--) {
+        if ((dir<0 && pos<=0) || (dir>0 && pos>=ed->line.len)) {
+            edbell(ed);
+            return;
+        }
+        for (;;) {
+            iz next = dir>0 ? ednext(ed, pos) : edprev(ed, pos);
+            if (next == pos) break;
+            pos = next;
+            if (pos+len<=ed->line.len && Str{ed->line.data+pos, len}==ch) {
+                ed->point = pos;
+                break;
+            }
+        }
+    }
+}
+
+
+static void edarg(Editor *, Shell *, i32 key);
+
+// Insert key count times, with the rest of a UTF-8 sequence it starts.
+static void edselfinsert(Editor *ed, Shell *sh, u8 key, i32 count)
+{
+    u8 buf[4] = {key};
+    iz n   = key>=0xf0 ? 4 : key>=0xe0 ? 3 : key>=0xc0 ? 2 : 1;
+    iz len = 1;
+    while (len < n) {
+        i32 c = edkey(ed, sh, -1);
+        if (c<0 || (c&0xc0)!=0x80) break;  // a stray byte is dropped
+        buf[len++] = (u8)c;
+    }
+    if (count <= 0) return;
+    Str ch = {buf, len};
+    if (ed->overwrite) {
+        edgroup(ed, U_BEGIN);
+        for (i32 i = 0; i < count; i++) {
+            edinsert(ed, ch);
+            if (ed->point < ed->line.len) {
+                eddelete(ed, ed->point, ednext(ed, ed->point));
+            }
+        }
+        edgroup(ed, U_END);
+    } else if (count == 1) {
+        edinsert(ed, ch);
+    } else {
+        Buf b(&ed->hmem, len*count);
+        for (i32 i = 0; i < count; i++) print(&b, ch);
+        edinsert(ed, finish(&b));
+    }
+}
 
 static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
 {
-    iz p   = ed->point;
-    iz len = ed->line.len;
+    iz  p     = ed->point;
+    iz  len   = ed->line.len;
+    i32 count = ed->count;
     switch (fn) {
     case EF_NONE:
+    case EF_COMPLETE:            // step 5
+    default:
         edbell(ed);
         break;
     case EF_SELF_INSERT:
+        edselfinsert(ed, sh, key, count);
+        if (count!=1 || ed->overwrite) break;
         // Keys already typed that insert themselves go in too, as
         // readline batches typeahead, so the line is shown once
-        for (;;) {
-            // A UTF-8 sequence goes in whole
-            u8 buf[4] = {key};
-            iz n   = key>=0xf0 ? 4 : key>=0xe0 ? 3 : key>=0xc0 ? 2 : 1;
-            iz len = 1;
-            while (len < n) {
-                i32 c = edkey(ed, sh, -1);
-                if (c<0 || (c&0xc0)!=0x80) break;  // a stray byte is dropped
-                buf[len++] = (u8)c;
-            }
-            edinsert(ed, {buf, len});
-            if (ed->nchars) break;
+        while (!ed->nchars) {
             i32 c = edkey(ed, sh, 0);
             if (c < 0) break;
             KeyNode *k = keychild(&ed->root, (u8)c);
@@ -674,13 +1393,19 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
                 ed->unread = c + 1;  // dispatched next
                 break;
             }
-            key = (u8)c;
+            edselfinsert(ed, sh, (u8)c, 1);
         }
         break;
     case EF_ACCEPT_LINE:
         ed->done   = 1;
         ed->result = ED_LINE;
         break;
+    case EF_OPERATE_AND_GET_NEXT: {
+        Hist *h = &sh->hist;
+        ed->done    = 1;
+        ed->result  = ED_LINE;
+        ed->getnext = ed->argset ? count : h->base + ed->hpos + 1;
+    } break;
     case EF_BEGINNING_OF_LINE:
         ed->point = 0;
         break;
@@ -688,58 +1413,294 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         ed->point = len;
         break;
     case EF_FORWARD_CHAR:
-        if (p == len) edbell(ed);
-        ed->point = ednext(ed, p);
+        ed->point = edcharmove(ed, p, count);
         break;
     case EF_BACKWARD_CHAR:
-        if (!p) edbell(ed);
-        ed->point = edprev(ed, p);
+        ed->point = edcharmove(ed, p, -count);
         break;
     case EF_FORWARD_WORD:
-        ed->point = edfwdword(ed, p);
+        ed->point = edwordmove(ed, p, count);
         break;
     case EF_BACKWARD_WORD:
-        ed->point = edbackword(ed, p);
+        ed->point = edwordmove(ed, p, -count);
         break;
     case EF_DELETE_CHAR:
-        if (!len) {
-            ed->done   = 1;
-            ed->result = ED_EOF;
-        } else if (p == len) {
+    case EF_BACKWARD_DELETE_CHAR: {
+        // Readline's rl_delete and rl_rubout: a negative count turns
+        // either into the other (without overwrite's rubout)
+        b32 back = (fn==EF_BACKWARD_DELETE_CHAR) != (count<0);
+        b32 over = ed->overwrite && fn==EF_BACKWARD_DELETE_CHAR && count>0;
+        i32 n    = count<0 ? -count : count;
+        if (back ? !p : p==len) {
+            edbell(ed);
+        } else if (over) {
+            iz  q = p;
+            i32 w = 0;
+            for (i32 i = 0; i < n; i++, w++) q = edcharmove(ed, q, -1);
+            edgroup(ed, U_BEGIN);
+            if (n>1 || ed->argset) {
+                edkill(ed, p, q);
+            } else {
+                eddelete(ed, q, p);
+            }
+            ed->point = q;
+            if (q < ed->line.len) {
+                for (i32 i = 0; i < w; i++) edinsert(ed, " ");
+                ed->point = q;
+            }
+            edgroup(ed, U_END);
+        } else if (n>1 || ed->argset) {
+            iz q = edcharmove(ed, p, back ? -n : n);
+            edkill(ed, p, q);
+            ed->point = back ? q : p;
+        } else {
+            iz q = back ? edprev(ed, p) : ednext(ed, p);
+            eddelete(ed, q<p ? q : p, q<p ? p : q);
+        }
+    } break;
+    case EF_KILL_LINE:
+        if (count < 0) {
+            edkill(ed, p, 0);
+            ed->point = 0;
+        } else {
+            edkill(ed, p, len);
+            ed->point = p;
+        }
+        ed->mark = ed->point;
+        break;
+    case EF_BACKWARD_KILL_LINE:
+        if (count < 0) {
+            edkill(ed, p, len);
+            ed->point = p;
+        } else if (!p) {
             edbell(ed);
         } else {
-            eddelete(ed, p, ednext(ed, p));
+            edkill(ed, p, 0);
+            ed->point = 0;
         }
+        ed->mark = ed->point;
         break;
-    case EF_BACKWARD_DELETE_CHAR:
+    case EF_KILL_WHOLE_LINE:
+        edgroup(ed, U_BEGIN);
+        ed->point = 0;
+        edkill(ed, 0, len);
+        ed->mark = 0;
+        edgroup(ed, U_END);
+        break;
+    case EF_UNIX_LINE_DISCARD:
         if (!p) {
             edbell(ed);
         } else {
-            eddelete(ed, edprev(ed, p), p);
+            edkill(ed, p, 0);
+            ed->point = ed->mark = 0;
         }
         break;
-    case EF_KILL_LINE:
-        eddelete(ed, p, len);
-        break;
-    case EF_UNIX_LINE_DISCARD:
-        eddelete(ed, 0, p);
-        break;
-    case EF_UNIX_WORD_RUBOUT: {
-        iz i = p;
+    case EF_UNIX_WORD_RUBOUT:
+    case EF_UNIX_FILENAME_RUBOUT: {
+        if (!p) {
+            edbell(ed);
+            break;
+        }
         u8 *s = ed->line.data;
-        for (; i>0 && (s[i-1]==' ' || s[i-1]=='\t'); i--) {}
-        for (; i>0 && s[i-1]!=' ' && s[i-1]!='\t'; i--) {}
-        if (i == p) edbell(ed);
-        eddelete(ed, i, p);
+        iz  i = p;
+        for (i32 n = count<=0 ? 1 : count; n > 0; n--) {
+            if (fn == EF_UNIX_WORD_RUBOUT) {
+                for (; i>0 && (s[i-1]==' ' || s[i-1]=='\t'); i--) {}
+                for (; i>0 && s[i-1]!=' ' && s[i-1]!='\t'; i--) {}
+                continue;
+            }
+            for (; i>0 && (s[i-1]==' ' || s[i-1]=='\t'); i--) {}
+            if (i>0 && s[i-1]=='/') {
+                iz j = i - 1;
+                for (; j>0 && s[j-1]=='/'; j--) {}
+                if (!j || s[j-1]==' ' || s[j-1]=='\t') {
+                    i = j;  // slashes only
+                    continue;
+                }
+            }
+            for (; i>0 && (s[i-1]==' ' || s[i-1]=='\t' || s[i-1]=='/'); i--) {}
+            for (; i>0 && s[i-1]!=' ' && s[i-1]!='\t' && s[i-1]!='/'; i--) {}
+        }
+        edkill(ed, p, i);
+        ed->point = ed->mark = i;
     } break;
     case EF_KILL_WORD:
-        eddelete(ed, p, edfwdword(ed, p));
+    case EF_BACKWARD_KILL_WORD: {
+        if (fn == EF_BACKWARD_KILL_WORD) count = -count;
+        iz q = edwordmove(ed, p, count);
+        if (q != p) edkill(ed, p, q);
+        ed->point = ed->mark = q<p ? q : p;
+    } break;
+    case EF_SHELL_FORWARD_WORD:
+    case EF_SHELL_BACKWARD_WORD: {
+        b32 bell = 0;
+        ed->point = edshellmove(ed, p, fn==EF_SHELL_FORWARD_WORD ? count : -count, &bell);
+        if (bell) edbell(ed);
+    } break;
+    case EF_SHELL_KILL_WORD:
+    case EF_SHELL_BACKWARD_KILL_WORD: {
+        b32 bell = 0;
+        if (fn == EF_SHELL_BACKWARD_KILL_WORD) count = -count;
+        iz q = edshellmove(ed, p, count, &bell);
+        if (bell) edbell(ed);
+        if (q != p) edkill(ed, p, q);
+        ed->point = ed->mark = q<p ? q : p;
+    } break;
+    case EF_KILL_REGION:
+    case EF_COPY_REGION_AS_KILL: {
+        iz m = ed->mark<len ? ed->mark : len;
+        if (m != p) {
+            if (fn == EF_KILL_REGION) {
+                edkill(ed, p, m);
+            } else {
+                // A copy: killed and put straight back
+                EdUndo *u = ed->undo;
+                b32   o = ed->undoing;
+                ed->undoing = 1;
+                Str t = clone(&ed->hmem, {ed->line.data+(p<m?p:m), p<m?m-p:p-m});
+                edkill(ed, p, m);
+                ed->point = p<m ? p : m;
+                edinsert(ed, t);
+                ed->undoing = o;
+                ed->undo    = u;
+            }
+        }
+        ed->killed = 1;
+        ed->point  = fn==EF_KILL_REGION ? (p<m ? p : m) : p;
+    } break;
+    case EF_COPY_FORWARD_WORD:
+    case EF_COPY_BACKWARD_WORD: {
+        if (fn == EF_COPY_BACKWARD_WORD) count = -count;
+        iz    q = edwordmove(ed, p, count);
+        EdUndo *u = ed->undo;
+        b32   o = ed->undoing;
+        ed->undoing = 1;
+        Str t = clone(&ed->hmem, {ed->line.data+(p<q?p:q), p<q?q-p:p-q});
+        edkill(ed, p, q);
+        ed->point = p<q ? p : q;
+        edinsert(ed, t);
+        ed->undoing = o;
+        ed->undo    = u;
+        ed->killed  = 1;
+        ed->point   = p;
+    } break;
+    case EF_YANK:
+        edyank(ed);
         break;
-    case EF_BACKWARD_KILL_WORD:
-        eddelete(ed, edbackword(ed, p), p);
+    case EF_YANK_POP: {
+        if ((ed->lastfn!=EF_YANK && ed->lastfn!=EF_YANK_POP) || !ed->nkills) {
+            edbell(ed);
+            break;
+        }
+        Str k = ed->kills[ed->killidx];
+        iz  n = p - k.len;
+        if (n<0 || !(Str{ed->line.data+n, k.len}==k)) {
+            edbell(ed);
+            break;
+        }
+        eddelete(ed, n, p);
+        ed->point   = n;
+        ed->killidx = ed->killidx ? ed->killidx-1 : ed->nkills-1;
+        edyank(ed);
+    } break;
+    case EF_YANK_LAST_ARG:
+        if (ed->lastfn != EF_YANK_LAST_ARG) {
+            ed->ylskip  = 0;
+            ed->ylarg   = ed->argset;
+            ed->ylcount = count;
+            ed->yldir   = 1;
+        } else {
+            if (ed->ylundo) edundo1(ed);
+            if (count < 0) ed->yldir = -ed->yldir;
+            ed->ylskip += ed->yldir;
+            if (ed->ylskip < 0) ed->ylskip = 0;
+        }
+        ed->ylundo = edyankarg(ed, sh, ed->ylarg ? ed->ylcount : '$', ed->ylskip);
+        break;
+    case EF_YANK_NTH_ARG:
+        edyankarg(ed, sh, count, 0);
+        break;
+    case EF_UNDO:
+        for (i32 n = count; n > 0; n--) {
+            if (!edundo1(ed)) {
+                edbell(ed);
+                break;
+            }
+        }
+        break;
+    case EF_REVERT_LINE:
+        if (!ed->undo) {
+            edbell(ed);
+        } else {
+            while (ed->undo) edundo1(ed);
+        }
+        break;
+    case EF_SET_MARK: {
+        iz at = ed->argset ? count : p;
+        if (at>=0 && at<=len) ed->mark = at;
+    } break;
+    case EF_EXCHANGE_POINT_AND_MARK:
+        if (ed->mark<0 || ed->mark>len) {
+            edbell(ed);
+            ed->mark = 0;
+        } else {
+            ed->point = ed->mark;
+            ed->mark  = p;
+        }
+        break;
+    case EF_CAPITALIZE_WORD:
+        edcase(ed, count, CASE_CAP);
+        break;
+    case EF_UPCASE_WORD:
+        edcase(ed, count, CASE_UP);
+        break;
+    case EF_DOWNCASE_WORD:
+        edcase(ed, count, CASE_DOWN);
+        break;
+    case EF_TRANSPOSE_WORDS:
+        edtransposewords(ed, count, 0);
+        break;
+    case EF_SHELL_TRANSPOSE_WORDS:
+        edtransposewords(ed, count, 1);
+        break;
+    case EF_DELETE_HORIZONTAL_SPACE: {
+        u8 *s = ed->line.data;
+        iz  b = p;
+        for (; b>0 && (s[b-1]==' ' || s[b-1]=='\t'); b--) {}
+        iz  e = b;
+        for (; e<len && (s[e]==' ' || s[e]=='\t'); e++) {}
+        eddelete(ed, b, e);
+        ed->point = b;
+    } break;
+    case EF_INSERT_COMMENT: {
+        Str com = "#";
+        ed->point = 0;
+        if (!ed->argset) {
+            edinsert(ed, com);
+        } else if (len>=com.len && Str{ed->line.data, com.len}==com) {
+            eddelete(ed, 0, com.len);
+        } else {
+            edinsert(ed, com);
+        }
+        ed->done   = 1;
+        ed->result = ED_LINE;
+    } break;
+    case EF_CHARACTER_SEARCH:
+        edcharsearch(ed, sh, count, 1);
+        break;
+    case EF_CHARACTER_SEARCH_BACKWARD:
+        edcharsearch(ed, sh, count, -1);
+        break;
+    case EF_OVERWRITE_MODE:
+        if (!ed->argset) {
+            ed->overwrite = !ed->overwrite;
+        } else {
+            ed->overwrite = count > 0;
+        }
         break;
     case EF_CLEAR_SCREEN:
-        edput(ed, "\x1b[H\x1b[2J");
+    case EF_CLEAR_DISPLAY:
+        edput(ed, fn==EF_CLEAR_SCREEN ? Str("\x1b[H\x1b[2J") : "\x1b[H\x1b[2J\x1b[3J");
         edflush(ed, sh);
         edredraw(ed, sh);
         return;
@@ -747,37 +1708,52 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         edbell(ed);
         break;
     case EF_TRANSPOSE_CHARS: {
+        if (!count) break;
         if (!p || len<2) {
             edbell(ed);
             break;
         }
-        iz at = p==len ? edprev(ed, p) : p;  // at the end: the last two
-        iz a  = edprev(ed, at);
-        iz b  = ednext(ed, at);
-        // Swapped by three reversals: characters may be any length
-        u8 *d = ed->line.data;
-        iz  r[3][2] = {{a, b}, {a, a+b-at}, {a+b-at, b}};
-        for (i32 k = 0; k < 3; k++) {
-            for (iz x = r[k][0], y = r[k][1]-1; x < y; x++, y--) {
-                u8 t = d[x]; d[x] = d[y]; d[y] = t;
-            }
+        edgroup(ed, U_BEGIN);
+        if (p == len) {
+            ed->point = edprev(ed, p);
+            count = 1;
         }
-        ed->point = b;
+        iz at = ed->point;
+        iz a  = edprev(ed, at);
+        Str c = clone(&ed->hmem, {ed->line.data+a, at-a});
+        eddelete(ed, a, at);
+        ed->point = a;
+        if (count > 0) {
+            for (i32 i = 0; i < count; i++) ed->point = ednext(ed, ed->point);
+        } else {
+            for (i32 i = 0; i < -count; i++) ed->point = edprev(ed, ed->point);
+        }
+        edinsert(ed, c);
+        edgroup(ed, U_END);
     } break;
     case EF_QUOTED_INSERT: {
-        i32 c = edkey(ed, sh, -1);
-        if (c >= 0) {
-            u8 b = (u8)c;
-            edinsert(ed, {&b, 1});
+        for (i32 n = count<0 ? -count : 1;  n > 0; n--) {
+            i32 c = edkey(ed, sh, -1);
+            if (c < 0) break;
+            edselfinsert(ed, sh, (u8)c, count<0 ? 1 : count);
         }
     } break;
     case EF_TAB_INSERT:
-        edinsert(ed, "\t");
+        edselfinsert(ed, sh, '\t', count);
         break;
-    case EF_COMPLETE:            // step 5
-    case EF_PREVIOUS_HISTORY:    // step 3
+    case EF_PREVIOUS_HISTORY:
+        edprevhist(ed, sh, count);
+        break;
     case EF_NEXT_HISTORY:
-        edbell(ed);
+        ednexthist(ed, sh, count);
+        break;
+    case EF_BEGINNING_OF_HISTORY:
+        edprevhist(ed, sh, ed->hpos+1);
+        break;
+    case EF_END_OF_HISTORY:
+        edkeepline(ed, sh);
+        ed->hpos = sh->hist.len;
+        edunsaveline(ed);
         break;
     case EF_REDRAW_CURRENT_LINE:
         edredraw(ed, sh);
@@ -819,47 +1795,187 @@ static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
     return n==1 ? c : n==-2 ? -2 : -1;
 }
 
-// Read a key sequence and run what it is bound to. False at the end of
-// input.
-static b32 eddispatch(Editor *ed, Shell *sh)
+// A key sequence read and looked up: its function and last key, or a
+// status (ED_EOF at the end of input, ED_INTR on an interrupt).
+struct EdSeq {
+    i32 fn;
+    u8  key;
+    u8  first;   // its first key
+    i32 status;  // -1 for a sequence
+};
+
+static EdSeq edreadseq(Editor *ed, Shell *sh)
 {
+    EdSeq r = {};
+    r.status = -1;
     i32 c = edkey(ed, sh, -1);
-    if (c == -2) {
-        ed->done   = 1;
-        ed->result = ED_INTR;
-        return 1;
+    if (c == -2 || c == ed->tty.intr) {
+        r.status = ED_INTR;
+        return r;
     }
-    if (c < 0) return 0;
-    if (c == ed->tty.intr) {
-        ed->done   = 1;
-        ed->result = ED_INTR;
-        return 1;
+    if (c < 0) {
+        r.status = ED_EOF;
+        return r;
     }
+    r.first = (u8)c;
     if (c == ed->delim) {
-        ed->done   = 1;
-        ed->result = ED_LINE;
-        return 1;
+        r.fn  = EF_ACCEPT_LINE;
+        r.key = (u8)c;
+        return r;
     } else if (c=='\r' && ed->delim>=0) {
-        edrun(ed, sh, EF_SELF_INSERT, '\r');
-        return 1;
+        r.fn  = EF_SELF_INSERT;
+        r.key = '\r';
+        return r;
     }
-    KeyNode *n = keychild(&ed->root, (u8)c);
+    KeyNode *parent = &ed->root;
+    KeyNode *n      = keychild(parent, (u8)c);
     u8 last = (u8)c;
     while (n && n->kids) {
         i32 next = edkey(ed, sh, n->fn ? ed->keytimeout : -1);
         if (next == -3) break;  // the prefix's own binding
-        if (next < 0) return 0;
+        if (next == -2) {
+            r.status = ED_INTR;
+            return r;
+        }
+        if (next < 0) {
+            r.status = ED_EOF;
+            return r;
+        }
         KeyNode *k = keychild(n, (u8)next);
         if (!k) {
             // An unbound sequence: the bell, the rest dropped
             n = 0;
             break;
         }
-        n    = k;
-        last = (u8)next;
+        parent = n;
+        n      = k;
+        last   = (u8)next;
     }
-    edrun(ed, sh, n ? n->fn : EF_NONE, last);
+    r.fn  = n ? n->fn : EF_NONE;
+    r.key = last;
+    if (r.fn==EF_DO_LOWERCASE_VERSION && last>='A' && last<='Z') {
+        KeyNode *k = keychild(parent, last+0x20);
+        r.fn  = k ? k->fn : EF_NONE;
+        r.key = last + 0x20;
+        if (r.fn == EF_DO_LOWERCASE_VERSION) r.fn = EF_NONE;
+    }
+    return r;
+}
+
+static void edresetarg(Editor *ed)
+{
+    ed->count  = 1;
+    ed->argset = 0;
+    ed->argneg = 0;
+}
+
+// Read and run one command, a numeric argument first if it starts with
+// one. False at the end of input.
+static b32 eddispatch(Editor *ed, Shell *sh)
+{
+    EdSeq s = edreadseq(ed, sh);
+    if (s.status == ED_INTR) {
+        ed->done   = 1;
+        ed->result = ED_INTR;
+        return 1;
+    }
+    if (s.status == ED_EOF) return 0;
+    // The terminal's EOF character, not twice in a row, on an empty line
+    u8 first  = s.first;
+    b32 again = first == ed->lastc;
+    ed->lastc = first;
+    if (first==ed->eof && !again && !ed->line.len) {
+        ed->done   = 1;
+        ed->result = ED_EOF;
+        return 1;
+    }
+    switch (s.fn) {
+    case EF_DIGIT_ARGUMENT:
+        edarg(ed, sh, s.key);
+        break;
+    case EF_UNIVERSAL_ARGUMENT:
+        ed->count *= 4;
+        edarg(ed, sh, -1);
+        ed->lastfn = EF_UNIVERSAL_ARGUMENT;
+        break;
+    default:
+        ed->killed = 0;
+        edrun(ed, sh, s.fn, s.key);
+        ed->lastkill = ed->killed;
+        ed->lastfn   = s.fn;
+    }
     return 1;
+}
+
+// Readline's numeric argument loop: digits and a leading minus, with
+// "(arg: N) " shown in place of the prompt, until another key, which
+// runs with it. key starts it (a digit or '-'), or -1.
+static void edarg(Editor *ed, Shell *sh, i32 key)
+{
+    b32 sawdigits = 0;
+    b32 sawminus  = 0;
+    Str prompt    = ed->prompt;
+    for (;;) {
+        Arena a = ed->linemem;
+        Buf   b(&a, 32);
+        print(&b, "(arg: ");
+        print(&b, (i64)ed->count*(ed->argneg ? -1 : 1));
+        print(&b, ") ");
+        ed->prompt = finish(&b);
+        redisplay(ed, sh);
+        ed->prompt = prompt;
+        i32 c = key;
+        key   = -1;
+        if (c < 0) {
+            c = edkey(ed, sh, -1);
+            if (c == -2 || c == ed->tty.intr) {
+                ed->done   = 1;
+                ed->result = ED_INTR;
+                return;
+            }
+            if (c < 0) {
+                edbell(ed);
+                edresetarg(ed);
+                return;
+            }
+            KeyNode *k = keychild(&ed->root, (u8)c);
+            if (k && !k->kids && k->fn==EF_UNIVERSAL_ARGUMENT) {
+                if (!sawdigits) {
+                    ed->count *= 4;
+                    continue;
+                }
+                ed->prompt = prompt;
+                eddispatch(ed, sh);
+                return;
+            }
+        }
+        if (c>='0' && c<='9') {
+            i32 d = c - '0';
+            ed->count  = ed->argset ? ed->count*10+d : d;
+            ed->argset = 1;
+            sawdigits  = 1;
+            if (ed->count > 1000000) {
+                edbell(ed);
+                edresetarg(ed);
+                ed->count = 0;
+                ed->prompt = prompt;
+                return;
+            }
+        } else if (c=='-' && !ed->argset) {
+            ed->count  = 1;
+            ed->argneg = 1;
+            sawminus   = 1;
+        } else {
+            // M-- alone is M--1
+            if (sawminus && ed->count==1 && !ed->argset) ed->argset = 1;
+            if (ed->argneg) ed->count = -ed->count;
+            ed->argneg = 0;
+            ed->prompt = prompt;
+            ed->unread = c + 1;
+            eddispatch(ed, sh);
+            return;
+        }
+    }
 }
 
 // LINES and COLUMNS (plain shell variables) follow the terminal's size
@@ -916,6 +2032,17 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     ed->lmargin = ed->hshown = ed->unread = 0;
     print(&ed->line, opts->init);
     ed->point   = ed->line.len;
+    ed->eof     = ed->tty.eof ? ed->tty.eof : 0x04;
+    ed->lastc   = 0;
+    ed->mark    = ed->lastfn = 0;
+    ed->lastkill = ed->overwrite = ed->hsaved = 0;
+    ed->undo    = 0;
+    ed->hpos    = sh->hist.len;
+    edresetarg(ed);
+    // EdUndo lists last while history entries keep them
+    b32 kept = 0;
+    for (iz i = 0; i < sh->hist.len; i++) kept |= !!sh->hist.ents[i]->undo;
+    if (!kept) ed->hmem = {(byte *)(ed->hmem.mem+1), ed->hmem.end, ed->hmem.mem};
 
     // Lines of the prompt before its last are written once
     iz nl = prompt.len;
@@ -925,9 +2052,16 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         if (head[i]!=1 && head[i]!=2) putbyte(&ed->out_, head[i]);
     }
     ed->prompt = cuthead(prompt, nl);
+    if (ed->getnext >= 0) {
+        // operate-and-get-next: start on the entry after the one run
+        i64 count = sh->hist.base + sh->hist.len - ed->getnext;
+        ed->getnext = -1;
+        edprevhist(ed, sh, count);
+    }
     edredraw(ed, sh);
 
     for (;;) {
+        edresetarg(ed);
         if (!eddispatch(ed, sh)) {
             ed->result = ED_EOF;
             break;
@@ -940,6 +2074,8 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         redisplay(ed, sh);
         if (ed->done) break;
     }
+
+    edleave(ed, sh, ed->result==ED_INTR);
 
     // Leave the cursor past the line
     Layout *l = &ed->shown;

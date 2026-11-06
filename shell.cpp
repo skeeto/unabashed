@@ -403,10 +403,14 @@ struct Editor;      // edit.cpp
 // The command history (history.cpp)
 enum : i32 { HC_IGNSPACE = 1<<0, HC_IGNDUPS = 1<<1, HC_ERASEDUPS = 1<<2 };
 
+struct EdUndo;      // edit.cpp
+
 struct HistEnt {   // in the store, never changed once made
-    Str line;
-    Str stamp;     // the comment character and epoch seconds, or empty
-    b32 edited;    // changed in the editor: * in listings
+    Str     line;
+    Str     stamp;   // the comment character and epoch seconds, or empty
+    b32     edited;  // changed in the editor: * in listings
+    Str     orig;    // with undo: the line before the editor changed it
+    EdUndo *undo;    // the editor's undo list back to orig
 };
 
 struct Hist {      // in the Shell by value: a subshell's changes roll back
