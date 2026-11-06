@@ -1,6 +1,6 @@
 # M5b: real background processes
 
-Status: steps 1-7 done; implementation in progress (see "Steps").
+Status: done (step 10, exit criteria).
 
 Scope and exit criteria: plan.md §2 (execution model: "Real process
 from M5b"), §3 (the copier writes the `&` image) and the M5b row of its
@@ -599,3 +599,38 @@ streams, and the fuzzer skips such runs ("output full"). The hangs at
 10 s: 18 out of memory, 408 still running; stack samples of 7 found
 only the scripts' own loops and `yes`. No traps, no mismatches: the
 image fuzzer is clean.
+
+
+### Step 10: closing
+
+The Win32 items (Ctrl-C misses, the XP `wait` flake, a lent pipe's
+other readers, Ctrl-C before SIGPIPE) moved to M7 and M8 in issues.md,
+each with its reason; none was seen to depend on real background
+processes, and the XP ones occur with builds from before M5b.
+
+Cost of `&` (200 `{ :; } & wait` on an idle Windows 11 machine, best
+of 3): ours 0.69 s, Git Bash 5.3.15 1.20 s (fork), busybox-w32 sh 1.28
+s. Each job copies an image into a suspended self-spawn, about 3.5 ms
+apiece.
+
+`sh -c 'server &'` returns at once with the server still running: vos
+t/exec/876, Win32 t/win32/016, POSIX t/posix/001.
+
+Exit criteria:
+
+1. Category c on the POSIX build: 2 of 10 (bash itself 7 of 10), every
+   failure attributed to M7 or shared with bash (step 8).
+2. Image fuzzer: three AFL campaigns, the last clean; replay under
+   FUZZ_WIN clean (step 9).
+3. `sh -c 'server &'`: above.
+4. No regressions: tests.exe 159, t/exec+t/winvos 692, t/msys 159,
+   t/parse+t/unit 3609 and 3055 (the two counts the runner prints),
+   chaos 43386, all passing; under --fibers only 877 (real processes
+   by design) fails. Vos oracle 64 of 86 and POSIX 61 of 86, as at
+   step 8. t/win32 on Windows 11: x64 17 of 17, i686 16 of 17 (008, the
+   known Ctrl-C race under load, failing alike with the previous
+   build). XP: after the setup was fixed (relative workdir, both
+   binaries present), only the known flakes, and 014 once in 13 runs
+   (issues.md, M7). Imports KERNEL32 only; subsystem 5.02 (x64) and
+   5.01 (i686).
+5. No M5b items in issues.md.
