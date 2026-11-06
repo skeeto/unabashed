@@ -196,15 +196,6 @@ Moved from M5a: needs the completion engine.
   we say + 1) but not others (`\\\`, `\\\\` are + 1 in both). Follows
   from how bash's shell_getc pads a final backslash and counts reads
   at end of input; not modelled. (review)
-- `f & kill -9 $!; wait` prints no "Killed" report; bash reports the
-  job when wait collects it. (`sleep 1` instead of wait works, spec
-  636.) (review)
-- DEBUG before a background simple command (`true &`) or each simple
-  stage of a background pipeline (`a | b &`) does not run: bash runs
-  it in the parent before forking, as for a foreground pipeline's
-  stages (`stagedebug`, spec 858), so it runs even without functrace.
-  Here the job's vproc drops the trap. (review)
-
 Moved from M5a (fidelity gaps that neither the w64devkit trial nor
 the Git Bash corpus reaches; M7 is where fidelity is finished):
 

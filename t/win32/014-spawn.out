@@ -42,6 +42,7 @@ self four
 dotsh five
 self six
 == exec
+test.sh: Killed "$U" -c 'echo $$ >opid; exec "$BB" sh -c "sleep 3; echo alive >late"'
 died with the shell
 cmdline = <@D\argv32.exe exec>
 argv[0] = <@D\argv32.exe>

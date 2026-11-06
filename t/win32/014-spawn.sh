@@ -60,7 +60,8 @@ echo "== exec"
 "$U" -c 'echo $$ >opid; exec "$BB" sh -c "sleep 3; echo alive >late"' &
 "$BB" sleep 1
 kill -9 "$(<opid)"
-wait
+{ wait; } 2>killed  # reported as bash reports its exec'd job
+"$BB" sed 's/: line [0-9]*: *[0-9]* Killed */: Killed /' killed
 "$BB" sleep 4
 [ -e late ] && echo "survived" || echo "died with the shell"
 "$U" -c 'exec ./argv32 exec' | norm

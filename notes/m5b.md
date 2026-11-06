@@ -1,6 +1,6 @@
 # M5b: real background processes
 
-Status: steps 1-4 and 6 done; implementation in progress (see "Steps").
+Status: steps 1-4, 6 and 7 done; implementation in progress (see "Steps").
 
 Scope and exit criteria: plan.md §2 (execution model: "Real process
 from M5b"), §3 (the copier writes the `&` image) and the M5b row of its
@@ -391,3 +391,28 @@ the forwarding; USR1 from a job to `$$`); t/exec/878-bg-kill-tail
 group's child does not). t/win32 -x 34/0 on Windows 11 x64, i686 33/1
 (008's known Ctrl-C flake); XP 33/1 (003's known `wait` flake); vos
 suites as before.
+
+
+### Step 7: real-pid jobs
+
+Most of it came with steps 2, 3 and 6: `$!` is the job's real pid,
+kill reaches it (and its traps, or its exec'd program), `wait`, `wait
+-n -p`, `wait -f`, `jobs` and `disown` work on the job's process
+through its waiter as for any program, and the shell exits without
+waiting for them. What was left, both M7 items in issues.md until now:
+
+- A job killed by a signal is reported when `wait` collects it
+  (`reportkilled`, factored out of `notifyjobs`, called wherever wait
+  takes a job): `f & kill -9 $!; wait` said nothing, where bash reports
+  "Killed". It showed in t/win32/014 too: `"$U" -c '... exec prog' &`
+  whose program is killed by its pid is now reported, as bash reports
+  the job it exec'd (the test masks the pid).
+- DEBUG before a background simple command, and before each simple
+  stage of a background pipeline when functrace is off, runs in the
+  parent, as bash runs it before it forks (`stagedebug` in
+  `runasync1`); the job, which drops DEBUG unless functrace, does not
+  run it again (`debugdone`).
+
+New spec t/exec/879-bg-jobs-real (recorded; report pids masked).
+Results: vos suites as before (689 specs); t/win32 -x 34/0 on Windows
+11 x64, i686 33/1 (008's Ctrl-C flake).

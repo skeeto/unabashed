@@ -404,28 +404,34 @@ static void printjob(Shell *sh, Arena a, Job *j, i32 form)
     if (ownjob(sh, j)) j->notified = 1;
 }
 
+// Report a finished background job killed by a signal, as bash does
+// for any but INT, TERM and PIPE and those this shell traps, once.
+static void reportkilled(Shell *sh, Arena scratch, Job *j)
+{
+    if (!j->done || j->notified || !(j->status & WSIGNALED)) return;
+    i32 sig = (j->status & 255) - 128;
+    if (sig==2 || sig==13 || sig==15 || !longreport(sh, sig) || sh->noreport) return;
+    flushbout(sh);
+    Buf b(&scratch, 128);
+    msgprefix(sh, &b);
+    padpid(&b, j->pid);
+    putbyte(&b, ' ');
+    Str st = jobstate(sh, &scratch, j);
+    print(&b, st);
+    for (iz i = st.len; i < 27; i++) putbyte(&b, ' ');
+    print(&b, j->text);
+    putbyte(&b, '\n');
+    fdwrite(sh, 2, finish(&b));
+    j->notified = 1;
+}
+
 // Before each top-level command: report background jobs killed by a
-// signal, as bash does for any but INT, TERM and PIPE and those this
-// shell traps, then drop the reported jobs.
+// signal, then drop the reported jobs.
 static void notifyjobs(Shell *sh, Arena scratch)
 {
     polljobs(sh);
     for (Job *j = sh->jobs; j && ownjob(sh, j); j = j->next) {
-        if (!j->done || j->notified || !(j->status & WSIGNALED)) continue;
-        i32 sig = (j->status & 255) - 128;
-        if (sig==2 || sig==13 || sig==15 || !longreport(sh, sig) || sh->noreport) continue;
-        flushbout(sh);
-        Buf b(&scratch, 128);
-        msgprefix(sh, &b);
-        padpid(&b, j->pid);
-        putbyte(&b, ' ');
-        Str st = jobstate(sh, &scratch, j);
-        print(&b, st);
-        for (iz i = st.len; i < 27; i++) putbyte(&b, ' ');
-        print(&b, j->text);
-        putbyte(&b, '\n');
-        fdwrite(sh, 2, finish(&b));
-        j->notified = 1;
+        reportkilled(sh, scratch, j);
     }
     cleanupjobs(sh);
 }
@@ -759,6 +765,23 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     polljobs(sh);
     cleanupjobs(sh);
     throttlejobs(sh);
+    // DEBUG for a simple command runs here, as bash runs it before it
+    // forks, and not again in the job (debugdone, under functrace)
+    if (stagedebug(sh, n, sh->status, scratch)) return;
+    b32 debugged = n->kind==N_SIMPLE && sh->traps && sh->traps[TRAP_DEBUG].len;
+    if (!sh->opt[O_FUNCTRACE]) {
+        // and each simple stage of a pipeline, which the job (with no
+        // DEBUG then) runs without it, as runpipeline flattens it
+        i32 before = sh->status;
+        for (Node *c = n; c->kind==N_CONNECT && c->connector=='|';) {
+            if (stagedebug(sh, c->a, before, scratch)) return;
+            c = c->b;
+            if (c->flags || c->redirs) break;
+            if (c->kind!=N_CONNECT || c->connector!='|') {
+                if (stagedebug(sh, c, before, scratch)) return;
+            }
+        }
+    }
     // Without job control, its input is /dev/null unless redirected
     b32   nullin = !sh->stdinredir && (!sh->interactive || !sh->opt[O_MONITOR]);
     File *in     = nullin ? devnull(sh, scratch) : 0;
@@ -779,7 +802,9 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
         }
     }
     if (retry) {
+        sh->debugdone = debugged;
         t = spawnbg(sh, n, in, 0, &pid, scratch);
+        sh->debugdone = 0;
     }
     fileunref(sh, in);
     Job *j = newjob(sh, scratch, n, t, pid, 0);
@@ -1149,6 +1174,7 @@ static i32 waitany(Shell *sh, Arena scratch, Str *ids, iz nids, Str var)
         if (found) {
             i32 st  = found->status & 255;
             i64 pid = found->pid;
+            reportkilled(sh, scratch, found);
             deletejob(sh, found);
             if (sh->opt[O_POSIX]) delbgstat(sh, pid);
             waitvar(sh, scratch, var, pid);
@@ -1221,6 +1247,7 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (!live) break;
             i32 st;
             if (!waitjob(sh, live, &st)) return st;
+            reportkilled(sh, scratch, live);  // as bash, when it collects it
             live->notified = 1;  // waited for: dropped, even $!'s
         }
         b32 found;
@@ -1251,6 +1278,7 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (j && !ownjob(sh, j)) j = 0;
             if (j) {
                 if (!waitjob(sh, j, &status)) return status;
+                reportkilled(sh, scratch, j);
                 j->notified = 1;
                 if (sh->opt[O_POSIX]) {
                     cleanupjobs(sh);
@@ -1289,6 +1317,7 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
                 continue;
             }
             if (!waitjob(sh, j, &status)) return status;
+            reportkilled(sh, scratch, j);
             j->notified = 1;
             lastpid = j->pid;
             if (sh->opt[O_POSIX]) cleanupjobs(sh);
