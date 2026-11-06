@@ -174,13 +174,17 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "trap.cpp"
 #include "jobs.cpp"
 #include "edit.cpp"
+#include "history.cpp"
 
 
 // Startup
 
 static void varchanged(Shell *sh, Str name)
 {
-    if (name == "LC_ALL" || name == "LC_CTYPE" || name == "LANG") {
+    if (name=="HISTSIZE" || name=="HISTCONTROL" || name=="histchars" ||
+            name=="HISTTIMEFORMAT" || name=="HISTFILESIZE") {
+        histvarchanged(sh, name);
+    } else if (name == "LC_ALL" || name == "LC_CTYPE" || name == "LANG") {
         Arena none = {};
         Str v = getvar(sh, &none, "LC_ALL").value;
         if (!v.len) v = getvar(sh, &none, "LC_CTYPE").value;
@@ -798,6 +802,9 @@ static Str promptstr(Shell *sh, Arena *a, Str expr)
     e.frame = sh->frame;
     sh->esc = &e;
     i32 status = sh->status;
+    i32 kind   = sh->promptkind;
+    // \! and \# differ by prompt, and HISTCMD while a prompt shows
+    sh->promptkind = find(expr, "PS1")>=0 ? 1 : find(expr, "PS2")>=0 ? 2 : 3;
     Str ps = {};
     if (!__builtin_setjmp(e.jmp)) {
         ps = expandstring(sh, a, expr);
@@ -806,6 +813,7 @@ static Str promptstr(Shell *sh, Arena *a, Str expr)
     }
     sh->esc    = e.up;
     sh->status = status;
+    sh->promptkind = kind;
     return ps;
 }
 
@@ -1366,7 +1374,20 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                 os_isatty(os, info->std[0]) && os_isatty(os, info->std[2])) {
             sh->interactive = 1;  // as bash: commands from a terminal
         }
+        histinit(sh);
+        sh->cmdnumber = 1;
         if (sh->interactive) {
+            // History on, and HISTFILE's default (read after the
+            // startup files)
+            sh->opt[O_HISTORY] = sh->opt[O_HISTEXPAND] = 1;
+            sh->hist.comchar = '#';
+            if (!getvar(sh, &scratch, "HISTFILE").set) {
+                Str home = getvar(sh, &scratch, "HOME").value;
+                Str name = sh->opt[O_POSIX] ? Str("/.sh_history") : "/.bash_history";
+                setvar(sh, scratch, "HISTFILE", concat(&scratch, home, name));
+            }
+            histvarchanged(sh, "HISTCONTROL");
+            histvarchanged(sh, "histchars");
             // As bash, it takes SIGINT even if ignored on entry, and
             // acts on INT, QUIT and TERM itself
             sh->hardign &= ~sigbit(2);
@@ -1431,13 +1452,16 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             st.posix = sh->opt[O_POSIX];
             startup(sh, scratch, info->nargs ? info->args[0] : Str("bash"), &st);
         }
+        if (sh->interactive && sh->opt[O_HISTORY] && !sh->hist.session) {
+            histload(sh);  // unless the startup files added lines
+        }
 
         if (selftest_) {
             Output *out = newoutput(os, &perm, info->std[1]);
             sh->status = selftest(os, &perm, out);
             flush(out);
         } else if (havecmd) {
-            runsource(sh, cmd, "-c", scratch);
+            runsource(sh, cmd, "-c", scratch, 0, 1, 0, 0, 0, 1);
         } else if (file.data) {
             // A script file
             i32  err;

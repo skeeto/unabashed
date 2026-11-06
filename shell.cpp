@@ -400,6 +400,42 @@ struct Coproc {       // bash 5.3 allows several
 struct SniffCache;  // spawn.cpp
 struct Editor;      // edit.cpp
 
+// The command history (history.cpp)
+enum : i32 { HC_IGNSPACE = 1<<0, HC_IGNDUPS = 1<<1, HC_ERASEDUPS = 1<<2 };
+
+struct HistEnt {   // in the store, never changed once made
+    Str line;
+    Str stamp;     // the comment character and epoch seconds, or empty
+    b32 edited;    // changed in the editor: * in listings
+};
+
+struct Hist {      // in the Shell by value: a subshell's changes roll back
+    HistEnt **ents;    // ents[0..len), the oldest first
+    iz        len;
+    iz        cap;
+    i64       base;    // the number of ents[0]
+    i64       max;     // HISTSIZE's limit, or -1 for none
+    i64       session; // entries added and not yet written
+    i64       infile;  // lines of HISTFILE read or written
+    i64       multiline;   // timestamped files read with HISTTIMEFORMAT
+    i32       control; // HISTCONTROL: HC_*
+    i32       cmdlines;    // lines of the command being read
+    i32       commentline; // the last line read that held a comment, or -2
+    b32       firstsaved;  // its first line was added
+    b32       lastadded;   // the last line read was added as an entry
+    b32       lastpushed;  // that entry came from history -s
+    b32       lastheredoc; // a here-document starts on the last line
+    b32       expinhibit;  // history expansion off with history
+    u8        expchar;     // histchars
+    u8        subchar;
+    u8        comchar;
+    // History expansion's memory
+    Str       search;      // the last !?string?
+    Str       subold;      // and :s/old/new/
+    Str       subnew;
+    iz        matchat;     // where !?string? matched, for %
+};
+
 // editline results, and what read -e asks of it (edit.cpp)
 enum : i32 { ED_LINE, ED_EOF, ED_INTR, ED_NOTTY };
 
@@ -484,6 +520,10 @@ struct Shell {
     Str      exe;          // the shell's own image, native (OsInfo.exe)
     SniffCache *sniffs;    // Windows: what files hold, shared by subshells
     Editor     *editor;    // the line editor, made on first use (edit.cpp)
+    Hist        hist;      // command history (history.cpp)
+    i64         cmdnumber; // \# in prompts: commands the reader ran, plus one
+    i32         promptkind;  // the prompt decoding: 1 PS1, 2 PS2, 3 PS0,
+                             // 4 PS4, or 0 (${x@P} alone)
 
     // Options
     b32      opt[O_COUNT];

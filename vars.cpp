@@ -73,6 +73,7 @@ struct Func {
 };
 
 static Arith evalarith(Shell *, Arena *, Str);
+static i64   histnumber(Shell *);  // history.cpp
 static void  keepcmdtext(Shell *, byte *beg, byte *end);
 static Arith evalinteger(Shell *, Arena *, Str);
 
@@ -431,7 +432,11 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
         return r->len ? r->e[0].val : Str{};
     }
     case DYN_BASH_COMMAND:  return cmdtext(sh, a);
-    case DYN_HISTCMD:       return sh->interactive ? Str("1") : Str("0");
+    case DYN_HISTCMD: {
+        // less one while running a command, not while a prompt shows
+        b32 prompt = sh->promptkind>=1 && sh->promptkind<=3;
+        return fmti64(a, histnumber(sh) - !prompt);
+    }
     case DYN_BASH_ARGV0:    return dollar0(sh);
     case DYN_PIPESTATUS:    return fmti64(a, sh->npstat ? sh->pstat[0] : 0);
     case DYN_UNDERSCORE:    return sh->lastarg.data ? sh->lastarg : Str("");

@@ -1,6 +1,8 @@
 // Builtin commands
 // This is free and unencumbered software released into the public domain.
 
+static void histoption(Shell *, i32 opt, b32 on);  // history.cpp
+
 static Str usage(Str name)
 {
     static struct { Str name; Str text; } usages[] = {
@@ -26,6 +28,8 @@ static Str usage(Str name)
         {"umask",    "umask [-p] [-S] [mode]"},
         {"getopts",  "getopts optstring name [arg ...]"},
         {"hash",     "hash [-lr] [-p pathname] [-dt] [name ...]"},
+        {"history",  "history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]"},
+        {"fc",       "fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]"},
         {"trap",     "trap [-Plp] [[action] signal_spec ...]"},
         {"kill",     "kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]"},
         {"return",   "return [n]"},
@@ -1489,6 +1493,7 @@ static i32 setoptionbyname(Shell *sh, Str name, b32 on)
                 return 1;
             }
             sh->opt[k] = on;
+            histoption(sh, k, on);
             if (k==O_EMACS && on) sh->opt[O_VI] = 0;
             if (k==O_VI && on) sh->opt[O_EMACS] = 0;
             if (k == O_IGNOREEOF) {
@@ -1575,6 +1580,7 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
             for (i32 o = 0; o < O_COUNT; o++) {
                 if (setoptions[o].letter == c) {
                     sh->opt[o] = on;
+                    histoption(sh, o, on);
                     found = 1;
                 }
             }
@@ -1701,6 +1707,7 @@ static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
             setpathmode(sh, scratch, set ? PM_MSYS : PM_NATIVE);
         } else if (set || unset) {
             if (oflag || idx!=S_LOGIN_SHELL) *slot = set;  // read-only, quietly
+            if (oflag) histoption(sh, idx, set);
             if (!oflag && (idx==S_ARRAY_EXPAND_ONCE || idx==S_ASSOC_EXPAND_ONCE)) {
                 // two names for one option
                 sh->shopt[S_ARRAY_EXPAND_ONCE] = sh->shopt[S_ASSOC_EXPAND_ONCE] = set;
@@ -3748,6 +3755,7 @@ static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
 // The table
 
 static i32 b_trap(Shell *, Str *, iz, Arena);  // trap.cpp
+static i32 b_history(Shell *, Str *, iz, Arena);  // history.cpp
 static i32 b_kill(Shell *, Str *, iz, Arena);
 static i32 b_jobs(Shell *, Str *, iz, Arena);  // jobs.cpp
 static i32 b_wait(Shell *, Str *, iz, Arena);
@@ -3780,6 +3788,7 @@ static Builtin builtins[] = {
     {"fg",       b_fg,       0},
     {"getopts",  b_getopts,  0},
     {"hash",     b_hash,     0},
+    {"history",  b_history,  0},
     {"jobs",     b_jobs,     0},
     {"kill",     b_kill,     0},
     {"let",      b_let,      0},

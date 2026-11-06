@@ -328,6 +328,13 @@ struct Lexer {
     b32    (*fill)(void *ctx, Lexer *);
     void    *fillctx;
     b32      newunit;    // the next fill starts a command (PS1, not PS2)
+    // History: each physical line read, and each here-document line,
+    // passes through hist (the reader's), which may replace it (history
+    // expansion) or drop it (null data) to have the next line read
+    Str    (*hist)(void *ctx, Lexer *, Str line, b32 heredoc);
+    void    *histctx;
+    i32      cmdlines;   // lines read for this command
+    b32      heredocfirst;   // reading the first here-document line
 
     // Token history and state
     i32      current;
@@ -591,21 +598,38 @@ static void nextline(Lexer *L, b32 remove)
     // Copy the line, privately since ungetting writes characters back,
     // dropping NUL bytes as bash does. An unterminated last line gets a
     // newline, or a doubled final backslash when continuations apply.
-    Str rest = cuthead(L->src, L->srcpos);
-    Cut c    = cut(rest, '\n');
-    Str s    = {};
-    s.data = allocbytes(L->a, c.head.len+1);
-    b32 bs = 0;
-    for (iz i = 0; i < c.head.len; i++) {
-        u8 b = c.head[i];
-        if (b) {
-            s.data[s.len++] = b;
-            bs = !bs && b=='\\';
+    for (;;) {
+        Str rest = cuthead(L->src, L->srcpos);
+        Cut c    = cut(rest, '\n');
+        Str s    = {};
+        s.data = allocbytes(L->a, c.head.len+1);
+        for (iz i = 0; i < c.head.len; i++) {
+            if (c.head[i]) s.data[s.len++] = c.head[i];
         }
+        L->srcpos += c.head.len + c.ok;
+        L->cmdlines += c.ok;
+        if (L->hist) {
+            s = L->hist(L->histctx, L, s, 0);
+            if (!s.data) {
+                // Dropped: another line instead, or the end
+                L->lineno++;
+                if (srcend(L)) {
+                    L->line    = {};
+                    L->lineeof = 1;
+                    return;
+                }
+                continue;
+            }
+            Str t = {allocbytes(L->a, s.len+1), s.len};
+            copybytes(t.data, s.data, s.len);
+            s = t;
+        }
+        b32 bs = 0;
+        for (iz i = 0; i < s.len; i++) bs = !bs && s[i]=='\\';
+        s.data[s.len++] = !c.ok && bs && remove ? '\\' : '\n';
+        L->line = s;
+        return;
     }
-    s.data[s.len++] = !c.ok && bs && remove ? '\\' : '\n';
-    L->line    = s;
-    L->srcpos += c.head.len + c.ok;
 }
 
 static void pushstring(Lexer *L, Str s, Alias *alias, b32 dparen)
@@ -1584,7 +1608,12 @@ static void readheredoc(Lexer *L, Redir *r, i32 lineno)
         }
         if (!L->heredocstring) {
             L->lineno++;
+            if (L->hist) {
+                L->cmdlines++;
+                L->hist(L->histctx, L, line, 1);
+            }
         }
+        L->heredocfirst = 0;
         if (strip && line.len) {
             if (startswith(line, eof) && line.len==eof.len+1 && line[eof.len]=='\n') {
                 found = 1;
@@ -1627,13 +1656,15 @@ static void readheredoc(Lexer *L, Redir *r, i32 lineno)
 
 static void gatherheredocs(Lexer *L)
 {
+    L->heredocfirst = 1;
     for (i32 i = 0; i < L->nheredoc; i++) {
         L->pst |= PST_HEREDOC;
         readheredoc(L, L->heredocs[i], L->lineno);
         L->pst &= ~PST_HEREDOC;
         L->heredocs[i] = 0;
     }
-    L->nheredoc = 0;
+    L->nheredoc     = 0;
+    L->heredocfirst = 0;
 }
 
 static void pushheredoc(Lexer *L, Redir *r)

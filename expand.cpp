@@ -634,6 +634,28 @@ static void promptput(Buf *b, Str s, b32 vis, b32 quote)
 }
 
 static PfZone *shellzone(Shell *, Arena *);  // exec.cpp
+static i64     histnumber(Shell *);          // history.cpp
+
+// Is the prompt decoding taken for PS0, PS1 or PS2 (k = 3, 1, 2)? As
+// bash compares pointers: ${x@P} outside a prompt passes for any of them
+// unset, and in a non-interactive shell for all.
+static b32 promptis(Shell *sh, i32 k)
+{
+    if (sh->promptkind) return sh->promptkind == k;
+    if (!sh->interactive) return 1;
+    Arena none = {};
+    return !getvar(sh, &none, k==3 ? Str("PS0") : k==1 ? Str("PS1") : "PS2").set;
+}
+
+// \! in a prompt: the number the next entry gets in PS1 (and in PS2
+// without cmdhist), the current one elsewhere.
+static i64 prompthistnum(Shell *sh)
+{
+    i64 n = histnumber(sh);
+    if (n==1 || promptis(sh, 1)) return n;
+    if (promptis(sh, 2) && !sh->shopt[S_CMDHIST]) return n;
+    return n - 1;
+}
 
 // Decode the backslash escapes of a prompt string, as ${x@P} does,
 // then expand it as if in double quotes when promptvars is on.
@@ -648,12 +670,12 @@ static Str promptdecode(X *x, Str s)
     for (iz i = 0; i < s.len; i++) {
         u8 c = s[i];
         if (c=='!' && sh->opt[O_POSIX]) {
-            // the history number, or ! for !!; no history here
+            // the history number, or ! for !!
             if (i+1<s.len && s[i+1]=='!') {
                 putbyte(&b, '!');
                 i++;
             } else {
-                putbyte(&b, '1');
+                print(&b, prompthistnum(sh));
             }
             continue;
         }
@@ -674,8 +696,11 @@ static Str promptdecode(X *x, Str s)
             if (expand && sh->euid) putbyte(&b, '\\');
             putbyte(&b, sh->euid ? '$' : '#');
             break;
-        case '!':  putbyte(&b, '1'); break;  // no history
-        case '#':  putbyte(&b, '1'); break;
+        case '!':  print(&b, prompthistnum(sh)); break;
+        case '#':
+            print(&b, sh->cmdnumber - !(promptis(sh, 1) || promptis(sh, 2) ||
+                                        promptis(sh, 3)));
+            break;
         case 's':  promptput(&b, basename(sh->shellname), 1, expand); break;
         case 'j': {
             i64 n = 0;

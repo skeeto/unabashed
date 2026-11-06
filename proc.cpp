@@ -331,6 +331,25 @@ static Fdtab *copyfdtab(Shell *c, Arena *a, Fdtab *t)
     return r;
 }
 
+// The history list, entries and all.
+static Hist copyhist(Store *st, Hist h)
+{
+    Hist r = h;
+    r.cap  = h.len ? h.len : 1;
+    r.ents = (HistEnt **)salloc(st, r.cap*(iz)sizeof(HistEnt *));
+    for (iz i = 0; i < h.len; i++) {
+        HistEnt *e = (HistEnt *)salloc(st, sizeof(HistEnt));
+        e->line   = sclone(st, h.ents[i]->line);
+        e->stamp  = sclone(st, h.ents[i]->stamp);
+        e->edited = h.ents[i]->edited;
+        r.ents[i] = e;
+    }
+    r.search = sclone(st, h.search);
+    r.subold = sclone(st, h.subold);
+    r.subnew = sclone(st, h.subnew);
+    return r;
+}
+
 // Deep-copy a shell's state as a subshell of it, into store st and
 // arena a. A vproc's copy shares what lasts as long as the process
 // (function bodies, the mount table, string constants); an image's,
@@ -384,6 +403,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->argvbase   = copyargs(a, sh->argvbase);
     c->retsrc     = 0;
     c->shellname  = sclone(st, sh->shellname);
+    c->hist       = copyhist(st, sh->hist);
     c->exe        = sclone(st, sh->exe);
     if (image) {
         c->os       = 0;

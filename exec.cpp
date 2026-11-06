@@ -22,9 +22,10 @@ static Builtin *findbuiltin(Shell *, Str name);
 static b32      parsei64(Str, i64 *);
 static void     execute(Shell *, Node *, Arena);
 static void     showps0(Shell *);  // unabashed.cpp
+static Str      histline(void *, Lexer *, Str, b32);  // history.cpp
 static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i32 line = 1,
                           b32 (*fill)(void *, Lexer *) = 0, void *fillctx = 0,
-                          b32 comsub = 0);
+                          b32 comsub = 0, b32 hist = 0);
 static Str      runfunsub(Shell *, Arena *, Str src, Capture *, Arena);
 static i32      compatlevel(Shell *);  // builtins.cpp
 static void     joinpsubs(Shell *);
@@ -1102,11 +1103,14 @@ static Str traceprefix(Shell *sh, Arena *a)
     e.frame = sh->frame;
     sh->esc = &e;
     sh->opt[O_XTRACE] = 0;
+    i32 kind = sh->promptkind;
+    sh->promptkind = 4;  // a prompt for \! and \#
     if (!__builtin_setjmp(e.jmp)) {
         ps4 = expandstring(sh, a, "${PS4@P}");
     } else {
         unwind(sh, e.undo);
     }
+    sh->promptkind = kind;
     sh->esc = e.up;
     sh->opt[O_XTRACE] = xtrace;
     sh->status = status;
@@ -3821,7 +3825,7 @@ static void runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
 // as in bash, it is parsed again with aliases only outside POSIX mode,
 // until a command changes expand_aliases.
 static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i32 line,
-                     b32 (*fill)(void *, Lexer *), void *fillctx, b32 comsub)
+                     b32 (*fill)(void *, Lexer *), void *fillctx, b32 comsub, b32 hist)
 {
     byte *beg = scratch.beg;
     byte *end = scratch.mem ? scratch.mem->limit : scratch.end;
@@ -3837,6 +3841,12 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
     L->extglob       = L->extglobopt = sh->shopt[S_EXTGLOB];
     L->posix         = sh->opt[O_POSIX];
     L->utf8          = sh->utf8;
+    if ((reader || hist) && !comsub) {
+        // The lines it reads go into the history: the reader's, and -c's
+        // once it turns history on
+        L->hist    = histline;
+        L->histctx = sh;
+    }
     if (comsub && L->posix) {
         L->expandaliases = 0;
     }
@@ -3851,6 +3861,8 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
         if (sh->lexeof) {
             resumeaftereof(L);  // a nested parse ended this way
         }
+        L->cmdlines = 0;
+        if (L->hist) sh->hist.cmdlines = 0;
         Parsed r = parseunit(L);
         if (r.status != PARSE_EOF) {
             sh->lexeof = L->current == T_EOF;
@@ -3917,6 +3929,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             sh->line = L->lineno;
             if (sh->jobs && !outer) notifyjobs(sh, *L->a);
             if (fill && sh->interactive) showps0(sh);
+            if (reader) sh->cmdnumber++;
             runcommand(sh, r.cmd, *L->a, reader);
         }
         // Syncing options the command may have changed
