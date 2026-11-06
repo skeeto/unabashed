@@ -882,9 +882,8 @@ static void os_racy(Os *)
 static void os_sigmode(Os *os, i32 sig, i32 mode)
 {
     u64 bit = (u64)1 << (sig-1);
-    if (sig<1 || sig>=NSIG || sig==SIGKILL || sig==SIGSTOP || (os->entryign & bit)) {
-        return;
-    }
+    if (sig<1 || sig>=NSIG || sig==SIGKILL || sig==SIGSTOP) return;
+    if ((os->entryign & bit) && mode!=SIGM_CLAIM) return;
     if (sig == SIGCHLD) return;  // os_wait's own handler
     struct sigaction sa = {};
     sigemptyset(&sa.sa_mask);
@@ -898,6 +897,7 @@ static void os_sigmode(Os *os, i32 sig, i32 mode)
         sa.sa_handler = SIG_IGN;
         break;
     case SIGM_CATCH:
+    case SIGM_CLAIM:
         sa.sa_handler = onsignal;
         break;
     }

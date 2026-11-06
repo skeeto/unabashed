@@ -152,6 +152,7 @@ struct VTty {
     iz     readylen;
     b32    eof;         // cooked: ^D on an empty line, not yet read
     b32    settling;    // vothersready: leave the terminal out
+    i64    active;      // the clock at its last output or read
 };
 
 struct Vos {
@@ -658,7 +659,9 @@ static b32 vadvance(Vos *v)
 
 // The next process to run after the current one, which may be itself
 // (last, unless chaos picks it), or -1 if none can run.
-static i32 vpick(Vos *v, b32 selfok)
+static b32 vtype(Os *, Vos *);
+
+static i32 vpick(Os *os, Vos *v, b32 selfok)
 {
     i32 n    = v->nprocs;
     i32 self = v->cur;
@@ -669,13 +672,15 @@ static i32 vpick(Vos *v, b32 selfok)
             if ((i!=self || selfok) && vready(v, v->procs+i)) ready[nready++] = i;
         }
         if (nready) return ready[vrand(v) % (u32)nready];
-        return vadvance(v) ? vpick(v, selfok) : -1;
+        if (vtype(os, v)) return vpick(os, v, selfok);
+        return vadvance(v) ? vpick(os, v, selfok) : -1;
     }
     for (i32 i = 1; i <= n; i++) {
         i32 j = (self + i) % n;
         if ((j!=self || selfok) && vready(v, v->procs+j)) return j;
     }
-    return vadvance(v) ? vpick(v, selfok) : -1;
+    if (vtype(os, v)) return vpick(os, v, selfok);
+    return vadvance(v) ? vpick(os, v, selfok) : -1;
 }
 
 static void vrun(Os *os, Vos *v, i32 next)
@@ -696,7 +701,7 @@ static b32 vschedule(Os *os, Vos *v)
 {
     VProc *me = v->procs + v->cur;
     me->state = VP_BLOCK;
-    i32 next = vpick(v, 1);
+    i32 next = vpick(os, v, 1);
     if (next < 0) {
         me->state = VP_RUN;
         me->wait  = VW_NONE;
@@ -745,7 +750,7 @@ static void vcloseall(Os *os, VProc *p)
     me->state  = VP_EXIT;
     me->wait   = VW_NONE;
     v->live--;
-    i32 next = vpick(v, 0);
+    i32 next = vpick(os, v, 0);
     if (next < 0) {
         vdeadlock(v);
         for (i32 i = 0; i < v->nprocs; i++) {
@@ -813,7 +818,7 @@ static void vdrain(Os *os, Vos *v)
     VProc *me = v->procs + v->cur;
     vcloseall(os, me);  // EOF for whoever reads what it wrote
     for (i32 steps = 0;; steps++) {
-        i32 next = vpick(v, 0);
+        i32 next = vpick(os, v, 0);
         if (next < 0) return;
         if (steps == 1<<14) {
             v->racy = 1;
@@ -860,6 +865,7 @@ static i32 vdevfd(Str path)
 static void vttyout(Vos *v, u8 *buf, iz len)
 {
     VTerm *t = v->tty.term;
+    v->tty.active = v->clock;
     for (iz i = 0; i < len; i++) {
         if (buf[i] == '\n') vtbyte(t, '\r');
         vtbyte(t, buf[i]);
@@ -997,11 +1003,60 @@ static b32 vttyready(Vos *v)
     return v->clock >= y->until;
 }
 
+// Are typed bytes waiting now? A zero-length read asks (read -t 0, the
+// editor's typeahead): keys still to come, a snapshot or a resize next,
+// are not yet typed.
+static b32 vttyhas(Vos *v)
+{
+    VTty *y = &v->tty;
+    if (!y->term || y->settling) return 0;
+    if (!vnocanon(y)) return y->readylen || y->eof;
+    for (iz i = y->next; i < y->nkeys; i++) {
+        VKey *k = y->keys + i;
+        if (k->kind != VKEY_TEXT) return 0;
+        if ((i==y->next ? y->pos : 0) < k->text.len) return 1;
+    }
+    return 0;
+}
+
+// Typing ahead: while no process reads the terminal, as when they all
+// wait for something else or a shell is busy, its line discipline
+// takes the script's keys in its cooked mode (echo, ^C), the pauses
+// passing in virtual time, up to anything that needs a reader (a
+// snapshot, a resize, other modes). True if it took any.
+static b32 vtype(Os *os, Vos *v)
+{
+    VTty *y = &v->tty;
+    if (!y->term || y->settling || (y->mode && y->mode!=TTY_NOECHO)) return 0;
+    for (i32 i = 0; i < v->nprocs; i++) {
+        VProc *p = v->procs + i;
+        if (p->state==VP_BLOCK && p->wait==VW_TTY) return 0;
+    }
+    b32 took = 0;
+    while (y->next < y->nkeys) {
+        VKey *k = y->keys + y->next;
+        if (k->kind == VKEY_PAUSE) {
+            if (!y->until) y->until = v->clock + k->ms*1000000;
+            if (v->clock < y->until) break;
+            y->until = 0;
+        } else if (k->kind == VKEY_TEXT) {
+            while (y->pos < k->text.len) vcooked(os, v, k->text[y->pos++]);
+            y->pos = 0;
+        } else {
+            break;
+        }
+        y->next++;
+        took = 1;
+    }
+    return took;
+}
+
 // Read typed keys: the count (raw: as typed, cooked: finished lines),
 // 0 at the end of input, -1 if none yet, -2 if others must run first.
 static iz vttyget(Os *os, Vos *v, u8 *buf, iz len)
 {
     VTty *y = &v->tty;
+    y->active = v->clock;
     for (;;) {
         if (!vnocanon(y) && y->readylen) {
             iz n = len<y->readylen ? len : y->readylen;
@@ -1736,8 +1791,29 @@ static u64 os_siggroup(Os *os)
 {
     Vos   *v  = osvos(os);
     VProc *me = v->procs + v->cur;
+    VTty  *y  = &v->tty;
     u64    r  = me->grpsig;
     me->grpsig = 0;
+    if (y->term && !y->ended && !vothersready(v)) {
+        // A busy shell: a millisecond passes at each look, and keys
+        // are typed once the terminal has been quiet a while, as
+        // tools/ptyrun waits for. Past the last of them, the final
+        // snapshot, and the shell is killed, as ptyrun does.
+        v->clock += 1000000;
+        if (y->active && v->clock-y->active>=300*1000000ll) {
+            if (y->next<y->nkeys && y->keys[y->next].kind==VKEY_SNAP) {
+                vsnap(v);
+                y->next++;
+                y->active = v->clock;
+            } else if (y->next < y->nkeys) {
+                vtype(os, v);
+            } else {
+                vsnap(v);
+                y->ended = 1;
+                r |= (u64)1 << (9-1);
+            }
+        }
+    }
     return r;
 }
 
@@ -2539,6 +2615,11 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
     switch (io->op) {
     case IO_READ:
         if (vistty(v, io->h)) {
+            if (!io->len) {
+                if (!vttyhas(v)) return 0;
+                if (perform) io->n = 0;
+                return 1;
+            }
             if (!vttyready(v)) return 0;
             if (perform) {
                 iz n = vttyget(os, v, io->buf, io->len);

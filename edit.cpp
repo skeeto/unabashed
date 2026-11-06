@@ -128,6 +128,7 @@ struct Editor {
     i32      cur;       // which of lay is on screen
     KeyNode  root;
     i32      keytimeout;  // keyseq-timeout, ms
+    i32      unread;    // a key read ahead and put back, plus one
     // The line being edited
     Buf      line;
     iz       point;
@@ -145,6 +146,9 @@ struct Editor {
     i32      delim;     // read -d: this byte accepts, CR inserts; or -1
     i64      nchars;    // read -n: accept at this many characters, or 0
     b32      silent;    // read -s: the line is not shown
+    b32      hscroll;   // TERM=dumb: one row, scrolled sideways
+    i32      lmargin;   // hscroll: the first column shown
+    i32      hshown;    // hscroll: columns drawn
     Layout   shown;
     i32      crow;      // where the cursor is, relative to the prompt's row
     i32      ccol;
@@ -456,6 +460,55 @@ static void edupdate(Editor *ed, Layout *nl)
     ed->shown = *nl;
 }
 
+// A terminal that cannot move the cursor up (TERM=dumb), as readline
+// draws for it: the line on one row, scrolled sideways to keep the
+// cursor about two thirds of the way across once it would leave the
+// screen, '<' and '>' over the first and last columns where the line
+// goes on past them. Drawn again whole from the left margin with CR,
+// spaces over what is left of the old, and the text up to the cursor.
+static void hredisplay(Editor *ed, Layout *nl)
+{
+    DRow *r     = nl->rows;
+    i32   w     = ed->tty.cols - 1;
+    i32   t     = w / 3;
+    i32   cpos  = nl->pcol;
+    i32   total = r->width;
+    i32   phys  = cpos - ed->lmargin;
+    i32   lm    = ed->lmargin;
+    if (phys > w-2) {
+        lm = cpos - 2*t;
+        lm = lm<0 ? 0 : lm;
+    } else if (cpos < w-2) {
+        lm = 0;
+    } else if (phys < 1) {
+        lm = (cpos - 1) / t * t;
+    }
+    ed->lmargin = lm;
+
+    Buf  vis(&ed->linemem, 64);
+    iz   atcur = -1;  // bytes of vis before the cursor
+    for (i32 i = 0; i < r->ncells; i++) {
+        i32 beg = cellcol(r, i);
+        if (beg == cpos) atcur = atcur<0 ? vis.len : atcur;
+        if (beg<lm || r->cols[i]>lm+w) continue;
+        i32 ob = i ? r->ends[i-1] : 0;
+        Str cell = {r->text.data+ob, r->ends[i]-ob};
+        if (beg==lm && lm>0) cell = "<";
+        if (r->cols[i]==lm+w && lm+w<total) cell = ">";
+        print(&vis, cell);
+    }
+    if (atcur < 0) atcur = vis.len;
+    i32 shown = (total<lm+w ? total : lm+w) - lm;
+    edput(ed, "\r");
+    print(&ed->out_, {vis.data, vis.len});
+    for (i32 i = shown; i < ed->hshown; i++) edput(ed, " ");
+    edput(ed, "\r");
+    print(&ed->out_, {vis.data, atcur});
+    ed->hshown = shown;
+    ed->crow   = 0;
+    ed->ccol   = cpos - lm;
+}
+
 static void redisplay(Editor *ed, Shell *sh)
 {
     Arena *a = &ed->lay[!ed->cur];
@@ -463,8 +516,12 @@ static void redisplay(Editor *ed, Shell *sh)
     Str line = {ed->line.data, ed->line.len};
     iz  point = ed->point;
     if (ed->silent) line = {}, point = 0;
-    Layout nl = layout(a, ed->prompt, line, point, ed->width);
-    edupdate(ed, &nl);
+    Layout nl = layout(a, ed->prompt, line, point, ed->hscroll ? 1<<30 : ed->width);
+    if (ed->hscroll) {
+        hredisplay(ed, &nl);
+    } else {
+        edupdate(ed, &nl);
+    }
     ed->cur = !ed->cur;
     edflush(ed, sh);
 }
@@ -594,18 +651,32 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
     case EF_NONE:
         edbell(ed);
         break;
-    case EF_SELF_INSERT: {
-        // A UTF-8 sequence goes in whole
-        u8 buf[4] = {key};
-        iz n   = key>=0xf0 ? 4 : key>=0xe0 ? 3 : key>=0xc0 ? 2 : 1;
-        iz len = 1;
-        while (len < n) {
-            i32 c = edkey(ed, sh, -1);
-            if (c<0 || (c&0xc0)!=0x80) break;  // a stray byte is dropped
-            buf[len++] = (u8)c;
+    case EF_SELF_INSERT:
+        // Keys already typed that insert themselves go in too, as
+        // readline batches typeahead, so the line is shown once
+        for (;;) {
+            // A UTF-8 sequence goes in whole
+            u8 buf[4] = {key};
+            iz n   = key>=0xf0 ? 4 : key>=0xe0 ? 3 : key>=0xc0 ? 2 : 1;
+            iz len = 1;
+            while (len < n) {
+                i32 c = edkey(ed, sh, -1);
+                if (c<0 || (c&0xc0)!=0x80) break;  // a stray byte is dropped
+                buf[len++] = (u8)c;
+            }
+            edinsert(ed, {buf, len});
+            if (ed->nchars) break;
+            i32 c = edkey(ed, sh, 0);
+            if (c < 0) break;
+            KeyNode *k = keychild(&ed->root, (u8)c);
+            if (!k || k->kids || k->fn!=EF_SELF_INSERT || c==ed->delim ||
+                c==ed->tty.intr || (c=='\r' && ed->delim>=0)) {
+                ed->unread = c + 1;  // dispatched next
+                break;
+            }
+            key = (u8)c;
         }
-        edinsert(ed, {buf, len});
-    } break;
+        break;
     case EF_ACCEPT_LINE:
         ed->done   = 1;
         ed->result = ED_LINE;
@@ -722,6 +793,12 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
 // signal meanwhile (SIGWINCH) checks the terminal's size.
 static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
 {
+    if (ed->unread) {
+        i32 c = ed->unread - 1;
+        ed->unread = 0;
+        return c;
+    }
+    if (!timeout && !taskreadable(sh->sched, ed->fin->h)) return -3;
     Task *self = sh->sched->cur;
     i64   when = timeout<0 ? 0 : os_now(sh->os) + timeout*1000000;
     u8    c;
@@ -834,6 +911,8 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     ed->delim   = opts->delim;
     ed->nchars  = opts->nchars;
     ed->silent  = opts->silent;
+    ed->hscroll = ed->tty.rows<=1 || getvar(sh, &ed->linemem, "TERM").value=="dumb";
+    ed->lmargin = ed->hshown = ed->unread = 0;
     print(&ed->line, opts->init);
     ed->point   = ed->line.len;
 
@@ -864,7 +943,9 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     // Leave the cursor past the line
     Layout *l = &ed->shown;
     b32 crlf = 1;
-    if (ed->result == ED_INTR) {
+    if (ed->hscroll) {
+        if (ed->result == ED_INTR) edput(ed, "^C");
+    } else if (ed->result == ED_INTR) {
         if (opts != &none) {
             // read -e: as readline on SIGINT, the line goes first
             ed->line.len = ed->point = 0;
@@ -882,7 +963,8 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     } else {
         edmove(ed, l->nrows-1, l->rows[l->nrows-1].width);
     }
-    if (crlf) edput(ed, "\r\n");
+    // read -e: the shell's interrupt writes the newline
+    if (crlf && !(ed->result==ED_INTR && opts!=&none)) edput(ed, "\r\n");
     edflush(ed, sh);
     edsize(ed, sh, os_tty(sh->os, ed->in, ed->out, TTY_RESTORE));
     print(out, {ed->line.data, ed->line.len});

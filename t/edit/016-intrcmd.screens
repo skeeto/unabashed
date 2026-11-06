@@ -1,0 +1,56 @@
+== snap 1
+$ while :; do :; done
+^C
+$
+@ 2,2
+== snap 2
+$ while :; do :; done
+^C
+$ echo $?
+130
+$
+@ 4,2
+== snap 3
+$ while :; do :; done
+^C
+$ echo $?
+130
+$ sleep 5
+^C
+$
+@ 6,2
+== snap 4
+$ while :; do :; done
+^C
+$ echo $?
+130
+$ sleep 5
+^C
+$ echo $?
+130
+$
+@ 8,2
+== snap 5
+$ echo $?
+130
+$ sleep 5
+^C
+$ echo $?
+130
+$ trap 'echo caught' INT
+$ while :; do :; done; echo after
+^Ccaught
+
+@ 9,0
+== snap 6
+$ echo $?
+130
+$ sleep 5
+^C
+$ echo $?
+130
+$ trap 'echo caught' INT
+$ while :; do :; done; echo after
+^Ccaught
+
+@ 9,0

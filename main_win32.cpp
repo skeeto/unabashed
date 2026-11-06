@@ -3213,8 +3213,11 @@ static u64 os_siggroup(Os *os)
     return r;
 }
 
-static void os_sigmode(Os *, i32, i32)
+static void os_sigmode(Os *, i32 sig, i32 mode)
 {
+    // Ctrl-C ignored on entry (ConsoleFlags): taken again; spawns set
+    // it back around each program that should ignore it
+    if (sig==2 && mode==SIGM_CLAIM) SetConsoleCtrlHandler(0, 0);
 }
 
 static void os_tasktag(Os *, u64, iz, u64)

@@ -544,6 +544,7 @@ struct Shell {
     Str     *shown;        // what trap lists in a subshell until it sets one
     Sigproc *sig;          // this level's pending signals
     u64      hardign;      // ignored on entry: cannot be trapped
+    u64      entryign;     // ignored on entry, as programs start
     u64      asyncign;     // INT and QUIT in a background job: ignored
                            // unless trapped, as bash without job control
     i32      intrap;       // running trap actions

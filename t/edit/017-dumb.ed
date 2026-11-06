@@ -1,0 +1,16 @@
+# TERM=dumb: one row, scrolled sideways as the line grows past it
+size 8 30
+env TERM=dumb
+rc PS1='$ '
+keys echo abc
+snap
+keys \C-b\C-b
+snap
+keys 0123456789012345678901234567
+snap
+keys 89
+snap
+keys \C-a
+snap
+keys \C-e\r
+snap

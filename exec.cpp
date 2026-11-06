@@ -55,7 +55,7 @@ static b32      trapignored(Shell *, i32 sig);
 // Signals the current level ignores, for the programs it starts.
 static u64 ignoredsigs(Shell *sh)
 {
-    u64 m = sh->hardign;
+    u64 m = sh->hardign | sh->entryign;
     for (i32 sig = 1; (sh->traps || sh->asyncign) && sig < NSIGNAL; sig++) {
         if (trapignored(sh, sig)) m |= (u64)1 << (sig-1);
     }

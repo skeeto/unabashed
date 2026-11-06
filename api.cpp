@@ -176,6 +176,8 @@ enum : i32 { NSIGNAL = 65, WSIGNALED = 0x100, WMISSED = 0x200, WNOLIB = 0x400 };
 
 enum : i32 {  // os_sigmode
     SIGM_DEFAULT, SIGM_IGNORE, SIGM_CATCH,
+    SIGM_CLAIM,  // caught even if ignored on entry (an interactive shell's
+                 // SIGINT); programs still start with it ignored
 };
 
 // An operation submitted for asynchronous completion, so that a task
@@ -329,7 +331,8 @@ static u64     os_sigpending(Os *);
 // foreground job would. os_wait returns null early when one arrives.
 static u64     os_siggroup(Os *);
 // How the process itself handles a real signal (SIGM_*): the main
-// shell's trap table. Signals ignored on entry stay ignored. Layers
+// shell's trap table. Signals ignored on entry stay ignored, unless
+// claimed (SIGM_CLAIM: Win32 takes Ctrl-C again). Layers
 // that deliver every signal through os_sigpending ignore it.
 static void    os_sigmode(Os *, i32 sig, i32 mode);
 // Realtime clock, in ns since the epoch.

@@ -1,0 +1,20 @@
+# Ctrl-C while a command runs: a builtin loop, a program, a trap
+size 10 40
+rc PS1='$ '
+keys while :; do :; done\r
+pause 300
+keys \C-c
+snap
+keys echo $?\r
+snap
+keys sleep 5\r
+pause 300
+keys \C-c
+snap
+keys echo $?\r
+snap
+keys trap 'echo caught' INT\r
+keys while :; do :; done; echo after\r
+pause 300
+keys \C-c
+snap

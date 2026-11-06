@@ -927,8 +927,8 @@ static b32 fillline(void *ctx, Lexer *L)
             }
         }
         if (n == -2) {
-            // Ctrl-C at the prompt: an empty line instead, status 130
-            fdwrite(sh, 2, "\n");
+            // Ctrl-C at the prompt (sigdefault wrote the newline): an
+            // empty line instead, status 130
             sh->status = 128 + 2;
             b->len = start;
             putbyte(b, '\n');
@@ -1260,7 +1260,8 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     Sigproc *sig = alloc<Sigproc>(&perm);
     sigenter(sh, sig, sh->pid, sh->sched->cur);
     sh->sched->top = sig;
-    sh->hardign = info->sigign;
+    sh->hardign  = info->sigign;
+    sh->entryign = info->sigign;
     byte stackmark = 0;
     sh->stacktop = &stackmark;
     sh->stackmax = info->stack ? info->stack - ((iz)1<<16) : (iz)1<<19;
@@ -1361,7 +1362,21 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             }
         }
 
+        if (!sh->interactive && !sh->cflag && (sh->sflag || i>=info->nargs) &&
+                os_isatty(os, info->std[0]) && os_isatty(os, info->std[2])) {
+            sh->interactive = 1;  // as bash: commands from a terminal
+        }
         if (sh->interactive) {
+            // As bash, it takes SIGINT even if ignored on entry, and
+            // acts on INT, QUIT and TERM itself
+            sh->hardign &= ~sigbit(2);
+            if (sh->traps) {
+                sfreestr(sh->store, sh->traps[2]);
+                sh->traps[2] = {};
+            }
+            updatesigmode(sh, 2);
+            updatesigmode(sh, 3);
+            updatesigmode(sh, 15);
             sh->shopt[S_EXPAND_ALIASES] = 1;
             if (!st.noediting && !sh->opt[O_VI]) sh->opt[O_EMACS] = 1;
             if (!getvar(sh, &scratch, "PS1").set) setvar(sh, scratch, "PS1", "\\s-\\v\\$ ");

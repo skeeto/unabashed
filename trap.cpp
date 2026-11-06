@@ -148,6 +148,8 @@ static b32 trapignored(Shell *sh, i32 sig)
     return sig>0 && sig<NSIGNAL && (sh->asyncign & sigbit(sig));
 }
 
+static b32 interactivetop(Shell *);
+
 // How the process should handle a real signal, per the table of its
 // outermost level (the shell, or a background job in its process): caught when trapped, or when an EXIT trap should run first.
 static void updatesigmode(Shell *sh, i32 sig)
@@ -158,6 +160,8 @@ static void updatesigmode(Shell *sh, i32 sig)
         mode = SIGM_IGNORE;
     } else if (trapset(sh, sig)) {
         mode = SIGM_CATCH;
+    } else if (interactivetop(sh) && (sig==2 || sig==3 || sig==15)) {
+        mode = SIGM_CATCH;  // acted on here (signoop, sigdefault)
     } else if (trapset(sh, TRAP_EXIT)) {
         switch (sig) {
         case 1: case 2: case 3: case 10: case 12: case 14: case 15:
@@ -165,6 +169,7 @@ static void updatesigmode(Shell *sh, i32 sig)
             mode = SIGM_CATCH;  // run the EXIT trap, then die
         }
     }
+    if (mode==SIGM_CATCH && (sh->entryign & sigbit(sig))) mode = SIGM_CLAIM;
     os_sigmode(sh->os, sig, mode);
 }
 
@@ -346,6 +351,9 @@ static b32 signoop(Shell *sh, i32 sig)
 [[noreturn]] static void sigdefault(Shell *sh, i32 sig, Arena scratch)
 {
     if (sig==2 && interactivetop(sh)) {
+        // Back to the prompt, on a line of its own after the ^C the
+        // terminal echoed
+        fdwrite(sh, 2, "\n");
         sh->status = 128 + 2;
         escape(sh, ESC_INTR);
     }

@@ -32,18 +32,17 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   is restored on the escape out of read, but not tested on a real
   terminal; Windows `read -n` echoes the bytes itself (the console
   echoes only whole lines). (step 2)
-- An interactive shell started with Ctrl-C ignored (Win32: the
-  inherited ConsoleFlags bit, from a parent's SetConsoleCtrlHandler(0,
-  1); POSIX: SIGINT ignored on entry) never sees Ctrl-C, so typing it
-  does nothing. bash catches SIGINT whenever it is interactive, even if
-  ignored on entry (its programs still start ignoring it). Win32 needs
-  SetConsoleCtrlHandler(0, 0) at startup when interactive; anything
-  run from Claude Code's shell starts that way. (m3b.md)
+- Ctrl-C claimed by an interactive shell that started with it
+  ignored (SIGM_CLAIM): tested on a pty and in the vos, not yet on a
+  real Windows console, where it calls SetConsoleCtrlHandler(0, 0).
+  (step 8)
 - history and histexpand oracles.
 - `bash -i` whose input is not a terminal still reads with readline
   and echoes each line it reads; ours reads plainly. (step 2)
-- TERM=dumb (and an unknown TERM): readline scrolls the line
-  horizontally in one row; ours always wraps. (step 2)
+- An unknown or unset TERM: readline draws as on a dumb terminal
+  (one row, scrolled sideways); ours does that only for TERM=dumb,
+  since a Windows console usually has no TERM. Decide with the
+  terminal database question at step 7. (step 7)
 - Unbound key sequences: readline's handling (bell, which bytes are
   dropped or inserted) not yet checked against recordings. (step 2)
 - A byte that breaks a UTF-8 sequence in self-insert is dropped;
