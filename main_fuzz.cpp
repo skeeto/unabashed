@@ -550,20 +550,24 @@ static void fuzzimage(Os *os, Arena scratch, Str src)
     // What would run the two dumps differently goes first, the same for
     // both: DEBUG, which a job does not inherit (as in bash); aliases
     // (of {, echo) and functions shadowing the dump's builtins, which
-    // the job's line would parse or run otherwise; S's jobs, which may
-    // still signal the shell or write.
+    // the job's line would parse or run otherwise; xtrace, whose trace
+    // of `wait` lands between the dumps when BASH_XTRACEFD is 1; S's
+    // jobs, which may still signal the shell or write. S's IFS stays, so
+    // nothing here may be split.
     Str sep    = "\x01image\x01\n";
     Str dump   = isolatedump;
     Str script = "eval \"$1\" </dev/null >/dev/null 2>&1\n"
                  "\\trap - DEBUG; \\shopt -u expand_aliases\n"
                  "unset -f builtin unset declare alias trap set shopt umask "
-                 "echo wait kill jobs 2>/dev/null\n"
-                 "kill -9 $(jobs -p) 2>/dev/null; wait 2>/dev/null\n"
+                 "echo wait kill jobs read 2>/dev/null\n"
+                 "set +x\n"
+                 "jobs -p | while IFS= read -r j; do kill -9 \"$j\"; done 2>/dev/null\n"
+                 "wait 2>/dev/null\n"
                  "echo $'\\x01image\\x01'\n";
     script = concat(&scratch, script, dump);
     script = concat(&scratch, script, "\necho $'\\x01image\\x01'\n{ ");
     script = concat(&scratch, script, dump);
-    script = concat(&scratch, script, "\necho $'\\x01image\\x01'; } &\nwait $!\n");
+    script = concat(&scratch, script, "\necho $'\\x01image\\x01'; } &\nwait \"$!\"\n");
     runonce(os, script, &src, 1, 0);
     if (find(os->vos.err, "vos: image escapes") >= 0) {
         #if FUZZ_REPLAY

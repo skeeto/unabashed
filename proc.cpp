@@ -369,8 +369,15 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->bltname    = {};  // the running builtin's, in the parent's memory
     c->bltargs    = 0;
     c->nbltargs   = 0;
+    // The printer's temporaries go where a allocates next, which in an
+    // image is the store's own arena: the text is moved past them before
+    // the store takes its copy, and none of them is left in the region
+    // (their pointers into sh's memory would break the image's closure)
     Arena tmp = *a;
-    c->cmdtext    = sclone(st, cmdtext(sh, &tmp));
+    Str   txt = cmdtext(sh, &tmp);
+    txt = clone(&tmp, txt);
+    c->cmdtext    = sclone(st, txt);
+    if (tmp.beg > a->beg) __builtin_memset(a->beg, 0, (uz)(tmp.beg - a->beg));
     c->cmdnode    = 0;
     c->frame      = copyframes(c, a, sh->frame, image);
     c->srcframes  = copysrcframes(a, sh->srcframes, sh->frame, c->frame, image);
