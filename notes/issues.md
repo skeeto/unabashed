@@ -88,9 +88,7 @@ Moved from M5a: needs the completion engine.
 - User name completion (`~user`, M-~) finds nothing: no user database
   is read; bash reads the password file. Hosts are read from
   HOSTFILE or /etc/hosts without `$include`. (step 10)
-- complete-into-braces (M-{), glob-expand-word (C-x *),
-  glob-list-expansions (C-x g), dabbrev-expand and export-completions
-  are not implemented. (step 10)
+- dabbrev-expand and export-completions are not implemented. (step 10)
 - Command position at PS2 inside a compound command: bash asks the
   parser whether a command word is expected; ours treats only the first
   line of a command as able to start one. (step 10)

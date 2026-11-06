@@ -1,0 +1,108 @@
+== snap 1
+$ echo d/ab*
+ab1  ab2
+$ echo d/ab*
+@ 2,12
+== snap 2
+$ echo d/ab*
+ab1  ab2
+$ echo d/ab1 d/ab2
+@ 2,19
+== snap 3
+$ echo d/ab*
+ab1  ab2
+$ echo d/ab*
+@ 2,12
+== snap 4
+$ echo d/ab*
+ab1  ab2
+$ echo f
+@ 2,8 bell 1
+== snap 5
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ echo f
+@ 4,8 bell 1
+== snap 6
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ echo fa fb fc.x
+@ 4,18 bell 1
+== snap 7
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ echo zz*
+@ 4,10 bell 2
+== snap 8
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ echo f{a,b,c.x}
+@ 4,18 bell 2
+== snap 9
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ echo d/{ab{1,2},b.c}
+@ 4,23 bell 2
+== snap 10
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ echo d/ab{1,2}
+@ 4,17 bell 2
+== snap 11
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ echo d/b.c
+@ 4,13 bell 2
+== snap 12
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ echo e/{ab{,1{,2}},q\,r,x\ y}
+@ 4,32 bell 2
+== snap 13
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ echo e/ab e/ab1 e/ab12 e/q,r e/x\ y
+@ 4,38 bell 2
+== snap 14
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ echo zz
+@ 4,9 bell 3
+== snap 15
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ ls d/b.c
+d/b.c
+$
+@ 6,2 bell 3
+== snap 16
+$ echo d/ab*
+ab1  ab2
+$ echo f
+fa    fb    fc.x
+$ ls d/b.c
+d/b.c
+$
+@ 6,2 bell 3

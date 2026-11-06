@@ -1,0 +1,46 @@
+# glob-expand-word (C-x *), glob-list-expansions (C-x g) and
+# complete-into-braces (M-{)
+size 14 50
+rc PS1='$ '
+rc mkdir d; : > d/ab1; : > d/ab2; : > d/b.c; : > fa; : > fb; : > fc.x
+rc mkdir e; : > e/ab; : > e/ab1; : > e/ab12; : > 'e/x y'; : > e/q,r
+keys echo d/ab*\C-xg
+snap
+keys \C-x*
+snap
+keys \C-_
+snap
+keys \C-a\C-k
+keys echo f\C-xg
+snap
+keys \e1\C-xg
+snap
+keys \e1\C-x*
+snap
+keys \C-a\C-k
+keys echo zz*\C-x*
+snap
+keys \C-a\C-k
+keys echo f\e{
+snap
+keys \C-a\C-k
+keys echo d/\e{
+snap
+keys \C-a\C-k
+keys echo d/a\e{
+snap
+keys \C-a\C-k
+keys echo d/b\e{
+snap
+keys \C-a\C-k
+keys echo e/\e{
+snap
+keys \C-a\C-k
+keys echo e/*\C-x*
+snap
+keys \C-a\C-k
+keys echo zz\e{
+snap
+keys \C-a\C-k
+keys ls d/*.c\C-x*\r
+snap

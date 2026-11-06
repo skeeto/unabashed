@@ -100,6 +100,9 @@ enum : i32 {
     EF_POSSIBLE_COMMAND_COMPLETIONS,
     EF_DYNAMIC_COMPLETE_HISTORY,
     EF_GLOB_COMPLETE_WORD,
+    EF_GLOB_EXPAND_WORD,
+    EF_GLOB_LIST_EXPANSIONS,
+    EF_COMPLETE_INTO_BRACES,
     EF_MENU_COMPLETE,
     EF_MENU_COMPLETE_BACKWARD,
     EF_DELETE_CHAR_OR_LIST,
@@ -198,6 +201,9 @@ static Str edfuncs[EF_COUNT] = {
     "possible-command-completions",
     "dynamic-complete-history",
     "glob-complete-word",
+    "glob-expand-word",
+    "glob-list-expansions",
+    "complete-into-braces",
     "menu-complete",
     "menu-complete-backward",
     "delete-char-or-list",
@@ -523,6 +529,9 @@ static void edbindings(Editor *ed)
         {"\x18!", EF_POSSIBLE_COMMAND_COMPLETIONS},
         {"\x1b\t", EF_DYNAMIC_COMPLETE_HISTORY},
         {"\x1b" "g", EF_GLOB_COMPLETE_WORD},
+        {"\x18*", EF_GLOB_EXPAND_WORD},
+        {"\x18" "g", EF_GLOB_LIST_EXPANSIONS},
+        {"\x1b{", EF_COMPLETE_INTO_BRACES},
         {"\x18\x12", EF_RE_READ_INIT_FILE},
     };
     for (iz i = 0; i < countof(map); i++) {
@@ -2400,6 +2409,9 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
     case EF_POSSIBLE_COMMAND_COMPLETIONS:
     case EF_DYNAMIC_COMPLETE_HISTORY:
     case EF_GLOB_COMPLETE_WORD:
+    case EF_GLOB_EXPAND_WORD:
+    case EF_GLOB_LIST_EXPANSIONS:
+    case EF_COMPLETE_INTO_BRACES:
     case EF_MENU_COMPLETE:
     case EF_MENU_COMPLETE_BACKWARD:
         edcomplete(ed, sh, fn, ed->argset ? ed->count : 1);
@@ -3059,6 +3071,7 @@ static void edarg(Editor *ed, Shell *sh, i32 key)
                     continue;
                 }
                 ed->prompt = prompt;
+                redisplay(ed, sh);
                 eddispatch(ed, sh);
                 return;
             }
@@ -3088,6 +3101,7 @@ static void edarg(Editor *ed, Shell *sh, i32 key)
             if (ed->argneg) ed->count = -ed->count;
             ed->argneg = 0;
             ed->prompt = prompt;
+            redisplay(ed, sh);  // as readline, the prompt back first
             edpush(ed, c);
             eddispatch(ed, sh);
             return;

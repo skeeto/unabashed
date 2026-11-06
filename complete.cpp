@@ -8,6 +8,7 @@ enum : u8 { CQ_BACKSLASH = 1, CQ_SINGLE = 2, CQ_DOUBLE = 4 };
 
 // readline's completion modes (§2.2)
 enum : u8 { CM_TAB = '\t', CM_LIST = '?', CM_ALL = '*', CM_AMBIG = '!', CM_UNMOD = '@' };
+enum : u8 { CM_BRACE = '{' };  // bash's complete-into-braces
 
 // What to drop from file name matches (§6.1)
 enum : i32 { IG_FIGNORE, IG_DIRS, IG_ALL, IG_NONE };
@@ -21,7 +22,8 @@ enum : i32 {
     CX_USER,      // M-~
     CX_HOST,      // M-@
     CX_HISTORY,   // M-TAB
-    CX_GLOB,      // M-g and the C-x glob commands
+    CX_GLOB,      // M-g: the word with * appended
+    CX_GLOBX,     // C-x * and C-x g: as typed, * appended by an argument
 };
 
 // One attempt
@@ -525,6 +527,8 @@ static Slice<Str> compgenerate(Editor *ed, Shell *sh, Comp *c, i32 gen)
     case CX_HOST:     return comphosts(sh, c, w);
     case CX_HISTORY:  return comphistory(sh, c, w);
     case CX_GLOB:     return compglob(sh, c, concat(c->a, c->word, "*"));
+    case CX_GLOBX:
+        return compglob(sh, c, ed->argset ? concat(c->a, c->word, "*") : c->word);
     }
 
     b32 invalid = 0;
@@ -1102,6 +1106,75 @@ static void compinsertall(Editor *ed, Shell *sh, Comp *c)
     edgroup(ed, U_END);
 }
 
+// A piece of a brace expansion, backslash-quoted
+static void compbq(Buf *b, Str s)
+{
+    for (iz i = 0; i < s.len; i++) {
+        if (compin(" \t\n'\"$=:@,][{}!&*\\();|<>?^`#~", s[i])) putbyte(b, '\\');
+        putbyte(b, s[i]);
+    }
+}
+
+// Sorted matches m[lo, hi), alike before off, as one brace expansion:
+// those sharing their next character grouped under their common prefix,
+// and so on within each group.
+static void compbrace(Buf *b, Slice<Str> m, iz lo, iz hi, iz off)
+{
+    putbyte(b, '{');
+    for (iz i = lo; i < hi;) {
+        if (i > lo) putbyte(b, ',');
+        iz j = i + 1;
+        if (m[i].len > off) {
+            for (; j<hi && m[j].len>off && m[j][off]==m[i][off]; j++) {}
+        }
+        if (j-i == 1) {
+            compbq(b, cuthead(m[i], off));
+        } else {
+            iz l = off + 1;
+            for (;; l++) {
+                b32 same = l < m[i].len;
+                for (iz k = i+1; same && k<j; k++) {
+                    same = l<m[k].len && m[k][l]==m[i][l];
+                }
+                if (!same) break;
+            }
+            compbq(b, span(m[i].data+off, m[i].data+l));
+            compbrace(b, m, i, j, l);
+        }
+        i = j;
+    }
+    putbyte(b, '}');
+}
+
+// complete-into-braces: the word replaced by its matches as a brace
+// expansion, and a space
+static void compbraces(Editor *ed, Shell *, Comp *c)
+{
+    Slice<Str> m = c->m;
+    Buf b(c->a, 256);
+    if (m.len == 1) {
+        compbq(&b, m[0]);
+    } else {
+        iz p = 0;
+        for (;; p++) {
+            b32 same = p < m[0].len;
+            for (iz k = 1; same && k<m.len; k++) same = p<m[k].len && m[k][p]==m[0][p];
+            if (!same) break;
+        }
+        compbq(&b, takehead(m[0], p));
+        compbrace(&b, m, 0, m.len, p);
+    }
+    putbyte(&b, ' ');
+    Str t = finish(&b);
+    edgroup(ed, U_BEGIN);
+    iz beg = c->start;
+    if (c->quote && beg>0 && ed->line.data[beg-1]==c->quote) beg--;
+    eddelete(ed, beg, c->end);
+    ed->point = beg;
+    edinsert(ed, t);
+    edgroup(ed, U_END);
+}
+
 // One completion attempt in a mode with a generator
 static void edcomplete1(Editor *ed, Shell *sh, u8 mode, i32 gen)
 {
@@ -1161,6 +1234,9 @@ static void edcomplete1(Editor *ed, Shell *sh, u8 mode, i32 gen)
         break;
     case CM_ALL:
         compinsertall(ed, sh, &c);
+        break;
+    case CM_BRACE:
+        compbraces(ed, sh, &c);
         break;
     }
     ed->cchanged = edtext(ed) != before;
@@ -1275,6 +1351,9 @@ static void edcomplete(Editor *ed, Shell *sh, i32 fn, i32 count)
         edcomplete1(ed, sh, compmode(ed, fn), CX_HISTORY);
         return;
     case EF_GLOB_COMPLETE_WORD: edcomplete1(ed, sh, compmode(ed, fn), CX_GLOB);     return;
+    case EF_GLOB_EXPAND_WORD:     edcomplete1(ed, sh, CM_ALL, CX_GLOBX);   return;
+    case EF_GLOB_LIST_EXPANSIONS: edcomplete1(ed, sh, CM_LIST, CX_GLOBX);  return;
+    case EF_COMPLETE_INTO_BRACES: edcomplete1(ed, sh, CM_BRACE, CX_FILE);  return;
     case EF_POSSIBLE_FILENAME_COMPLETIONS:
         ed->cfailed = 0;
         edcomplete1(ed, sh, CM_LIST, CX_FILE);
