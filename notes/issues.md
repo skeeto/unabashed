@@ -35,8 +35,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 - The history file is overwritten in place; readline writes a
   `FILE-NNNNN.tmp` beside it and renames it over (keeping a symlink's
   target and the owner). Needs a rename in the platform API. (step 10)
-- fc's temp file is `bash-fc-` plus 10 random characters, not
-  sh_mktmpfp's form; a failed editor leaves no message, as bash. (step 10)
 - `bash -i` whose input is not a terminal still reads with readline
   and echoes each line it reads; ours reads plainly. (step 2)
 - Unbound key sequences: readline's handling (bell, which bytes are

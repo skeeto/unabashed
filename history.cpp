@@ -1877,7 +1877,8 @@ static i32 fcrun(Shell *sh, Str src, Arena scratch)
     return status;
 }
 
-// A new file in TMPDIR (or /tmp) for fc to edit: its name, or an error.
+// A new file in TMPDIR (or /tmp) for fc to edit, named as bash's
+// mkstemp makes it (bash-fc.XXXXXX): its name, or an error.
 static Opened fctemp(Shell *sh, Arena *a, Str *name)
 {
     Str dir = getvar(sh, a, "TMPDIR").value;
@@ -1888,10 +1889,11 @@ static Opened fctemp(Shell *sh, Arena *a, Str *name)
                 (u64)try_*0x2545f4914f6cdd1du;
         Buf b(a, dir.len+24);
         print(&b, dir);
-        print(&b, "/bash-fc-");
-        for (i32 k = 0; k < 10; k++) {
-            putbyte(&b, (u8)"abcdefghijklmnopqrstuvwxyz0123456789"[r%36]);
-            r /= 36;
+        print(&b, "/bash-fc.");
+        Str set = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        for (i32 k = 0; k < 6; k++) {
+            putbyte(&b, set[(iz)(r%62)]);
+            r /= 62;
         }
         *name = finish(&b);
         Arena t = *a;
