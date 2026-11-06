@@ -1691,16 +1691,20 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         sp.nenv    = tg.env.len;
         sp.crtslot = tg.crtslot;
     }
-    if (execing && sh->subshell==sh->procbase && !sh->capdepth &&
+    // The last command of a background job in a process of its own,
+    // which bash would exec in the job's place
+    b32 jobtail = !execing && sh->attail && sh->subshell==sh->procbase &&
+                  sh->procbase && sh->taillevel==sh->procbase+1 && s->cur==&s->main;
+    if ((execing || jobtail) && sh->subshell==sh->procbase && !sh->capdepth &&
             !capfile && !sh->spawnto && !br.n) {
         // exec at the process's outermost level: become the program (it
         // keeps the shell's pid). While other tasks run, a copy of the
         // process forked first keeps them, as bash's procsubs and jobs
-        // are processes of their own already. Else (no exec, no fork)
-        // start it as a child.
+        // are processes of their own already. Else (no exec, no fork,
+        // or a job's tail that could not) start it as a child.
         b32 alone = s->ntasks==1 && !npumps;
         i32 err   = alone ? os_exec(sh->os, a, &sp) : os_forkexec(sh->os, a, &sp);
-        if (err != E_NOSYS) {
+        if (err!=E_NOSYS && !(err && jobtail)) {
             for (i32 i = 0; i < nclose; i++) os_close(sh->os, closeafter[i]);
             if (!err) {
                 // The copy: its tasks finish, joined as the shell exits.
@@ -1723,6 +1727,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
                     pumps[i]->sib = s->orphans;
                     s->orphans    = pumps[i];
                 }
+                sh->execed = 1;  // no EXIT trap
                 return 0;
             }
             return -err;

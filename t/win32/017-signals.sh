@@ -29,6 +29,17 @@ kill $!
 wait $!
 echo "exec $?"
 
+# KILL to a job whose last program it exec'd (in a job that ends with
+# the shell) ends that program too, as in bash where they are one
+"$U" -c 'echo r >k9.txt; sleep 2; echo end >k9end.txt' &
+while [ ! -e k9.txt ]; do sleep 1; done
+kill -9 $!
+{ wait $!; } 2>k9.err
+echo "k9 $?"
+"$BB" sed 's/: line [0-9]*: *[0-9]* Killed */: Killed /' k9.err
+sleep 3
+[ -e k9end.txt ] || echo "k9 program gone"
+
 trap 'echo top USR1' USR1
 { kill -USR1 $$; } &
 wait

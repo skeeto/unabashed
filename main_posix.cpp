@@ -196,7 +196,11 @@ static NamedPipe os_namedpipe(Os *, Arena *, Str, i32)
 
 static iz os_pipecap(Os *)
 {
-    return 1<<14;  // macOS starts small; Linux has 64 KiB
+#ifdef __linux__
+    return 1<<16;
+#else
+    return 1<<14;  // macOS starts small
+#endif
 }
 
 static OsPipe os_pipe(Os *)

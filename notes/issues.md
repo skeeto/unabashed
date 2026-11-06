@@ -21,14 +21,6 @@ Closed: every item was fixed or moved (m5a.md, exit criteria).
 
 ## M5b (real background processes)
 
-- **`kill -9 $!` of a job whose program bash would exec leaves the
-  program running (Win32)**: since steps 2 and 6, `"$U" -c x &` is a
-  shell process waiting for its program, and every other signal is
-  passed on to the program (`Sigproc.execpid`), as to the program bash
-  exec'd; but KILL is TerminateProcess of the shell, which cannot pass
-  it on. (Formerly: `$!` was a virtual pid and `kill -9` marked the job
-  killed while the program ran on; m5a.md, step 7.) Putting the program
-  in a kill-on-close job, as for `exec`, would end it with the shell.
 - **Win32 Ctrl-C a starting program can still miss** (m3b.md, "Programs
   that miss a Ctrl-C"): unnoticed are one over 100 ms old and still
   not attached; the real program of a wrapper that starts it more than

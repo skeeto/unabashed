@@ -8,6 +8,9 @@ kid end
 kid 0
 exec TERM
 exec 4
+k9 137
+test.sh: Killed "$U" -c 'echo r >k9.txt; sleep 2; echo end >k9end.txt'
+k9 program gone
 top USR1
 end
 status 0
