@@ -79,7 +79,8 @@ static byte *os_reserve(Os *os, iz len)
     }
     byte *r = os->heap + os->heapused + pad;
     os->heapused += pad + len;
-    if (os->nmarks && os->marks[os->nmarks-1].proc!=os->vos.cur) {
+    if (os->nmarks && (os->marks[os->nmarks-1].proc!=os->vos.cur ||
+                       os->vos.imaging)) {
         os->pinned = os->heapused;
     }
     memset(r, 0x55, (uz)len);  // expose reads of uninitialized memory

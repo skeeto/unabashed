@@ -160,6 +160,7 @@ struct Vos {
     VCount  spawns[256];   // programs started per (process, task)
     i32     nspawns;
     b32     images;  // self-spawn background shells (os_imagenew)
+    b32     imaging; // os_reserve is for an image: the layer pins it
     // Windows mode
     b32        win;
     VNamedPipe npipes[64];
@@ -1941,7 +1942,11 @@ static ImageRef os_imagenew(Os *os, iz cap)
 {
     ImageRef r = {};
     if (!osvos(os)->images) return r;
+    // The child runs from it after the nested shell that made it, and
+    // whose memory the layer releases, has ended
+    osvos(os)->imaging = 1;
     r.base = os_reserve(os, cap);
+    osvos(os)->imaging = 0;
     r.cap  = r.base ? cap : 0;
     return r;
 }
