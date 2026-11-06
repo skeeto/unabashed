@@ -21,12 +21,14 @@ Closed: every item was fixed or moved (m5a.md, exit criteria).
 
 ## M5b (real background processes)
 
-- **`kill $!` misses a background program on Win32**: `prog &` gets
-  the shell's own pid in `$!`, and `kill -9 $!` marks the job killed
-  (wait says 137) while the Windows process runs on (found by
-  t/win32/014-spawn, which kills by the program's own `$$`). In a probe
-  where the program had already exited, `kill -9 $!` seemed to kill the
-  calling shell itself. (m5a.md, step 7)
+- **`kill -9 $!` of a job whose program bash would exec leaves the
+  program running (Win32)**: since steps 2 and 6, `"$U" -c x &` is a
+  shell process waiting for its program, and every other signal is
+  passed on to the program (`Sigproc.execpid`), as to the program bash
+  exec'd; but KILL is TerminateProcess of the shell, which cannot pass
+  it on. (Formerly: `$!` was a virtual pid and `kill -9` marked the job
+  killed while the program ran on; m5a.md, step 7.) Putting the program
+  in a kill-on-close job, as for `exec`, would end it with the shell.
 - **Win32 Ctrl-C a starting program can still miss** (m3b.md, "Programs
   that miss a Ctrl-C"): unnoticed are one over 100 ms old and still
   not attached; the real program of a wrapper that starts it more than
@@ -46,7 +48,9 @@ Closed: every item was fixed or moved (m5a.md, exit criteria).
   ended (os_spawn's unseen rule) and before notemissedspawn compared
   creation times; the cause of the rest is not known. A 32-bit shell
   reading a 64-bit child's PEB (console image, Ctrl-C ignored,
-  initializing, same image) gets "unknown".
+  initializing, same image) gets "unknown". On Windows 11 the i686
+  build in XP I/O mode (-x) fails 008 ("after 0") about 3 runs in 10,
+  as much with builds from before M5b step 6.
 - **XP, in the sandbox only: a killed background job's status is
   often 0**: `sleep 3 & kill $!; wait $!` (also `"$U" -c "sleep 3" &`)
   ends the job at once but `wait` gives 0 for most iterations after the

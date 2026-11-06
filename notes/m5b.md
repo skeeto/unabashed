@@ -1,6 +1,6 @@
 # M5b: real background processes
 
-Status: steps 1-3 done; implementation in progress (see "Steps").
+Status: steps 1-4 and 6 done; implementation in progress (see "Steps").
 
 Scope and exit criteria: plan.md §2 (execution model: "Real process
 from M5b"), §3 (the copier writes the `&` image) and the M5b row of its
@@ -335,3 +335,59 @@ job finishes.
 Results: tests.exe 159/0, t/exec and t/winvos 687 specs, 0 failed (also
 with `--fibers` but 877, and `--chaos 20`), t/parse, t/unit, t/msys;
 t/win32 -x 32/0 on Windows 11 (x64 and i686).
+
+
+### Step 4: what was left of Win32 self-spawn
+
+Nothing needed code. CREATE_NEW_PROCESS_GROUP only decides where
+GenerateConsoleCtrlEvent sends Ctrl-C and Ctrl-Break, which the shell
+never calls; the keyboard's go to every process of the console, and
+the job ignores Ctrl-C through the inherited flag as programs started
+with `trap '' INT` do (Ctrl-Break cannot be ignored so on Windows, by
+a job's programs or any other). A pipe the job gets that has a read in
+flight is lent as for any program (`lend`, 016's pipe). A fallback to a
+fiber shows in 016, whose job's BASHPID would not be `$!`; no separate
+debug counter.
+
+
+### Step 6: the signal channel (Win32)
+
+Every shell creates a pagefile section `Local\unabashed-sig-<pid>`
+(`SigChan`: magic, pid, a pending mask for the process, and a queue of
+32 level signals under a spin lock; the same layout in 32- and 64-bit
+builds) and an auto-reset event `Local\unabashed-sigev-<pid>`, with a
+registered wait (`onchan`) that wakes the main thread as a Ctrl-C does
+(`wakemain`, factored out of `onctrl`: the wake event, and cancelling a
+blocking read). `os_kill` to a pid with such a section sets the bit and
+the event (`chansend`) instead of ending it, but for KILL and STOP;
+anything else, or a shell that has no channel, is ended with SIGEXIT as
+before. `os_siglevel` queues a level signal; `os_levelsig` and
+`os_sigpending` take them; `sigwaiting` sees them, so `os_wait`
+returns early. Where the objects cannot be made the shell has no
+channel and is killed outright, as before; it works in t/win32's
+sandbox at Low integrity and on XP.
+
+Two core changes came with it:
+- A signal for a level whose tail program is running, which bash
+  would have exec'd (`( prog ) &`, `prog &`, the last command of a `-c`
+  string with no traps), goes to the program instead
+  (`Sigproc.execpid`, set by `runprogram` when `runsimple` says it runs
+  at the tail): `kill $!` of `"$U" -c '...' &` reaches the program's
+  trap, as in bash, where it ended the waiting shell and left the
+  program running.
+- `taskwaitproc` no longer calls the blocking `os_waitproc` when it is
+  the only task: nothing could interrupt that, so a level waiting for a
+  program never saw a signal sent to it (the vos showed it once jobs
+  were processes). It always waits through `os_submit`/`os_wait`; 200
+  programs take the same time either way on Windows 11. And a signal
+  for the process that will kill its outermost level now ends whatever
+  wait that level is in, not only a `wait` or `read` builtin, so the
+  shell dies at once and its program runs on, as bash does.
+
+Tests: t/win32/017-signals (a job's TERM trap; plain TERM; USR2 from a
+job to a level of the parent; TERM to `"$U" -c` with a trap, through
+the forwarding; USR1 from a job to `$$`); t/exec/878-bg-kill-tail
+(recorded: a lone program and a subshell's last get the signal, a
+group's child does not). t/win32 -x 34/0 on Windows 11 x64, i686 33/1
+(008's known Ctrl-C flake); XP 33/1 (003's known `wait` flake); vos
+suites as before.
