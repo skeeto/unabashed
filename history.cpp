@@ -731,8 +731,8 @@ static i32 b_history(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (i < nargs) {
             if (i+1 < nargs) {
                 builtinerror(sh, scratch, "history", "too many arguments");
-                sh->status = 2;
-                escape(sh, ESC_DISCARD);  // the rest of the line too
+                sh->status = 1;
+                escape(sh, ESC_ABORT);  // as bash's jump to top level
             }
             i64 n = 0;
             if (!parsei64(args[i], &n)) {
