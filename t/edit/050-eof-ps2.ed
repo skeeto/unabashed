@@ -1,0 +1,17 @@
+# Syntax errors at the prompt, and in eval there, name no line, and the
+# rest of the line goes; Ctrl-D inside an unfinished command reports
+# the end of file and ends the shell, saying exit
+size 16 50
+rc PS1='$ '
+keys )\r
+snap
+keys eval ')'\r
+snap
+keys echo one; fi; echo two\r
+snap
+keys echo $?\r
+snap
+keys echo "a\r
+snap
+keys \C-d
+snap

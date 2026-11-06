@@ -296,7 +296,7 @@ struct Token {
     Cond *cond;    // T_CONDCMD
 };
 
-enum : i32 { MSG_ERROR, MSG_WARNING };
+enum : i32 { MSG_ERROR, MSG_WARNING, MSG_LINE };  // MSG_LINE: the line quoted
 
 struct Message {   // a diagnostic from the parser
     Message *next;
@@ -2618,7 +2618,7 @@ static void synerror(Lexer *L)
         print(&l, "`");
         print(&l, currentline(L));
         print(&l, "'");
-        message(L, L->lineno, finish(&l));
+        message(L, L->lineno, finish(&l), MSG_LINE);
     } else if (L->line.len) {
         Str near = errortokenfromtext(L);
         if (near.data) {
@@ -2632,7 +2632,7 @@ static void synerror(Lexer *L)
         print(&l, "`");
         print(&l, currentline(L));
         print(&l, "'");
-        message(L, L->lineno, finish(&l));
+        message(L, L->lineno, finish(&l), MSG_LINE);
     } else if (L->eofreached && L->eoftoken && t!=L->eoftoken) {
         Buf b(L->a, 64);
         print(&b, "unexpected EOF while looking for matching `");

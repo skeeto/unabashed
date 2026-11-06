@@ -54,9 +54,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   it until complete), and in the C locale readline (output-meta off)
   shows bytes past 0x7f as `\NNN` where ours draws UTF-8 whatever the
   locale. (step 10)
-- Ctrl-D at PS2 (inside an unfinished command): bash reports the
-  unexpected end of file and returns to PS1; ours ends the shell.
-  (step 2)
 - checkwinsize: LINES and COLUMNS follow the size each time the
   editor starts and ends a line, not after each foreground program as
   bash's checkwinsize does; a script that resizes and reads COLUMNS

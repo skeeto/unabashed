@@ -3878,12 +3878,19 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             if (text.len) fdwrite(sh, 2, text);
             if (text.len && text[text.len-1]!='\n') fdwrite(sh, 2, "\n");
         }
-        // Report parser messages
+        // Report parser messages. As bash's parser_error, a shell reading
+        // interactively (at the prompt or in eval, not a sourced file or
+        // PROMPT_COMMAND) names no line, nor quotes the line in error.
         Arena msgarena = *L->a;
+        b32   noline   = sh->interactive && !sh->sourcedepth && !(iname=="PROMPT_COMMAND");
         for (Message *m = L->msgs; m; m = m->next) {
+            if (noline && m->kind==MSG_LINE) continue;
             Buf b(&msgarena, 128);
             print(&b, errname(sh));
-            if (m->kind == MSG_ERROR) {
+            if (noline) {
+                print(&b, ": ");
+                if (m->kind == MSG_WARNING) print(&b, "warning: ");
+            } else if (m->kind != MSG_WARNING) {
                 if (!(errname(sh) == sh->iname)) {
                     print(&b, ": ");
                     print(&b, sh->iname);
@@ -3919,6 +3926,18 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             }
             if (!sh->interactive && !sh->evaldepth && !sh->sourcedepth) {
                 sh->exiting = 1;
+            } else if (reader && fill && sh->interactive && !L->eofreached) {
+                // At the prompt: the rest of the line goes, and the next
+                // is read
+                L->line    = {};
+                L->idx     = 0;
+                L->pushed  = 0;
+                L->newunit = 1;
+                *L->a      = unit;
+                continue;
+            } else if (reader && fill && sh->interactive) {
+                // The input ended within a command: as at its start
+                fdwrite(sh, 2, sh->login ? Str("logout\n") : "exit\n");
             }
             break;
         }

@@ -1,0 +1,60 @@
+== snap 1
+$ )
+bash: syntax error near unexpected token `)'
+$
+@ 2,2
+== snap 2
+$ )
+bash: syntax error near unexpected token `)'
+$ eval ')'
+bash: syntax error near unexpected token `)'
+$
+@ 4,2
+== snap 3
+$ )
+bash: syntax error near unexpected token `)'
+$ eval ')'
+bash: syntax error near unexpected token `)'
+$ echo one; fi; echo two
+bash: syntax error near unexpected token `fi'
+$
+@ 6,2
+== snap 4
+$ )
+bash: syntax error near unexpected token `)'
+$ eval ')'
+bash: syntax error near unexpected token `)'
+$ echo one; fi; echo two
+bash: syntax error near unexpected token `fi'
+$ echo $?
+2
+$
+@ 8,2
+== snap 5
+$ )
+bash: syntax error near unexpected token `)'
+$ eval ')'
+bash: syntax error near unexpected token `)'
+$ echo one; fi; echo two
+bash: syntax error near unexpected token `fi'
+$ echo $?
+2
+$ echo "a
+>
+@ 9,2
+== snap 6
+$ )
+bash: syntax error near unexpected token `)'
+$ eval ')'
+bash: syntax error near unexpected token `)'
+$ echo one; fi; echo two
+bash: syntax error near unexpected token `fi'
+$ echo $?
+2
+$ echo "a
+>
+bash: unexpected EOF while looking for matching `"
+'
+exit
+
+@ 13,0
