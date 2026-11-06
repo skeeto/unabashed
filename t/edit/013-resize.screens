@@ -1,0 +1,30 @@
+== snap 1
+$ echo one two three four five
+ six seven
+@ 1,10
+== snap 2
+$ echo one two three
+ four five six seven
+
+@ 1,19
+== snap 3
+$ echo one two three
+ four five six seveX
+n
+@ 2,0
+== snap 4
+$ echo one two three four five six seveX
+n
+@ 1,1
+== snap 5
+$ echo one two three four five six seveX
+n
+one two three four five six seveXn
+$
+@ 3,2
+== snap 6
+$ echo one two three four five six seveX
+n
+one two three four five six seveXn
+$
+@ 3,2

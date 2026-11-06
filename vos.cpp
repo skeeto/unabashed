@@ -1049,10 +1049,11 @@ static iz vttyget(Os *os, Vos *v, u8 *buf, iz len)
                 VProc *p = v->procs + i;
                 if (p->shell && (p->state==VP_RUN || p->state==VP_BLOCK)) {
                     os_kill(os, p->pid, 28);
+                    p->intr = 1;  // the reader's own read too
                 }
             }
             y->next++;
-            continue;
+            return -2;  // the reader sees its signal before more keys
         }
     }
 }

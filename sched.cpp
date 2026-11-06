@@ -34,6 +34,8 @@ struct Task {
     b32     intr;      // its wait was failed by a signal (taskinterrupt)
     b32     introk;    // in a read or wait builtin: any signal with an
                        // action interrupts its wait
+    b32     anysig;    // in the editor: any signal at all does (a resize),
+                       // so its reads never block outside the scheduler
     b32     timedout;  // its wait was failed by its deadline
     b32     waitany;   // woken when any task finishes (wait -n)
     i64     deadline;  // os_now time when its pipe or OS wait fails, or 0
@@ -573,7 +575,7 @@ static void taskio(Sched *s, Io *io)
 // Read up to len bytes: 0 at end of file, -1 on error.
 static iz taskread(Sched *s, Handle h, u8 *buf, iz len)
 {
-    if (s->ntasks==1 && !s->cur->deadline) {
+    if (s->ntasks==1 && !s->cur->deadline && !s->cur->anysig) {
         return os_read(s->os, h, buf, len);
     }
     Io *io = &s->cur->io;

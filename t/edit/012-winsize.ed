@@ -1,0 +1,8 @@
+# LINES and COLUMNS: set by the editor and after each command
+size 8 30
+rc PS1='$ '
+keys declare -p LINES COLUMNS\r
+snap
+resize 9 33
+keys echo $LINES $COLUMNS\r
+snap

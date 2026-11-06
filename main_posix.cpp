@@ -321,6 +321,8 @@ static Stat os_fstat(Os *, Handle h)
     return tostat(&s);
 }
 
+static void onsignal(int);
+
 static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
 {
     Tty     r = {};
@@ -338,6 +340,15 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
         raw.c_cc[VMIN]  = 1;
         raw.c_cc[VTIME] = 0;
         tcsetattr((i32)in, TCSADRAIN, &raw);
+        // A resize is a signal (SIGWINCH), unless something else
+        // already handles it (a trap)
+        struct sigaction sa = {};
+        if (!sigaction(SIGWINCH, 0, &sa) && sa.sa_handler==SIG_DFL) {
+            sigemptyset(&sa.sa_mask);
+            sa.sa_flags   = SA_RESTART;
+            sa.sa_handler = onsignal;
+            sigaction(SIGWINCH, &sa, 0);
+        }
     } else if (how==TTY_RESTORE && os->ttyraw) {
         os->ttyraw = 0;
         tcsetattr((i32)in, TCSADRAIN, &os->ttysave);

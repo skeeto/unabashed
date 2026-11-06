@@ -782,9 +782,14 @@ struct StdinSource {
     i32    eofs;  // ends of input in a row ignored for IGNOREEOF
 };
 
-// PS1 or PS2 expanded as ${PS1@P} would be, \1 and \2 around the
-// invisible parts while editing. An expansion error gives nothing.
-static Str promptstr(Shell *sh, Arena *a, b32 first)
+static Str psexpr(b32 first)
+{
+    return first ? Str("${PS1@P}") : "${PS2@P}";
+}
+
+// A prompt expanded by expr (${PS1@P} and the like), \1 and \2 around
+// the invisible parts while editing. An expansion error gives nothing.
+static Str promptstr(Shell *sh, Arena *a, Str expr)
 {
     Escape e = {};
     e.up    = sh->esc;
@@ -795,7 +800,7 @@ static Str promptstr(Shell *sh, Arena *a, b32 first)
     i32 status = sh->status;
     Str ps = {};
     if (!__builtin_setjmp(e.jmp)) {
-        ps = expandstring(sh, a, first ? Str("${PS1@P}") : "${PS2@P}");
+        ps = expandstring(sh, a, expr);
     } else {
         unwind(sh, e.undo);
     }
@@ -804,11 +809,11 @@ static Str promptstr(Shell *sh, Arena *a, b32 first)
     return ps;
 }
 
-// Show PS1 or PS2 on standard error, without the editor's markers.
-static void showprompt(Shell *sh, b32 first)
+// Show a prompt on standard error, without the editor's markers.
+static void showprompt(Shell *sh, Str expr)
 {
     Arena a  = *scratchat(sh, sh->capdepth+1);
-    Str   ps = promptstr(sh, &a, first);
+    Str   ps = promptstr(sh, &a, expr);
     iz    n  = 0;
     for (iz i = 0; i < ps.len; i++) {
         if (ps[i]!=1 && ps[i]!=2) ps.data[n++] = ps[i];
@@ -837,6 +842,45 @@ static iz readstdin(Shell *sh, File *f, u8 *buf, iz len)
     return n;
 }
 
+// PS0, shown after a command is read and before it runs.
+static void showps0(Shell *sh)
+{
+    showprompt(sh, "${PS0@P}");
+}
+
+// PROMPT_COMMAND, run before each primary prompt: the string, or each
+// element of an indexed array, as eval would run it. $_ survives it.
+static void promptcommand(Shell *sh)
+{
+    Value *v = lookup(sh, "PROMPT_COMMAND");
+    if (!v || (v->attrs&V_ASSOC)) return;
+    i32   depth  = ++sh->capdepth;
+    Arena a      = *scratchat(sh, depth);
+    Str   last   = clone(&a, getvar(sh, &a, "_").value);
+    i32   status = sh->status;  // $? too, unlike eval
+    i32   line   = sh->line;
+    b32   lexeof = sh->lexeof;
+    AList cmds   = {};
+    if (v->attrs & V_ARRAY) {
+        cmds = alist(&a, v->arr, 0);
+    } else if (v->str.len) {
+        cmds.vals = &v->str;
+        cmds.n    = 1;
+    }
+    Str *copies = alloc<Str>(&a, cmds.n);  // the commands may change it
+    for (iz i = 0; i < cmds.n; i++) copies[i] = clone(&a, cmds.vals[i]);
+    sh->evaldepth++;
+    for (iz i = 0; i<cmds.n && !sh->exiting; i++) {
+        if (copies[i].len) runsource(sh, copies[i], "PROMPT_COMMAND", a, 0, 1);
+    }
+    sh->evaldepth--;
+    sh->capdepth = depth - 1;
+    sh->status   = status;
+    sh->line     = line;
+    sh->lexeof   = lexeof;
+    bindlastarg(sh, a, last);
+}
+
 static b32 fillline(void *ctx, Lexer *L)
 {
     StdinSource *in = (StdinSource *)ctx;
@@ -845,9 +889,10 @@ static b32 fillline(void *ctx, Lexer *L)
     Buf   *b     = &in->buf;
     iz     start = b->len;
     b32 seekable = f && f->kind==F_OS && os_seek(sh->os, f->h, 0, 1)>=0;
+    if (sh->interactive && L->newunit) promptcommand(sh);
     if (sh->interactive && (sh->opt[O_EMACS] || sh->opt[O_VI])) {
         Arena a  = *scratchat(sh, sh->capdepth+1);
-        Str   ps = promptstr(sh, &a, L->newunit);
+        Str   ps = promptstr(sh, &a, psexpr(L->newunit));
         i32   r  = editline(sh, ps, b);
         if (r != ED_NOTTY) {
             L->newunit = 0;
@@ -864,7 +909,7 @@ static b32 fillline(void *ctx, Lexer *L)
         }
     }
     if (sh->interactive) {
-        showprompt(sh, L->newunit);
+        showprompt(sh, psexpr(L->newunit));
         L->newunit = 0;
     }
     for (b32 done = 0; !done;) {

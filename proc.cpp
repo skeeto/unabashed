@@ -390,6 +390,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
         c->sched    = 0;
         c->paths    = copypaths(a, sh->paths);
         c->sniffs   = 0;
+        c->editor   = 0;
         c->fds      = alloc<Fdtab>(a);
         c->coprocs  = 0;
         c->spawnto  = 0;
@@ -417,6 +418,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->intrap   = 0;
     c->trapbusy = 0;
     c->intrread = 0;
+    c->intredit = 0;
     c->jobs     = copyjobs(st, sh->jobs);  // to list, not to wait for
     c->bgstats  = 0;
     closecoproc(c);

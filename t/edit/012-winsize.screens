@@ -1,0 +1,22 @@
+== snap 1
+$ declare -p LINES COLUMNS
+declare -- LINES="8"
+declare -- COLUMNS="30"
+$
+@ 3,2
+== snap 2
+$ declare -p LINES COLUMNS
+declare -- LINES="8"
+declare -- COLUMNS="30"
+$ echo $LINES $COLUMNS
+9 33
+$
+@ 5,2
+== snap 3
+$ declare -p LINES COLUMNS
+declare -- LINES="8"
+declare -- COLUMNS="30"
+$ echo $LINES $COLUMNS
+9 33
+$
+@ 5,2

@@ -8,3 +8,4 @@ third_party/
 /debug
 /unabashed
 tools/ptyrun
+tools/unabashed-linux

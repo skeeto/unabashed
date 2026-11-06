@@ -398,6 +398,7 @@ struct Coproc {       // bash 5.3 allows several
 };
 
 struct SniffCache;  // spawn.cpp
+struct Editor;      // edit.cpp
 
 struct Shell {
     Os      *os;
@@ -471,6 +472,7 @@ struct Shell {
     PathCtx *paths;        // the mount table and the rest, from startup
     Str      exe;          // the shell's own image, native (OsInfo.exe)
     SniffCache *sniffs;    // Windows: what files hold, shared by subshells
+    Editor     *editor;    // the line editor, made on first use (edit.cpp)
 
     // Options
     b32      opt[O_COUNT];
@@ -550,6 +552,7 @@ struct Shell {
                            // a descriptor they replace closes at once
     b32      noreport;     // in command and process substitutions: no reports
     b32      intrread;     // in the read builtin: trap actions run at once
+    b32      intredit;     // in the editor's read: a signal ends it (-4)
     b32      execed;       // replaced by exec: no EXIT trap
     b32      exitcalled;   // the exit builtin: EXIT trap in the function
     b32      execing;      // exec's program may replace the process
@@ -1007,6 +1010,7 @@ static iz fileread(Shell *sh, File *f, u8 *buf, iz len)
             // once, as bash, and the read resumes
             if (n>=0 || !sigtaken(sh)) return n;
             if (sh->intrread) runsigs(sh, {});
+            if (sh->intredit) return -4;  // the editor looks at its size
         }
     case F_MEM: {
         iz n = f->mem.len - f->pos;

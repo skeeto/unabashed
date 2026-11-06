@@ -46,9 +46,15 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 - Ctrl-D at PS2 (inside an unfinished command): bash reports the
   unexpected end of file and returns to PS1; ours ends the shell.
   (step 2)
-- Still to do in step 2: PROMPT_COMMAND, PS0, checkwinsize
-  (LINES/COLUMNS), SIGWINCH redraw, and the static editor across the
-  image copier and subshells.
+- checkwinsize: LINES and COLUMNS follow the size each time the
+  editor starts and ends a line, not after each foreground program as
+  bash's checkwinsize does; a script that resizes and reads COLUMNS
+  within one line sees the old size. (step 2)
+- A WINCH trap: the editor only catches SIGWINCH itself (POSIX) when
+  its disposition is the default, and its trap action runs later than
+  bash's. (step 2)
+- Win32: the editor's reads now always go through the console helper
+  (to be woken by a resize); check on a real console in step 8.
 
 Moved from M5a: needs the completion engine.
 

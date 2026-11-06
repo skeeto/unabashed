@@ -1,0 +1,15 @@
+# PROMPT_COMMAND (a string, then an array) and PS0 around each command
+size 12 40
+rc PS1='$ '
+keys PROMPT_COMMAND='echo pc; false'\r
+snap
+keys true last\r
+snap
+keys echo $? $_\r
+snap
+keys PS0='<ps0>\n'\r
+snap
+keys PROMPT_COMMAND=(x=1 'echo two'); unset PS0\r
+snap
+keys echo $x\r
+snap

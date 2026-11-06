@@ -1,0 +1,77 @@
+== snap 1
+$ PROMPT_COMMAND='echo pc; false'
+pc
+$
+@ 2,2
+== snap 2
+$ PROMPT_COMMAND='echo pc; false'
+pc
+$ true last
+pc
+$
+@ 4,2
+== snap 3
+$ PROMPT_COMMAND='echo pc; false'
+pc
+$ true last
+pc
+$ echo $? $_
+0 last
+pc
+$
+@ 7,2
+== snap 4
+$ PROMPT_COMMAND='echo pc; false'
+pc
+$ true last
+pc
+$ echo $? $_
+0 last
+pc
+$ PS0='<ps0>
+> '
+pc
+$
+@ 10,2
+== snap 5
+pc
+$ echo $? $_
+0 last
+pc
+$ PS0='<ps0>
+> '
+pc
+$ PROMPT_COMMAND=(x=1 'echo two'); unset
+ PS0
+<ps0>
+two
+$
+@ 11,2
+== snap 6
+pc
+$ PS0='<ps0>
+> '
+pc
+$ PROMPT_COMMAND=(x=1 'echo two'); unset
+ PS0
+<ps0>
+two
+$ echo $x
+1
+two
+$
+@ 11,2
+== snap 7
+pc
+$ PS0='<ps0>
+> '
+pc
+$ PROMPT_COMMAND=(x=1 'echo two'); unset
+ PS0
+<ps0>
+two
+$ echo $x
+1
+two
+$
+@ 11,2

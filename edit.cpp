@@ -137,6 +137,8 @@ struct Editor {
     i32      width;     // usable columns: one less without deferred wrap
     Handle   in;
     Handle   out;
+    i32      setrows;   // the size last put in LINES and COLUMNS
+    i32      setcols;
     // The display
     Str      prompt;    // the prompt's last line, \1 \2 marking the invisible
     Layout   shown;
@@ -194,7 +196,7 @@ static void edbindings(Editor *ed)
 
 static Editor *editor(Shell *sh)
 {
-    static Editor *ed;  // one per process: the top level's
+    Editor *ed = sh->editor;  // shared by subshells
     if (!ed) {
         Arena perm = newarena(sh->os, (iz)1<<24);
         ed = alloc<Editor>(&perm);
@@ -204,6 +206,7 @@ static Editor *editor(Shell *sh)
         ed->linemem    = newarena(sh->os, (iz)1<<24);
         ed->keytimeout = 500;
         edbindings(ed);
+        sh->editor = ed;
     }
     return ed;
 }
@@ -326,6 +329,12 @@ static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width)
             laycell(&y, {line.data+beg, i-beg}, w<0 ? 1 : w);
         }
     }
+    if (y.col >= y.width) {
+        // As readline, a full last row has an empty one after it,
+        // wherever the cursor is
+        layfinish(&y);
+        laynewrow(&y);
+    }
     layfinish(&y);
     return y.l;
 }
@@ -407,11 +416,19 @@ static void edupdate(Editor *ed, Layout *nl)
         DRow *o = row<ol->nrows ? ol->rows+row : 0;
         DRow *w = row<nl->nrows ? nl->rows+row : 0;
         if (!w) {
-            if (o->width) {
-                edmove(ed, row, 0);
-                edput(ed, "\x1b[K");
-            }
+            // An empty row is the one past a full row: it may hold the
+            // space that made the terminal wrap
+            edmove(ed, row, 0);
+            edput(ed, "\x1b[K");
             continue;
+        }
+        if (!w->ncells && ed->pending && ed->crow==row-1) {
+            // As readline: a space on the empty row past a full one
+            // makes the terminal wrap
+            edput(ed, " ");
+            ed->crow    = row;
+            ed->ccol    = 1;
+            ed->pending = 0;
         }
         i32 same = 0;  // cells in common
         if (o) {
@@ -457,6 +474,30 @@ static void edredraw(Editor *ed, Shell *sh)
     ed->pending = 0;
     edput(ed, "\r");
     redisplay(ed, sh);
+}
+
+static void edsize(Editor *, Shell *, Tty);
+
+// The terminal may have a new size (SIGWINCH): as readline does, clear
+// the rows of the line from its last up to its first, then draw it all
+// again for the new width from there.
+static void edresize(Editor *ed, Shell *sh)
+{
+    Tty t = os_tty(sh->os, ed->in, ed->out, TTY_QUERY);
+    if (t.err || t.cols<2) return;
+    if (t.rows==ed->tty.rows && t.cols==ed->tty.cols) return;
+    ed->tty.rows = t.rows;
+    ed->tty.cols = t.cols;
+    ed->width    = ed->tty.xenl ? t.cols : t.cols-1;
+    edsize(ed, sh, t);
+    edput(ed, "\r");
+    ed->ccol    = 0;
+    ed->pending = 0;
+    for (i32 row = ed->shown.nrows-1; row >= 0; row--) {
+        edmove(ed, row, 0);
+        edput(ed, "\x1b[K");
+    }
+    edredraw(ed, sh);
 }
 
 
@@ -673,13 +714,22 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
 // Input
 
 // The next key byte, waiting at most timeout ms (-1: forever): -1 at
-// end of input or on error, -2 on an interrupt, -3 on timeout.
-static i32 edkey(Editor *, Shell *sh, i64 timeout)
+// end of input or on error, -2 on an interrupt, -3 on timeout. A
+// signal meanwhile (SIGWINCH) checks the terminal's size.
+static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
 {
     Task *self = sh->sched->cur;
-    self->deadline = timeout<0 ? 0 : os_now(sh->os) + timeout*1000000;
-    u8 c;
-    iz n = readstdin(sh, sh->fds->fd[0], &c, 1);
+    i64   when = timeout<0 ? 0 : os_now(sh->os) + timeout*1000000;
+    u8    c;
+    iz    n;
+    for (;;) {
+        self->deadline = when;
+        self->introk   = self->anysig = sh->intredit = 1;
+        n = readstdin(sh, sh->fds->fd[0], &c, 1);
+        self->introk   = self->anysig = sh->intredit = 0;
+        if (n != -4) break;
+        edresize(ed, sh);
+    }
     self->deadline = 0;
     if (self->timedout) {
         self->timedout = 0;
@@ -723,6 +773,19 @@ static b32 eddispatch(Editor *ed, Shell *sh)
     return 1;
 }
 
+// LINES and COLUMNS (plain shell variables) follow the terminal's size
+// when it changes, as readline sets them at its start and on a resize.
+static void edsize(Editor *ed, Shell *sh, Tty t)
+{
+    if (t.err || t.rows<1 || t.cols<1) return;
+    if (t.rows==ed->setrows && t.cols==ed->setcols) return;
+    ed->setrows = t.rows;
+    ed->setcols = t.cols;
+    Arena a = *scratchat(sh, sh->capdepth+1);
+    setvar(sh, a, "LINES",   fmti64(&a, t.rows));
+    setvar(sh, a, "COLUMNS", fmti64(&a, t.cols));
+}
+
 // Read a line on the terminal with the editor, the prompt shown first.
 // ED_NOTTY if descriptors 0 and 2 are not one terminal.
 static i32 editline(Shell *sh, Str prompt, Buf *out)
@@ -735,6 +798,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out)
     ed->out = ferr->h;
     ed->tty = os_tty(sh->os, ed->in, ed->out, TTY_RAW);
     if (ed->tty.err) return ED_NOTTY;
+    edsize(ed, sh, ed->tty);
     if (ed->tty.cols < 2) ed->tty.cols = 80;
     ed->width = ed->tty.xenl ? ed->tty.cols : ed->tty.cols-1;
 
@@ -775,7 +839,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out)
     }
     edput(ed, "\r\n");
     edflush(ed, sh);
-    os_tty(sh->os, ed->in, ed->out, TTY_RESTORE);
+    edsize(ed, sh, os_tty(sh->os, ed->in, ed->out, TTY_RESTORE));
     print(out, {ed->line.data, ed->line.len});
     return ed->result;
 }

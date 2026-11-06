@@ -1,0 +1,15 @@
+# A resize while editing: the line drawn again for the new width
+size 8 30
+rc PS1='$ '
+keys echo one two three four five six seven
+snap
+resize 8 20
+keys \C-b
+snap
+keys X
+snap
+resize 8 40
+keys \C-e
+snap
+keys \r
+snap

@@ -21,6 +21,7 @@ enum : i32 {
 static Builtin *findbuiltin(Shell *, Str name);
 static b32      parsei64(Str, i64 *);
 static void     execute(Shell *, Node *, Arena);
+static void     showps0(Shell *);  // unabashed.cpp
 static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i32 line = 1,
                           b32 (*fill)(void *, Lexer *) = 0, void *fillctx = 0,
                           b32 comsub = 0);
@@ -3915,6 +3916,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             // its last line
             sh->line = L->lineno;
             if (sh->jobs && !outer) notifyjobs(sh, *L->a);
+            if (fill && sh->interactive) showps0(sh);
             runcommand(sh, r.cmd, *L->a, reader);
         }
         // Syncing options the command may have changed
