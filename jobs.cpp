@@ -579,7 +579,8 @@ static Node *bgnode(Shell *c, Arena *a, Node *n)
         r->kind = N_GROUP;
         c->tailnode = tailcommand(r->a);
     }
-    c->taillevel = c->subshell + 1;
+    c->taillevel  = c->subshell + 1;
+    c->keepredirs = r;
     c->asyncign = (u64)1<<1 | (u64)1<<2;  // INT, QUIT
     return r;
 }

@@ -47,6 +47,12 @@ Closed: every item was fixed or moved (m5a.md, exit criteria).
   creation times; the cause of the rest is not known. A 32-bit shell
   reading a 64-bit child's PEB (console image, Ctrl-C ignored,
   initializing, same image) gets "unknown".
+- **XP, in the sandbox only: a killed background job's status is
+  often 0**: `sleep 3 & kill $!; wait $!` (also `"$U" -c "sleep 3" &`)
+  ends the job at once but `wait` gives 0 for most iterations after the
+  first, where Windows 11, and XP outside tools/sandbox, give 143 every
+  time. Seen with binaries from before M5b too, so not the image or
+  SIGEXIT; makes t/win32/016's "TERM 143" line flaky on XP.
 - **Win32: a bare `wait` can return before every background program
   has been reported** (XP laptop, t/win32/003, about 1 run in 4 since
   at least step 6): `wait -n` afterwards yields one extra status 0

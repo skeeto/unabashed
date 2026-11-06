@@ -543,6 +543,9 @@ struct Shell {
     i32      taillevel;    // subshell level + 1 where tailnode is the last
     Node    *tailnode;     // command, which bash would exec: its death by a
                            // signal is the subshell's (reported by its parent)
+    Node    *keepredirs;   // a background job's command: its redirections
+                           // are not undone, as in bash's forked child, so
+                           // a descriptor they replace closes at once
     b32      noreport;     // in command and process substitutions: no reports
     b32      intrread;     // in the read builtin: trap actions run at once
     b32      execed;       // replaced by exec: no EXIT trap

@@ -20,7 +20,6 @@ struct ImageRef {
     byte  *base;  // null: none
     iz     cap;   // reserved from base
     iz     len;   // filled from base
-    Handle h;     // the platform's means of passing it, if any
 };
 
 struct OsInfo {
@@ -148,9 +147,10 @@ struct Spawn {
                       // descriptors 3 and up in the CRT's lpReserved2
                       // blob, or 0 to pass only 0-2
     ImageRef image;   // with a base: start this shell's own program
-                      // (path ignored) continuing from the image, which
-                      // the parent no longer touches, every descriptor
-                      // listed passed
+                      // (path and cmdline ignored) continuing from the
+                      // image, every descriptor listed passed; once
+                      // started the child owns it (the parent's copy may
+                      // be gone), else the caller frees it
 };
 
 struct Spawned {
@@ -241,7 +241,7 @@ static Dirent *os_list(Os *, Arena *, Str dir, i32 *err);
 static Spawned os_spawn(Os *, Arena scratch, Spawn *);
 // Reserve a region for a child's state image (Spawn.image), where a
 // fresh process of this shell can reserve it again: base null where
-// the platform cannot self-spawn so.
+// the platform cannot self-spawn so. The core commits and fills it.
 static ImageRef os_imagenew(Os *, iz cap);
 // Release a region os_imagenew made that no child took.
 static void    os_imagefree(Os *, ImageRef);

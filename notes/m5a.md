@@ -1,6 +1,6 @@
 # M5a: Windows paths and spawning
 
-Status: planning done; implementation in progress (see "Steps").
+Status: done (see "Exit criteria checks").
 
 Scope and exit criteria: plan.md §6 and the M5a row of its milestone
 table. The exact MSYS2 rules are in research/msys2.md; Win32 API

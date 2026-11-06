@@ -135,10 +135,15 @@ then 7; then 8 and 9 in parallel; then 10.
 
 - ASLR stays: the image is made closed rather than the exe based at a
   fixed address (principle 2).
-- Win32 transfer by a shared section mapped at the same address in the
-  child, not a stream through a pipe: no copy and no relocation; if the
-  child cannot map it there it says so and the parent runs the job as
-  a fiber.
+- Win32 transfer by copying: the parent starts the child suspended,
+  reserves the image's address range in it (VirtualAllocEx), commits
+  as much as is committed here, writes the image (WriteProcessMemory)
+  and resumes it. No relocation. If the range is taken in the child,
+  the spawn fails and the parent runs the job as a fiber. This replaced
+  the planned shared section: the child's store goes on in the region,
+  and a mapped view can be committed but never decommitted or released
+  piecemeal, and copying an image of a few hundred KiB costs little next
+  to starting a process.
 
 
 ## Exit criteria checks
@@ -227,3 +232,66 @@ less the dynamic variables, declare -f, alias, trap -p, set -o, shopt,
 hash, `$-`, the positional parameters, FUNCNAME, BASH_SOURCE, PWD,
 OLDPWD, getopts' state) the same in a background job as in its
 parent, from functions with locals called from a sourced file.
+
+
+### Step 2: the platform API, and Win32 self-spawn
+
+`ImageRef` lost its handle: no platform needs one. `Spawn.image` now
+says that a started child owns the region (the parent's copy may be
+gone) and that the caller frees it if the spawn fails.
+
+Win32 (main_win32.cpp): `os_imagenew` is a plain reservation; `os_spawn`
+with an image (`startproc`) runs this program again (`Os.exe`) with the
+one argument `--unabashed-image=BASE,CAP,LEN` (hex), always suspended,
+passing descriptors above 2 in the CRT blob at this build's width;
+`imagecopy` then does what the decision above says, the thread is
+resumed, and the parent's region is released. The child's startup
+takes the argument only as the sole argument, and only for a region
+that is this process's own private memory, committed from its
+allocation base as far as LEN (`imagearg`); `imagemain` then checks the
+head's magic and build stamp. Otherwise the argument is an ordinary
+(invalid) option.
+
+The signal-death convention: a shell dying by signal N, and a program
+`os_kill` ends, exit with `SIGEXIT|128+N` (0xe0550000, an error
+NTSTATUS with the customer bit; its low byte is the status for a parent
+that keeps only that), SIGINT keeping 0xc000013a; `exitstatus` maps
+both back to `WSIGNALED|128+N`. So `sleep 5 & kill $!; wait $!` is 143
+from a signal, as in bash.
+
+This already does most of step 4: `&`, coproc and background pipeline
+stages are processes on Windows, ignoring Ctrl-C (`Spawn.sigign`, as
+for programs: no job object, so they outlive the shell). Left for step
+4: CREATE_NEW_PROCESS_GROUP, counting fiber fallbacks in debug builds,
+and handles lent to the child (a pipe with a read in flight).
+
+A background job's own redirections (`{ ...; } >/dev/null &`, `f
+>/dev/null &`) are now made for good, as in bash's forked child
+(`Shell.keepredirs`, set by `bgnode`): the descriptor they replace is
+closed at once instead of being saved for a restore that never comes.
+In a process that held the parent's pipe open, so `"$U" -c '{ sleep 2;
+} >/dev/null & echo s' | cat` waited 2 s; as a fiber, `x=$( { sleep 2;
+} >/dev/null & )` did too. bash returns at once in both; a redirection
+inside the job's command (`{ sleep 2 >/dev/null; } &`) still holds it,
+in bash too. New spec t/exec/876-bg-redir-closes (recorded).
+
+The vos `bash` fake (tests and fuzz layers) now hands its process's
+descriptors to the shell instead of duplicates, so that, as in a real
+process, the shell's references are the only ones and closing one
+closes it; without that the image child of 876 kept the pipe open
+however its redirections went. No spec changed.
+
+`os_fork` moves to step 5, its first caller (an unused static function
+would only warn).
+
+Cost: 100 `{ :; } & wait` take 0.33 s on Windows 11 (3.3 ms each)
+against 0.018 s as fibers.
+
+Tests: t/win32/016-bg-image (`$!` the job's BASHPID, `$$` the parent's,
+locals, arrays and functions in the job, a descriptor above 2, a pipe
+in, a here-string, a capture, `kill` status, `"$U" -c '... &'`
+returning at once with the job finishing later). t/win32 -x 32/0 on
+Windows 11 (x64 and i686 builds); on XP 29/3 with -x: 003-waits (the
+known XP `wait` flake, passing on a rerun) and 016's "TERM 143" in the
+sandbox (issues.md, also with binaries from before M5b). The vos suites
+unchanged; with `--images` only 692 fails.

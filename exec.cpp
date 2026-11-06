@@ -2560,7 +2560,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     i64 lastbg   = sh->lastbg;
     Str savedname = sh->bltname;
     if (n->redirs && findbuiltin(sh, name)) sh->bltname = name;  // for messages
-    b32 redirected = doredirs(sh, n->redirs, a, execonly && !commit);
+    b32 keep       = (execonly && !commit) || n==sh->keepredirs;
+    b32 redirected = doredirs(sh, n->redirs, a, keep);
     sh->bltname = savedname;
     if (!redirected) {
         unwind(sh, mark);
@@ -3466,7 +3467,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         for (Redir *r = n->redirs; r; r = r->next) {
             sh->stdinredir |= r->src==0 && !r->srcvar;  // & reads it then
         }
-        if (!doredirs(sh, n->redirs, &scratch, 0)) {
+        if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs)) {
             sh->stdinredir = stdinredir;
             unwind(sh, mark);
             sh->status = 1;

@@ -216,8 +216,13 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.uid     = info.euid = 1000;
     info.gid     = info.egid = 1000;
     info.host    = "oracle";
-    // Its own references: exec may close them before the process exits
-    for (i32 i = 0; i < 3; i++) info.std[i] = os_dup(os, ctx->fd[i]);
+    // The process's descriptors become the shell's own, its only
+    // references, as in a real process: closing one closes it (a pipe
+    // a background job's redirection replaces is closed at once)
+    for (i32 i = 0; i < 3; i++) {
+        info.std[i] = ctx->fd[i];
+        ctx->fd[i]  = BADHANDLE;
+    }
     // The rest it was given, as a POSIX shell inherits them, or a
     // Windows one through lpReserved2 (os_spawn passes them only then)
     InheritFd inherit[countof(ctx->fd)];
@@ -225,8 +230,9 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
         if (ctx->fd[fd] == BADHANDLE) continue;
         InheritFd *e = inherit + info.ninherit++;
         e->fd    = fd;
-        e->h     = os_dup(os, ctx->fd[fd]);
+        e->h     = ctx->fd[fd];
         e->flags = vaccess(osvos(os), ctx->fd[fd]);
+        ctx->fd[fd] = BADHANDLE;
     }
     info.inherit = inherit;
     info.ownstd  = 1;

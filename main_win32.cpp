@@ -67,6 +67,7 @@ enum : i32 {
     JobObjectExtendedLimitInformation = 9,
     MEM_COMMIT                   = 0x1000,
     MEM_RESERVE                  = 0x2000,
+    MEM_PRIVATE                  = 0x20000,
     MEM_RELEASE                  = 0x8000,
     OPEN_ALWAYS                  = 4,
     OPEN_EXISTING                = 3,
@@ -196,6 +197,16 @@ struct BasicInfo {  // PROCESS_BASIC_INFORMATION
     uz ppid;
 };
 
+struct MemInfo {  // MEMORY_BASIC_INFORMATION
+    byte *base;
+    byte *allocbase;
+    i32   allocprotect;
+    uz    size;
+    i32   state;
+    i32   protect;
+    i32   type;
+};
+
 struct SysTime {  // SYSTEMTIME, WORDs
     c16 year;
     c16 month;
@@ -289,7 +300,10 @@ W32(uz,     OpenProcess(i32, b32, i32));
 W32(b32,    TerminateProcess(uz, u32));
 W32(b32,    SetConsoleCtrlHandler(void *, b32));
 W32(byte *, VirtualAlloc(byte *, iz, i32, i32));
+W32(byte *, VirtualAllocEx(uz, byte *, iz, i32, i32));
 W32(b32,    VirtualFree(byte *, iz, i32));
+W32(iz,     VirtualQuery(byte *, MemInfo *, iz));
+W32(b32,    WriteProcessMemory(uz, void *, void *, iz, iz *));
 W32(b32,    SetEvent(uz));
 W32(void,   Sleep(i32));
 W32(i32,    WaitForMultipleObjects(i32, uz *, b32, i32));
@@ -519,6 +533,7 @@ struct Os {
     void (__stdcall *now)(Filetime *);  // precise clock where available
     NtQueryInformationFileFn queryfile;  // ntdll, resolved at run time
     NtQueryInformationProcessFn queryproc;  // ntdll, likewise
+    Str  exe;  // this program, for self-spawning (os_spawn with an image)
     b32  (__stdcall *cancelsync)(uz);    // CancelSynchronousIo, Vista
     Arena      perm;       // platform records, recycled through free lists
     uz         wake;       // auto-reset event for the main thread
@@ -2644,13 +2659,62 @@ static Str envget(Str *env, iz nenv, Str name)
 // the M3b job on Windows 8, else one made here, out of the shell's own
 // job if that allows breaking away, without one if not. *job is then
 // that job, or 0.
+static void printhexuz(Buf *b, uz x)
+{
+    u8  buf[16];
+    i32 n = 0;
+    do {
+        buf[n++] = (u8)"0123456789abcdef"[x&15];
+    } while (x >>= 4);
+    while (n) putbyte(b, buf[--n]);
+}
+
+// Give a suspended child of this program the parent's image region at
+// the same address, committed as far as it is here (the image's arena
+// goes on from there), and its bytes. Returns a Win32 error, or 0.
+static i32 imagecopy(uz proc, ImageRef im)
+{
+    MemInfo mi = {};
+    if (!VirtualQuery(im.base, &mi, sizeof(mi)) || mi.state!=MEM_COMMIT ||
+            (iz)mi.size<im.len) {
+        return 87;  // ERROR_INVALID_PARAMETER
+    }
+    if (VirtualAllocEx(proc, im.base, im.cap, MEM_RESERVE, PAGE_NOACCESS) != im.base) {
+        return 487;  // ERROR_INVALID_ADDRESS: taken in the child
+    }
+    if (!VirtualAllocEx(proc, im.base, (iz)mi.size, MEM_COMMIT, PAGE_READWRITE)) {
+        return GetLastError();
+    }
+    iz n = 0;
+    if (!WriteProcessMemory(proc, im.base, im.base, im.len, &n) || n!=im.len) {
+        return GetLastError();
+    }
+    return 0;
+}
+
 static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
 {
     Spawned r = {};
     r.proc = BADHANDLE;
 
-    Str cmd = s->cmdline;
-    if (!cmd.len) {
+    Str  cmd  = s->cmdline;
+    Str  path = s->path;
+    i32  slot = s->crtslot;
+    b32  self = !!s->image.base;
+    if (self) {
+        // This program again, told where its image is (see imagearg)
+        Buf b(&scratch, 1<<10);
+        quoteprogram(&b, s->argc ? s->argv[0] : os->exe);
+        print(&b, " --unabashed-image=");
+        printhexuz(&b, (uz)s->image.base);
+        putbyte(&b, ',');
+        printhexuz(&b, (uz)s->image.cap);
+        putbyte(&b, ',');
+        printhexuz(&b, (uz)s->image.len);
+        cmd  = finish(&b);
+        path = os->exe;
+        slot = sizeof(void *);  // as this program decodes it
+    } else if (!cmd.len) {
         Buf b(&scratch, 1<<10);
         quoteprogram(&b, s->argc ? s->argv[0] : s->path);
         for (iz i = 1; i < s->argc; i++) {
@@ -2664,7 +2728,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
         r.err = E_2BIG;
         return r;
     }
-    Str16 app = widepath(&scratch, s->path);
+    Str16 app = widepath(&scratch, path);
 
     // Environment block: sorted, each entry null-terminated, and one
     // more null at the end (towide adds the last). XP takes at most
@@ -2697,9 +2761,9 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
     // are binary, as busybox-w32 passes them. A pipe or console the
     // child gets is lent to it (see Wobj), perhaps through an
     // interposed pipe.
-    uz  self = GetCurrentProcess();
-    i32 top  = 3;
-    for (iz i = 0; i<s->nfds && s->crtslot; i++) {
+    uz  cur = GetCurrentProcess();
+    i32 top = 3;
+    for (iz i = 0; i<s->nfds && slot; i++) {
         i32 fd = s->fds[i].fd;
         top = fd>=top && fd<FDMAX ? fd+1 : top;
     }
@@ -2711,7 +2775,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
         uz  h  = s->fds[i].h;
         if (fd<0 || fd>=top || h==BADHANDLE || dups[fd]) continue;
         h = lend(os, h, objs+fd, viaip+fd);
-        if (!DuplicateHandle(self, h, self, dups+fd, 0, 1, DUPLICATE_SAME_ACCESS)) {
+        if (!DuplicateHandle(cur, h, cur, dups+fd, 0, 1, DUPLICATE_SAME_ACCESS)) {
             dups[fd] = 0;
         }
     }
@@ -2728,7 +2792,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
         // A 32-bit parent always writes 4-byte slots: for a 64-bit
         // child WOW64 widens them itself (zero-extended), and would
         // widen 8-byte slots again (observed on Windows 11)
-        i32 width = sizeof(void *)==4 ? 4 : s->crtslot;
+        i32 width = sizeof(void *)==4 ? 4 : slot;
         blob = encodecrtfds(&scratch, c, top, width);
     }
 
@@ -2770,7 +2834,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
     u64 ctrls  = (u64)1<<1 | (u64)1<<2;  // SIGINT, SIGQUIT (Ctrl-Break)
     b32 unseen = !noint && (nctrl!=os->nctrlseen ||
                  (__atomic_load_n(&os->siggrp, __ATOMIC_SEQ_CST) & ctrls));
-    flags |= tojob || ejob || unseen ? CREATE_SUSPENDED : 0;
+    flags |= tojob || ejob || unseen || self ? CREATE_SUSPENDED : 0;
     if (noint) SetConsoleCtrlHandler(0, 1);
     b32 ok = CreateProcessW(app.data, line.data, 0, 0, 1, flags, wenv.data,
                             cwd.data, &si, &pi);
@@ -2782,6 +2846,18 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
         code = ok ? 0 : GetLastError();
     }
     if (noint) SetConsoleCtrlHandler(0, 0);
+    if (ok && self) {
+        i32 err = imagecopy(pi.process, s->image);
+        if (err) {
+            TerminateProcess(pi.process, 1);
+            CloseHandle(pi.thread);
+            CloseHandle(pi.process);
+            ok   = 0;
+            code = err;
+        } else if (!tojob && !ejob && !unseen) {
+            ResumeThread(pi.thread);
+        }
+    }
     if (ok && unseen) TerminateProcess(pi.process, 0xc000013a);
     if (ok && exec) {
         uz j = 0;
@@ -2820,6 +2896,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
         return r;
     }
     CloseHandle(pi.thread);
+    if (self) VirtualFree(s->image.base, 0, MEM_RELEASE);  // the child's now
     r.proc = pi.process;
     r.pid  = (i64)pi.pid;
     return r;
@@ -2830,9 +2907,20 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     return startproc(os, scratch, s, 0, 0);
 }
 
-// Native crashes become the matching signal statuses, as in Cygwin.
+// A program or shell ended by signal N (os_kill, or a shell dying by
+// one) exits with SIGEXIT|128+N, which os_waitproc takes for death by
+// N: an error NTSTATUS with the customer bit set, whose low byte is the
+// status for parents that keep only that.
+enum : u32 { SIGEXIT = 0xe0550000u };
+
+// Native crashes become the matching signal statuses, as in Cygwin,
+// and so does SIGEXIT.
 static i32 exitstatus(u32 code)
 {
+    i32 low = (i32)(code & 255);
+    if ((code & ~0xffu)==SIGEXIT && low>128 && low<128+NSIGNAL) {
+        return WSIGNALED | low;
+    }
     switch (code) {
     case 0xc0000005u: return WSIGNALED | (128 + 11);  // access violation: SIGSEGV
     case 0xc00000fdu: return WSIGNALED | (128 + 11);  // stack overflow
@@ -2846,8 +2934,8 @@ static i32 exitstatus(u32 code)
 }
 
 // Signals (M3a's minimum; the signal channel to our own shells is
-// M5b): a signal ends another process outright, with exit code 128+N.
-// Nothing arrives through os_sigpending yet.
+// M5b): a signal ends another process outright, as killed by it (see
+// SIGEXIT). Nothing arrives through os_sigpending yet.
 static i32 os_kill(Os *, i64 pid, i32 sig)
 {
     if (pid<=0 || pid>(i64)0x7fffffff) return E_SRCH;
@@ -2863,7 +2951,7 @@ static i32 os_kill(Os *, i64 pid, i32 sig)
     case 0: case 17: case 18: case 19: case 20: case 21: case 22: case 23: case 28:
         break;  // existence check, or ignored by default
     default:
-        ok = TerminateProcess(h, (u32)(128 + sig));
+        ok = TerminateProcess(h, sig==2 ? 0xc000013au : SIGEXIT|(u32)(128+sig));
     }
     CloseHandle(h);
     return ok ? 0 : E_PERM;
@@ -2896,14 +2984,56 @@ static void os_racy(Os *)
 {
 }
 
-// Self-spawning with a state image: not yet (M5b), so background jobs
-// stay fibers.
-static ImageRef os_imagenew(Os *, iz)
+// Self-spawning with a state image: a plain reservation, which
+// os_spawn copies into the suspended child at the same address
+// (imagecopy) and then releases.
+static ImageRef os_imagenew(Os *os, iz cap)
 {
-    return {};
+    ImageRef r = {};
+    r.base = os_reserve(os, cap);
+    r.cap  = r.base ? cap : 0;
+    return r;
 }
 
-static void os_imagefree(Os *, ImageRef) {}
+static void os_imagefree(Os *, ImageRef im)
+{
+    if (im.base) VirtualFree(im.base, 0, MEM_RELEASE);
+}
+
+// The image a self-spawning parent left (imagecopy), from its command
+// line argument "BASE,CAP,LEN" in hex: only a region that is wholly
+// this process's own private, committed memory as far as LEN, which
+// the core then checks further (imagemain).
+static ImageRef imagearg(Str s)
+{
+    ImageRef r = {};
+    uz v[3] = {};
+    iz i = 0;
+    for (i32 k = 0; k < 3; k++) {
+        if (k && (i>=s.len || s[i++]!=',')) return r;
+        iz beg = i;
+        for (; i < s.len && i-beg < (iz)sizeof(uz)*2; i++) {
+            u8 c = s[i];
+            i32 d = c>='0' && c<='9' ? c-'0' : c>='a' && c<='f' ? c-'a'+10 : -1;
+            if (d < 0) break;
+            v[k] = v[k]<<4 | (uz)d;
+        }
+        if (i == beg) return r;
+    }
+    iz cap = (iz)v[1], len = (iz)v[2];
+    if (i<s.len || cap<=0 || len<=0 || len>cap) return r;
+    MemInfo mi = {};
+    byte   *base = (byte *)v[0];
+    if (!VirtualQuery(base, &mi, sizeof(mi)) || mi.allocbase!=base ||
+            mi.base!=base || mi.state!=MEM_COMMIT || mi.type!=MEM_PRIVATE ||
+            (iz)mi.size<len) {
+        return r;
+    }
+    r.base = base;
+    r.cap  = cap;
+    r.len  = len;
+    return r;
+}
 
 // No exec on Windows: the program starts as a child in a job that ends
 // it if the shell dies (startproc), and the shell waits and exits with
@@ -3264,6 +3394,10 @@ void mainCRTStartup()
     Slice<Str> args = splitcmdline(&a, clone(&a, info.cmdline));
     info.args  = args.data;
     info.nargs = args.len;
+    Str flag = "--unabashed-image=";
+    if (args.len==2 && startswith(args[1], flag)) {
+        info.image = imagearg(cuthead(args[1], flag.len));
+    }
 
     for (i32 cap = 260; cap <= 1<<15; cap *= 2) {
         c16 *buf = alloc<c16>(&a, cap);
@@ -3274,7 +3408,7 @@ void mainCRTStartup()
             for (iz i = 0; i < s.len; i++) {
                 s[i] = s[i]=='\\' ? '/' : s[i];
             }
-            info.exe = s;
+            info.exe = os.exe = s;
             break;
         } else if (!len) {
             break;
@@ -3401,7 +3535,14 @@ void mainCRTStartup()
     info.stack = stackreserve();
 
     // A shell killed by SIGINT exits as Ctrl-C ends a native program,
-    // which Cygwin's processes also take for death by SIGINT
+    // which Cygwin's processes also take for death by SIGINT; by
+    // another signal, with SIGEXIT
     i32 status = sh_main(&os, &info);
-    ExitProcess(status==(WSIGNALED|(128+2)) ? 0xc000013a : status&255);
+    u32 code   = (u32)(status & 255);
+    if (status == (WSIGNALED|(128+2))) {
+        code = 0xc000013a;
+    } else if (status & WSIGNALED) {
+        code |= SIGEXIT;
+    }
+    ExitProcess(code);
 }

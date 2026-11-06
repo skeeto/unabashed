@@ -1,0 +1,17 @@
+job outer loc b c v
+g one two
+status 0
+BASHPID is $!
+$$ is the parent's
+three
+got piped
+here
+out
+captured
+TERM 143
+exit 7
+started
+returned at once
+not yet
+late
+status 0

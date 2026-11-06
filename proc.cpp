@@ -416,6 +416,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     closecoproc(c);
     copytraps(c, sh);
     c->sig      = 0;
+    c->keepredirs = 0;
     return c;
 }
 

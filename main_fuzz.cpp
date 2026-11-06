@@ -205,7 +205,11 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.sigign  = os->vos.procs[os->vos.cur].sigign;
     info.ppid    = 2;
     info.chaos   = os->chaos;
-    for (i32 i = 0; i < 3; i++) info.std[i] = os_dup(os, ctx->fd[i]);
+    // Its descriptors become the shell's own, as in main_test.cpp
+    for (i32 i = 0; i < 3; i++) {
+        info.std[i] = ctx->fd[i];
+        ctx->fd[i]  = BADHANDLE;
+    }
     // The rest it was given, as a POSIX shell inherits them, or a
     // Windows one through lpReserved2 (os_spawn passes them only then)
     InheritFd inherit[countof(ctx->fd)];
@@ -213,8 +217,9 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
         if (ctx->fd[fd] == BADHANDLE) continue;
         InheritFd *e = inherit + info.ninherit++;
         e->fd    = fd;
-        e->h     = os_dup(os, ctx->fd[fd]);
+        e->h     = ctx->fd[fd];
         e->flags = vaccess(&os->vos, ctx->fd[fd]);
+        ctx->fd[fd] = BADHANDLE;
     }
     info.inherit = inherit;
     info.ownstd = 1;
