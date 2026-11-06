@@ -79,9 +79,10 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   its parent; ours leaves the prefix unbound. Bash's own keys and the
   arrow keys are bound before the inputrc rather than after it "if
   unbound", which differs only when the inputrc unbinds one. (step 10)
-- inputrc with CRLF lines: msys mode strips the CR, POSIX keeps it, as
-  readline does; not recorded (the vos runs one personality), and the
-  install's /etc/inputrc under msys is untested. (step 8)
+- inputrc with CRLF lines: msys mode strips the CR (checked with an
+  install's CRLF /etc/inputrc on a Windows console); POSIX keeps it, as
+  readline does, but no script records that (the vos runs one
+  personality). (step 10)
 - A terminal special character that stops being one (stty) becomes
   self-insert on the next line, as readline; untested, since neither
   the vos nor the oracle's PATH has stty. (step 10)
