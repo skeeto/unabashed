@@ -30,6 +30,15 @@ struct HeapMark {
     b32 dead;
 };
 
+// A reservation of a nested shell's own, for reuse once the shell has
+// exited if the heap could not be rewound past it (a job outliving its
+// parent's next reservation): loops of jobs run in bounded memory.
+struct HeapBlock {
+    byte *base;
+    iz    len;
+    i32   proc;  // the vos process of the shell that reserved it
+};
+
 struct Os {
     Fibers   fibers;
     byte    *heap;     // backs every reservation
@@ -38,6 +47,10 @@ struct Os {
     iz       pinned;   // reserved by others while nested shells run
     HeapMark marks[64];
     i32      nmarks;
+    HeapBlock blocks[1024];  // of live nested shells
+    i32       nblocks;
+    HeapBlock spare[1024];   // of ended ones, below heapused
+    i32       nspare;
     u64      chaos;    // seed for the next run, 0 for none
     Vos      vos;
 };
@@ -71,8 +84,40 @@ static jmp_buf *oomjmp;  // test-only: where os_oom lands
 
 static iz reservelimit(Os *);
 
+// Empty the heap: every reservation is released.
+static void heapreset(Os *os)
+{
+    os->nblocks  = 0;
+    os->nspare   = 0;
+    os->heapused = 0;
+    os->nmarks   = 0;
+    os->pinned   = 0;
+}
+
+// The nested shell running now, as an index into marks, or -1.
+static i32 heapowner(Os *os)
+{
+    for (i32 m = os->nmarks-1; m >= 0; m--) {
+        if (!os->marks[m].dead && os->marks[m].proc==os->vos.cur) return m;
+    }
+    return -1;
+}
+
 static byte *os_reserve(Os *os, iz len)
 {
+    // An image's region the vos recycles itself (os_imagenew)
+    b32 own = !os->vos.imaging && heapowner(os)>=0;
+    for (i32 i = 0; own && i<os->nspare; i++) {
+        if (os->spare[i].len == len) {
+            byte *r = os->spare[i].base;
+            os->spare[i] = os->spare[--os->nspare];
+            if (os->nblocks < countof(os->blocks)) {
+                os->blocks[os->nblocks++] = {r, len, os->vos.cur};
+            }
+            memset(r, 0x55, (uz)len);
+            return r;
+        }
+    }
     iz pad = -os->heapused & 63;
     if (len > reservelimit(os) - os->heapused - pad) {
         return 0;
@@ -82,6 +127,9 @@ static byte *os_reserve(Os *os, iz len)
     if (os->nmarks && (os->marks[os->nmarks-1].proc!=os->vos.cur ||
                        os->vos.imaging)) {
         os->pinned = os->heapused;
+    }
+    if (own && os->nblocks<countof(os->blocks)) {
+        os->blocks[os->nblocks++] = {r, len, os->vos.cur};
     }
     memset(r, 0x55, (uz)len);  // expose reads of uninitialized memory
     return r;
@@ -245,6 +293,20 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
         iz save = os->marks[--os->nmarks].save;
         os->heapused = save>os->pinned ? save : os->pinned;
     }
+    // What the rewind did not release becomes spare; nothing spare may
+    // lie past the heap's end
+    byte *end = os->heap + os->heapused;
+    for (i32 i = os->nblocks-1; i >= 0; i--) {
+        HeapBlock b = os->blocks[i];
+        if (b.proc != os->vos.cur) continue;
+        os->blocks[i] = os->blocks[--os->nblocks];
+        if (b.base<end && os->nspare<countof(os->spare)) {
+            os->spare[os->nspare++] = b;
+        }
+    }
+    for (i32 i = os->nspare-1; i >= 0; i--) {
+        if (os->spare[i].base >= end) os->spare[i] = os->spare[--os->nspare];
+    }
     return status;
 }
 
@@ -286,9 +348,7 @@ static Str speclocaltz;  // a spec's "# localtz:" line: the vos's zone
 // heap, the shell below.
 static void startrun(Os *os, b32 win, Str input)
 {
-    os->heapused = 0;
-    os->pinned   = 0;
-    os->nmarks   = 0;
+    heapreset(os);
     Arena va = {};
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
@@ -481,7 +541,7 @@ static void test_pathmodes(Test *t)
 static void test_arena(Test *t)
 {
     Os *os = t->os;
-    os->heapused = 0;
+    heapreset(os);
 
     // Grows past the initial commit, then fails at the reservation.
     Arena a = newarena(os, (iz)1<<21);
@@ -521,7 +581,7 @@ static void pipereader(Task *t)
 static void test_sched(Test *t)
 {
     Os *os = t->os;
-    os->heapused = 0;
+    heapreset(os);
     Arena va = {};
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
@@ -730,7 +790,7 @@ static b32 test_spec(Test *t, char *path)
     // The script's commands must also print and reparse to a fixed
     // point (scripts with aliases are skipped: the reparse lacks them).
     if (find(script, "alias")<0 && find(script, "# nofixedpoint")<0) {
-        t->os->heapused = 0;
+        heapreset(t->os);
         Arena a = newarena(t->os, (iz)1<<22);
         Fixed f = fixedpoint(&a, script, find(script, "extglob")>=0);
         t->run++;
@@ -1334,9 +1394,7 @@ static void vbuildfile(Vos *v, VNode *dir, Str name, iz size)
 static b32 oracle(Test *t, char *suite, char *name, b32 verbose)
 {
     Os *os = t->os;
-    os->heapused = 0;
-    os->pinned   = 0;
-    os->nmarks   = 0;
+    heapreset(os);
     Arena va = {};
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
@@ -1424,7 +1482,9 @@ int main(int argc, char **argv)
     static Os os = {};
     byte base = 0;
     stackbase = &base;
-    os.heapcap         = (iz)1<<29;  // half for the shells: room for background vprocs
+    os.heapcap         = (iz)1<<30;  // half for the shells: room for background
+                                     // vprocs, and the images of jobs not yet
+                                     // started (read2.sub has some 50 at once)
     os.heap            = (byte *)malloc((uz)os.heapcap);
     os.vos.outcap      = (iz)1<<20;
     os.vos.out.data    = (u8 *)malloc((uz)os.vos.outcap);

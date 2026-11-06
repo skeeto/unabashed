@@ -161,6 +161,8 @@ struct Vos {
     i32     nspawns;
     b32     images;  // self-spawn background shells (os_imagenew)
     b32     imaging; // os_reserve is for an image: the layer pins it
+    ImageRef freeimgs[64];  // regions of images whose shells have ended
+    i32      nfreeimgs;
     // Windows mode
     b32        win;
     VNamedPipe npipes[64];
@@ -753,6 +755,10 @@ static void vprocentry(Os *os, void *arg)
     VProc *p = (VProc *)arg;
     Vos   *v = osvos(os);
     i32 status = v->fakes[p->prog].main(os, &p->ctx);
+    ImageRef im = p->ctx.image;
+    if (im.base && v->nfreeimgs<countof(v->freeimgs)) {
+        v->freeimgs[v->nfreeimgs++] = im;  // nothing refers to it now
+    }
     // A program's exit status is truncated to a byte, as by a kernel
     // (sed's "Q888" is 120), while a shell reports its own deaths
     vexit(os, v, p->shell ? status : status&255);
@@ -1941,7 +1947,19 @@ static Opened vnpopen(Vos *v, Str name, i32 flags)
 static ImageRef os_imagenew(Os *os, iz cap)
 {
     ImageRef r = {};
-    if (!osvos(os)->images) return r;
+    Vos     *v = osvos(os);
+    if (!v->images) return r;
+    // One that ended gives back its region, which the layer never
+    // releases, so that loops of jobs run in bounded memory
+    for (i32 i = 0; i < v->nfreeimgs; i++) {
+        if (v->freeimgs[i].cap >= cap) {
+            r = v->freeimgs[i];
+            v->freeimgs[i] = v->freeimgs[--v->nfreeimgs];
+            r.len = 0;
+            __builtin_memset(r.base, 0x55, (uz)r.cap);  // as fresh from os_reserve
+            return r;
+        }
+    }
     // The child runs from it after the nested shell that made it, and
     // whose memory the layer releases, has ended
     osvos(os)->imaging = 1;
@@ -1951,7 +1969,14 @@ static ImageRef os_imagenew(Os *os, iz cap)
     return r;
 }
 
-static void os_imagefree(Os *, ImageRef) {}
+// An image whose spawn failed: its region goes back for reuse
+static void os_imagefree(Os *os, ImageRef im)
+{
+    Vos *v = osvos(os);
+    if (im.base && v->nfreeimgs<countof(v->freeimgs)) {
+        v->freeimgs[v->nfreeimgs++] = im;
+    }
+}
 
 #if _WIN32
 extern "C" char __ImageBase;
@@ -1985,6 +2010,22 @@ static iz vimageescape(Os *os, ImageRef im)
         if (inheap || inexe) return off;
     }
     return -1;
+}
+
+// Free the slots of the current process's children that have exited,
+// their statuses kept for os_wait, as a shell's SIGCHLD handling reaps
+// them however busy it is: a loop starting jobs from subshells, never
+// blocking, would otherwise fill the table.
+static void vreapexited(Os *os, Vos *v)
+{
+    for (Io *io = v->procs[v->cur].ios; io; io = io->next) {
+        b32 child = io->op==IO_PROC && !io->plt[2] && io->h &&
+                    io->h<(Handle)v->nprocs;
+        if (child && v->procs[io->h].state==VP_EXIT) {
+            io->n      = vreap(os, v, io->h);
+            io->plt[2] = 1;
+        }
+    }
 }
 
 static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
@@ -2050,6 +2091,14 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
             r.err = E_2BIG;
             return r;
         }
+    }
+    // At the limit, as a kernel would, let time pass while the others
+    // run and make room (jobs still starting sleep); E_AGAIN if none
+    // does within a virtual second
+    vreapexited(os, v);
+    for (i32 tries = 0; v->live>=64 && tries<1000; tries++) {
+        os_sleep(os, 1000000);
+        vreapexited(os, v);
     }
     i32 id = 1;
     for (; id<v->nprocs && v->procs[id].state!=VP_FREE; id++) {}
@@ -2209,6 +2258,7 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
         }
         return 1;
     case IO_PROC:
+        if (io->plt[2]) return 1;  // reaped early (vreapexited): n holds
         if (!io->h || io->h>=(Handle)v->nprocs || v->procs[io->h].state==VP_FREE) {
             io->err = E_CHILD;
             return 1;
@@ -2243,6 +2293,7 @@ static void os_submit(Os *os, Io *io)
     io->next = 0;
     io->plt[0] = me->tag;  // tracing: done later, perhaps for another task
     io->plt[1] = me->group;
+    io->plt[2] = 0;
     if (!v->chaos || vrand(v)%2) {
         if (vio(os, v, io, 1)) {
             io->done = 1;
