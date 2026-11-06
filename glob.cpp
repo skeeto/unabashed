@@ -378,7 +378,8 @@ static GlobRes globfile(Glob *g, Str path, i32 flags)
             dlen -= 3;
         }
         d = takehead(d, dlen);
-        if (d.len && d[d.len-1]=='/') d.len--;
+        // A run of slashes as one, else a recursion for each
+        while (d.len && d[d.len-1]=='/') d.len--;
 
         GlobRes dirs = globfile(g, d, dflags|GX_RECURSE);
         if (dirs.err || !dirs.v.len) {

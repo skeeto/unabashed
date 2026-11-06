@@ -38,6 +38,7 @@ struct VTerm {
     u8     inter;     // CSI intermediate byte or 0
     i32    cp;        // UTF-8 sequence being decoded
     i32    need;      // its continuation bytes still to come
+    i32    least;     // the least code point its length may encode
 };
 
 static VTerm *vtnew(Arena *a, i32 rows, i32 cols, b32 xenl)
@@ -311,7 +312,12 @@ static void vtbyte(VTerm *t, u8 b)
     if (t->need) {
         if ((b & 0xc0) == 0x80) {
             t->cp = t->cp<<6 | (b & 0x3f);
-            if (!--t->need) vtput(t, t->cp);
+            if (!--t->need) {
+                // Overlong, a surrogate or past U+10FFFF: invalid
+                i32 c = t->cp;
+                b32 bad = c<t->least || (c>=0xd800 && c<=0xdfff) || c>0x10ffff;
+                vtput(t, bad ? 0xfffd : c);
+            }
             return;
         }
         t->need = 0;
@@ -319,14 +325,17 @@ static void vtbyte(VTerm *t, u8 b)
     }
     if (b >= 0x80) {
         if (b>=0xc2 && b<=0xdf) {
-            t->cp   = b & 0x1f;
-            t->need = 1;
+            t->cp    = b & 0x1f;
+            t->need  = 1;
+            t->least = 0x80;
         } else if (b>=0xe0 && b<=0xef) {
-            t->cp   = b & 0x0f;
-            t->need = 2;
+            t->cp    = b & 0x0f;
+            t->need  = 2;
+            t->least = 0x800;
         } else if (b>=0xf0 && b<=0xf4) {
-            t->cp   = b & 0x07;
-            t->need = 3;
+            t->cp    = b & 0x07;
+            t->need  = 3;
+            t->least = 0x10000;
         } else {
             vtput(t, 0xfffd);
         }

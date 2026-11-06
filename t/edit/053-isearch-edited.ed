@@ -1,0 +1,18 @@
+# reverse-i-search on a history entry edited in place (operate-and-get-
+# next, then C-p onto it): the search starts in the line as edited
+size 15 31
+rc PS1=
+keys a\C-o
+snap
+keys \C-pa
+snap
+keys \C-p
+snap
+keys \C-la$
+snap
+keys \C-r
+snap
+keys $
+snap
+keys \C-g
+snap

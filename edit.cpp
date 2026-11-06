@@ -1707,6 +1707,9 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
     iz   lastfound = saveline;
     Str  sline     = clone(&ed->linemem, edtext(ed));
     iz   idx       = ed->point;
+    // The line searched from is the one shown, which its entry may not
+    // hold yet: inserts that extend the last undo record leave it alone
+    lines[saveline] = sline;
     Str  prevfound = {};
     i32  dir       = count>=0 ? 1 : -1;  // C-r passes -count
     b32  failed    = 0;

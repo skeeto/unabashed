@@ -1,0 +1,31 @@
+== snap 1
+a
+bash: a: command not found
+
+@ 2,0
+== snap 2
+a
+bash: a: command not found
+aa
+@ 2,2
+== snap 3
+a
+bash: a: command not found
+aa
+@ 2,2 bell 1
+== snap 4
+aaa$
+@ 0,4 bell 1
+== snap 5
+(reverse-i-search)`': aaa$
+@ 0,26 bell 1
+== snap 6
+(reverse-i-search)`$': aaa$
+~                          r
+@ 0,26 bell 1
+== snap 7
+aaa$
+@ 0,4 bell 1
+== snap 8
+aaa$
+@ 0,4 bell 1
