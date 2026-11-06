@@ -2,7 +2,7 @@
 # Usage: tools/fuzz MODE [MINUTES [CORES]]
 # Build main_fuzz.cpp in one of its modes and fuzz it with AFL++ in
 # ~/fuzz-MODE, from a snapshot of the working tree. MODE is run, parse,
-# chaos or isolate (see main_fuzz.cpp), or regex, pattern or float,
+# chaos, isolate or image (see main_fuzz.cpp), or regex, pattern or float,
 # which compare regex.cpp, pattern.cpp or float.cpp with glibc in
 # memory (t/unit/regex_diff.cpp, t/unit/pattern_diff.cpp,
 # t/unit/float_diff.cpp). Defaults: 60 minutes, 2 cores.
@@ -21,6 +21,7 @@ run)     def= ;;
 parse)   def=-DFUZZ_PARSE ;;
 chaos)   def=-DFUZZ_CHAOS ;;
 isolate) def=-DFUZZ_ISOLATE ;;
+image)   def=-DFUZZ_IMAGE ;;
 regex)   def= ;;
 pattern) def= ;;
 float)   def= ;;

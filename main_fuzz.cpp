@@ -3,6 +3,7 @@
 // $ afl-clang-fast++ -DFUZZ_PARSE ...    (print/reparse fixed point)
 // $ afl-clang-fast++ -DFUZZ_CHAOS ...    (same output under every schedule)
 // $ afl-clang-fast++ -DFUZZ_ISOLATE ...  (a subshell changes nothing)
+// $ afl-clang-fast++ -DFUZZ_IMAGE ...    (a job's image is the state)
 // $ afl-clang-fast++ -DFUZZ_WIN ...      (any mode, on Windows: below)
 // $ afl-fuzz -i fuzzin -o fuzzout ./fuzz
 //
@@ -36,6 +37,14 @@
 // - FUZZ_ISOLATE: in one shell, the state dump (isolatedump) printed
 //   before "( eval S )" equals the one printed after it, except for
 //   variables that change on their own (isolatenoise).
+// - FUZZ_IMAGE: after "eval S", the state dump the shell prints equals
+//   the one a background job prints, which runs from an image of the
+//   shell adopted by a vos child (notes/m5b.md), except for the
+//   variables naming the job (imagenoise); and no image escapes its
+//   region (the vos's audit, vimageescape, at every spawn).
+//
+// Background jobs run from images in the run and image modes, as the
+// shell's default; chaos and isolate keep them fibers.
 //
 // FUZZ_WIN, with any mode, runs the shell in the vos's Windows mode
 // instead (vos.cpp, Vos.win): drives, case-insensitive names, reserved
@@ -55,6 +64,11 @@
 
 #ifndef FUZZ_WIN
 #define FUZZ_WIN 0
+#endif
+#if defined(FUZZ_CHAOS) || defined(FUZZ_ISOLATE) || defined(FUZZ_PARSE)
+#define FUZZ_IMAGES 0
+#else
+#define FUZZ_IMAGES 1
 #endif
 
 #ifdef __AFL_FUZZ_TESTCASE_LEN
@@ -148,6 +162,9 @@ static byte *os_reserve(Os *os, iz len)
     byte *r = os->heap + os->heapused + pad;
     os->heapused += pad + len;
     if (os->shells && os->owner!=os->vos.cur) os->pinned = os->heapused;
+    // As main_test.cpp: expose reads of uninitialized memory, and leave
+    // no earlier run's pointers for the image audit (vimageescape)
+    memset(r, 0x55, (uz)len);
     return r;
 }
 
@@ -245,8 +262,9 @@ static i32 runonce(Os *os, Str script, Str *extra, iz nextra, u64 chaos)
     va.beg = os->heap + os->heapcap/2;
     va.end = os->heap + os->heapcap;
     vreset(&os->vos, va, fuzzfakes, nfuzzfakes, FUZZ_WIN);
-    os->vos.chaos = chaos;
-    os->vos.trace = 1;
+    os->vos.chaos  = chaos;
+    os->vos.trace  = 1;
+    os->vos.images = FUZZ_IMAGES;
     #if FUZZ_WIN
     static Str env[] = {
         "=C:=C:\\work", "ComSpec=C:\\Windows\\System32\\cmd.exe", "LANG=C",
@@ -486,6 +504,74 @@ static b32 isolatesame(Str a, Str b)
     }
 }
 
+// Variables a background job sees differently, besides isolatenoise.
+static Str imagenoise[] = {"BASHPID", "BASH_SUBSHELL"};
+
+static b32 imagenoisy(Str line)
+{
+    if (isolatenoisy(line)) return 1;
+    if (!startswith(line, "declare -")) return 0;
+    Cut c = cut(cuthead(line, 9), ' ');
+    if (!c.ok) return 0;
+    Str name = cut(c.tail, '=').head;
+    for (iz i = 0; i < countof(imagenoise); i++) {
+        if (name == imagenoise[i]) return 1;
+    }
+    return 0;
+}
+
+static b32 imagesame(Str a, Str b)
+{
+    for (;;) {
+        Cut x = {}, y = {};
+        do x = cut(a, '\n'), a = x.tail; while (x.ok && imagenoisy(x.head));
+        do y = cut(b, '\n'), b = y.tail; while (y.ok && imagenoisy(y.head));
+        if (!x.ok || !y.ok) return x.ok==y.ok && x.head==y.head;
+        if (x.head != y.head) return 0;
+    }
+}
+
+static void fuzzimage(Os *os, Arena scratch, Str src)
+{
+    // DEBUG, which a job does not inherit (as in bash), would run around
+    // the shell's dump only: it goes first
+    Str sep    = "\x01image\x01\n";
+    Str dump   = isolatedump;
+    Str script = "eval \"$1\" </dev/null >/dev/null 2>&1\ntrap - DEBUG\n"
+                 "echo $'\\x01image\\x01'\n";
+    script = concat(&scratch, script, dump);
+    script = concat(&scratch, script, "\necho $'\\x01image\\x01'\n{ ");
+    script = concat(&scratch, script, dump);
+    script = concat(&scratch, script, "\necho $'\\x01image\\x01'; } &\nwait $!\n");
+    runonce(os, script, &src, 1, 0);
+    if (find(os->vos.err, "vos: image escapes") >= 0) {
+        #if FUZZ_REPLAY
+        fprintf(stderr, "%.*s", (int)os->vos.err.len, (char *)os->vos.err.data);
+        #endif
+        __builtin_trap();
+    }
+    Str out = os->vos.out;
+    iz  i   = find(out, sep);
+    if (i < 0) return note("no dump");  // exit, exec, closed stdout
+    Str rest = cuthead(out, i+sep.len);
+    iz  j    = find(rest, sep);
+    if (j < 0) return note("no dump");
+    Str before = takehead(rest, j);
+    rest = cuthead(rest, j+sep.len);
+    iz k = find(rest, sep);
+    if (k < 0) return note("no job dump");  // kill, ulimit, no images
+    Str after = takehead(rest, k);
+    if (!imagesame(before, after)) {
+        #if FUZZ_REPLAY
+        fprintf(stderr, "--- shell\n%.*s--- job\n%.*s",
+                (int)before.len, (char *)before.data,
+                (int)after.len, (char *)after.data);
+        #endif
+        __builtin_trap();
+    }
+    note("same");
+}
+
 static void fuzzisolate(Os *os, Arena scratch, Str src)
 {
     Str sep    = "\x01isolate\x01\n";
@@ -579,6 +665,12 @@ int main(int argc, char **argv)
         scratch.end = scratch.beg + countof(scratchmem);
         if (len > countof(scratchmem)/2) continue;
         fuzzisolate(&os, scratch, {src, len});
+        #elif FUZZ_IMAGE
+        Arena scratch = {};
+        scratch.beg = (byte *)scratchmem;
+        scratch.end = scratch.beg + countof(scratchmem);
+        if (len > countof(scratchmem)/2) continue;
+        fuzzimage(&os, scratch, {src, len});
         #else
         runonce(&os, {src, len}, 0, 0, 0);
         #endif
