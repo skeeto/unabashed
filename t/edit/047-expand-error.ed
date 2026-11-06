@@ -1,0 +1,14 @@
+# shell-expand-line on a word that fails to expand: the message, then
+# the line abandoned for a new prompt, $? 1
+size 10 30
+rc PS1='$ '
+keys echo `a
+snap
+keys \e\C-e
+snap
+keys echo $?\r
+snap
+keys \C-a\C-k${a
+snap
+keys \e\C-e
+snap

@@ -445,8 +445,9 @@ struct Hist {      // in the Shell by value: a subshell's changes roll back
     b32       noexpand;    // reading -c's string: no expansion
 };
 
-// editline results, and what read -e asks of it (edit.cpp)
-enum : i32 { ED_LINE, ED_EOF, ED_INTR, ED_NOTTY };
+// editline results, and what read -e asks of it (edit.cpp). ED_ABORT:
+// an error abandoned the line, its message ending on a new line.
+enum : i32 { ED_LINE, ED_EOF, ED_INTR, ED_NOTTY, ED_ABORT };
 
 struct EdRead {   // what read -e asks of the editor
     Str init;     // -i: the line to start with

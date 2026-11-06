@@ -534,17 +534,19 @@ static Editor *editor(Shell *sh)
 {
     Editor *ed = sh->editor;  // shared by subshells
     if (!ed) {
-        Arena perm = newarena(sh->os, (iz)1<<24);
+        // Each 16 MiB, or less where the shell's own are (tests, fuzzing)
+        iz    cap  = sh->reserve<((iz)1<<24) ? sh->reserve : (iz)1<<24;
+        Arena perm = newarena(sh->os, cap);
         ed = alloc<Editor>(&perm);
         ed->perm       = perm;
-        ed->lay[0]     = newarena(sh->os, (iz)1<<24);
-        ed->lay[1]     = newarena(sh->os, (iz)1<<24);
-        ed->linemem    = newarena(sh->os, (iz)1<<24);
-        ed->hmem       = newarena(sh->os, (iz)1<<24);
-        ed->kmem[0]    = newarena(sh->os, (iz)1<<24);
-        ed->kmem[1]    = newarena(sh->os, (iz)1<<24);
+        ed->lay[0]     = newarena(sh->os, cap);
+        ed->lay[1]     = newarena(sh->os, cap);
+        ed->linemem    = newarena(sh->os, cap);
+        ed->hmem       = newarena(sh->os, cap);
+        ed->kmem[0]    = newarena(sh->os, cap);
+        ed->kmem[1]    = newarena(sh->os, cap);
         ed->keytimeout = 500;
-        ed->cmem       = newarena(sh->os, (iz)1<<24);
+        ed->cmem       = newarena(sh->os, cap);
         ed->vars.queryitems   = 100;
         ed->vars.pagecompl    = 1;
         ed->vars.displaywidth = -1;
@@ -657,6 +659,29 @@ static Str layregion(u8 *buf, Str bytes)
     return {buf, n};
 }
 
+// Decode as a terminal does, and mbrtowc: -1 for a byte that starts no
+// valid sequence (a stray continuation, a sequence cut short, overlong,
+// a surrogate, past U+10FFFF), which goes alone.
+static i32 utf8strict(Str s, iz *i)
+{
+    iz  beg = *i;
+    u8  c   = s[beg];
+    i32 cp  = utf8decode(s, i);
+    iz  n   = *i - beg;
+    b32 bad = (n==1 && c>=0x80) || (n==2 && cp<0x80) ||
+              (n==3 && (cp<0x800 || (cp>=0xd800 && cp<=0xdfff))) ||
+              (n==4 && (c>0xf4 || cp<0x10000 || cp>0x10ffff));
+    if (bad) {
+        *i = beg + 1;
+        return -1;
+    }
+    return cp;
+}
+
+// An invalid byte is drawn as the terminal would show it, U+FFFD, so
+// that one cut short at the end of the output is not held back.
+static Str badbyte = "\xef\xbf\xbd";
+
 static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width,
                      iz rbeg, iz rend)
 {
@@ -673,18 +698,25 @@ static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width,
             continue;
         }
         iz  beg = i;
-        i32 cp  = utf8decode(prompt, &i);
+        i32 cp  = utf8strict(prompt, &i);
         Str s   = {prompt.data+beg, i-beg};
-        if (hidden) {
+        if (cp<0 && !hidden) {
+            laycell(&y, badbyte, 1);
+        } else if (hidden) {
             layinvisible(&y, s);
         } else {
+            // As readline counts the visible, a C0 control is a column;
+            // C1 controls, which the terminal does not show, are bad
             i32 w = cpwidth(cp);
-            laycell(&y, s, w<0 ? 1 : w);  // as readline counts the visible
+            if (w<0 && cp>=0x80) s = badbyte;
+            laycell(&y, s, w<0 ? 1 : w);
         }
     }
     y.l.prow = -1;
     for (iz i = 0; i <= line.len;) {
-        if (i == point) {
+        // Bytes typed apart may join into one character around point:
+        // the cursor goes after it
+        if (y.l.prow<0 && i>=point) {
             // The cursor goes where the next cell would: past a full
             // row, at the start of the next
             if (y.col >= y.width) {
@@ -697,7 +729,7 @@ static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width,
         if (i == line.len) break;
         u8  c   = line[i];
         iz  beg = i;
-        i32 cp  = utf8decode(line, &i);
+        i32 cp  = utf8strict(line, &i);
         b32 hi  = beg>=rbeg && beg<rend;
         u8  hbuf[24];
         if (c == '\n') {
@@ -710,6 +742,8 @@ static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width,
             for (i32 k = 0; k < n; k++) {
                 laycell(&y, hi ? layregion(hbuf, " ") : Str(" "), 1);  // as readline, may wrap
             }
+        } else if (cp < 0) {
+            laycell(&y, hi ? layregion(hbuf, badbyte) : badbyte, 1);
         } else if (c<0x20 || c==0x7f) {
             u8  buf[2] = {'^', (u8)(c==0x7f ? '?' : c|0x40)};
             Str t      = {buf, 2};
@@ -717,6 +751,7 @@ static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width,
         } else {
             i32 w = cpwidth(cp);
             Str t = {line.data+beg, i-beg};
+            t = w<0 ? badbyte : t;  // a C1 control
             laycell(&y, hi ? layregion(hbuf, t) : t, w<0 ? 1 : w);
         }
     }
@@ -786,9 +821,23 @@ static void edwrite(Editor *ed, DRow *r, i32 from)
     }
 }
 
+// Test layers (EDIT_CHECK) check each redisplay against the layout
+// drawn afresh: told where a line starts, where a redraw starts from
+// the left margin, when a redisplay is done, and which output is the
+// editor's own.
+#ifdef EDIT_CHECK
+enum : i32 {
+    EDCHECK_START, EDCHECK_MARGIN, EDCHECK_DRAWN, EDCHECK_WRITE, EDCHECK_WROTE
+};
+static void edcheck(Editor *, Shell *, i32 how);
+#endif
+
 static void edflush(Editor *ed, Shell *sh)
 {
     Str s = finish(&ed->out_);
+    #ifdef EDIT_CHECK
+    edcheck(ed, sh, EDCHECK_WRITE);
+    #endif
     if (!s.len) {
         // nothing
     } else if (ed->tty.legacy) {
@@ -796,6 +845,9 @@ static void edflush(Editor *ed, Shell *sh)
     } else {
         fdwrite(sh, 2, s);
     }
+    #ifdef EDIT_CHECK
+    edcheck(ed, sh, EDCHECK_WROTE);
+    #endif
     ed->out_ = Buf(&ed->linemem, 256);
 }
 
@@ -835,6 +887,12 @@ static void edupdate(Editor *ed, Layout *nl)
                 Str oc = {o->text.data+ob, o->ends[same]-ob};
                 Str wc = {w->text.data+wb, w->ends[same]-wb};
                 if (oc!=wc || o->cols[same]!=w->cols[same]) break;
+            }
+            // A zero-width cell (a combining mark) is drawn over the one
+            // before it: redraw from that one, which drops an old mark
+            while (same > 0 && ((same<o->ncells && cellcol(o, same)==o->cols[same]) ||
+                                (same<w->ncells && cellcol(w, same)==w->cols[same]))) {
+                same--;
             }
             if (same==w->ncells && same==o->ncells) continue;
         }
@@ -922,6 +980,9 @@ static void redisplay(Editor *ed, Shell *sh)
     }
     ed->cur = !ed->cur;
     edflush(ed, sh);
+    #ifdef EDIT_CHECK
+    edcheck(ed, sh, EDCHECK_DRAWN);
+    #endif
 }
 
 // Draw the prompt and line afresh on the current row.
@@ -932,7 +993,24 @@ static void edredraw(Editor *ed, Shell *sh)
     ed->ccol    = 0;
     ed->pending = 0;
     edput(ed, "\r");
+    #ifdef EDIT_CHECK
+    edcheck(ed, sh, EDCHECK_MARGIN);
+    #endif
     redisplay(ed, sh);
+}
+
+// Clear the rows of the line from its last up to its first, as
+// readline's rl_clear_visible_line, then draw it all again from there.
+static void edrefresh(Editor *ed, Shell *sh)
+{
+    edput(ed, "\r");
+    ed->ccol    = 0;
+    ed->pending = 0;
+    for (i32 row = ed->shown.nrows-1; row >= 0; row--) {
+        edmove(ed, row, 0);
+        edput(ed, "\x1b[K");
+    }
+    edredraw(ed, sh);
 }
 
 static void edsize(Editor *, Shell *, Tty);
@@ -949,14 +1027,7 @@ static void edresize(Editor *ed, Shell *sh)
     ed->tty.cols = t.cols;
     ed->width    = ed->tty.xenl ? t.cols : t.cols-1;
     edsize(ed, sh, t);
-    edput(ed, "\r");
-    ed->ccol    = 0;
-    ed->pending = 0;
-    for (i32 row = ed->shown.nrows-1; row >= 0; row--) {
-        edmove(ed, row, 0);
-        edput(ed, "\x1b[K");
-    }
-    edredraw(ed, sh);
+    edrefresh(ed, sh);
 }
 
 
@@ -1639,7 +1710,16 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
         if (failed) print(&m, "failed ");
         if (dir < 0) print(&m, "reverse-");
         print(&m, "i-search)`");
-        print(&m, Str{str.data, str.len});
+        for (iz i = 0; i < str.len; i++) {
+            // Controls as on the line, which the prompt would not show
+            u8 c = str.data[i];
+            if (c<0x20 || c==0x7f) {
+                putbyte(&m, '^');
+                putbyte(&m, c==0x7f ? '?' : (u8)(c|0x40));
+            } else {
+                putbyte(&m, c);
+            }
+        }
         print(&m, "': ");
         ed->prompt = finish(&m);
         redisplay(ed, sh);
@@ -2085,9 +2165,14 @@ static void edexpandhistline(Editor *ed, Shell *sh)
 // expanded as one word, its fields joined by spaces.
 static void edshellexpand(Editor *ed, Shell *sh)
 {
-    Arena a = *scratchat(sh, sh->capdepth+1);
-    Str   r = {};
-    if (!edhistexpand(ed, sh, &a, &r)) return;
+    // Its command substitutions run at the next depth: claim this one
+    i32   depth = ++sh->capdepth;
+    Arena a     = *scratchat(sh, depth);
+    Str   r     = {};
+    if (!edhistexpand(ed, sh, &a, &r)) {
+        sh->capdepth = depth - 1;
+        return;
+    }
     iz  oldpoint = ed->point;
     b32 atend    = ed->point == ed->line.len;
     edreplace(ed, r);
@@ -2109,16 +2194,21 @@ static void edshellexpand(Editor *ed, Shell *sh)
     } else {
         unwind(sh, e.undo);
     }
-    sh->esc    = e.up;
-    sh->status = status;
-    if (ok) {
-        Buf b(&a, w.text.len+16);
-        for (iz i = 0; i < fields.len; i++) {
-            if (i) putbyte(&b, ' ');
-            print(&b, fields[i]);
-        }
-        edreplace(ed, finish(&b));
+    sh->esc      = e.up;
+    sh->status   = status;
+    sh->capdepth = depth - 1;
+    if (!ok) {
+        // As bash's jump to the top level: the line is given up
+        ed->done   = 1;
+        ed->result = ED_ABORT;
+        return;
     }
+    Buf b(&a, w.text.len+16);
+    for (iz i = 0; i < fields.len; i++) {
+        if (i) putbyte(&b, ' ');
+        print(&b, fields[i]);
+    }
+    edreplace(ed, finish(&b));
     if (atend) {
         ed->point = ed->line.len;
     } else if (oldpoint < ed->line.len) {
@@ -2141,7 +2231,11 @@ static void edselfinsert(Editor *ed, Shell *sh, u8 key, i32 count)
     iz len = 1;
     while (len < n) {
         i32 c = edkey(ed, sh, -1);
-        if (c<0 || (c&0xc0)!=0x80) break;  // a stray byte is dropped
+        if (c < 0) break;
+        if ((c&0xc0) != 0x80) {
+            edpush(ed, c);  // the sequence was cut short: a key of its own
+            break;
+        }
         buf[len++] = (u8)c;
     }
     if (count <= 0) return;
@@ -2526,7 +2620,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
     case EF_CLEAR_SCREEN:
         if (ed->argset) {
             ed->keepactive = ed->active;
-            edredraw(ed, sh);
+            edrefresh(ed, sh);
             return;
         }
         // fallthrough
@@ -2589,7 +2683,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         break;
     case EF_REDRAW_CURRENT_LINE:
         ed->keepactive = ed->active;
-        edredraw(ed, sh);
+        edrefresh(ed, sh);
         return;
     case EF_REVERSE_SEARCH_HISTORY:
         edisearch(ed, sh, -(i64)count);
@@ -3034,6 +3128,10 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     ed->crow    = 0;
     ed->ccol    = 0;
     ed->pending = 0;
+    #ifdef EDIT_CHECK
+    edflush(ed, sh);
+    edcheck(ed, sh, EDCHECK_START);
+    #endif
     redisplay(ed, sh);
 
     for (;;) {
@@ -3062,7 +3160,10 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     // Leave the cursor past the line
     Layout *l = &ed->shown;
     b32 crlf = 1;
-    if (ed->hscroll) {
+    if (ed->result == ED_ABORT) {
+        ed->line.len = ed->point = 0;  // the message is past the line
+        crlf = 0;
+    } else if (ed->hscroll) {
         if (ed->result == ED_INTR) edput(ed, "^C");
     } else if (ed->result == ED_INTR) {
         if (isread) {

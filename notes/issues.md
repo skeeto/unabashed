@@ -50,8 +50,14 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   and echoes each line it reads; ours reads plainly. (step 2)
 - Unbound key sequences: readline's handling (bell, which bytes are
   dropped or inserted) not yet checked against recordings. (step 2)
-- A byte that breaks a UTF-8 sequence in self-insert is dropped;
-  readline's handling of invalid sequences not yet checked. (step 2)
+- Invalid UTF-8 in the line is drawn as U+FFFD, a column per byte,
+  which is what a terminal shows for the raw bytes readline writes;
+  a byte that breaks a sequence in self-insert becomes a key of its
+  own. Not checked against recordings: a sequence cut short by the key
+  timeout or the end of input is inserted as it is (readline may hold
+  it until complete), and in the C locale readline (output-meta off)
+  shows bytes past 0x7f as `\NNN` where ours draws UTF-8 whatever the
+  locale. (step 10)
 - Ctrl-D at PS2 (inside an unfinished command): bash reports the
   unexpected end of file and returns to PS1; ours ends the shell.
   (step 2)

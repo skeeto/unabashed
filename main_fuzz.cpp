@@ -4,6 +4,7 @@
 // $ afl-clang-fast++ -DFUZZ_CHAOS ...    (same output under every schedule)
 // $ afl-clang-fast++ -DFUZZ_ISOLATE ...  (a subshell changes nothing)
 // $ afl-clang-fast++ -DFUZZ_IMAGE ...    (a job's image is the state)
+// $ afl-clang-fast++ -DFUZZ_EDIT ...     (the editor draws as it lays out)
 // $ afl-clang-fast++ -DFUZZ_WIN ...      (any mode, on Windows: below)
 // $ afl-fuzz -i fuzzin -o fuzzout ./fuzz
 //
@@ -45,6 +46,12 @@
 //   naming coproc are left out: a coprocess reaped between the dumps
 //   takes its variables with it, as in bash; so are those with disown,
 //   or procsubs and kill: what they start may act between the dumps.
+// - FUZZ_EDIT: the input is typed at an interactive shell on the vos's
+//   terminal (vterm.cpp): a header picks the terminal (size, deferred
+//   wrap, a legacy console drawn through vtcon, TERM=dumb), the prompt
+//   and the locale, and the rest are keys, with resizes and pauses
+//   marked in them (fuzzedit). After every redisplay, the screen must
+//   equal the line's layout drawn afresh (vos.cpp, edcheck).
 //
 // Background jobs run from images in the run and image modes, as the
 // shell's default; chaos and isolate keep them fibers.
@@ -59,6 +66,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#define EDIT_CHECK 1
 #include "unabashed.cpp"
 #include "fibers.cpp"
 #include "check.cpp"
@@ -629,6 +637,107 @@ static void fuzzisolate(Os *os, Arena scratch, Str src)
 }
 
 
+// Editor
+
+// The prompts to choose from: plain, empty, longer than a narrow
+// screen, with invisible parts, wide characters, several lines, an
+// invisible title sequence and a combining mark, and \w that
+// changes with cd. (No tabs: as readline, the editor counts one as a
+// column, which the terminal does not.)
+static Str edprompts[] = {
+    "$ ",
+    "",
+    "0123456789abcdefghijklmnopqrstuvwxyz> ",
+    "\\[\\e[1;7m\\]\\u@\\h\\[\\e[0m\\]:\\w\\$ ",
+    "日本語> ",
+    "line one\\n\\[\\e[4m\\]two\\[\\e[24m\\] $ ",
+    "\\[\\e]0;title\\a\\]> ",
+    "e\u0301> ",
+};
+
+// Header: flags (bit 0 no deferred wrap, 1 a legacy console, 2
+// TERM=dumb, 3-5 the prompt, 6 the C locale), columns, rows. Then the
+// keys, where FF FE R C resizes to R rows by C columns and FF FD N
+// waits N*10 ms with nothing typed.
+static void fuzzedit(Os *os, Str src)
+{
+    static u8 snapbuf[1<<12];
+    if (src.len < 3) return;
+    u8  flags = src[0];
+    i32 cols  = 4 + src[1]%77;
+    i32 rows  = 1 + src[2]%24;
+    src = cuthead(src, 3);
+
+    os->heapused = 0;
+    os->pinned   = 0;
+    os->shells   = 0;
+    os->chaos    = 0;
+    Arena va = {};
+    va.beg = os->heap + os->heapcap/2;
+    va.end = os->heap + os->heapcap;
+    Vos *v = &os->vos;
+    vreset(v, va, fuzzfakes, nfuzzfakes, 0);
+    v->trace = 1;
+
+    VKey *keys  = alloc<VKey>(&v->a, 65);
+    iz    nkeys = 0;
+    iz    beg   = 0;
+    for (iz i = 0; i <= src.len && nkeys < 64; i++) {
+        b32 mark = i+3<src.len && src[i]==0xff && (src[i+1]==0xfe || src[i+1]==0xfd);
+        if (!mark && i<src.len) continue;
+        if (i > beg) {
+            keys[nkeys].kind = VKEY_TEXT;
+            keys[nkeys++].text = {src.data+beg, i-beg};
+        }
+        if (!mark) break;
+        if (src[i+1] == 0xfe) {
+            keys[nkeys].kind = VKEY_RESIZE;
+            keys[nkeys].rows = 1 + src[i+2]%24;
+            keys[nkeys].cols = 4 + src[i+3]%77;
+            nkeys++;
+            beg = i + 4;
+        } else {
+            keys[nkeys].kind = VKEY_PAUSE;
+            keys[nkeys].ms   = src[i+2] * 10;
+            nkeys++;
+            beg = i + 3;
+        }
+        i = beg - 1;
+    }
+    vttyinit(v, rows, cols, !(flags&1), keys, nkeys, snapbuf, countof(snapbuf));
+    v->tty.legacy = !!(flags & 2);
+    v->tty.edtrap = !FUZZ_REPLAY;  // replay: say what differed
+
+    Str ps1 = edprompts[flags>>3 & 7];
+    Str rc  = concat(&v->a, "PS1='", ps1);
+    rc = concat(&v->a, rc, "'\n");
+    vputfile(v, "/home/oracle", ".edrc", rc);
+    Str env[] = {
+        flags&64 ? Str("LANG=C") : Str("LANG=C.UTF-8"),
+        flags&4  ? Str("TERM=dumb") : Str("TERM=xterm"),
+        "HOME=/home/oracle", "PATH=/usr/local/bin:/opt/fakes/bin",
+    };
+    static Str args[] = {"bash", "--noprofile", "--rcfile", "/home/oracle/.edrc", "-i"};
+    OsInfo info = {};
+    info.args    = args;
+    info.nargs   = countof(args);
+    info.env     = env;
+    info.nenv    = countof(env);
+    info.cwd     = "/home/oracle";
+    info.pid     = 2;
+    info.std[1]  = 1;
+    info.std[2]  = 2;
+    info.reserve = (iz)1<<21;  // the editor's arenas too
+    sh_main(os, &info);
+    vfinish(os);
+    if (v->tty.edbad) {
+        fprintf(stderr, "%.*s", (int)v->tty.edwhy.len, (char *)v->tty.edwhy.data);
+        __builtin_trap();
+    }
+    note("drawn");
+}
+
+
 int main(int argc, char **argv)
 {
     #if FUZZ_REPLAY
@@ -693,6 +802,8 @@ int main(int argc, char **argv)
         scratch.end = scratch.beg + countof(scratchmem);
         if (len > countof(scratchmem)/2) continue;
         fuzzisolate(&os, scratch, {src, len});
+        #elif FUZZ_EDIT
+        fuzzedit(&os, {src, len});
         #elif FUZZ_IMAGE
         Arena scratch = {};
         scratch.beg = (byte *)scratchmem;

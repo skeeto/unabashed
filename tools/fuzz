@@ -2,8 +2,8 @@
 # Usage: tools/fuzz MODE [MINUTES [CORES]]
 # Build main_fuzz.cpp in one of its modes and fuzz it with AFL++ in
 # ~/fuzz-MODE, from a snapshot of the working tree. MODE is run, parse,
-# chaos, isolate or image (see main_fuzz.cpp), or regex, pattern or float,
-# which compare regex.cpp, pattern.cpp or float.cpp with glibc in
+# chaos, isolate, image or edit (see main_fuzz.cpp), or regex, pattern or
+# float, which compare regex.cpp, pattern.cpp or float.cpp with glibc in
 # memory (t/unit/regex_diff.cpp, t/unit/pattern_diff.cpp,
 # t/unit/float_diff.cpp). Defaults: 60 minutes, 2 cores.
 # Run it in WSL or on Linux with AFL++ installed; crashes land in
@@ -22,6 +22,7 @@ parse)   def=-DFUZZ_PARSE ;;
 chaos)   def=-DFUZZ_CHAOS ;;
 isolate) def=-DFUZZ_ISOLATE ;;
 image)   def=-DFUZZ_IMAGE ;;
+edit)    def=-DFUZZ_EDIT ;;
 regex)   def= ;;
 pattern) def= ;;
 float)   def= ;;
@@ -83,6 +84,27 @@ elif [ "$mode" = float ]; then
 106 040 005 9.9999995
 000 000 000 0xf.8p0
 005 000 012 1.18973149535723176508e+4932
+END
+elif [ "$mode" = edit ]; then
+    # Seeds: flags, columns and rows bytes (octal), then keys, with
+    # FF FE R C a resize and FF FD N a pause (main_fuzz.cpp, fuzzedit)
+    n=0
+    while read -r keys; do
+        n=$((n + 1))
+        printf "$keys" >"$dir/in/$n"
+    done <<'END'
+\000\040\010echo hi\r
+\001\014\006echo one two three four five six\001\006\006\005\002\002\013\031\r
+\002\024\005ec\t\t\033b\033f\r\020\020\016
+\010\020\004\022ec\022\033\033\033\037\037
+\030\012\003日本語日本語日本語\002\002\002\004\004\010\010\r
+\050\011\004ls -l /\033[D\033[D\033[C\033[1;5D\r\377\376\006\020abc
+\060\015\010xyz\001\004\004\377\375\012\033
+\070\012\004é é é e\314\201\002\002\024\r
+\103\030\003cd /usr\rpwd\r\014x\030\025
+\004\020\001a long dumb line that scrolls sideways\001\005\002\002\002
+\040\050\002\033[200~pasted\ntext\033[201~\030\030\003
+\010\040\002echo `a\033\005echo $?\r
 END
 else
     # Seeds: the small spec scripts

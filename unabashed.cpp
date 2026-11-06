@@ -921,6 +921,11 @@ static b32 fillline(void *ctx, Lexer *L)
                 sh->status = 128 + 2;
                 b->len = start;
                 putbyte(b, '\n');
+            } else if (r == ED_ABORT) {
+                // An expansion error while editing: the same, status 1
+                sh->status = 1;
+                b->len = start;
+                putbyte(b, '\n');
             }
             L->src = {b->data, b->len};
             return b->len > start;

@@ -154,6 +154,15 @@ struct VTty {
     b32    settling;    // vothersready: leave the terminal out
     b32    legacy;      // a console without VT: drawn with os_con
     i64    active;      // the clock at its last output or read
+    // The editor's check (edcheck)
+    b32    edoff;       // the line started off the left margin
+    b32    edattr;      // ... or with attributes on
+    b32    edlost;      // it was taller than the screen
+    b32    edforeign;   // ... or others wrote over it
+    b32    edwriting;   // the editor is writing
+    b32    edtrap;      // trap on a failure, else record it
+    i32    edbad;       // failures
+    Str    edwhy;       // the first one: both screens
 };
 
 struct Vos {
@@ -867,6 +876,7 @@ static void vttyout(Vos *v, u8 *buf, iz len)
 {
     VTerm *t = v->tty.term;
     v->tty.active = v->clock;
+    if (!v->tty.edwriting) v->tty.edforeign = 1;
     for (iz i = 0; i < len; i++) {
         if (buf[i] == '\n') vtbyte(t, '\r');
         vtbyte(t, buf[i]);
@@ -1230,6 +1240,107 @@ static b32 os_con(Os *os, Handle out, ConOp *o)
     } break;
     }
     return 1;
+}
+
+// The editor's check (EDIT_CHECK): what a redisplay leaves on the
+// screen, from the prompt's row down, equals its layout drawn on a
+// blank screen, with the cursor at point. Not checked: a line started
+// past the left margin or with attributes on (as readline, it draws as
+// though it had not), one that ever got taller than the screen (its
+// top is lost) or that others wrote over (shell-expand-line's command
+// substitutions), until a redraw from the margin; sideways scrolling.
+static b32 edcellsame(VCell a, VCell b)
+{
+    if (a.c==' ' && !a.attr) a.c = 0;
+    if (b.c==' ' && !b.attr) b.c = 0;
+    return a.c==b.c && a.comb==b.comb && a.attr==b.attr;
+}
+
+static void edcheck(Editor *ed, Shell *sh, i32 how)
+{
+    Vos   *v = osvos(sh->os);
+    VTty  *y = &v->tty;
+    VTerm *t = y->term;
+    if (!t || !vistty(v, ed->out)) return;
+    switch (how) {
+    case EDCHECK_START:
+        y->edoff     = t->col!=0 || t->wrapnext;
+        y->edattr    = t->attr != 0;
+        y->edlost    = 0;
+        y->edforeign = 0;
+        return;
+    case EDCHECK_MARGIN:
+        y->edoff     = 0;
+        y->edattr    = t->attr != 0;
+        y->edlost    = 0;
+        y->edforeign = 0;
+        return;
+    case EDCHECK_WRITE:
+        y->edwriting = 1;
+        return;
+    case EDCHECK_WROTE:
+        y->edwriting = 0;
+        return;
+    }
+    Layout *l    = &ed->shown;
+    i32     need = l->nrows;  // rows that must be on the screen
+    if (need>1 && !l->rows[need-1].ncells && l->prow<need-1) {
+        need--;  // as readline, the empty row past a full one is not drawn
+    }
+    if (need > t->rows) y->edlost = 1;
+    if (y->edoff || y->edattr || y->edlost || y->edforeign || ed->hscroll) return;
+    if (t->rows!=ed->tty.rows || t->cols!=ed->tty.cols) return;  // unseen resize
+
+    Arena  a   = v->a;
+    i32    top = t->row - ed->crow;
+    VTerm *r   = vtnew(&a, l->nrows+t->rows, t->cols, t->xenl);
+    for (i32 i = 0; i < l->nrows; i++) {
+        vtmoveto(r, i, 0);
+        r->wrapnext = 0;
+        vtfeed(r, l->rows[i].text.data, l->rows[i].text.len);
+    }
+    if (y->legacy) {
+        // vtcon draws no underline
+        for (iz i = 0; i < (iz)r->rows*r->cols; i++) r->cells[i].attr &= ~VA_UNDER;
+    }
+    b32 ok = top>=0 && top+need<=t->rows;
+    ok = ok && ed->crow==l->prow && ed->ccol==l->pcol && !ed->pending;
+    ok = ok && t->col==l->pcol && !t->wrapnext;
+    i32 badrow = -1;
+    i32 badcol = -1;
+    for (i32 row = top<0 ? 0 : top; ok && row < t->rows; row++) {
+        for (i32 c = 0; ok && c < t->cols; c++) {
+            ok = edcellsame(*vtcell(t, row, c), *vtcell(r, row-top, c));
+            badrow = ok ? -1 : row;
+            badcol = ok ? -1 : c;
+        }
+    }
+    if (ok) return;
+    if (y->edtrap) __builtin_trap();
+    if (!y->edbad++) {
+        v->a   = a;  // keeping r
+        r->row = l->prow;
+        r->col = l->pcol;
+        Buf b(&v->a, 1<<12);
+        print(&b, "-- screen (top ");
+        print(&b, (i64)top);
+        print(&b, ", editor at ");
+        print(&b, (i64)ed->crow);
+        print(&b, ",");
+        print(&b, (i64)ed->ccol);
+        print(&b, ed->pending ? Str("+") : "");
+        if (badrow >= 0) {
+            print(&b, ", cell ");
+            print(&b, (i64)badrow);
+            print(&b, ",");
+            print(&b, (i64)badcol);
+        }
+        print(&b, ")\n");
+        print(&b, vtdump(t, &v->a));
+        print(&b, "-- redrawn\n");
+        print(&b, vtdump(r, &v->a));
+        y->edwhy = finish(&b);
+    }
 }
 
 // Give the outermost shell a terminal typed at by a script, rows by

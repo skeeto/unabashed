@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <io.h>
 #endif
+#define EDIT_CHECK 1
 #include "unabashed.cpp"
 #include "fibers.cpp"
 #include "check.cpp"
@@ -956,6 +957,18 @@ static Str runedit(Test *t, EdScript *ed, b32 nowrap, b32 legacy)
     return os->vos.tty.snaps;
 }
 
+// A redisplay left what a redraw would not (EDIT_CHECK)
+static b32 edchecked(Test *t, Str name)
+{
+    Vos *v = &t->os->vos;
+    if (!v->tty.edbad) return 1;
+    t->run++;
+    t->failed++;
+    fprintf(stderr, "FAIL: %.*s redisplay\n", (int)name.len, (char *)name.data);
+    printstr(stderr, v->tty.edwhy);
+    return 0;
+}
+
 static b32 test_edit(Test *t, char *path)
 {
     Str  p = {(u8 *)path, (iz)strlen(path)};
@@ -979,11 +992,13 @@ static b32 test_edit(Test *t, char *path)
         fprintf(stderr, "SKIP: %s (%.*s)\n", path, (int)ed.err.len, (char *)ed.err.data);
     } else {
         Str got = runedit(t, &ed, ed.nowrap, 0);
+        ok = edchecked(t, p);
         if (want.data) {
-            ok = expect(t, p, got, want);
+            ok &= expect(t, p, got, want);
             // Again on a console without VT, drawn through vtcon
             Str lp = concat(&a, p, " (vtcon)");
             got = runedit(t, &ed, ed.nowrap, 1);
+            ok &= edchecked(t, lp);
             ok &= expect(t, lp, got, want);
         } else {
             // Not recorded (or vos only): printed for review

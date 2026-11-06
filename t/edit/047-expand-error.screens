@@ -1,0 +1,40 @@
+== snap 1
+$ echo `a
+@ 0,9
+== snap 2
+$ echo `abash: bad substitutio
+n: no closing "`" in `a
+$
+@ 2,2
+== snap 3
+$ echo `abash: bad substitutio
+n: no closing "`" in `a
+$ echo $?
+1
+$
+@ 4,2
+== snap 4
+$ echo `abash: bad substitutio
+n: no closing "`" in `a
+$ echo $?
+1
+$ ${a
+@ 4,5
+== snap 5
+$ echo `abash: bad substitutio
+n: no closing "`" in `a
+$ echo $?
+1
+$ ${abash: ${a: bad substituti
+on
+$
+@ 6,2
+== snap 6
+$ echo `abash: bad substitutio
+n: no closing "`" in `a
+$ echo $?
+1
+$ ${abash: ${a: bad substituti
+on
+$
+@ 6,2
