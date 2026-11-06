@@ -16,7 +16,7 @@ WARN    = -Wall -Wextra -Wconversion -Wno-sign-conversion \
 DEBUG   = -g3 -fsanitize=undefined -fsanitize-trap
 RELEASE = -O2 -s
 WIN32   = -nostartfiles -static-libgcc -Wl,--stack,0x1000000
-SOURCES = base.cpp api.cpp unicode.cpp vterm.cpp unabashed.cpp edit.cpp parse.cpp print.cpp wide.cpp \
+SOURCES = base.cpp api.cpp unicode.cpp vterm.cpp unabashed.cpp edit.cpp history.cpp parse.cpp print.cpp wide.cpp \
           fibers.cpp check.cpp shell.cpp array.cpp vars.cpp expand.cpp glob.cpp exec.cpp \
           builtins.cpp arith.cpp pattern.cpp regex.cpp brace.cpp sched.cpp proc.cpp \
           b_test.cpp float.cpp b_printf.cpp trap.cpp jobs.cpp vos.cpp fakes.cpp \

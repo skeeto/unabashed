@@ -1521,6 +1521,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             if (sh->errexited) unwind(sh, 0);
             runexittrap(sh, scratch);
         }
+        histexit(sh);
     }
     if (sh->jobs) orphanjobs(sh);
     if (sh->psubs || sh->sched->orphans) {

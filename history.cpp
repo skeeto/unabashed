@@ -130,6 +130,9 @@ static b32 histnum(Str s, i64 *out)
     return 1;
 }
 
+static void histfilesize(Shell *sh);
+static i32  histread(Shell *, Str file, i64 from, Arena);
+
 // Variables that steer the history, as bash's sv_* hooks.
 static void histvarchanged(Shell *sh, Str name)
 {
@@ -170,6 +173,8 @@ static void histvarchanged(Shell *sh, Str name)
             if (g.value.len > 1) h->subchar = g.value[1];
             if (g.value.len > 2) h->comchar = g.value[2];
         }
+    } else if (name == "HISTFILESIZE") {
+        histfilesize(sh);
     } else if (name == "HISTTIMEFORMAT") {
         if (getvar(sh, &none, name).set && !h->comchar) h->comchar = '#';
     }
@@ -496,6 +501,11 @@ static void histload(Shell *sh)
         Str n = clone(&a, getvar(sh, &none, "HISTSIZE").value);
         setvar(sh, a, "HISTFILESIZE", n);
     }
+    histfilesize(sh);
+    Str file = getvar(sh, &a, "HISTFILE").value;
+    if (file.len && !pathstat(sh, a, file, 1).err) {
+        if (!histread(sh, file, 0, a)) sh->hist.infile = sh->hist.readlines;
+    }
 }
 
 
@@ -732,7 +742,246 @@ static Str histtime(Shell *sh, Arena *a, Str stamp, Str fmt)
 }
 
 
-// Stubs until the file and expansion parts land
+// Stubs until history expansion lands
 static Str histexpandline(Shell *, Lexer *, Str line, b32 *) { return line; }
 static Str histexpandarg(Shell *, Arena *, Str s, i32 *r) { *r = 0; return s; }
-static i32 histfileop(Shell *, i32, Str *, iz, iz, Arena) { return 0; }
+
+
+// The history file (readline's histfile.c)
+
+// HISTFILE, or readline's default when it is unset.
+static Str histfile(Shell *sh, Arena *a)
+{
+    Got g = getvar(sh, a, "HISTFILE");
+    if (g.set) return g.value;
+    return concat(a, getvar(sh, a, "HOME").value, "/.history");
+}
+
+// A time stamp line: the comment character and a digit.
+static b32 isstamp(Str s, iz i, u8 com)
+{
+    return com && i+1<s.len && s[i]==com && digit(s[i+1]);
+}
+
+static b32 writestamps(Shell *sh)
+{
+    Arena none = {};
+    return getvar(sh, &none, "HISTTIMEFORMAT").set;
+}
+
+// Append the entries of a file to the list, skipping its first from
+// lines (time stamp lines aside): readline's read_history_range. The
+// lines it went through go in readlines, 0 on an error. An error, or 0.
+static i32 histread(Shell *sh, Str file, i64 from, Arena scratch)
+{
+    Hist *h  = &sh->hist;
+    Stat  st = pathstat(sh, scratch, file, 1);
+    if (st.type!=FT_FILE && !st.err) return E_INVAL;  // count kept
+    h->readlines = 0;
+    if (st.err) return st.err;
+    i32 err = 0;
+    Str buf = readwholefile(sh, &scratch, file, &err);
+    if (err) return err;
+
+    u8 com = h->comchar;
+    if (!com && buf.len>1 && buf[0]=='#' && digit(buf[1])) com = '#';
+    if (isstamp(buf, 0, com) && writestamps(sh)) h->multiline++;
+    b32 multi = h->multiline > 0;
+
+    i64 line = 0;
+    iz  pos  = 0;
+    while (line<from && pos<buf.len) {
+        Cut c = cut(cuthead(buf, pos), '\n');
+        if (!c.ok) {
+            pos = buf.len;  // an unterminated last line is not read
+            break;
+        }
+        line += !isstamp(c.head, 0, com);
+        pos  += c.head.len + 1;
+    }
+
+    Str  stamp   = {};  // a time stamp line waiting for its entry
+    b32  afterts = 0;   // the last line was a time stamp
+    while (pos < buf.len) {
+        Cut c = cut(cuthead(buf, pos), '\n');
+        if (!c.ok) break;
+        pos += c.head.len + 1;
+        Str text = c.head;
+        if (text.len && text[text.len-1]=='\r') text.len--;
+        if (isstamp(text, 0, com)) {
+            stamp   = text;
+            afterts = 1;
+            continue;
+        }
+        line++;
+        if (!text.len && (!multi || afterts)) continue;
+        if (multi && !afterts && h->len) {
+            Arena t   = scratch;
+            Str   cur = h->ents[h->len-1]->line;
+            histreplace(sh, h->len-1, concat3(&t, cur, "\n", text));
+        } else {
+            byte  mem[32];
+            Arena t = {mem, mem+sizeof(mem)};
+            histpush(sh, text, stamp.data ? stamp : histstamp(sh, &t));
+        }
+        stamp   = {};
+        afterts = 0;
+    }
+    h->readlines = line;
+    return 0;
+}
+
+// Write entries [from, len) to a file, each after its time stamp line
+// when HISTTIMEFORMAT is set: appended to a file that must exist, or
+// replacing its contents. An error, or 0.
+static i32 histwrite(Shell *sh, Str file, iz from, b32 append, Arena scratch)
+{
+    Hist *h     = &sh->hist;
+    b32   ts    = writestamps(sh);
+    i32   flags = append ? OF_WRITE|OF_APPEND : OF_WRITE|OF_CREATE|OF_TRUNC;
+    Str   path  = absolute(sh, &scratch, file);
+    Opened o = os_open(sh->os, scratch, path, flags, 0600);
+    if (o.err) return o.err;
+    Buf b(&scratch, 4096);
+    for (iz i = from; i < h->len; i++) {
+        HistEnt *e = h->ents[i];
+        if (ts && e->stamp.len) {
+            print(&b, e->stamp);
+            putbyte(&b, '\n');
+        }
+        print(&b, e->line);
+        putbyte(&b, '\n');
+    }
+    b32 ok = !b.len || os_write(sh->os, o.h, b.data, b.len);
+    os_close(sh->os, o.h);
+    return ok ? 0 : E_IO;
+}
+
+// Cut a history file to its last n entries, each time stamp kept with
+// its entry: readline's history_truncate_file.
+static void histtruncate(Shell *sh, Str file, i64 n, Arena scratch)
+{
+    Stat st = pathstat(sh, scratch, file, 1);
+    if (st.err || st.type!=FT_FILE) return;
+    Str keep = {};
+    if (n) {
+        i32 err = 0;
+        Str buf = readwholefile(sh, &scratch, file, &err);
+        if (err || !buf.len) return;
+        u8  com   = sh->hist.comchar;
+        b32 ts    = writestamps(sh);
+        i64 lines = n + ts;
+        // Count newlines back from the end, those before a time stamp
+        // line aside, until n lines are behind.
+        iz i = buf.len - 1;
+        for (; i>0 && lines>0; i--) {
+            if (buf[i]=='\n' && !isstamp(buf, i+1, com)) lines--;
+        }
+        // Then back to the start of a line, or of a time stamp line
+        for (; i > 0; i--) {
+            if (buf[i]=='\n' && (!ts || isstamp(buf, i+1, com))) {
+                i++;
+                break;
+            }
+        }
+        if (i <= 0) return;  // no more lines than that
+        keep = cuthead(buf, i);
+    }
+    Str    path = absolute(sh, &scratch, file);
+    Opened o    = os_open(sh->os, scratch, path, OF_WRITE|OF_TRUNC, 0600);
+    if (o.err) return;
+    if (keep.len) os_write(sh->os, o.h, keep.data, keep.len);
+    os_close(sh->os, o.h);
+}
+
+// HISTFILESIZE: a number of 0 or more cuts the file at once.
+static void histfilesize(Shell *sh)
+{
+    Hist *h = &sh->hist;
+    Arena a = *scratchat(sh, sh->capdepth+1);
+    Got   g = getvar(sh, &a, "HISTFILESIZE");
+    i64   n = 0;
+    if (!g.value.len || !histnum(g.value, &n) || n<0) return;
+    histtruncate(sh, histfile(sh, &a), n, a);
+    if (n < h->infile) h->infile = n;
+}
+
+// Create a missing file, empty. An error, or 0.
+static i32 histcreate(Shell *sh, Str file, Arena scratch)
+{
+    if (!pathstat(sh, scratch, file, 1).err) return 0;
+    Str    path = absolute(sh, &scratch, file);
+    Opened o    = os_open(sh->os, scratch, path, OF_WRITE|OF_CREATE, 0600);
+    if (o.err) return o.err;
+    os_close(sh->os, o.h);
+    return 0;
+}
+
+// At exit with history on: this session's entries go to the end of the
+// file, or the whole list replaces it when some of those are already
+// gone from the list. Then HISTFILESIZE cuts it.
+static void histexit(Shell *sh)
+{
+    Hist *h = &sh->hist;
+    if (!sh->opt[O_HISTORY] || h->session<=0) return;
+    Arena a    = *scratchat(sh, sh->capdepth+1);
+    Str   file = getvar(sh, &a, "HISTFILE").value;
+    if (!file.len) return;
+    histcreate(sh, file, a);
+    if (h->session<=h->len || sh->shopt[S_HISTAPPEND]) {
+        iz n = h->session<h->len ? (iz)h->session : h->len;
+        histwrite(sh, file, h->len-n, 1, a);
+        h->infile += h->session;
+    } else {
+        histwrite(sh, file, 0, 0, a);
+        h->infile = h->len;
+    }
+    h->session = 0;
+    histfilesize(sh);
+}
+
+// history -a, -n, -r, -w, with the file args[i] or HISTFILE.
+static i32 histfileop(Shell *sh, i32 op, Str *args, iz nargs, iz i, Arena scratch)
+{
+    Hist *h    = &sh->hist;
+    Str   file = i<nargs ? args[i] : getvar(sh, &scratch, "HISTFILE").value;
+    if (!file.len) {
+        Str msg = i<nargs ? Str("empty filename") : "HISTFILE: parameter null or not set";
+        builtinerror(sh, scratch, "history", msg);
+        return !sh->interactive;
+    }
+    i32 err = 0;
+    switch (op) {
+    case 'a':
+        if (h->session > 0) {
+            err = histcreate(sh, file, scratch);
+            if (err) {
+                Str msg = concat3(&scratch, file, ": cannot create: ", errtext(err));
+                builtinerror(sh, scratch, "history", msg);
+                return 1;
+            }
+            if (h->session > h->len) h->session = h->len;
+            err = histwrite(sh, file, h->len-(iz)h->session, 1, scratch);
+            h->infile += h->session;
+        }
+        h->session = 0;
+        break;
+    case 'w':
+        err = histwrite(sh, file, 0, 0, scratch);
+        break;
+    case 'r':
+        err = histread(sh, file, 0, scratch);
+        h->infile = h->readlines;
+        break;
+    case 'n': {
+        i64 old  = h->infile;
+        i64 base = h->base;
+        err = histread(sh, file, h->infile, scratch);
+        h->infile = h->readlines;
+        if (!sh->shopt[S_HISTAPPEND]) {
+            h->session += h->infile - old + h->base - base;
+        }
+    } break;
+    }
+    return err ? 1 : 0;
+}

@@ -417,6 +417,7 @@ struct Hist {      // in the Shell by value: a subshell's changes roll back
     i64       max;     // HISTSIZE's limit, or -1 for none
     i64       session; // entries added and not yet written
     i64       infile;  // lines of HISTFILE read or written
+    i64       readlines;   // lines the last read of a file went through
     i64       multiline;   // timestamped files read with HISTTIMEFORMAT
     i32       control; // HISTCONTROL: HC_*
     i32       cmdlines;    // lines of the command being read
