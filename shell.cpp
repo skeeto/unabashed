@@ -570,6 +570,41 @@ static b32 hasshopt(Shell *sh, i32 k)
     return k!=S_COMPLETION_STRIP_EXE || sh->pathmode==PM_MSYS;
 }
 
+// The options a shell starts with, which a script without #! also
+// starts from (as bash's reinitialized subshell); with fresh, those a
+// shell keeps across that, as bash, survive: the editing mode, history,
+// igncr, login_shell and completion_strip_exe.
+static void defaultoptions(Shell *sh, b32 fresh)
+{
+    static i32 optkeep[] = {O_EMACS, O_HISTORY, O_IGNCR, O_NOLOG, O_VI};
+    static i32 shoptkeep[] = {S_COMPLETION_STRIP_EXE, S_LOGIN_SHELL};
+    static i32 shoptson[] = {
+        S_CHECKWINSIZE, S_CMDHIST, S_COMPLETE_FULLQUOTE, S_EXTQUOTE,
+        S_FORCE_FIGNORE, S_GLOBASCIIRANGES, S_GLOBSKIPDOTS, S_HOSTCOMPLETE,
+        S_INTERACTIVE_COMMENTS, S_PATSUB_REPLACEMENT, S_PROGCOMP,
+        S_PROMPTVARS, S_SOURCEPATH,
+    };
+    b32 opt[O_COUNT]   = {};
+    b32 shopt[S_COUNT] = {};
+    if (fresh) {
+        for (iz i = 0; i < countof(optkeep); i++) {
+            opt[optkeep[i]] = sh->opt[optkeep[i]];
+        }
+        for (iz i = 0; i < countof(shoptkeep); i++) {
+            shopt[shoptkeep[i]] = sh->shopt[shoptkeep[i]];
+        }
+    }
+    for (i32 i = 0; i < O_COUNT; i++) sh->opt[i] = opt[i];
+    for (i32 i = 0; i < S_COUNT; i++) sh->shopt[i] = shopt[i];
+    sh->opt[O_BRACEEXPAND] = 1;
+    sh->opt[O_HASHALL]     = 1;
+    sh->opt[O_INTERACTIVECOMMENTS] = 1;
+    for (iz i = 0; i < countof(shoptson); i++) {
+        sh->shopt[shoptson[i]] = 1;
+    }
+    sh->posixsaved = 0;
+}
+
 // set -o igncr in effect: CRs vanish from command substitution output
 // and from what read splits, as in Cygwin's bash.
 static b32 igncr(Shell *sh)

@@ -2027,6 +2027,9 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->evaldepth   = 0;
         sh->sourcedepth = 0;
         sh->psubs       = 0;
+        sh->aliases     = 0;
+        sh->cflag       = 0;
+        defaultoptions(sh, 1);
         sh->capdepth++;
         // As a new shell: what was ignored is ignored on entry, caught
         // signals are reset, and only its own traps are listed

@@ -3076,12 +3076,28 @@ static i32 b_true(Shell *, Str *, iz, Arena)
     return 0;
 }
 
+// One alias as alias prints it: reusable as a command outside POSIX
+// mode or with -p, else bare name=value
+static void printalias(Shell *sh, Arena scratch, Alias *a, b32 reusable)
+{
+    if (reusable) {
+        bprint(sh, "alias ");
+        if (a->name.len && a->name[0]=='-') bprint(sh, "-- ");
+    }
+    bprint(sh, a->name);
+    bprint(sh, "=");
+    bprint(sh, singlequote(&scratch, a->value));
+    bprint(sh, "\n");
+}
+
 static i32 b_alias(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
-    iz i = 1;
-    if (i<nargs && args[i]=="-p") i++;
+    iz  i     = 1;
+    b32 pflag = i<nargs && args[i]=="-p";
+    i += pflag;
     i = skipdashdash(args, nargs, i);
-    if (i == nargs) {
+    b32 reusable = pflag || !sh->opt[O_POSIX];
+    if (i==nargs || pflag) {
         // list, sorted
         Slice<Alias *> all = {};
         Alias *stack[256];
@@ -3100,13 +3116,9 @@ static i32 b_alias(Shell *sh, Str *args, iz nargs, Arena scratch)
             }
         }
         for (iz k = 0; k < all.len; k++) {
-            bprint(sh, "alias ");
-            bprint(sh, all[k]->name);
-            bprint(sh, "=");
-            bprint(sh, singlequote(&scratch, all[k]->value));
-            bprint(sh, "\n");
+            printalias(sh, scratch, all[k], reusable);
         }
-        return 0;
+        if (i == nargs) return 0;
     }
     i32 status = 0;
     for (; i < nargs; i++) {
@@ -3114,11 +3126,7 @@ static i32 b_alias(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (!c.ok) {
             Alias *a = findalias(sh->aliases, args[i]);
             if (a && a->value.data) {
-                bprint(sh, "alias ");
-                bprint(sh, a->name);
-                bprint(sh, "=");
-                bprint(sh, singlequote(&scratch, a->value));
-                bprint(sh, "\n");
+                printalias(sh, scratch, a, reusable);
             } else {
                 builtinerror(sh, scratch, "alias", concat(&scratch, args[i], ": not found"));
                 status = 1;

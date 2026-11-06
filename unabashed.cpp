@@ -1116,18 +1116,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
 
     startfds(sh, info);
 
-    sh->opt[O_BRACEEXPAND] = 1;
-    sh->opt[O_HASHALL]     = 1;
-    sh->opt[O_INTERACTIVECOMMENTS] = 1;
-    static i32 shoptson[] = {
-        S_CHECKWINSIZE, S_CMDHIST, S_COMPLETE_FULLQUOTE, S_EXTQUOTE,
-        S_FORCE_FIGNORE, S_GLOBASCIIRANGES, S_GLOBSKIPDOTS, S_HOSTCOMPLETE,
-        S_INTERACTIVE_COMMENTS, S_PATSUB_REPLACEMENT, S_PROGCOMP,
-        S_PROMPTVARS, S_SOURCEPATH,
-    };
-    for (iz i = 0; i < countof(shoptson); i++) {
-        sh->shopt[shoptson[i]] = 1;
-    }
+    defaultoptions(sh, 0);
 
     if (!__builtin_setjmp(top.jmp)) {
         pathsetup(sh, info, &perm, scratch);
