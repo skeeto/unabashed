@@ -43,7 +43,8 @@
 //   variables naming the job (imagenoise); and no image escapes its
 //   region (the vos's audit, vimageescape, at every spawn). Scripts
 //   naming coproc are left out: a coprocess reaped between the dumps
-//   takes its variables with it, as in bash.
+//   takes its variables with it, as in bash; so are those with disown,
+//   or procsubs and kill: what they start may act between the dumps.
 //
 // Background jobs run from images in the run and image modes, as the
 // shell's default; chaos and isolate keep them fibers.
@@ -539,11 +540,25 @@ static b32 imagesame(Str a, Str b)
 static void fuzzimage(Os *os, Arena scratch, Str src)
 {
     if (find(src, "coproc") >= 0) return note("coproc");
-    // DEBUG, which a job does not inherit (as in bash), would run around
-    // the shell's dump only: it goes first
+    // Processes that S starts and the harness cannot stop (disowned
+    // jobs, procsubs signaling the shell) may write or signal between
+    // the dumps
+    b32 psub = find(src, "<(")>=0 || find(src, ">(")>=0;
+    if (find(src, "disown")>=0 || (psub && find(src, "kill")>=0)) {
+        return note("async");
+    }
+    // What would run the two dumps differently goes first, the same for
+    // both: DEBUG, which a job does not inherit (as in bash); aliases
+    // (of {, echo) and functions shadowing the dump's builtins, which
+    // the job's line would parse or run otherwise; S's jobs, which may
+    // still signal the shell or write.
     Str sep    = "\x01image\x01\n";
     Str dump   = isolatedump;
-    Str script = "eval \"$1\" </dev/null >/dev/null 2>&1\ntrap - DEBUG\n"
+    Str script = "eval \"$1\" </dev/null >/dev/null 2>&1\n"
+                 "\\trap - DEBUG; \\shopt -u expand_aliases\n"
+                 "unset -f builtin unset declare alias trap set shopt umask "
+                 "echo wait kill jobs 2>/dev/null\n"
+                 "kill -9 $(jobs -p) 2>/dev/null; wait 2>/dev/null\n"
                  "echo $'\\x01image\\x01'\n";
     script = concat(&scratch, script, dump);
     script = concat(&scratch, script, "\necho $'\\x01image\\x01'\n{ ");
