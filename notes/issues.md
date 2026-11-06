@@ -121,6 +121,10 @@ Moved from M5a: needs the completion engine.
 
 ## M7 (job control and fidelity)
 
+- **`read -t` never times out on input that never ends a line**: `read
+  -t 0.01 x </dev/zero` hangs on POSIX, where bash fails it with 142;
+  the deadline is checked only while waiting for data, and /dev/zero
+  always has some. (m5b.md, step 8)
 - **UTF-8 character classes and case folding are ASCII-only** in
   pattern.cpp, glob.cpp and regex.cpp: `[[:alpha:]]` does not match é,
   where bash (glibc) does. (m4.md)

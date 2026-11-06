@@ -465,3 +465,60 @@ job. Output equal to bash 5.3's but for pids and dash's own
 "Terminated" timing. The scripts move into a POSIX tier in step 8.
 Results: vos suites as before; t/win32 17/17, -x 34/0 on Windows 11
 x64, i686 33/1 (008's flake).
+
+### Step 8: bash's suite and the specs on the POSIX build
+
+Two harnesses run our Linux build (built in WSL; the bash53 image has
+no compiler) in the oracle image, where the fakes and bash 5.3 live:
+
+- `RECORD_SHELL=ub RECORD_CHECK=1 tools/record SCRIPT...` mounts the
+  shell over /usr/local/bin/bash (so `$BASH` and messages name the
+  same path as in the recording) and compares each run with its spec
+  instead of writing it. t/exec and t/posix: 668 of 668 pass.
+- `tools/oracle-posix [-v] SHELL [NAME...|all]` runs bash's run-*
+  tests as run-all does, in one container (`--network none`,
+  read-only, tmpfs /tmp and home, uid 1000, no capabilities), the
+  suite unpacked afresh per test with the stub config.h and version.h
+  that some tests grep. A test passes if it prints only "warning:"
+  lines. The default is category c (notes/research/tests.md).
+
+t/posix holds what the vos cannot show: 001 (real pids kept on exec,
+a job's TERM trap, USR2 to a level of another process, a killed exec'd
+job's 143, `bash -c 'server &'` returning at once). 880 (fork on exec)
+runs on both.
+
+Category c on the POSIX build, 2 of 10 (bash 5.3 itself: 7 of 10):
+
+| test | result | what is left |
+|---|---|---|
+| varenv | PASS | |
+| dynvar | PASS | |
+| execscript | FAIL | bash fails too, here: `trap` lists in Linux signal order (USR1 before TERM), not exec.right's. Ours differs further only in job control's "cannot set terminal process group (-1)" lines (M7) |
+| invocation | FAIL | option and `--help` texts, the "bad interpreter" message (M7: invocation, original help text) |
+| exportfunc | FAIL | importing functions from the environment: `BASH_FUNC_x%%` names that are not identifiers, `export` refusing them, an eval syntax error's line (M7) |
+| posixexp | FAIL | POSIX-mode field splitting of `${x-$y}` words and `${$'x1'...}` "bad substitution" (M7: POSIX mode) |
+| builtins | FAIL | umask, enable, help, source and other builtins' messages (M7: remaining builtins) |
+| procsub | FAIL | `ulimit` (M7) |
+| rsh | FAIL | restricted shell (M7: rbash) |
+| glob-bracket | FAIL | builds a helper with gcc, which the image lacks; bash fails too |
+
+Every run-* test: ours 61 of 86, bash 74 of 86. Beyond category c, ours
+fails complete dirstack dollars errors histexpand jobs nameref redir
+trap (as on the vos, M6/M7), and heredoc history intl printf read test
+vredir, glob-test, which bash fails here as well (locales, /dev/tty,
+ulimit, timing). shopt failed only here: a script without `#!`
+(ENOEXEC) runs, as in bash, in a reinitialized subshell whose set and
+shopt options are back to their defaults, which ours did not do. Fixed
+(2308fef), with alias's POSIX-mode listing form found on the way.
+
+The vos oracle is 64 of 86, the same failures as at the end of M4 (its
+64 of 87 counted run-minimal). read had regressed to running the test
+heap out of memory: read2.sub starts 2001 jobs from subshells, each an
+image of 4 MiB. The vos now recycles image regions (when the job ends
+or its spawn fails), reaps exited children at a spawn as SIGCHLD
+handling would, and waits at its 64-process limit; main_test recycles
+a nested shell's blocks that its stack rewind cannot release (448a7eb).
+
+Found on the way: `read -t` never times out on an endless stream with
+no newline (`read -t 0.01 x </dev/zero` hangs on POSIX; bash gives
+142), in issues.md.
