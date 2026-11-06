@@ -36,12 +36,14 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   ignored (SIGM_CLAIM): tested on a pty and in the vos, not yet on a
   real Windows console, where it calls SetConsoleCtrlHandler(0, 0).
   (step 8)
-- run-history on the vos: history4 needs C-r and C-o (step 4);
-  history7 needs readline on a non-terminal (the item below). (step 4)
-- histverify and histreedit are untested on a terminal: test with the
-  history keys. (step 4)
-- `*` for an entry changed in the editor: nothing sets HistEnt.edited
-  until the editor edits history lines. (step 4)
+- run-history: history4 and history7 both need readline on a
+  non-terminal under `-i` (the item below). (step 2)
+- edit-and-execute-command (C-x C-e) is bound but rings the bell: it
+  needs fc's editor run from inside the editor. (step 10)
+- shell-expand-line does not translate `$'...'` or expand aliases as
+  bash's does. (step 10)
+- The search-ignore-case variable and the isearch-terminators string
+  are not implemented (inputrc, step 6).
 - The history file is overwritten in place; readline writes a
   `FILE-NNNNN.tmp` beside it and renames it over (keeping a symlink's
   target and the owner). Needs a rename in the platform API. (step 10)

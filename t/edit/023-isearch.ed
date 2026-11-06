@@ -1,5 +1,5 @@
 # Incremental search: C-r, typing, C-r again, failure, DEL, C-g, ESC and
-# C-j to stop, RET to run, C-s, C-w
+# C-j to stop, RET to run, M-- C-r (C-s is XOFF on a pty), C-w
 size 16 60
 rc PS1='$ '
 keys echo apple one\r
@@ -24,7 +24,7 @@ pause 700
 snap
 keys \C-u\C-rtwo\C-j
 snap
-keys \C-u\C-rban\C-s
+keys X\C-u\C-rban\e-\C-r
 snap
 keys \C-g\C-u\C-r\C-r
 snap

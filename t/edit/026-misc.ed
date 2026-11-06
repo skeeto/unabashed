@@ -1,6 +1,8 @@
 # M-# (insert-comment), C-] and M-C-] (character search), M-C-e
 # (shell-expand-line), M-^ (history-expand-line), bracketed paste,
-# C-x C-x and the mark
+# C-x C-x and the mark (a C-@ right after typed text is lost in bash
+# when keys arrive at once: readline's typeahead pushback reads 0 as
+# no key)
 size 16 60
 rc PS1='$ '
 rc x=expanded
@@ -19,7 +21,7 @@ keys \C-u echo !!:1\e^
 snap
 keys \C-u\e[200~echo pasted\rline\e[201~
 snap
-keys \C-u echo mark\C-@\C-a\C-x\C-x
+keys \C-u echo mark\C-b\C-@\C-a\C-x\C-x
 snap
 keys \C-u\r
 snap

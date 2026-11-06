@@ -240,7 +240,8 @@ struct Editor {
     i32      cur;       // which of lay is on screen
     KeyNode  root;
     i32      keytimeout;  // keyseq-timeout, ms
-    i32      unread;    // a key read ahead and put back, plus one
+    u8       pushed[32];  // keys read ahead and put back, the next last
+    i32      unread;    // how many
     // The line being edited
     Buf      line;
     iz       point;
@@ -295,6 +296,14 @@ struct Editor {
     Str      hsavedline;
     EdUndo    *hsavedundo;
     i64      getnext;   // operate-and-get-next: the entry to start on, or -1
+    b32      active;    // the region from mark to point is highlighted
+    b32      keepactive;  // and stays so past this command
+    Str      lastisearch; // the last incremental search's string
+    Str      noninc;    // the last non-incremental search's string
+    iz       nonincpos; // and the entry it found
+    iz       hspos;     // history-search: the entry last found
+    Str      hsprefix;  // ^ and the line up to point
+    Str      hsprev;    // the last line found
     i64      ylskip;    // yank-last-arg's walk back
     i32      yldir;
     i32      ylcount;
@@ -470,7 +479,26 @@ static void layinvisible(Layouter *y, Str bytes)
     laycell(y, bytes, 0);
 }
 
-static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width)
+// The active region, line[rbeg, rend), is drawn in standout: each of
+// its cells carries the sequences that turn it on and off, so that any
+// cell may be redrawn alone. Built in buf (24 bytes), not the arena,
+// whose buffers are growing.
+static Str layregion(u8 *buf, Str bytes)
+{
+    Str on  = "\x1b[7m";
+    Str off = "\x1b[27m";
+    iz  n   = 0;
+    copybytes(buf+n, on.data, on.len);
+    n += on.len;
+    copybytes(buf+n, bytes.data, bytes.len);
+    n += bytes.len;
+    copybytes(buf+n, off.data, off.len);
+    n += off.len;
+    return {buf, n};
+}
+
+static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width,
+                     iz rbeg, iz rend)
 {
     Layouter y = {};
     y.a     = a;
@@ -510,15 +538,26 @@ static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width)
         u8  c   = line[i];
         iz  beg = i;
         i32 cp  = utf8decode(line, &i);
-        if (c == '\t') {
+        b32 hi  = beg>=rbeg && beg<rend;
+        u8  hbuf[24];
+        if (c == '\n') {
+            // A newline in the line starts a row of its own
+            layfinish(&y);
+            laynewrow(&y);
+            y.vcol = 0;
+        } else if (c == '\t') {
             i32 n = 8 - y.vcol%8;
-            for (i32 k = 0; k < n; k++) laycell(&y, " ", 1);  // as readline, may wrap
+            for (i32 k = 0; k < n; k++) {
+                laycell(&y, hi ? layregion(hbuf, " ") : Str(" "), 1);  // as readline, may wrap
+            }
         } else if (c<0x20 || c==0x7f) {
-            u8 buf[2] = {'^', (u8)(c==0x7f ? '?' : c|0x40)};
-            laycell(&y, {buf, 2}, 2);
+            u8  buf[2] = {'^', (u8)(c==0x7f ? '?' : c|0x40)};
+            Str t      = {buf, 2};
+            laycell(&y, hi ? layregion(hbuf, t) : t, 2);
         } else {
             i32 w = cpwidth(cp);
-            laycell(&y, {line.data+beg, i-beg}, w<0 ? 1 : w);
+            Str t = {line.data+beg, i-beg};
+            laycell(&y, hi ? layregion(hbuf, t) : t, w<0 ? 1 : w);
         }
     }
     if (y.col >= y.width) {
@@ -702,7 +741,14 @@ static void redisplay(Editor *ed, Shell *sh)
     Str line = {ed->line.data, ed->line.len};
     iz  point = ed->point;
     if (ed->silent) line = {}, point = 0;
-    Layout nl = layout(a, ed->prompt, line, point, ed->hscroll ? 1<<30 : ed->width);
+    iz  rbeg = 0, rend = 0;
+    if (ed->active && !ed->hscroll) {
+        iz m = ed->mark<line.len ? ed->mark : line.len;
+        rbeg = m<point ? m : point;
+        rend = m<point ? point : m;
+    }
+    Layout nl = layout(a, ed->prompt, line, point, ed->hscroll ? 1<<30 : ed->width,
+                       rbeg, rend);
     if (ed->hscroll) {
         hredisplay(ed, &nl);
     } else {
@@ -751,6 +797,12 @@ static void edresize(Editor *ed, Shell *sh)
 // Editing functions
 
 static i32 edkey(Editor *, Shell *, i64 timeout);
+
+// Put back a key to be read next.
+static void edpush(Editor *ed, i32 c)
+{
+    if (ed->unread < countof(ed->pushed)) ed->pushed[ed->unread++] = (u8)c;
+}
 
 static void edbell(Editor *ed)
 {
@@ -1001,13 +1053,13 @@ static void edyank(Editor *ed)
 // History
 
 // Readline's rl_maybe_replace_line: the entry left keeps its changes.
-static void edkeepline(Editor *ed, Shell *sh)
+static b32 edkeepline(Editor *ed, Shell *sh)  // true if it did
 {
     Hist *h = &sh->hist;
-    if (ed->hpos >= h->len) return;
-    if (h->ents[ed->hpos]->undo != ed->undo) {
-        histedit(sh, ed->hpos, edtext(ed), ed->undo);
-    }
+    if (ed->hpos >= h->len) return 0;
+    if (h->ents[ed->hpos]->undo == ed->undo) return 0;
+    histedit(sh, ed->hpos, edtext(ed), ed->undo);
+    return 1;
 }
 
 static void edload(Editor *ed, Shell *sh, iz i)
@@ -1335,6 +1387,557 @@ static void edcharsearch(Editor *ed, Shell *sh, i32 count, i32 dir)
 }
 
 
+// Searching the history
+
+static void edrun(Editor *, Shell *, i32 fn, u8 key);
+
+// Bracketed paste: the bytes up to ESC [ 201 ~, CR as LF.
+static Str edpaste(Editor *ed, Shell *sh, Arena *a)
+{
+    Buf  b(a, 256);
+    Str  end = "\x1b[201~";
+    for (;;) {
+        i32 c = edkey(ed, sh, -1);
+        if (c < 0) break;
+        putbyte(&b, c=='\r' ? '\n' : (u8)c);
+        if (b.len>=end.len && Str{b.data+b.len-end.len, end.len}==end) {
+            b.len -= end.len;
+            break;
+        }
+    }
+    return finish(&b);
+}
+
+
+static void edactivate(Editor *ed)
+{
+    ed->active = ed->keepactive = 1;
+}
+
+// Readline's incremental search (C-r, C-s): a modal loop with its own
+// keys, the prompt replaced by the search's message, the match shown in
+// the line it was found in. Ending it moves through the history to that
+// entry; C-g puts everything back.
+static void edisearch(Editor *ed, Shell *sh, i64 count)
+{
+    Hist *h = &sh->hist;
+    if (edkeepline(ed, sh)) ed->undo = 0;
+
+    // Every entry, and the line typed: the saved one or this one
+    iz   hlen  = h->len + 1;
+    Str *lines = alloc<Str>(&ed->linemem, hlen);
+    for (iz i = 0; i < h->len; i++) lines[i] = h->ents[i]->line;
+    lines[h->len] = ed->hsaved ? ed->hsavedline : clone(&ed->linemem, edtext(ed));
+
+    iz   saveline  = ed->hpos;
+    iz   savepoint = ed->point;
+    iz   savemark  = ed->mark;
+    Str  prompt    = ed->prompt;
+    iz   pos       = saveline;
+    iz   lastfound = saveline;
+    Str  sline     = clone(&ed->linemem, edtext(ed));
+    iz   idx       = ed->point;
+    Str  prevfound = {};
+    i32  dir       = count>=0 ? 1 : -1;  // C-r passes -count
+    b32  failed    = 0;
+    Buf  str(&ed->linemem, 64);
+
+    for (;;) {
+        // The message in place of the prompt
+        Arena a = ed->linemem;
+        Buf   m(&a, str.len+40);
+        print(&m, "(");
+        if (failed) print(&m, "failed ");
+        if (dir < 0) print(&m, "reverse-");
+        print(&m, "i-search)`");
+        print(&m, Str{str.data, str.len});
+        print(&m, "': ");
+        ed->prompt = finish(&m);
+        redisplay(ed, sh);
+        ed->prompt = prompt;
+
+        i32 c = edkey(ed, sh, -1);
+        if (c==-2 || c==ed->tty.intr) {
+            ed->done   = 1;
+            ed->result = ED_INTR;
+            return;
+        }
+        if (c < 0) return;
+
+        enum { OP_ADD, OP_AGAIN, OP_SWITCH, OP_DEL, OP_ABORT, OP_WORD, OP_REST,
+               OP_QUOTE, OP_PASTE, OP_END, OP_ENDRUN };
+        i32 op  = OP_ADD;
+        u8  seq[16] = {(u8)c};
+        i32 nseq    = 1;
+        if (c==0x1b || c=='\n') {
+            op = OP_END;
+            if (c == 0x1b) {
+                // More keys soon after ESC: the search ends and they run
+                i32 n = edkey(ed, sh, 100);
+                if (n >= 0) {
+                    edpush(ed, n);
+                    edpush(ed, 0x1b);
+                }
+            }
+        } else {
+            KeyNode *k = keychild(&ed->root, (u8)c);
+            while (k && k->kids && nseq<countof(seq)) {
+                i32 n = edkey(ed, sh, k->fn ? ed->keytimeout : -1);
+                if (n == -3) break;
+                if (n < 0) return;
+                seq[nseq++] = (u8)n;
+                k = keychild(k, (u8)n);
+            }
+            i32 fn = k ? k->fn : EF_NONE;
+            if (fn==EF_REVERSE_SEARCH_HISTORY || fn==EF_FORWARD_SEARCH_HISTORY) {
+                op = (fn==EF_REVERSE_SEARCH_HISTORY) == (dir<0) ? OP_AGAIN : OP_SWITCH;
+            } else if (fn == EF_BACKWARD_DELETE_CHAR) {
+                op = OP_DEL;
+            } else if (fn==EF_ABORT || c==0x07) {
+                op = OP_ABORT;
+            } else if (fn==EF_UNIX_WORD_RUBOUT || c==0x17) {
+                op = OP_WORD;
+            } else if (fn==EF_YANK || c==0x19) {
+                op = OP_REST;
+            } else if (fn==EF_QUOTED_INSERT || c==0x16) {
+                op = OP_QUOTE;
+            } else if (fn == EF_BRACKETED_PASTE_BEGIN) {
+                op = OP_PASTE;
+            } else if (nseq > 1) {
+                op = OP_ENDRUN;
+            } else if (c<0x20 || c==0x7f) {
+                op = OP_ENDRUN;
+            }
+        }
+
+        if (op==OP_END || op==OP_ENDRUN) {
+            // Back to the line searched from, then by history motion to
+            // the one found
+            ed->line.len = 0;
+            print(&ed->line, lines[saveline]);
+            ed->point = ed->line.len;
+            Str last = {str.data, str.len};
+            ed->lastisearch = clone(&ed->perm, last);
+            if (lastfound < saveline) {
+                edprevhist(ed, sh, saveline-lastfound);
+            } else {
+                ednexthist(ed, sh, lastfound-saveline);
+            }
+            ed->point  = idx<ed->line.len ? idx : ed->line.len;
+            ed->active = 0;
+            if (op == OP_ENDRUN) {
+                for (i32 i = nseq-1; i >= 0; i--) edpush(ed, seq[i]);
+            }
+            return;
+        }
+
+        switch (op) {
+        case OP_AGAIN:
+            if (!str.len) {
+                if (ed->lastisearch.data) {
+                    print(&str, ed->lastisearch);
+                    break;
+                }
+                continue;
+            } else if (dir < 0) {
+                if (idx >= 0) idx--;
+            } else if (idx != sline.len) {
+                idx++;
+            } else {
+                edbell(ed);
+            }
+            break;
+        case OP_SWITCH:
+            dir = -dir;
+            break;
+        case OP_DEL:
+            if (!str.len) {
+                edbell(ed);
+            } else {
+                Str s = {str.data, str.len};
+                iz  i = s.len - 1;
+                while (i>0 && (s[i]&0xc0)==0x80) i--;
+                str.len = i;
+            }
+            if (!str.len) edbell(ed);
+            break;
+        case OP_ABORT:
+            ed->line.len = 0;
+            print(&ed->line, lines[saveline]);
+            ed->point  = savepoint<ed->line.len ? savepoint : ed->line.len;
+            ed->mark   = savemark;
+            ed->active = 0;
+            return;
+        case OP_WORD: {
+            iz w = ed->point + str.len;
+            if (w>=ed->line.len || !edwordchar(ed->line.data[w])) {
+                edbell(ed);
+                break;
+            }
+            iz e = w;
+            for (; e<ed->line.len && edwordchar(ed->line.data[e]); e++) {}
+            print(&str, {ed->line.data+w, e-w});
+        } break;
+        case OP_REST: {
+            iz w = ed->point + str.len;
+            if (w >= ed->line.len) {
+                edbell(ed);
+                break;
+            }
+            print(&str, {ed->line.data+w, ed->line.len-w});
+        } break;
+        case OP_PASTE:
+            print(&str, edpaste(ed, sh, &ed->linemem));
+            break;
+        case OP_QUOTE: {
+            i32 k = edkey(ed, sh, -1);
+            if (k < 0) return;
+            putbyte(&str, (u8)k);
+        } break;
+        case OP_ADD: {
+            putbyte(&str, (u8)c);
+            iz n = c>=0xf0 ? 4 : c>=0xe0 ? 3 : c>=0xc0 ? 2 : 1;
+            for (iz i = 1; i < n; i++) {
+                i32 k = edkey(ed, sh, -1);
+                if (k<0 || (k&0xc0)!=0x80) {
+                    if (k >= 0) edpush(ed, k);
+                    break;
+                }
+                putbyte(&str, (u8)k);
+            }
+        } break;
+        }
+
+        // The search: from idx in sline, then line by line
+        Str  s     = {str.data, str.len};
+        b32  found = 0;
+        failed = 0;
+        for (;;) {
+            if (!s.len) {
+                failed = 1;
+                break;
+            }
+            iz limit = sline.len - s.len + 1;
+            while (dir<0 ? idx>=0 : idx<limit) {
+                if (idx>=0 && idx+s.len<=sline.len && Str{sline.data+idx, s.len}==s) {
+                    found = 1;
+                    break;
+                }
+                idx += dir;
+                if (idx<0 || idx>sline.len) {
+                    idx = 0;
+                    break;
+                }
+            }
+            if (found) break;
+            do {
+                pos += dir;
+                if (dir<0 ? pos<0 : pos==hlen) {
+                    failed = 1;
+                    break;
+                }
+                sline = lines[pos];
+            } while ((prevfound.data && prevfound==sline) || s.len>sline.len);
+            if (failed) {
+                if (idx<0 || idx>sline.len) idx = 0;
+                break;
+            }
+            idx = dir<0 ? sline.len-s.len : 0;
+        }
+        if (failed) {
+            edbell(ed);
+            pos = lastfound;
+            ed->active = 0;
+        } else {
+            prevfound    = lines[pos];
+            ed->line.len = 0;
+            print(&ed->line, lines[pos]);
+            ed->point = idx;
+            ed->mark  = idx + s.len;
+            edactivate(ed);
+            lastfound = pos;
+        }
+    }
+}
+
+// Search the history from entry pos in direction dir for one holding s
+// (at its start if s starts with ^): its index, -1 if none, and where in
+// it the match is (backward: the last in the line).
+static iz edfindhist(Shell *sh, Str s, iz pos, i32 dir, iz *at)
+{
+    Hist *h  = &sh->hist;
+    b32   anchor = s.len && s[0]=='^';
+    if (anchor) s = cuthead(s, 1);
+    for (; pos>=0 && pos<h->len; pos += dir) {
+        Str line = h->ents[pos]->line;
+        if (anchor) {
+            if (line.len>=s.len && Str{line.data, s.len}==s) {
+                *at = 0;
+                return pos;
+            }
+            continue;
+        }
+        if (s.len > line.len) continue;
+        for (iz i = 0; i <= line.len-s.len; i++) {
+            iz j = dir<0 ? line.len-s.len-i : i;
+            if (Str{line.data+j, s.len} == s) {
+                *at = j;
+                return pos;
+            }
+        }
+    }
+    return -1;
+}
+
+static void edgohist(Editor *ed, Shell *sh, iz to)
+{
+    if (to < ed->hpos) {
+        edprevhist(ed, sh, ed->hpos-to);
+    } else {
+        ednexthist(ed, sh, to-ed->hpos);
+    }
+}
+
+// Readline's non-incremental search (M-p, M-n): the string is read on
+// the line, the prompt's last line with ':' after it.
+static void ednoninc(Editor *ed, Shell *sh, i32 dir)
+{
+    iz     savepoint = ed->point;
+    iz     savemark  = ed->mark;
+    iz     savepos   = ed->hpos;
+    Str    saved     = clone(&ed->linemem, edtext(ed));
+    EdUndo *saveundo = ed->undo;
+    Str    prompt    = ed->prompt;
+    ed->line.len = ed->point = 0;
+    ed->undo     = 0;
+    ed->prompt   = concat(&ed->linemem, prompt, ":");
+
+    b32 ok = 0;
+    for (;;) {
+        redisplay(ed, sh);
+        i32 c = edkey(ed, sh, -1);
+        if (c==-2 || c==ed->tty.intr) {
+            ed->prompt = prompt;
+            ed->done   = 1;
+            ed->result = ED_INTR;
+            return;
+        }
+        if (c < 0) break;
+        if (c==0x17 || c==0x15) {
+            ed->killed = 0;
+            edrun(ed, sh, c==0x17 ? EF_UNIX_WORD_RUBOUT : EF_UNIX_LINE_DISCARD, (u8)c);
+        } else if (c==0x11 || c==0x16) {
+            i32 k = edkey(ed, sh, -1);
+            if (k < 0) break;
+            u8 b = (u8)k;
+            edinsert(ed, {&b, 1});
+        } else if (c=='\r' || c=='\n') {
+            ok = 1;
+            break;
+        } else if (c==0x08 || c==0x7f) {
+            if (!ed->line.len) break;
+            eddelete(ed, edprev(ed, ed->point), ed->point);
+        } else if (c==0x03 || c==0x07) {
+            edbell(ed);
+            break;
+        } else {
+            u8 b = (u8)c;
+            edinsert(ed, {&b, 1});
+        }
+    }
+    Str typed = clone(&ed->linemem, edtext(ed));
+    ed->prompt   = prompt;
+    ed->line.len = 0;
+    print(&ed->line, saved);
+    ed->undo  = saveundo;
+    ed->point = savepoint;
+    ed->mark  = savemark;
+    if (!ok) return;
+
+    iz from = savepos;
+    if (!typed.len) {
+        if (!ed->noninc.data) {
+            edbell(ed);
+            return;
+        }
+        from = ed->nonincpos;
+    } else {
+        ed->noninc = clone(&ed->perm, typed);
+    }
+    iz at  = 0;
+    iz got = edfindhist(sh, ed->noninc, from+dir, dir, &at);
+    if (got < 0) {
+        edbell(ed);
+        return;
+    }
+    ed->nonincpos = got;
+    edgohist(ed, sh, got);
+    if (!ed->hscroll && at<ed->line.len) {
+        ed->point = at;
+        ed->mark  = at + ed->noninc.len;
+        edactivate(ed);
+    } else {
+        ed->point = 0;
+        ed->mark  = ed->line.len;
+    }
+}
+
+// history-search-backward and -forward: entries starting with the line
+// up to point.
+static void edhistsearch(Editor *ed, Shell *sh, i32 fn, i32 count)
+{
+    if (!count) return;
+    if (ed->lastfn!=EF_HISTORY_SEARCH_BACKWARD && ed->lastfn!=EF_HISTORY_SEARCH_FORWARD) {
+        ed->hspos    = ed->hpos;
+        ed->hsprefix = concat(&ed->linemem, "^", Str{ed->line.data, ed->point});
+        ed->hsprev   = {};
+    }
+    if (ed->hsprefix.len == 1) {
+        if (fn == EF_HISTORY_SEARCH_BACKWARD) {
+            edprevhist(ed, sh, count);
+        } else {
+            ednexthist(ed, sh, count);
+        }
+        return;
+    }
+    i32 dir = (fn==EF_HISTORY_SEARCH_BACKWARD) == (count>0) ? -1 : 1;
+    i32 n   = count<0 ? -count : count;
+    b32 any = 0;
+    while (n) {
+        iz at  = 0;
+        iz got = edfindhist(sh, ed->hsprefix, ed->hspos+dir, dir, &at);
+        if (got < 0) break;
+        ed->hspos = got;
+        any = 1;
+        Str line = sh->hist.ents[got]->line;
+        if (ed->hsprev.data && ed->hsprev==line) continue;
+        ed->hsprev = clone(&ed->linemem, line);
+        n--;
+    }
+    iz plen = ed->hsprefix.len - 1;
+    if (!any) {
+        edbell(ed);
+        ed->point = plen<ed->line.len ? plen : ed->line.len;
+        ed->mark  = ed->line.len;
+        return;
+    }
+    edgohist(ed, sh, ed->hspos);
+    ed->point = plen<ed->line.len ? plen : ed->line.len;
+    ed->mark  = ed->line.len;
+}
+
+
+// Bash's expansions of the line
+
+// History expansion of the line, as bash's pre_process_line without
+// verification: false on an error or a :p, which are shown under the
+// line, the line then drawn again.
+static b32 edhistexpand(Editor *ed, Shell *sh, Arena *a, Str *out)
+{
+    Hist *h = &sh->hist;
+    Str line = edtext(ed);
+    *out = line;
+    if (!sh->opt[O_HISTEXPAND] || h->expinhibit || !h->expchar) return 1;
+    HResult r = histexpand(sh, a, line, h->len, 0);
+    if (r.r>=0 && r.r!=2) {
+        if (r.r) *out = r.line;
+        return 1;
+    }
+    edput(ed, "\r\n");
+    edflush(ed, sh);
+    if (r.r < 0) {
+        shellerror(sh, *a, r.err);
+    } else {
+        fdwrite(sh, 2, concat(a, r.line, "\n"));
+    }
+    edredraw(ed, sh);
+    return 0;
+}
+
+// Point after bash's set_up_new_line: kept the same distance from the
+// end, or put past the word it lands in.
+static void edexpandpoint(Editor *ed, iz oldpoint, iz oldend)
+{
+    iz dist = oldend - oldpoint;
+    iz len  = ed->line.len;
+    u8 *s   = ed->line.data;
+    if (!dist) {
+        ed->point = len;
+    } else if (!oldpoint || len<oldpoint) {
+        ed->point = oldpoint<len ? oldpoint : len;
+        if (ed->point<len && s[ed->point]!=' ' && s[ed->point]!='\t') {
+            ed->point = edfwdword(ed, ed->point, 1);
+        }
+    } else {
+        ed->point = len - dist;
+    }
+    if (ed->point < 0) ed->point = 0;
+    if (ed->point > len) ed->point = len;
+    ed->mark = 0;
+}
+
+static void edexpandhistline(Editor *ed, Shell *sh)
+{
+    Arena a = *scratchat(sh, sh->capdepth+1);
+    Str   r = {};
+    if (!edhistexpand(ed, sh, &a, &r)) return;
+    if (r == edtext(ed)) return;
+    iz oldpoint = ed->point;
+    iz oldend   = ed->line.len;
+    edreplace(ed, r);
+    edexpandpoint(ed, oldpoint, oldend);
+}
+
+// Bash's shell-expand-line: history expansion, then the whole line
+// expanded as one word, its fields joined by spaces.
+static void edshellexpand(Editor *ed, Shell *sh)
+{
+    Arena a = *scratchat(sh, sh->capdepth+1);
+    Str   r = {};
+    if (!edhistexpand(ed, sh, &a, &r)) return;
+    iz  oldpoint = ed->point;
+    b32 atend    = ed->point == ed->line.len;
+    edreplace(ed, r);
+
+    Word w = {};
+    w.text = clone(&a, edtext(ed));
+    Slice<Str> fields = {};
+    Escape e = {};
+    e.up    = sh->esc;
+    e.bout  = sh->bout;
+    e.undo  = sh->undo;
+    e.frame = sh->frame;
+    sh->esc = &e;
+    i32  status = sh->status;
+    b32  ok     = 0;
+    if (!__builtin_setjmp(e.jmp)) {
+        fields = expandwords(sh, &a, &w, XW_NOBRACE|XW_NOGLOB);
+        ok = 1;
+    } else {
+        unwind(sh, e.undo);
+    }
+    sh->esc    = e.up;
+    sh->status = status;
+    if (ok) {
+        Buf b(&a, w.text.len+16);
+        for (iz i = 0; i < fields.len; i++) {
+            if (i) putbyte(&b, ' ');
+            print(&b, fields[i]);
+        }
+        edreplace(ed, finish(&b));
+    }
+    if (atend) {
+        ed->point = ed->line.len;
+    } else if (oldpoint < ed->line.len) {
+        ed->point = oldpoint;
+        u8 c = ed->line.data[oldpoint];
+        if (c!=' ' && c!='\t') ed->point = edfwdword(ed, ed->point, 1);
+    } else {
+        ed->point = ed->line.len;
+    }
+}
+
+
 static void edarg(Editor *, Shell *, i32 key);
 
 // Insert key count times, with the rest of a UTF-8 sequence it starts.
@@ -1390,7 +1993,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
             KeyNode *k = keychild(&ed->root, (u8)c);
             if (!k || k->kids || k->fn!=EF_SELF_INSERT || c==ed->delim ||
                 c==ed->tty.intr || (c=='\r' && ed->delim>=0)) {
-                ed->unread = c + 1;  // dispatched next
+                edpush(ed, c);  // dispatched next
                 break;
             }
             edselfinsert(ed, sh, (u8)c, 1);
@@ -1646,6 +2249,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         } else {
             ed->point = ed->mark;
             ed->mark  = p;
+            if (!ed->hscroll) edactivate(ed);
         }
         break;
     case EF_CAPITALIZE_WORD:
@@ -1699,7 +2303,14 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         }
         break;
     case EF_CLEAR_SCREEN:
+        if (ed->argset) {
+            ed->keepactive = ed->active;
+            edredraw(ed, sh);
+            return;
+        }
+        // fallthrough
     case EF_CLEAR_DISPLAY:
+        ed->keepactive = ed->active;
         edput(ed, fn==EF_CLEAR_SCREEN ? Str("\x1b[H\x1b[2J") : "\x1b[H\x1b[2J\x1b[3J");
         edflush(ed, sh);
         edredraw(ed, sh);
@@ -1756,8 +2367,49 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         edunsaveline(ed);
         break;
     case EF_REDRAW_CURRENT_LINE:
+        ed->keepactive = ed->active;
         edredraw(ed, sh);
         return;
+    case EF_REVERSE_SEARCH_HISTORY:
+        edisearch(ed, sh, -(i64)count);
+        break;
+    case EF_FORWARD_SEARCH_HISTORY:
+        edisearch(ed, sh, count);
+        break;
+    case EF_NON_INCREMENTAL_REVERSE_SEARCH_HISTORY:
+        ednoninc(ed, sh, -1);
+        break;
+    case EF_NON_INCREMENTAL_FORWARD_SEARCH_HISTORY:
+        ednoninc(ed, sh, 1);
+        break;
+    case EF_HISTORY_SEARCH_BACKWARD:
+    case EF_HISTORY_SEARCH_FORWARD:
+        edhistsearch(ed, sh, fn, count);
+        break;
+    case EF_HISTORY_EXPAND_LINE:
+        edexpandhistline(ed, sh);
+        break;
+    case EF_MAGIC_SPACE: {
+        Arena a = *scratchat(sh, sh->capdepth+1);
+        Str   r = {};
+        if (!edhistexpand(ed, sh, &a, &r)) break;
+        if (!(r == edtext(ed))) {
+            iz dist = len - p;
+            edreplace(ed, r);
+            ed->point = p ? ed->line.len-dist : 0;
+            if (ed->point < 0) ed->point = 0;
+        }
+        edselfinsert(ed, sh, ' ', 1);
+    } break;
+    case EF_SHELL_EXPAND_LINE:
+        edshellexpand(ed, sh);
+        break;
+    case EF_BRACKETED_PASTE_BEGIN: {
+        Str t = edpaste(ed, sh, &ed->hmem);
+        ed->mark = ed->point;
+        edinsert(ed, t);
+        if (!ed->hscroll) edactivate(ed);
+    } break;
     }
 }
 
@@ -1769,11 +2421,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
 // signal meanwhile (SIGWINCH) checks the terminal's size.
 static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
 {
-    if (ed->unread) {
-        i32 c = ed->unread - 1;
-        ed->unread = 0;
-        return c;
-    }
+    if (ed->unread) return ed->pushed[--ed->unread];
     if (!timeout && !taskreadable(sh->sched, ed->fin->h)) return -3;
     Task *self = sh->sched->cur;
     i64   when = timeout<0 ? 0 : os_now(sh->os) + timeout*1000000;
@@ -1971,7 +2619,7 @@ static void edarg(Editor *ed, Shell *sh, i32 key)
             if (ed->argneg) ed->count = -ed->count;
             ed->argneg = 0;
             ed->prompt = prompt;
-            ed->unread = c + 1;
+            edpush(ed, c);
             eddispatch(ed, sh);
             return;
         }
@@ -2021,6 +2669,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     ed->width = ed->tty.xenl ? ed->tty.cols : ed->tty.cols-1;
 
     ed->linemem = {(byte *)(ed->linemem.mem+1), ed->linemem.end, ed->linemem.mem};
+    prompt      = clone(&ed->linemem, prompt);  // callers' scratch is reused
     ed->line    = Buf(&ed->linemem, 256);
     ed->out_    = Buf(&ed->linemem, 256);
     ed->done    = 0;
@@ -2037,6 +2686,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     ed->mark    = ed->lastfn = 0;
     ed->lastkill = ed->overwrite = ed->hsaved = 0;
     ed->undo    = 0;
+    ed->active  = ed->keepactive = 0;
     ed->hpos    = sh->hist.len;
     edresetarg(ed);
     // EdUndo lists last while history entries keep them
@@ -2058,11 +2708,28 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         ed->getnext = -1;
         edprevhist(ed, sh, count);
     }
-    edredraw(ed, sh);
+    // Bracketed paste, as readline's enable-bracketed-paste, except where
+    // there are no escape sequences
+    b32 bracket = !ed->hscroll && !ed->tty.legacy;
+    if (bracket) edput(ed, "\x1b[?2004h");
+
+    // As readline, the first draw starts wherever the cursor is, taken
+    // as column 0, so a prompt follows output with no final newline.
+    ed->shown   = {};
+    ed->crow    = 0;
+    ed->ccol    = 0;
+    ed->pending = 0;
+    redisplay(ed, sh);
 
     for (;;) {
         edresetarg(ed);
-        if (!eddispatch(ed, sh)) {
+        b32 ok = eddispatch(ed, sh);
+        if (ed->keepactive) {
+            ed->keepactive = 0;
+        } else {
+            ed->active = 0;
+        }
+        if (!ok) {
             ed->result = ED_EOF;
             break;
         }
@@ -2102,6 +2769,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     }
     // read -e: the shell's interrupt writes the newline
     if (crlf && !(ed->result==ED_INTR && isread)) edput(ed, "\r\n");
+    if (bracket) edput(ed, "\x1b[?2004l\r");
     edflush(ed, sh);
     edsize(ed, sh, os_tty(sh->os, ed->in, ed->out, TTY_RESTORE));
     print(out, {ed->line.data, ed->line.len});

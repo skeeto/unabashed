@@ -79,8 +79,8 @@ $ echo banana two
 banana two
 $ echo apple three
 apple three
-$ ana two
-@ 6,2 bell 6
+(i-search)`': ana two
+@ 6,14 bell 9
 == snap 10
 $ echo apple one
 apple one
@@ -88,8 +88,8 @@ $ echo banana two
 banana two
 $ echo apple three
 apple three
-$ ana two
-@ 6,2 bell 6
+(failed reverse-i-search)`ban': ana two
+@ 6,32 bell 11
 == snap 11
 $ echo apple one
 apple one
@@ -97,8 +97,9 @@ $ echo banana two
 banana two
 $ echo apple three
 apple three
-$ ana two
-@ 6,2 bell 6
+(reverse-i-search)`echo': echo apple one
+~                          rrrr
+@ 6,26 bell 13
 == snap 12
 $ echo apple one
 apple one
@@ -107,7 +108,9 @@ banana two
 $ echo apple three
 apple three
 $ ana two
-@ 6,2 bell 6
+bash: ana: command not found
+$
+@ 8,2 bell 19
 == snap 13
 $ echo apple one
 apple one
@@ -116,4 +119,6 @@ banana two
 $ echo apple three
 apple three
 $ ana two
-@ 6,2 bell 6
+bash: ana: command not found
+$
+@ 8,2 bell 19

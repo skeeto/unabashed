@@ -613,8 +613,10 @@ static void nextline(Lexer *L, b32 remove)
         if (L->hist) {
             s = L->hist(L->histctx, L, s, 0);
             if (!s.data) {
-                // Dropped: another line instead, or the end
+                // Dropped: another line instead, or the end, prompted
+                // as a new command when it was a command's first line
                 L->lineno++;
+                if (!L->cmdlines) L->newunit = 1;
                 if (srcend(L)) {
                     L->line    = {};
                     L->lineeof = 1;

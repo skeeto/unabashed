@@ -1,0 +1,51 @@
+== snap 1
+$ echo one
+one
+$ shopt -s histverify histreedit
+$ echo !-2:1 two
+$ echo one two
+@ 4,14
+== snap 2
+$ echo one
+one
+$ shopt -s histverify histreedit
+$ echo !-2:1 two
+$ echo one two
+one two
+$
+@ 6,2
+== snap 3
+$ echo one
+one
+$ shopt -s histverify histreedit
+$ echo !-2:1 two
+$ echo one two
+one two
+$ echo !nosuch end
+bash: !nosuch: event not found
+$ echo !nosuch end
+@ 8,18
+== snap 4
+$ echo one
+one
+$ shopt -s histverify histreedit
+$ echo !-2:1 two
+$ echo one two
+one two
+$ echo !nosuch end
+bash: !nosuch: event not found
+$
+$
+@ 9,2
+== snap 5
+$ echo one
+one
+$ shopt -s histverify histreedit
+$ echo !-2:1 two
+$ echo one two
+one two
+$ echo !nosuch end
+bash: !nosuch: event not found
+$
+$
+@ 9,2

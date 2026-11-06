@@ -62,25 +62,25 @@ $ #echo one
 $ echo one
 one
 $  echo mark echo oneabcabc
-~  rrrrrrrrrrrrrrrrrrrrrrrrr
-@ 5,2 bell 1
+~  rrrrrrrrr
+@ 5,11 bell 1
 == snap 9
 $ echo hi
 hi
 $ #echo one
 $ echo one
 one
-$  echo mark echo oneabcabc
-mark echo oneabcabc
+$ k echo oneabcabc
+bash: k: command not found
 $
-@ 7,2 bell 2
+@ 7,2 bell 1
 == snap 10
 $ echo hi
 hi
 $ #echo one
 $ echo one
 one
-$  echo mark echo oneabcabc
-mark echo oneabcabc
+$ k echo oneabcabc
+bash: k: command not found
 $
-@ 7,2 bell 2
+@ 7,2 bell 1

@@ -1,0 +1,14 @@
+# histverify and histreedit: an expanded line comes back to be edited,
+# and so does a line whose expansion failed
+size 16 50
+rc PS1='$ '
+keys echo one\r
+keys shopt -s histverify histreedit\r
+keys echo !-2:1 two\r
+snap
+keys \r
+snap
+keys echo !nosuch end\r
+snap
+keys \C-a\C-k\r
+snap
