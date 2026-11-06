@@ -901,7 +901,13 @@ static b32 fillline(void *ctx, Lexer *L)
     if (sh->interactive && (sh->opt[O_EMACS] || sh->opt[O_VI])) {
         Arena a  = *scratchat(sh, sh->capdepth+1);
         Str   ps = promptstr(sh, &a, psexpr(L->newunit));
-        i32   r  = editline(sh, ps, b, 0);
+        EdRead opts = {};
+        opts.delim = -1;
+        opts.shell = 1;
+        opts.init  = clone(&a, sh->hist.preload);
+        sfreestr(sh->store, sh->hist.preload);
+        sh->hist.preload = {};
+        i32   r  = editline(sh, ps, b, &opts);
         if (r != ED_NOTTY) {
             L->newunit = 0;
             if (r == ED_LINE) {
@@ -1461,7 +1467,9 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             sh->status = selftest(os, &perm, out);
             flush(out);
         } else if (havecmd) {
+            sh->hist.noexpand = 1;
             runsource(sh, cmd, "-c", scratch, 0, 1, 0, 0, 0, 1);
+            sh->hist.noexpand = 0;
         } else if (file.data) {
             // A script file
             i32  err;

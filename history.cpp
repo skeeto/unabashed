@@ -742,9 +742,759 @@ static Str histtime(Shell *sh, Arena *a, Str stamp, Str fmt)
 }
 
 
-// Stubs until history expansion lands
-static Str histexpandline(Shell *, Lexer *, Str line, b32 *) { return line; }
-static Str histexpandarg(Shell *, Arena *, Str s, i32 *r) { *r = 0; return s; }
+
+// History expansion (readline's histexpand.c, with bash's hooks)
+
+// Replace a string the history keeps.
+static Str hset(Shell *sh, Str old, Str s)
+{
+    sfreestr(sh->store, old);
+    return sclone(sh->store, s);
+}
+
+static b32 hblank(u8 c)
+{
+    return c==' ' || c=='\t' || c=='\n';
+}
+
+static b32 hdelim(u8 c)  // history_word_delimiters
+{
+    return hblank(c) || c==';' || c=='&' || c=='(' || c==')' ||
+           c=='|' || c=='<' || c=='>';
+}
+
+// The end of a parenthesized group opening at s[i]=='(': past its ')'.
+static iz hparens(Str s, iz i)
+{
+    i32 depth = 0;
+    for (; i < s.len; i++) {
+        u8 c = s[i];
+        if (c=='\\' && i+1<s.len) {
+            i++;
+        } else if (c=='\'' || c=='"') {
+            for (i++; i<s.len && s[i]!=c; i++) {
+                if (c=='"' && s[i]=='\\') i++;
+            }
+        } else if (c == '(') {
+            depth++;
+        } else if (c==')' && !--depth) {
+            return i + 1;
+        }
+    }
+    return s.len;
+}
+
+// The end of the word starting at s[i], as history_tokenize sees it.
+static iz hwordend(Str s, iz i, u8 com)
+{
+    if (i >= s.len) return i;
+    iz start = i;
+    // A file descriptor before a redirection belongs to it
+    iz d = i;
+    for (; d<s.len && digit(s[d]); d++) {}
+    if (d>i && d<s.len && (s[d]=='<' || s[d]=='>')) i = d;
+    u8 c = s[i];
+    u8 n = i+1<s.len ? s[i+1] : 0;
+    if ((c=='<' || c=='>') && n=='(') {
+        // a process substitution is a word
+    } else if (c=='(' || c==')') {
+        return i + 1;
+    } else if (c==';' || c=='&' || c=='|' || c=='<' || c=='>') {
+        if (n == c) {
+            i += 2;
+            if (c=='<' && i<s.len && (s[i]=='-' || s[i]=='<')) i++;
+            return i;
+        }
+        if ((c=='<' || c=='>') && n=='&') {
+            for (i += 2; i<s.len && digit(s[i]); i++) {}
+            if (i<s.len && s[i]=='-') i++;
+            return i;
+        }
+        if ((c=='&' && n=='>') || (c=='>' && n=='|')) return i + 2;
+        for (; i<s.len && hdelim(s[i]) && !hblank(s[i]); i++) {}
+        return i;
+    } else if (i > start) {
+        return i;  // digits then a lone operator handled above
+    }
+    for (; i < s.len; i++) {
+        c = s[i];
+        n = i+1<s.len ? s[i+1] : 0;
+        if (c == '\\') {
+            i += i+1 < s.len;
+        } else if (c=='\'' || c=='"' || c=='`') {
+            for (i++; i<s.len && s[i]!=c; i++) {
+                if (c!='\'' && s[i]=='\\') i++;
+            }
+        } else if (n=='(' && (c=='$' || c=='<' || c=='>' || c=='@' ||
+                              c=='!' || c=='?' || c=='+' || c=='*')) {
+            i = hparens(s, i+1) - 1;
+        } else if (hdelim(c)) {
+            break;
+        }
+    }
+    (void)com;
+    return i;
+}
+
+struct HWords {
+    Str *word;
+    iz   len;
+    iz   at;  // the word holding a position, or -1
+};
+
+// Split a line into words; also find which holds position pos.
+static HWords histwords(Arena *a, Str s, u8 com, iz pos)
+{
+    HWords r = {};
+    r.at = -1;
+    iz cap = 8;
+    r.word = alloc<Str>(a, cap);
+    for (iz i = 0;;) {
+        for (; i<s.len && hblank(s[i]); i++) {}
+        if (i>=s.len || (com && s[i]==com)) break;
+        iz e = hwordend(s, i, com);
+        if (e == i) e++;
+        if (r.len == cap) {
+            Str *w = alloc<Str>(a, cap*2);
+            copybytes(w, r.word, cap*(iz)sizeof(Str));
+            r.word = w;
+            cap *= 2;
+        }
+        if (pos>=i && pos<e) r.at = r.len;
+        r.word[r.len++] = span(s.data+i, s.data+e);
+        i = e;
+    }
+    return r;
+}
+
+// Bash's veto: is the ! at s[i] quoted, as bash's scanner sees quoting?
+static b32 hquoted(Shell *sh, Str s, iz i)
+{
+    b32 posix = sh->opt[O_POSIX];
+    b32 dq    = 0;
+    u8  saved[64];   // double-quote state outside each $( or `
+    i32 parens[64];  // and the parentheses open within it
+    u8  kind[64];
+    i32 depth = 0;
+    for (iz j = 0; j < i; j++) {
+        u8 c = s[j];
+        u8 n = j+1<s.len ? s[j+1] : 0;
+        if (c == '\\') {
+            j++;
+        } else if (c=='\'' && !dq) {
+            iz k = j + 1;
+            for (; k<s.len && s[k]!='\''; k++) {}
+            if (k >= i) return 1;
+            j = k;
+        } else if (c=='"' && posix) {
+            iz k = j + 1;
+            for (; k<s.len && s[k]!='"'; k++) {
+                if (s[k] == '\\') k++;
+            }
+            if (k >= i) return 1;
+            j = k;
+        } else if (c == '"') {
+            dq = !dq;
+        } else if ((c=='$' && n=='(') || c=='`') {
+            if (c=='`' && depth && kind[depth-1]=='`') {
+                dq = saved[--depth];
+                continue;
+            }
+            if (depth < 64) {
+                saved[depth]  = (u8)dq;
+                parens[depth] = 0;
+                kind[depth]   = c;
+                depth++;
+            }
+            dq = 0;
+            j += c == '$';
+        } else if (c=='(' && depth) {
+            parens[depth-1]++;
+        } else if (c==')' && depth && kind[depth-1]=='$') {
+            if (parens[depth-1]) {
+                parens[depth-1]--;
+            } else {
+                dq = saved[--depth];
+            }
+        }
+    }
+    return dq && i+1<s.len && s[i+1]=='"';  // a ! closing its quotes
+}
+
+static b32 hhas(Str s, iz from, u8 c)
+{
+    for (iz i = from; i < s.len; i++) {
+        if (s[i] == c) return 1;
+    }
+    return 0;
+}
+
+// Does bash keep the ! at s[i] from expanding?
+static b32 hveto(Shell *sh, Str s, iz i)
+{
+    if (i>0 && s[i-1]=='[' && hhas(s, i+1, ']')) return 1;
+    if (i>1 && s[i-1]=='{' && s[i-2]=='$' && hhas(s, i+1, '}')) return 1;
+    if (i>0 && s[i-1]=='$') return 1;
+    if (sh->shopt[S_EXTGLOB] && i>1 && i+1<s.len && s[i+1]=='(' &&
+            hhas(s, i+2, ')')) return 1;
+    return hquoted(sh, s, i);
+}
+
+struct HExp {
+    Buf  out;
+    Str  err;      // the message on failure
+    Str  line;     // the line expanding
+    iz   hlen;     // the entries it may refer to
+    i32  quote;    // :q 1, :x 2
+    b32  print;    // :p
+};
+
+static Str herror(Arena *a, Str s, iz beg, iz end, Str msg)
+{
+    return concat3(a, span(s.data+beg, s.data+end), ": ", msg);
+}
+
+static Str hentry(Shell *sh, iz i)
+{
+    return sh->hist.ents[i]->line;
+}
+
+// The rightmost occurrence of pat in s, or -1.
+static iz hrfind(Str s, Str pat)
+{
+    for (iz i = s.len-pat.len; i >= 0; i--) {
+        if (!pat.len || takehead(cuthead(s, i), pat.len) == pat) return i;
+    }
+    return -1;
+}
+
+static iz hfind(Str s, Str pat, iz from)
+{
+    for (iz i = from; i+pat.len <= s.len; i++) {
+        if (takehead(cuthead(s, i), pat.len) == pat) return i;
+    }
+    return -1;
+}
+
+// One delimited part of :s/old/new/, ending past its delimiter (or at the
+// end of the line). In new, & and \& stay for later.
+static Str hsubpart(Arena *a, Str s, iz *j, u8 delim, b32 rhs)
+{
+    Buf b(a, 16);
+    iz  i = *j;
+    for (; i<s.len && s[i]!=delim; i++) {
+        if (s[i]=='\\' && i+1<s.len && s[i+1]==delim) {
+            i++;
+        } else if (rhs && s[i]=='\\' && i+1<s.len && s[i+1]=='&') {
+            putbyte(&b, s[i++]);
+        }
+        putbyte(&b, s[i]);
+    }
+    *j = i + (i < s.len);
+    return finish(&b);
+}
+
+// new with & as old and \& as &.
+static Str hrhs(Arena *a, Str rhs, Str old)
+{
+    Buf b(a, rhs.len+old.len);
+    for (iz i = 0; i < rhs.len; i++) {
+        if (rhs[i]=='\\' && i+1<rhs.len && rhs[i+1]=='&') {
+            putbyte(&b, '&');
+            i++;
+        } else if (rhs[i] == '&') {
+            print(&b, old);
+        } else {
+            putbyte(&b, rhs[i]);
+        }
+    }
+    return finish(&b);
+}
+
+// Replace old by new in text: the first occurrence, all (global), or
+// the first in each blank-separated word (each). Null if none.
+static Str hsubst(Arena *a, Str text, Str old, Str rep, b32 global, b32 each)
+{
+    Buf b(a, text.len+rep.len);
+    b32 any = 0;
+    b32 done = 0;
+    iz  i = 0;
+    while (i < text.len) {
+        if (each && hblank(text[i])) {
+            done = 0;
+            putbyte(&b, text[i++]);
+            continue;
+        }
+        b32 hit = !done && old.len<=text.len-i &&
+                  takehead(cuthead(text, i), old.len)==old;
+        if (hit) {
+            print(&b, rep);
+            i  += old.len;
+            any = 1;
+            done = !global;
+            if (!old.len) {
+                if (i < text.len) putbyte(&b, text[i]);
+                i++;
+            }
+        } else {
+            putbyte(&b, text[i++]);
+        }
+    }
+    return any ? finish(&b) : Str{};
+}
+
+// :q and :x quoting.
+static Str hquote(Arena *a, Str s, b32 split)
+{
+    Buf b(a, s.len+8);
+    putbyte(&b, '\'');
+    for (iz i = 0; i < s.len; i++) {
+        if (s[i] == '\'') {
+            print(&b, "'\\''");
+        } else if (split && hblank(s[i])) {
+            putbyte(&b, '\'');
+            putbyte(&b, s[i]);
+            putbyte(&b, '\'');
+        } else {
+            putbyte(&b, s[i]);
+        }
+    }
+    putbyte(&b, '\'');
+    return finish(&b);
+}
+
+// The word designator at s[*j], applied to the event's text. Null with
+// x->err set on failure.
+static Str hdesignate(Shell *sh, Arena *a, HExp *x, Str text, iz *pj, iz matchat)
+{
+    Hist *h = &sh->hist;
+    Str   s = x->line;
+    iz    j = *pj;
+    iz    start = j;
+    u8    c = j<s.len ? s[j] : 0;
+    u8    n = j+1<s.len ? s[j+1] : 0;
+    b32 colon = c==':' && (digit(n) || n=='^' || n=='$' || n=='*' ||
+                           n=='-' || n=='%');
+    if (colon) {
+        j++;
+        c = n;
+    } else if (!(c=='^' || c=='$' || c=='*' || c=='-' || c=='%')) {
+        return text;
+    }
+    HWords w = histwords(a, text, h->comchar, matchat);
+    iz last  = w.len - 1;
+    iz first = 0;
+    iz end   = 0;
+    if (c == '%') {
+        j++;
+        *pj = j;
+        return w.at>=0 && matchat>=0 ? w.word[w.at] : Str("");
+    }
+    if (c == '*') {
+        j++;
+        *pj = j;
+        if (w.len <= 1) return Str("");
+        first = 1;
+        end   = last;
+    } else {
+        if (c == '^') {
+            first = 1;
+            j++;
+        } else if (c == '$') {
+            first = last;
+            j++;
+        } else if (digit(c)) {
+            first = 0;
+            for (; j<s.len && digit(s[j]); j++) {
+                first = first*10 + (s[j]-'0');
+                if (first > 1<<20) first = 1<<20;
+            }
+        } else {
+            first = 0;  // c == '-'
+        }
+        c = j<s.len ? s[j] : 0;
+        if (c == '*') {
+            j++;
+            end = last;
+        } else if (c == '-') {
+            j++;
+            c = j<s.len ? s[j] : 0;
+            if (c == '$') {
+                j++;
+                end = last;
+            } else if (c == '^') {
+                j++;
+                end = 1;
+            } else if (digit(c)) {
+                end = 0;
+                for (; j<s.len && digit(s[j]); j++) {
+                    end = end*10 + (s[j]-'0');
+                    if (end > 1<<20) end = 1<<20;
+                }
+            } else {
+                end = last - 1;
+            }
+        } else {
+            end = first;
+        }
+    }
+    *pj = j;
+    if (first<0 || end<first || end>last) {
+        x->err = herror(a, s, start, j, "bad word specifier");
+        return {};
+    }
+    Buf b(a, text.len);
+    for (iz k = first; k <= end; k++) {
+        if (k > first) putbyte(&b, ' ');
+        print(&b, w.word[k]);
+    }
+    return finish(&b);
+}
+
+// The modifiers at s[*j] applied to text. Null with x->err on failure.
+static Str hmodify(Shell *sh, Arena *a, HExp *x, Str text, iz *pj)
+{
+    Hist *h = &sh->hist;
+    Str   s = x->line;
+    iz    j = *pj;
+    iz    start = j;
+    while (j+1<s.len && s[j]==':') {
+        u8  c  = s[j+1];
+        b32 global = 0;
+        b32 each   = 0;
+        j += 2;
+        if ((c=='g' || c=='a' || c=='G') && j<s.len) {
+            global = c != 'G';
+            each   = c == 'G';
+            c = s[j++];
+        }
+        switch (c) {
+        case 'h': {
+            iz k = text.len;
+            while (k>0 && text[k-1]!='/') k--;
+            if (k) text = takehead(text, k-1);
+        } break;
+        case 't': {
+            iz k = text.len;
+            while (k>0 && text[k-1]!='/') k--;
+            if (k) text = cuthead(text, k);
+        } break;
+        case 'r': {
+            iz k = text.len;
+            while (k>0 && text[k-1]!='.') k--;
+            if (k) text = takehead(text, k-1);
+        } break;
+        case 'e': {
+            iz k = text.len;
+            while (k>0 && text[k-1]!='.') k--;
+            if (k) text = cuthead(text, k-1);
+        } break;
+        case 'p': x->print = 1; break;
+        case 'q': x->quote = 1; break;
+        case 'x': x->quote = 2; break;
+        case 's':
+        case '&': {
+            if (c == 's') {
+                if (j >= s.len) {
+                    *pj = j;
+                    return text;  // a bare s at the end does nothing
+                }
+                u8  delim = s[j++];
+                Str old   = hsubpart(a, s, &j, delim, 0);
+                Str rep   = hsubpart(a, s, &j, delim, 1);
+                if (old.len) {
+                    h->subold = hset(sh, h->subold, old);
+                } else if (!h->subold.data && h->search.data) {
+                    h->subold = hset(sh, h->subold, h->search);
+                }
+                h->subnew = hset(sh, h->subnew, rep);
+                if (!h->subnew.data) h->subnew = sclone(sh->store, "");
+            }
+            if (!h->subold.data) {
+                x->err = herror(a, s, start, j, "no previous substitution");
+                return {};
+            }
+            Str rep = hrhs(a, h->subnew, h->subold);
+            Str r   = h->subold.len>text.len ? Str{} :
+                      hsubst(a, text, h->subold, rep, global, each);
+            if (!r.data) {
+                x->err = herror(a, s, start, j, "substitution failed");
+                return {};
+            }
+            text = r;
+        } break;
+        default:
+            x->err = herror(a, s, j-1, j, "unrecognized history modifier");
+            return {};
+        }
+    }
+    *pj = j;
+    return text;
+}
+
+// The event at s[*pj] (just past the expansion character). Null with
+// x->err set on failure; *matchat is where a ?string? search matched.
+static Str hevent(Shell *sh, Arena *a, HExp *x, iz bang, iz *pj, b32 dq, iz *matchat)
+{
+    Hist *h = &sh->hist;
+    Str   s = x->line;
+    iz    j = *pj;
+    u8    c = j<s.len ? s[j] : 0;
+    *matchat = -1;
+    if (c == h->expchar) {
+        *pj = j + 1;
+        if (!x->hlen) goto notfound;
+        return hentry(sh, x->hlen-1);
+    }
+    if (c==':' || c=='$' || c=='*' || c=='%' || c=='^') {
+        if (!x->hlen) goto notfound;
+        return hentry(sh, x->hlen-1);
+    }
+    if (c == '#') {
+        *pj = j + 1;
+        return clone(a, Str{x->out.data, x->out.len});
+    }
+    if (digit(c) || (c=='-' && j+1<s.len && digit(s[j+1]))) {
+        b32 neg = c == '-';
+        j += neg;
+        i64 v = 0;
+        for (; j<s.len && digit(s[j]); j++) {
+            v = v*10 + (s[j]-'0');
+            if (v > (i64)1<<40) v = (i64)1<<40;
+        }
+        *pj = j;
+        i64 idx = neg ? x->hlen-v : v-h->base;
+        if (idx<0 || idx>=x->hlen) goto notfound;
+        return hentry(sh, (iz)idx);
+    }
+    if (c == '?') {
+        iz k = ++j;
+        for (; k<s.len && s[k]!='?' && s[k]!='\n'; k++) {}
+        Str pat = span(s.data+j, s.data+k);
+        j = k + (k<s.len && s[k]=='?');
+        *pj = j;
+        if (!pat.len) {
+            if (!h->search.data) goto notfound;
+            pat = h->search;
+        } else {
+            h->search = hset(sh, h->search, pat);
+        }
+        for (iz e = x->hlen-1; e >= 0; e--) {
+            iz at = hrfind(hentry(sh, e), pat);
+            if (at >= 0) {
+                *matchat = at;
+                return hentry(sh, e);
+            }
+        }
+        goto notfound;
+    }
+    {
+        iz k = j;
+        for (; k < s.len; k++) {
+            u8 d = s[k];
+            if (hblank(d) || d==':' || (d=='-' && k>j) || d=='^' || d=='$' ||
+                d=='*' || d=='%' || d==';' || d=='&' || d=='(' || d==')' ||
+                d=='|' || d=='<' || d=='>' || (dq && d=='"')) break;
+        }
+        Str pre = span(s.data+j, s.data+k);
+        *pj = k;
+        for (iz e = x->hlen-1; pre.len && e>=0; e--) {
+            if (startswith(hentry(sh, e), pre)) return hentry(sh, e);
+        }
+    }
+    notfound:
+    x->err = herror(a, s, bang, *pj, "event not found");
+    return {};
+}
+
+// Expand the line's history references. -1 on failure (with the message
+// in err), 0 if there are none, 1 if expanded, 2 if only to be printed.
+// quote is the parser's open quote the line continues, if any.
+struct HResult {
+    Str line;
+    Str err;
+    i32 r;
+};
+
+static HResult histexpand(Shell *sh, Arena *a, Str line, iz hlen, u8 quote)
+{
+    Hist   *h = &sh->hist;
+    HResult r = {};
+    r.line = line;
+    u8 bang = h->expchar;
+    if (!bang) return r;
+    if (h->subchar && line.len && line[0]==h->subchar && quote!='\'') {
+        Buf b(a, line.len+4);
+        putbyte(&b, bang);
+        putbyte(&b, bang);
+        print(&b, ":s");
+        print(&b, line);
+        line = finish(&b);
+    }
+    HExp x = {};
+    x.out  = Buf(a, line.len+64);
+    x.line = line;
+    x.hlen = hlen;
+    b32 changed = 0;
+    for (i32 pass = line.data!=r.line.data; pass < 2; pass++) {
+    // The first pass only looks for a reference not vetoed by the line
+    // as read; the second expands, and vetoes by the line made so far.
+    b32 found = 0;
+    b32 dq = quote == '"';
+    iz  i  = 0;
+    x.out.len = 0;
+    if (quote == '\'') {
+        for (; i<line.len && line[i]!='\''; i++) {}
+        i += i < line.len;
+        print(&x.out, takehead(line, i));
+    }
+    while (i < line.len) {
+        u8 c = line[i];
+        u8 n = i+1<line.len ? line[i+1] : 0;
+        if (c == '\\') {
+            putbyte(&x.out, c);
+            if (i+1 < line.len) putbyte(&x.out, n);
+            i += 2;
+            continue;
+        }
+        if (c=='\'' && !dq) {
+            iz k = i + 1;
+            b32 dollar = i>0 && line[i-1]=='$';
+            for (; k<line.len && line[k]!='\''; k++) {
+                if (dollar && line[k]=='\\') k++;
+            }
+            k += k < line.len;
+            if (k > line.len) k = line.len;
+            print(&x.out, span(line.data+i, line.data+k));
+            i = k;
+            continue;
+        }
+        if (c == '"') {
+            dq = !dq;
+            putbyte(&x.out, c);
+            i++;
+            continue;
+        }
+        if (h->comchar && c==h->comchar && !dq &&
+                (i==0 || hdelim(line[i-1]))) {
+            print(&x.out, cuthead(line, i));
+            break;
+        }
+        if (c != bang) {
+            putbyte(&x.out, c);
+            i++;
+            continue;
+        }
+        b32 literal = !n || hblank(n) || n=='\r' || n=='=' || n==';' ||
+                      n=='&' || n=='|' || n=='(' || n==')' || n=='<' ||
+                      n=='>' || (dq && n=='"');
+        b32 veto = 0;
+        if (!literal && !pass) {
+            veto = hveto(sh, line, i);
+        } else if (!literal) {
+            Buf v(a, x.out.len+2);
+            print(&v, Str{x.out.data, x.out.len});
+            putbyte(&v, c);
+            putbyte(&v, n);
+            veto = hveto(sh, finish(&v), x.out.len);
+        }
+        if (literal || veto) {
+            putbyte(&x.out, c);
+            i++;
+            continue;
+        }
+        if (!pass) {
+            found = 1;
+            break;
+        }
+        iz  j       = i + 1;
+        iz  matchat = -1;
+        Str ev = hevent(sh, a, &x, i, &j, dq, &matchat);
+        if (!ev.data) {
+            r.r   = -1;
+            r.err = clone(a, x.err);
+            return r;
+        }
+        Str w = hdesignate(sh, a, &x, ev, &j, matchat);
+        if (w.data) w = hmodify(sh, a, &x, w, &j);
+        if (!w.data) {
+            r.r   = -1;
+            r.err = clone(a, x.err);
+            return r;
+        }
+        if (x.quote) w = hquote(a, w, x.quote==2);
+        x.quote = 0;
+        print(&x.out, w);
+        changed = 1;
+        i = j;
+    }
+    if (!pass && !found) return r;
+    }
+    r.line = finish(&x.out);
+    r.r    = x.print ? 2 : changed;
+    return r;
+}
+
+// The reader's line: expanded when history expansion is on. *drop when
+// it is not to run: a failure (reported), or a :p line (shown).
+static Str histexpandline(Shell *sh, Lexer *L, Str line, b32 *drop)
+{
+    Hist *h = &sh->hist;
+    if (!sh->opt[O_HISTEXPAND] || h->expinhibit || h->noexpand) return line;
+    if (!h->expchar) return line;
+    b32 any = 0;
+    for (iz i = 0; i<line.len && !any; i++) {
+        any = line[i]==h->expchar || (h->subchar && line[i]==h->subchar);
+    }
+    if (!any) return line;
+    Arena a = *scratchat(sh, sh->capdepth+1);
+    iz hlen = h->len;
+    if (L->cmdlines>1 && sh->shopt[S_CMDHIST] && h->firstsaved && hlen) hlen--;
+    i32 cd = L->ddepth ? currentdelim(L) : 0;
+    HResult r = histexpand(sh, &a, line, hlen, cd=='\'' || cd=='"' ? (u8)cd : 0);
+    if (r.r < 0) {
+        // As bash, the line is not counted from here on
+        i32 saved = sh->line;
+        sh->line = (i32)L->lineno;
+        L->lineno--;
+        shellerror(sh, a, r.err);
+        sh->line = saved;
+        if (sh->shopt[S_HISTREEDIT] && sh->interactive) {
+            h->preload = hset(sh, h->preload, line);
+        }
+        L->cmdlines--;
+        h->cmdlines = L->cmdlines;
+        *drop = 1;
+        return {};
+    }
+    if (!r.r) return line;
+    if (r.r==1 && sh->shopt[S_HISTVERIFY] && sh->interactive) {
+        h->preload = hset(sh, h->preload, r.line);
+        L->lineno--;
+        L->cmdlines--;
+        *drop = 1;
+        return {};
+    }
+    flushbout(sh);
+    fdwrite(sh, 2, concat(&a, r.line, "\n"));
+    r.line = clone(L->a, r.line);  // maybeadd reuses the scratch arena
+    if (r.r == 2) {
+        if (r.line.len) maybeadd(sh, L, r.line);
+        L->lineno--;
+        L->cmdlines--;
+        *drop = 1;
+        return {};
+    }
+    return r.line;
+}
+
+// history -p: one argument expanded, the library's way.
+static Str histexpandarg(Shell *sh, Arena *a, Str s, i32 *result)
+{
+    HResult r = histexpand(sh, a, s, sh->hist.len, 0);
+    *result = r.r;
+    return r.line;
+}
 
 
 // The history file (readline's histfile.c)

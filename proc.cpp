@@ -346,7 +346,8 @@ static Hist copyhist(Store *st, Hist h)
     }
     r.search = sclone(st, h.search);
     r.subold = sclone(st, h.subold);
-    r.subnew = sclone(st, h.subnew);
+    r.subnew  = sclone(st, h.subnew);
+    r.preload = sclone(st, h.preload);
     return r;
 }
 

@@ -435,6 +435,8 @@ struct Hist {      // in the Shell by value: a subshell's changes roll back
     Str       subold;      // and :s/old/new/
     Str       subnew;
     iz        matchat;     // where !?string? matched, for %
+    Str       preload;     // the editor's next line (histverify, histreedit)
+    b32       noexpand;    // reading -c's string: no expansion
 };
 
 // editline results, and what read -e asks of it (edit.cpp)
@@ -446,6 +448,7 @@ struct EdRead {   // what read -e asks of the editor
     i32 delim;    // -d: accepts the line, or -1 for none (a newline)
     i64 nchars;   // -n: accept at this many characters, 0 for no limit
     b32 silent;   // -s: the line is not shown
+    b32 shell;    // not read -e: the shell's own line, with init preloaded
 };
 
 struct Shell {

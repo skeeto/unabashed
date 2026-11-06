@@ -891,6 +891,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     EdRead none = {};
     none.delim = -1;
     opts = opts ? opts : &none;
+    b32 isread = opts!=&none && !opts->shell;
     File *fin  = sh->fds->fd[opts->fd];
     File *ferr = sh->fds->fd[2];
     if (!fin || !ferr || fin->kind!=F_OS || ferr->kind!=F_OS) return ED_NOTTY;
@@ -946,7 +947,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     if (ed->hscroll) {
         if (ed->result == ED_INTR) edput(ed, "^C");
     } else if (ed->result == ED_INTR) {
-        if (opts != &none) {
+        if (isread) {
             // read -e: as readline on SIGINT, the line goes first
             ed->line.len = ed->point = 0;
             redisplay(ed, sh);
@@ -964,7 +965,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         edmove(ed, l->nrows-1, l->rows[l->nrows-1].width);
     }
     // read -e: the shell's interrupt writes the newline
-    if (crlf && !(ed->result==ED_INTR && opts!=&none)) edput(ed, "\r\n");
+    if (crlf && !(ed->result==ED_INTR && isread)) edput(ed, "\r\n");
     edflush(ed, sh);
     edsize(ed, sh, os_tty(sh->os, ed->in, ed->out, TTY_RESTORE));
     print(out, {ed->line.data, ed->line.len});
