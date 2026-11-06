@@ -2163,6 +2163,73 @@ static void edexpandhistline(Editor *ed, Shell *sh)
 
 // Bash's shell-expand-line: history expansion, then the whole line
 // expanded as one word, its fields joined by spaces.
+static b32 edin(Str set, u8 c)
+{
+    for (iz i = 0; i < set.len; i++) {
+        if (set[i] == c) return 1;
+    }
+    return 0;
+}
+
+// Aliases in the line, as bash's alias_expand for shell-expand-line:
+// a word in command position (first, or after one of the separators
+// ;|&( or a newline) with no quoting in it is replaced by its alias
+// once, not again within the value, and a value ending in a blank
+// puts the next word in command position too.
+static Str edaliases(Shell *sh, Arena *a, Str s)
+{
+    Str breaks = "()<>;&| \t\n";
+    Buf b(a, s.len+16);
+    b32 cmd  = 1;
+    b32 next = 0;
+    for (iz i = 0; i < s.len;) {
+        u8 c = s[i];
+        if (c==' ' || c=='\t') {
+            putbyte(&b, c);
+            i++;
+            continue;
+        }
+        iz  beg    = i;
+        b32 quoted = 0;
+        while (i<s.len && !edin(breaks, s[i])) {
+            u8 q = s[i];
+            if (q=='\\' && i+1<s.len) {
+                quoted = 1;
+                i += 2;
+            } else if (q=='\'' || q=='"' || q=='`') {
+                quoted = 1;
+                for (i++; i<s.len && s[i]!=q; i++) {
+                    if (s[i]=='\\' && q!='\'' && i+1<s.len) i++;
+                }
+                i += i < s.len;
+            } else {
+                quoted |= q == '$';
+                i++;
+            }
+        }
+        if (i == beg) {
+            // A break character alone: a separator starts a command
+            putbyte(&b, c);
+            i++;
+            cmd  = edin(";|&(\n", c);
+            next = 0;
+            continue;
+        }
+        Str    word = span(s.data+beg, s.data+i);
+        Alias *al   = (cmd||next) && !quoted ? findalias(sh->aliases, word) : 0;
+        if (al) {
+            Str v = al->value;
+            print(&b, v);
+            next = v.len && (v[v.len-1]==' ' || v[v.len-1]=='\t');
+        } else {
+            print(&b, word);
+            next = 0;
+        }
+        cmd = 0;
+    }
+    return finish(&b);
+}
+
 static void edshellexpand(Editor *ed, Shell *sh)
 {
     // Its command substitutions run at the next depth: claim this one
@@ -2173,6 +2240,7 @@ static void edshellexpand(Editor *ed, Shell *sh)
         sh->capdepth = depth - 1;
         return;
     }
+    if (sh->shopt[S_EXPAND_ALIASES]) r = edaliases(sh, &a, r);
     iz  oldpoint = ed->point;
     b32 atend    = ed->point == ed->line.len;
     edreplace(ed, r);
@@ -2218,6 +2286,56 @@ static void edshellexpand(Editor *ed, Shell *sh)
     } else {
         ed->point = ed->line.len;
     }
+}
+
+// edit-and-execute-command (C-x C-e), as bash's: the line goes into
+// history with an empty entry after it standing for fc's own, which fc
+// drops; with the terminal restored, fc edits the line in $VISUAL or
+// $EDITOR and runs what comes back; then a new empty line follows
+// under the same prompt.
+static void ededitexec(Editor *ed, Shell *sh)
+{
+    // The cursor past the line, as accept-line leaves it
+    Layout *l = &ed->shown;
+    if (ed->hscroll) {
+        edput(ed, "\r\n");
+    } else {
+        edmove(ed, l->nrows-1, l->rows[l->nrows-1].width);
+        edput(ed, "\r\n");
+    }
+    b32 bracket = !ed->hscroll && !ed->tty.legacy && ed->vars.bracketpaste;
+    if (bracket) edput(ed, "\x1b[?2004l\r");
+    edflush(ed, sh);
+    reallyadd(sh, clone(&ed->linemem, edtext(ed)));
+    reallyadd(sh, "");
+    os_tty(sh->os, ed->in, ed->out, TTY_RESTORE);
+
+    i32   depth  = ++sh->capdepth;
+    Arena a      = *scratchat(sh, depth);
+    i32   line   = sh->line;
+    b32   lexeof = sh->lexeof;
+    sh->evaldepth++;
+    runsource(sh, "fc -e \"${VISUAL:-${EDITOR:-emacs}}\"", "C-xC-e", a);
+    sh->evaldepth--;
+    sh->capdepth = depth - 1;
+    sh->line     = line;
+    sh->lexeof   = lexeof;
+
+    // The program may have resized the terminal
+    Tty t = os_tty(sh->os, ed->in, ed->out, TTY_RAW);
+    if (!t.err && t.cols>=2) {
+        ed->tty.rows = t.rows;
+        ed->tty.cols = t.cols;
+        ed->width    = ed->tty.xenl ? t.cols : t.cols-1;
+        edsize(ed, sh, t);
+    }
+    if (bracket) edput(ed, "\x1b[?2004h");
+    ed->line.len = ed->point = 0;
+    ed->mark     = 0;
+    ed->undo     = 0;
+    ed->hpos     = sh->hist.len;
+    ed->hsaved   = 0;
+    edredraw(ed, sh);
 }
 
 
@@ -2719,6 +2837,9 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
     case EF_SHELL_EXPAND_LINE:
         edshellexpand(ed, sh);
         break;
+    case EF_EDIT_AND_EXECUTE_COMMAND:
+        ededitexec(ed, sh);
+        return;
     case EF_BRACKETED_PASTE_BEGIN: {
         Str t = edpaste(ed, sh, &ed->hmem);
         ed->mark = ed->point;

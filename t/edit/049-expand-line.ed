@@ -1,0 +1,12 @@
+size 10 50
+rc PS1='$ '
+rc alias ll='echo long'
+rc x=1
+keys ll $'a\tb' "$x" $"y" a  b\e\C-e
+snap
+keys \C-a\C-kecho ll;ll\e\C-e
+snap
+keys \C-a\C-k$((1+2)) ~ a*b\e\C-e
+snap
+keys \C-a\C-kecho $'x\\ty' $"m" \e\C-e
+snap

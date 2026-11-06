@@ -1,0 +1,15 @@
+== snap 1
+$ echo long ab 1 y a  b
+@ 0,23 bell 1
+== snap 2
+$ echo ll;echo long
+@ 0,19 bell 1
+== snap 3
+$ 3 ~ a*b
+@ 0,9 bell 1
+== snap 4
+$ echo x        y m
+@ 0,20 bell 1
+== snap 5
+$ echo x        y m
+@ 0,20 bell 1

@@ -34,10 +34,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   echoes only whole lines). (step 2)
 - run-history: history4 and history7 both need readline on a
   non-terminal under `-i` (the item below). (step 2)
-- edit-and-execute-command (C-x C-e) is bound but rings the bell: it
-  needs fc's editor run from inside the editor. (step 10)
-- shell-expand-line does not translate `$'...'` or expand aliases as
-  bash's does. (step 10)
 - The history file is overwritten in place; readline writes a
   `FILE-NNNNN.tmp` beside it and renames it over (keeping a symlink's
   target and the owner). Needs a rename in the platform API. (step 10)

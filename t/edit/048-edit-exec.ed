@@ -1,0 +1,15 @@
+# edit-and-execute-command (C-x C-e): the line in $VISUAL, then what
+# comes back runs, echoed; history keeps the line and the edit, and an
+# empty line follows under the same prompt
+size 12 40
+rc PS1='$ '
+rc myed() { printf 'echo edited\n' >"$1"; }
+rc VISUAL=myed
+keys echo before\C-x\C-e
+snap
+keys history\r
+snap
+keys VISUAL=false\r
+snap
+keys echo again\C-x\C-e
+snap
