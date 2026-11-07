@@ -129,6 +129,9 @@ struct Sched {
     iz      nbg;         // job vprocs not yet joined, orphans included
     u64     chaos;       // random state for chaos mode, 0 if off
     Handle  err;         // where to report a deadlock
+    Handle  stopproc;    // a grouped pipeline's last program stopped
+    i64     stoppid;     // (runprogram for runpipeline, across the
+    i32     stopsig;     // stage's subshell)
 };
 
 static Sched *newsched(Os *os, Arena *perm, iz reserve, u64 chaos, Handle err)
@@ -141,6 +144,7 @@ static Sched *newsched(Os *os, Arena *perm, iz reserve, u64 chaos, Handle err)
     s->reserve = reserve;
     s->chaos   = chaos;
     s->err     = err;
+    s->stopproc = BADHANDLE;
     s->budget  = 1024;
     s->main.s     = s;
     s->main.fiber = os_self(os);

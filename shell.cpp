@@ -627,6 +627,9 @@ struct Shell {
     Handle   jctty;        // with shellpgid: the terminal it hands to
                            // foreground jobs, or BADHANDLE
     i64      spawngrp;     // Spawn.pgid for the job being started
+    b32      spawnfg;      // and it takes the terminal (a pipeline's first)
+    b32      pipetail;     // the program is a grouped pipeline's last:
+                           // its stop is reported (Sched.stopproc)
     i64      exitwarned;   // cmdnumber when exit warned of stopped jobs
 
     // Signals and traps (trap.cpp)

@@ -31,6 +31,16 @@ Closed: every item was fixed or moved (m6.md, step 10).
 
 ## M7 (job control and fidelity)
 
+- **Shell-code stages cannot stop** (m7.md, step 7d): under set -m a
+  pipeline stage that is shell code, a `( )` or a function runs in the
+  shell's process, so ^Z stops only the programs; a pipeline whose last
+  stage is shell code then waits for it rather than stopping. Bash forks
+  these. Fix: run such a foreground job in a forked image child that
+  leads the group (the step 7 design), keeping PIPESTATUS.
+- **jobs -l shows a stopped pipeline as one line**: bash lists each
+  process with its own pid and state. Job holds one waiter.
+- **A job killed by TERM after a stop**: bash shows its mark as "+" or
+  " " depending on timing; ours always "+" (905 hides the mark).
 - **Win32 Ctrl-C a starting program can still miss** (m3b.md, "Programs
   that miss a Ctrl-C"): unnoticed are one over 100 ms old and still
   not attached; the real program of a wrapper that starts it more than

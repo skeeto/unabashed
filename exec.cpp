@@ -1789,8 +1789,13 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     // group (spawngrp), and a foreground program leads a group of its
     // own that holds the terminal while it runs
     b32 group = 0;
+    b32 stops = 0;  // a grouped pipeline's last: its stop is reported
     if (sh->spawngrp) {
         sp.pgid = sh->spawngrp;
+        sp.fg   = sh->spawnfg && sh->jctty!=BADHANDLE;
+        sp.tty  = sh->jctty;
+        stops   = sh->pipetail && !sh->spawnto;
+        sh->pipetail = 0;
     } else if (!execing && fgjobctl(sh) && !sh->spawnto && !capfile && !npumps && !br.n) {
         group   = 1;
         sp.pgid = -1;
@@ -1889,7 +1894,13 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     takeossigs(sh);  // those from before the wait are this level's own
     sh->sig->fgwait  = !r.err;
     sh->sig->execpid = sh->attail && !r.err ? r.pid : 0;
-    i32 status = r.err ? -r.err : group ? taskwaitstop(s, r.proc) : taskwaitproc(s, r.proc);
+    i32 status = r.err ? -r.err : group||stops ? taskwaitstop(s, r.proc) : taskwaitproc(s, r.proc);
+    if (stops && !r.err && status>=0 && (status & WSTOP)) {
+        s->stopproc = r.proc;
+        s->stoppid  = r.pid;
+        s->stopsig  = status & 255;
+        status = 128 + (status & 255);
+    }
     sh->sig->execpid = 0;
     sh->childsig = 0;
     if (group && !r.err) {
