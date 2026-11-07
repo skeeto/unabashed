@@ -1698,15 +1698,10 @@ static b32 oracle(Test *t, char *suite, char *name, b32 verbose)
     vbuildfile(&os->vos, build, "y.tab.c",   100000);
     vbuildfile(&os->vos, build, "config.h",  20000);
     vbuildfile(&os->vos, build, "version.h", 2000);
-    // A system's account files, which a few tests read
+    // A system's account files, which a few tests read (the vos has
+    // /etc/passwd already)
     VNode *etc = vmkdirs(&os->vos, "etc");
-    static char const passwd[] =
-        "root:x:0:0:root:/root:/bin/sh\n"
-        "daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n"
-        "oracle:x:1000:1000::/home/oracle:/bin/sh\n";
     static char const group[] = "root:x:0:\ndaemon:x:1:\noracle:x:1000:\n";
-    VNode *pw = vnew(&os->vos, etc, "passwd", FT_FILE, 0644);
-    vwritenode(&os->vos, pw, 0, (u8 *)passwd, (iz)sizeof(passwd)-1);
     VNode *gr = vnew(&os->vos, etc, "group", FT_FILE, 0644);
     vwritenode(&os->vos, gr, 0, (u8 *)group, (iz)sizeof(group)-1);
 

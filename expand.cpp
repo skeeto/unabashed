@@ -1854,6 +1854,35 @@ static void expandbraced(X *x, Str whole, i32 ctx)
 
 // Tilde expansion
 
+// A user's home directory from the password file, as getpwnam does, or
+// with a null name the shell's own user's (getpwuid): null if none.
+// Windows has no such file, and so no other users' homes.
+static Str readwholefile(Shell *, Arena *, Str, i32 *);
+static b32 parsei64(Str, i64 *);
+
+static Str userhome(Shell *sh, Arena *a, Str user)
+{
+    if (sh->win32) return {};
+    i32 err = 0;
+    Str pw  = readwholefile(sh, a, "/etc/passwd", &err);
+    for (Cut c = {{}, pw, 1}; c.ok;) {
+        c = cut(c.tail, '\n');
+        Str f[6] = {};
+        Cut d    = {{}, c.head, 1};
+        i32 n    = 0;
+        for (; n<6 && d.ok; n++) {
+            d    = cut(d.tail, ':');
+            f[n] = d.head;
+        }
+        if (n<6 || !d.ok) continue;  // name:pw:uid:gid:gecos:home:shell
+        i64 uid;
+        if (user.data ? f[0]==user : parsei64(f[2], &uid) && uid==sh->uid) {
+            return f[5];
+        }
+    }
+    return {};
+}
+
 static Str tildeprefix(X *x, Str prefix, b32 *ok)
 {
     Shell *sh = x->sh;
@@ -1861,7 +1890,10 @@ static Str tildeprefix(X *x, Str prefix, b32 *ok)
     if (!prefix.len) {
         Got g = getvar(sh, x->a, "HOME");
         if (g.set) return g.value;
-        return "/home/oracle";
+        Str h = userhome(sh, x->a, {});
+        if (h.data) return h;
+        *ok = 0;
+        return {};
     }
     if (prefix == "+") {
         Got g = getvar(sh, x->a, "PWD");
@@ -1870,8 +1902,10 @@ static Str tildeprefix(X *x, Str prefix, b32 *ok)
         Got g = getvar(sh, x->a, "OLDPWD");
         if (g.set) return g.value;
     } else {
-        // ~N, ~+N, ~-N: the directory stack
+        // ~N, ~+N, ~-N: the directory stack, else a user's home
         Str d = dirtilde(sh, prefix);
+        if (d.data) return d;
+        d = userhome(sh, x->a, prefix);
         if (d.data) return d;
     }
     *ok = 0;

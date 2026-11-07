@@ -1,0 +1,70 @@
+== snap 1
+$ echo ~root/
+@ 0,13
+== snap 2
+$ echo ~daemon/
+@ 0,15
+== snap 3
+$ echo ~
+~_apt      ~games/    ~mail/     ~oracle/   ~sys/
+~backup/   ~irc       ~man       ~proxy/    ~uucp
+~bin/      ~list      ~news      ~root/     ~www-data
+~daemon/   ~lp        ~nobody    ~sync/
+$ echo ~
+@ 5,8 bell 1
+== snap 4
+$ echo ~
+~_apt      ~games/    ~mail/     ~oracle/   ~sys/
+~backup/   ~irc       ~man       ~proxy/    ~uucp
+~bin/      ~list      ~news      ~root/     ~www-data
+~daemon/   ~lp        ~nobody    ~sync/
+$ echo ~nosuch
+@ 5,14 bell 2
+== snap 5
+$ echo ~
+~_apt      ~games/    ~mail/     ~oracle/   ~sys/
+~backup/   ~irc       ~man       ~proxy/    ~uucp
+~bin/      ~list      ~news      ~root/     ~www-data
+~daemon/   ~lp        ~nobody    ~sync/
+$ echo oracle
+@ 5,14 bell 2
+== snap 6
+$ echo ~
+~_apt      ~games/    ~mail/     ~oracle/   ~sys/
+~backup/   ~irc       ~man       ~proxy/    ~uucp
+~bin/      ~list      ~news      ~root/     ~www-data
+~daemon/   ~lp        ~nobody    ~sync/
+$ echo ~b
+~backup/ ~bin/
+$ echo ~b
+@ 7,9 bell 2
+== snap 7
+$ echo ~
+~_apt      ~games/    ~mail/     ~oracle/   ~sys/
+~backup/   ~irc       ~man       ~proxy/    ~uucp
+~bin/      ~list      ~news      ~root/     ~www-data
+~daemon/   ~lp        ~nobody    ~sync/
+$ echo ~b
+~backup/ ~bin/
+$ echo ~oracle/.edrc
+@ 7,21 bell 2
+== snap 8
+$ echo ~
+~_apt      ~games/    ~mail/     ~oracle/   ~sys/
+~backup/   ~irc       ~man       ~proxy/    ~uucp
+~bin/      ~list      ~news      ~root/     ~www-data
+~daemon/   ~lp        ~nobody    ~sync/
+$ echo ~b
+~backup/ ~bin/
+$ cd ~root/
+@ 7,11 bell 2
+== snap 9
+$ echo ~
+~_apt      ~games/    ~mail/     ~oracle/   ~sys/
+~backup/   ~irc       ~man       ~proxy/    ~uucp
+~bin/      ~list      ~news      ~root/     ~www-data
+~daemon/   ~lp        ~nobody    ~sync/
+$ echo ~b
+~backup/ ~bin/
+$ cd ~root/
+@ 7,11 bell 2

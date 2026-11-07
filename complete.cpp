@@ -288,6 +288,28 @@ static Slice<Str> compadd(Comp *c, Slice<Str> m, Str s)
 // File names: the entries of the word's directory that start with its
 // last part (§5). keep: 1 for every match, 2 for executables and
 // directories only (a command with a slash).
+// User names from the password file, as readline's: a ~name for each
+// when the word has its ~ (M-~ takes a bare word too). Their homes,
+// being files, are marked and appended to as files are.
+static Slice<Str> compusers(Shell *sh, Comp *c, Str w)
+{
+    Arena *a = c->a;
+    c->files = 1;
+    c->udir  = c->odir = {};
+    Str pre = w.len && w[0]=='~' ? Str("~") : Str("");
+    Str nw  = cuthead(w, pre.len);
+    Slice<Str> m = {};
+    if (sh->win32) return m;  // no password file
+    i32 err = 0;
+    Str pw  = readwholefile(sh, a, "/etc/passwd", &err);
+    for (Cut l = {{}, pw, 1}; l.ok;) {
+        l = cut(l.tail, '\n');
+        Str name = cut(l.head, ':').head;
+        if (name.len && startswith(name, nw)) m = compadd(c, m, concat(a, pre, name));
+    }
+    return m;
+}
+
 static Slice<Str> compfiles(Editor *ed, Shell *sh, Comp *c, Str w, i32 keep)
 {
     Arena *a = c->a;
@@ -295,6 +317,9 @@ static Slice<Str> compfiles(Editor *ed, Shell *sh, Comp *c, Str w, i32 keep)
     iz slash = -1;
     for (iz i = 0; i < w.len; i++) {
         if (w[i] == '/') slash = i;
+    }
+    if (slash<0 && w.len && w[0]=='~') {
+        return compusers(sh, c, w);  // ~name: a user's home
     }
     Str udir = takehead(w, slash+1);
     Str part = cuthead(w, slash+1);
@@ -535,7 +560,7 @@ static Slice<Str> compgenerate(Editor *ed, Shell *sh, Comp *c, i32 gen)
         return compfiles(ed, sh, c, w, 1);
     case CX_COMMAND:  return compcommands(ed, sh, c, w);
     case CX_VARIABLE: return compvariables(sh, c, w);
-    case CX_USER:     return {};
+    case CX_USER:     return compusers(sh, c, w);
     case CX_HOST:     return comphosts(sh, c, w);
     case CX_HISTORY:  return comphistory(sh, c, w);
     case CX_GLOB:     return compglob(sh, c, concat(c->a, c->word, "*"));

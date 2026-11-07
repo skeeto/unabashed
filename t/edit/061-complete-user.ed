@@ -1,0 +1,20 @@
+# User names from the password file: TAB on a ~word without a slash,
+# M-~ and C-x ~ (listing), each a ~name; a single match gets a slash
+size 16 60
+rc PS1='$ '
+keys echo ~ro\t
+snap
+keys \C-a\C-kecho ~d\t
+snap
+keys \C-a\C-kecho ~\t\t
+snap
+keys \C-a\C-kecho ~nosuch\t
+snap
+keys \C-a\C-kecho or\e~
+snap
+keys \C-a\C-kecho ~b\x18~
+snap
+keys \C-a\C-kecho ~oracle/\t
+snap
+keys \C-a\C-kcd ~ro\t
+snap

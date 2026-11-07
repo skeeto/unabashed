@@ -77,8 +77,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
 - glibc's 4 KiB stdio flush before a diagnostic is not emulated (bash
   prints an error mid-line after 4 KiB without a newline). (m4.md)
 - GLOBIGNORE splitting skips quotes and groups but not `$(...)`.
-- A `~user` tilde prefix is left as is; bash looks the user's home
-  up (`~root/x` is `/root/x`), in words and in BASH_ENV. (review)
 - `${ prog & }`, a program started straight in the background (not
   a vproc job, procsub or coprocess), holds up the substitution until
   it closes its output: its pump has no owner to check, so endcapture
@@ -190,10 +188,7 @@ Moved from M6 (m6.md, step 10):
 - A WINCH trap: the editor only catches SIGWINCH itself (POSIX) when
   its disposition is the default, and its trap action runs later than
   bash's (with the trap fidelity work).
-- User name completion (`~user`, M-~) finds nothing: no user database
-  is read; bash reads the password file (with the `~user` tilde
-  prefix above, which needs the same lookup). Hosts are read from
-  HOSTFILE or /etc/hosts without `$include`.
+- Hosts are read from HOSTFILE or /etc/hosts without `$include`.
 - cdspell and dirspell are not done, and the completion stat hook does
   not canonicalize against `$PWD` (with cd's other options).
 - A history file that is a symbolic link is written through in place
@@ -376,6 +371,10 @@ Moved from M5a: limits of the test tiers, not of the shell.
 
 ## Accepted deviations
 
+- **Accepted: no users on Windows**: `~user` is left as it is, `~`
+  with HOME unset too, and M-~ finds nothing, there being no password
+  file; Cygwin's bash makes them up from the account database
+  (/home/NAME). Native-mode busybox has no `~user` either. (M7, step 9)
 - **Accepted: jobs -l shows a pipeline as one line**, the job's pid
   and state, where bash lists each process with its own pid (and the
   pipeline's text split at each `|`): a background pipeline is one

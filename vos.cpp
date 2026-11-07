@@ -3863,6 +3863,35 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes, b32 win = 0)
     vmkdirs(v, "usr/local/bin");
     vmkdirs(v, "usr/bin");
     vmkdirs(v, "etc");
+    // Accounts, as in the oracle image, for ~user
+    vputfile(v, "etc", "passwd",
+        "root:x:0:0:root:/root:/bin/bash\n"
+        "daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n"
+        "bin:x:2:2:bin:/bin:/usr/sbin/nologin\n"
+        "sys:x:3:3:sys:/dev:/usr/sbin/nologin\n"
+        "sync:x:4:65534:sync:/bin:/bin/sync\n"
+        "games:x:5:60:games:/usr/games:/usr/sbin/nologin\n"
+        "man:x:6:12:man:/var/cache/man:/usr/sbin/nologin\n"
+        "lp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin\n"
+        "mail:x:8:8:mail:/var/mail:/usr/sbin/nologin\n"
+        "news:x:9:9:news:/var/spool/news:/usr/sbin/nologin\n"
+        "uucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin\n"
+        "proxy:x:13:13:proxy:/bin:/usr/sbin/nologin\n"
+        "www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n"
+        "backup:x:34:34:backup:/var/backups:/usr/sbin/nologin\n"
+        "list:x:38:38:Mailing List Manager:/var/list:/usr/sbin/nologin\n"
+        "irc:x:39:39:ircd:/run/ircd:/usr/sbin/nologin\n"
+        "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin\n"
+        "nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n"
+        "oracle:x:1000:1000::/home/oracle:/usr/local/bin/bash\n");
+    // and those of the homes that exist there
+    VNode *root = vmkdirs(v, "root");
+    root->uid  = 0;
+    root->mode = 0700;
+    vmkdirs(v, "usr/sbin");
+    vmkdirs(v, "usr/games");
+    vmkdirs(v, "var/mail");
+    vmkdirs(v, "var/backups");
     // What login shells see of the oracle image's /etc/profile: the
     // PATH Debian gives a user other than root
     vputfile(v, "etc", "profile",
