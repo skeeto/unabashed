@@ -380,6 +380,7 @@ struct Job {
     b32    done;
     b32    notified;  // listed as done, or waited for
     b32    nohup;     // disown -h
+    b32    jc;        // started under job control
 };
 
 struct Bgstat {       // the status of a job no longer listed
@@ -609,6 +610,13 @@ struct Shell {
     Coproc  *coprocs;      // coprocesses, newest first
     b32      stdinredir;   // input is a pipe or redirected: & keeps it,
                            // rather than reading /dev/null
+    b32      jobctl;       // job control is active: set -m, but not in a
+                           // subshell other than a command substitution
+    b32      incomsub;     // in a command substitution: fg and bg find
+                           // no job of their own
+    b32      forked;       // the next simple command is a stage or job
+                           // bash forks first: %N is no command there
+    b32      asyncpct;     // the next simple command is "%N &", so bg
 
     // Signals and traps (trap.cpp)
     Str     *traps;        // NTRAP actions in the store, or null

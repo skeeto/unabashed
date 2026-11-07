@@ -4410,6 +4410,7 @@ static i32 b_jobs(Shell *, Str *, iz, Arena);  // jobs.cpp
 static i32 b_wait(Shell *, Str *, iz, Arena);
 static i32 b_disown(Shell *, Str *, iz, Arena);
 static i32 b_fg(Shell *, Str *, iz, Arena);
+static i32 b_bg(Shell *, Str *, iz, Arena);
 static i32 b_suspend(Shell *, Str *, iz, Arena);
 
 static i32 b_enable(Shell *, Str *, iz, Arena);
@@ -4421,7 +4422,7 @@ static Builtin builtins[] = {
     {":",        b_colon,    B_SPECIAL|B_NOHELP},
     {"[",        b_test,     B_NOHELP},
     {"alias",    b_alias,    0},
-    {"bg",       b_fg,       0},
+    {"bg",       b_bg,       0},
     {"break",    b_break,    B_SPECIAL},
     {"builtin",  b_builtin,  0},
     {"caller",   b_caller,   0},

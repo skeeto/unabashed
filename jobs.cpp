@@ -304,6 +304,7 @@ static Job *newjob(Shell *sh, Arena scratch, Node *n, Task *t, i64 pid, b32 copr
     j->pid   = pid;
     j->task  = t;
     j->id    = id;
+    j->jc    = sh->jobctl;
     Node c = *n;
     c.flags &= ~(CMD_TIME|CMD_TIMEPOSIX);
     Printer *p = newprinter(&scratch);
@@ -762,6 +763,12 @@ static void runasync(Shell *sh, Node *n, Arena scratch)
 
 static void runasync1(Shell *sh, Node *n, Arena scratch)
 {
+    if (n->kind==N_SIMPLE && n->words && startswith(n->words->text, "%")) {
+        // "%N &" is "bg %N", in this shell: bash does not fork for it
+        sh->asyncpct = 1;
+        runsimple(sh, n, scratch);
+        return;
+    }
     Sched *s = sh->sched;
     polljobs(sh);
     cleanupjobs(sh);
@@ -783,8 +790,9 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
             }
         }
     }
-    // Without job control, its input is /dev/null unless redirected
-    b32   nullin = !sh->stdinredir && (!sh->interactive || !sh->opt[O_MONITOR]);
+    // Without job control, or in a subshell, its input is /dev/null
+    // unless redirected
+    b32   nullin = !sh->stdinredir && (sh->subshell || !sh->jobctl);
     File *in     = nullin ? devnull(sh, scratch) : 0;
     Task *t      = 0;
     i64   pid    = 0;
@@ -804,8 +812,10 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     }
     if (retry) {
         sh->debugdone = debugged;
+        sh->forked    = n->kind == N_SIMPLE;
         t = spawnbg(sh, n, in, 0, &pid, scratch);
         sh->debugdone = 0;
+        sh->forked    = 0;
     }
     fileunref(sh, in);
     Job *j = newjob(sh, scratch, n, t, pid, 0);
@@ -1392,10 +1402,116 @@ static i32 b_disown(Shell *sh, Str *args, iz nargs, Arena scratch)
     return status;
 }
 
-static i32 b_fg(Shell *sh, Str *args, iz, Arena scratch)
+// The job fg or bg acts on: the one spec names, or the current job. Or
+// null after saying why not.
+static Job *fgbgjob(Shell *sh, Arena scratch, Str who, Str *spec)
 {
-    builtinerror(sh, scratch, args[0], "no job control");
-    return 1;
+    b32  amb = 0;
+    Job *j   = spec ? findjob(sh, scratch, who, *spec, &amb)
+             : sh->curjob ? jobbyid(sh, sh->curjob) : 0;
+    if (!j) {
+        if (!amb) {
+            Str name = spec ? *spec : Str("current");
+            builtinerror(sh, scratch, who, concat(&scratch, name, ": no such job"));
+        }
+        return 0;
+    }
+    if (!j->jc) {
+        Str msg = concat3(&scratch, "job ", fmti64(&scratch, j->id), " started without job control");
+        builtinerror(sh, scratch, who, msg);
+        return 0;
+    }
+    if (!ownjob(sh, j) || sh->incomsub) {
+        builtinerror(sh, scratch, who, "no current jobs");
+        return 0;
+    }
+    return j;
+}
+
+// fg and bg take no options, but --. Returns the index of the first
+// operand, or -1 after a usage error.
+static iz fgbgoptions(Shell *sh, Arena scratch, Str *args, iz nargs)
+{
+    iz i = 1;
+    if (i<nargs && args[i]=="--") return i + 1;
+    if (i<nargs && args[i].len>1 && args[i][0]=='-') {
+        jobsusage(sh, scratch, args[0], span(args[i].data, args[i].data+2));
+        return -1;
+    }
+    return i;
+}
+
+// The command a job runs, as fg prints it: with where it started, if
+// not here.
+static Str jobtext(Shell *sh, Arena *a, Job *j, Str sep)
+{
+    if (j->wd == sh->wd) return j->text;
+    Str wd   = j->wd;
+    Got home = getvar(sh, a, "HOME");
+    iz  n    = homeprefix(sh, wd, home.value);
+    if (n >= 0) wd = concat(a, "~", cuthead(wd, n));
+    return concat3(a, j->text, sep, concat3(a, "(wd: ", wd, ")"));
+}
+
+static i32 b_fg(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    if (!sh->jobctl) {
+        builtinerror(sh, scratch, "fg", "no job control");
+        return 1;
+    }
+    iz i = fgbgoptions(sh, scratch, args, nargs);
+    if (i < 0) return 2;
+    polljobs(sh);
+    Job *j = fgbgjob(sh, scratch, "fg", i<nargs ? args+i : 0);  // the rest ignored
+    if (!j) return 1;
+    if (!jobrunning(j)) {
+        builtinerror(sh, scratch, "fg", "job has terminated");
+        return 1;
+    }
+    setcurrent(sh, j->id);
+    bprint(sh, concat(&scratch, jobtext(sh, &scratch, j, "\t"), "\n"));
+    flushbout(sh);
+    // As a foreground command: trapped signals wait for its end
+    if (j->task) {
+        jointask(sh->sched, j->task, &j->status);
+        j->task = 0;
+        j->done = 1;
+        coprocended(sh, j->pid);
+    }
+    i32 st  = j->status;
+    i64 pid = j->pid;
+    Str txt = clone(&scratch, jobtext(sh, &scratch, j, "  "));
+    j->notified = 1;
+    deletejob(sh, j);
+    delbgstat(sh, pid);
+    if (st & WSIGNALED) reportsig(sh, scratch, (st & 255) - 128, pid, txt);
+    return st & 255;
+}
+
+static i32 b_bg(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    if (!sh->jobctl) {
+        builtinerror(sh, scratch, "bg", "no job control");
+        return 1;
+    }
+    iz i = fgbgoptions(sh, scratch, args, nargs);
+    if (i < 0) return 2;
+    polljobs(sh);
+    i32 status = 0;
+    do {
+        Job *j = fgbgjob(sh, scratch, "bg", i<nargs ? args+i : 0);
+        if (!j) {
+            status = 1;
+        } else if (!jobrunning(j)) {
+            builtinerror(sh, scratch, "bg", "job has terminated");
+            status = 1;
+        } else {
+            sh->lastbg = j->pid;  // as bash, its process group
+            Str msg = concat3(&scratch, "job ", fmti64(&scratch, j->id), " already in background");
+            builtinerror(sh, scratch, "bg", msg);
+        }
+    } while (++i < nargs);
+    return status;
 }
 
 static i32 b_suspend(Shell *sh, Str *args, iz nargs, Arena scratch)

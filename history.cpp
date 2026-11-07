@@ -497,11 +497,14 @@ static Str histline(void *ctx, Lexer *L, Str line, b32 heredoc)
 static void histload(Shell *sh);
 
 // set -o history, set -H and their shopt -o forms. (Also set -n, which
-// an interactive shell ignores, though not as its own -n argument.)
+// an interactive shell ignores, though not as its own -n argument, and
+// set -m, which turns job control on and off.)
 static void histoption(Shell *sh, i32 opt, b32 on)
 {
     Hist *h = &sh->hist;
-    if (opt==O_NOEXEC && sh->interactive) {
+    if (opt == O_MONITOR) {
+        sh->jobctl = on;
+    } else if (opt==O_NOEXEC && sh->interactive) {
         sh->opt[O_NOEXEC] = 0;
     } else if (opt == O_HISTORY) {
         h->expinhibit = !on;

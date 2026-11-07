@@ -467,6 +467,8 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sh->psubs   = 0;
     sh->killsig   = 0;
     sh->errexited = 0;
+    sh->jobctl   &= j->comsub;  // as bash, which keeps it in a comsub
+    sh->incomsub |= j->comsub;
     subshelltraps(sh);
     Sigproc sig;
     sigenter(sh, &sig, sh->bashpid, sh->sched->cur);
@@ -2558,6 +2560,10 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     sh->spawnto = 0;
     b32 debugdone = sh->debugdone;  // a pipeline stage's, by its parent
     sh->debugdone = 0;
+    b32 forked = sh->forked;
+    b32 async  = sh->asyncpct;
+    sh->forked   = 0;
+    sh->asyncpct = 0;
     safepoint(sh->sched);
     sh->line    = n->line;
     sh->current = n;
@@ -2722,6 +2728,20 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         tracewords(sh, scratch, argv.data, argv.len);
     }
 
+    // Job control shorthand: "%N" is "fg %N", and "%N &" is "bg %N",
+    // the builtin even if a function has its name, and as in bash with
+    // no redirections. Not where bash forks before expanding the words:
+    // a stage, or a job's command.
+    b32 jobspec = name.len && name[0]=='%' && !forked;
+    if (jobspec) {
+        Slice<Str> v = {};
+        v = push(a, v, async ? Str("bg") : Str("fg"));
+        for (iz i = 0; i < argv.len; i++) v = push(a, v, argv[i]);
+        argv     = v;
+        name     = argv[0];
+        compargs = {};
+    }
+
     // exec without a command makes its redirections permanent
     // (outside a subshell only once all of them succeed: a failure
     // undoes the rest, as in bash)
@@ -2731,7 +2751,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     Str savedname = sh->bltname;
     if (n->redirs && findbuiltin(sh, name)) sh->bltname = name;  // for messages
     b32 keep       = (execonly && !commit) || n==sh->keepredirs;
-    b32 redirected = doredirs(sh, n->redirs, a, keep);
+    b32 redirected = jobspec || doredirs(sh, n->redirs, a, keep);
     sh->bltname = savedname;
     if (!redirected) {
         unwind(sh, mark);
@@ -2752,7 +2772,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     Func    *fn = 0;
     Builtin *bi = findbuiltin(sh, name);
     b32 special = bi && (bi->flags & B_SPECIAL);
-    if (!(special && sh->opt[O_POSIX])) {
+    if (!(special && sh->opt[O_POSIX]) && !jobspec) {
         // as bash, a name with a slash too, outside POSIX mode
         if (!sh->opt[O_POSIX] || !haspath(sh, name)) fn = findfunc(sh, name);
     }

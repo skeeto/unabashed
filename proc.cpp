@@ -446,6 +446,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->intrread = 0;
     c->intredit = 0;
     c->jobs     = copyjobs(st, sh->jobs);  // to list, not to wait for
+    c->jobctl   = 0;
     c->bgstats  = 0;
     closecoproc(c);
     copytraps(c, sh);
@@ -942,6 +943,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         b32 retry = !skip;
         ran[k] = !skip;
         sh->debugdone = stages[k]->kind == N_SIMPLE;
+        sh->forked    = stages[k]->kind == N_SIMPLE;
         if (!skip && ext[k] && directstage(sh, scratch, stages[k], !k)) {
             u64 group = setgroup(s, nexttag(s));  // tracing: as a stage task
             procs[k] = spawndirect(sh, stages[k], in[k], out[k], scratch,
@@ -950,6 +952,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             pids[k]  = sh->childpid;
             sh->status = before;
             sh->debugdone = stages[k]->kind == N_SIMPLE;  // for a retry
+            sh->forked    = stages[k]->kind == N_SIMPLE;
         }
         if (retry) {
             b32 newloops = stages[k]->kind != N_SIMPLE;  // as bash: break | x is silent
@@ -957,9 +960,11 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             tasks[k]->group = tasks[k]->tag;  // tracing: runs alongside the last stage
             pids[k]  = ((Vproc *)tasks[k]->arg)->sh->bashpid;
             sh->debugdone = 0;
+            sh->forked    = 0;
             yield(s);
         }
         sh->debugdone = 0;
+        sh->forked    = 0;
         // Drop the parent's ends at once: a later direct stage whose
         // words read its input expands here (a comsub runscode missed),
         // and would wait forever on a writer held here
@@ -970,7 +975,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     // The last stage here, reading the previous stage's output
     i32   last  = nstages - 1;
     Node *stage = stages[last];
-    b32   inhere = sh->shopt[S_LASTPIPE] && !sh->opt[O_MONITOR];
+    b32   inhere = sh->shopt[S_LASTPIPE] && !sh->jobctl;
     b32   skip   = (!inhere || sh->flow) && stagedebug(sh, stage, before, scratch);
     i32   flowed = sh->flow ? sh->status : -1;  // the action's return
     ran[last] = !skip;
@@ -1027,8 +1032,10 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         takeossigs(sh);  // those from before are this level's own
         sh->sig->fgwait = 1;
         sh->debugdone = stage->kind == N_SIMPLE;
+        sh->forked    = stage->kind == N_SIMPLE;
         status = subshell(sh, &j, child, 0);
         sh->debugdone = 0;
+        sh->forked    = 0;
         sh->tailnode  = 0;
         sh->taillevel = 0;
         sh->simplestages -= stage->kind == N_SIMPLE;
