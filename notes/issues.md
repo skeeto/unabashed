@@ -47,24 +47,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
 - **XP: t/win32/014-spawn failed once in 13 runs** (M5b step 10, with
   UNABASHED_XPIO=1); the diff was lost and twelve reruns passed. Look
   for it with the other XP flakes, which may share a cause.
-- With extquote off, a here-document's `${x#${$'x1'}}` is a bad
-  substitution with our usual message; bash reports "bad substitution:
-  no closing `}' in" followed by the whole body. (m7.md, step 6)
-- glibc's 4 KiB stdio flush before a diagnostic is not emulated (bash
-  prints an error mid-line after 4 KiB without a newline). (m4.md)
-- `${ prog & }`, a program started straight in the background (not
-  a vproc job, procsub or coprocess), holds up the substitution until
-  it closes its output: its pump has no owner to check, so endcapture
-  joins it; bash reads the substitution's file at once. In bash that
-  file is on the lowest free descriptor from 3, so
-  `${ exec 3>/dev/null; echo a; }` is empty there, and fd 3 is closed
-  after it. (fuzz triage)
-- Eval text that ends inside `$(...)` on a backslash: bash's
-  "unexpected EOF" cites the line after ours in some cases
-  (`echo $(echo \`, `\\`, `a\`, `$\`, `$(\` report the eval's line + 2,
-  we say + 1) but not others (`\\\`, `\\\\` are + 1 in both). Follows
-  from how bash's shell_getc pads a final backslash and counts reads
-  at end of input; not modelled. (review)
 Moved from M5a (fidelity gaps that neither the w64devkit trial nor
 the Git Bash corpus reaches; M7 is where fidelity is finished):
 
@@ -351,9 +333,37 @@ Moved from M5a: limits of the test tiers, not of the shell.
 
 ## Accepted deviations
 
+- **Accepted: a here-document's nested $'...' message.** With extquote
+  off, a here-document's `${x#${$'x1'}}` is a bad substitution with our
+  usual message; bash reports "bad substitution: no closing `}' in"
+  followed by the whole body. (m7.md, step 6) Found by fuzzing; it needs
+  bash's brace scanner for here-documents with extquote off, for a
+  message only. (M7 step 9)
+- **Accepted: no stdio flush artifact.** glibc's 4 KiB stdio flush
+  before a diagnostic is not emulated (bash prints an error mid-line
+  after 4 KiB without a newline). (m4.md) An artifact of glibc's stdout
+  buffer, which output that ends a line never shows. (M7 step 9)
+- **Accepted: ${ prog & } waits for prog.** `${ prog & }`, a program
+  started straight in the background (not a vproc job, procsub or
+  coprocess), holds up the substitution until it closes its output: its
+  pump has no owner to check, so endcapture joins it; bash reads the
+  substitution's file at once. In bash that file is on the lowest free
+  descriptor from 3, so `${ exec 3>/dev/null; echo a; }` is empty there,
+  and fd 3 is closed after it. (fuzz triage) Bash's temporary file has
+  no counterpart here, and draining a pump without waiting for its end
+  would need one; a program started in the background straight from
+  `${ ...; }` is rare. (M7 step 9)
+- **Accepted: eval's EOF line after a backslash.** Eval text that ends
+  inside `$(...)` on a backslash: bash's "unexpected EOF" cites the line
+  after ours in some cases (`echo $(echo \`, `\\`, `a\`, `$\`, `$(\`
+  report the eval's line + 2, we say + 1) but not others (`\\\`, `\\\\`
+  are + 1 in both). Follows from how bash's shell_getc pads a final
+  backslash and counts reads at end of input, not worth modelling for
+  a line number in an error. (review, M7 step 9)
 - **Accepted: rare back-reference mismatches.** regex.cpp differs
-  from glibc on back-reference patterns without repetition where `rxlongest`'s first pass records close nodes reached
-  through back-references glibc finds no span for, which then hide the
+  from glibc on back-reference patterns without repetition where
+  `rxlongest`'s first pass records close nodes reached through
+  back-references glibc finds no span for, which then hide the
   span of a later back-reference: `[^a]($|)\1($)\2` on a space (glibc
   (0,1)(1,1)(1,1), ours no match), and `($|)($)($|)\1\2$\`$($)` on an
   empty subject (glibc matches, ours not). Both differ on master too;
