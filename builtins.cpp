@@ -1179,6 +1179,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 continue;
             }
         }
+        Str    refname = {};  // the nameref followed to vname, if any
         Value *raw = global ? globalvalue(sh, vname) : rawlookup(sh, vname);
         if (raw && (raw->attrs & V_NAMEREF) && hassub && eq<a.len) {
             // declare -n r; declare r[1]=x: r stops being a nameref
@@ -1189,6 +1190,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         } else if (raw && (raw->attrs & V_NAMEREF) && !onref) {
             // Otherwise declare acts on the variable a nameref names,
             // though in a function only through a nameref of its own
+            if ((raw->attrs & V_EMPTYREF) && (off & V_READONLY)) {
+                continue;  // as bash: +r finds no variable, silently
+            }
             Ref r = resolveref(sh, vname, global);
             b32 offref = !!(off & V_NAMEREF);
             if (offref && r.last && r.last->str.data && (r.last->attrs & V_READONLY)) {
@@ -1208,7 +1212,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             }
             if (offref && r.last) setattrs(sh, r.lastname, 0, V_NAMEREF);
             if (follow) {
-                vname = r.name;
+                refname = vname;
+                vname   = r.name;
                 if (r.hassub && !hassub) {
                     sub    = r.sub;
                     hassub = 1;
@@ -1256,7 +1261,13 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             b32 shadow = mklocal && cur->depth!=sh->funcdepth;
             u32 bad    = V_ARRAY|V_ASSOC|V_INTEGER|V_LOWER|V_UPPER|V_CAPITAL;
             if (shadow ? !cur->depth : eq<a.len || (off & V_READONLY) || ((on|off) & bad)) {
-                Str msg = concat(&scratch, vname, ": readonly variable");
+                // As bash, an assignment names the nameref; a local of
+                // it that failed, or attributes alone, its target
+                b32 byref = refname.data && !shadow && eq<a.len && !(off & V_READONLY);
+                if ((cur->attrs & V_NAMEREF) && !cur->str.data && !mklocal && eq<a.len) {
+                    setattrs(sh, vname, V_EMPTYREF, 0);  // see V_EMPTYREF
+                }
+                Str msg   = concat(&scratch, byref ? refname : vname, ": readonly variable");
                 // export -a and readonly -a run declare, which names itself
                 if ((name=="export" || name=="readonly") && !(on & (V_ARRAY|V_ASSOC))) {
                     shellerror(sh, scratch, msg);

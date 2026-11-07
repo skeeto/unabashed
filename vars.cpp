@@ -23,6 +23,8 @@ enum : u32 {  // variable attributes
     V_LOCAL    = 1<<10,
     V_TEMP     = 1<<11,  // NAME=value before a builtin or function
     V_NOASSIGN = 1<<12,  // assignments silently do nothing (GROUPS)
+    V_EMPTYREF = 1<<13,  // a readonly nameref a failed assignment left
+                         // naming "" (bash): +r then does nothing
 };
 
 enum : i32 {  // dynamic variables, computed when read
@@ -256,6 +258,7 @@ struct Bind {
     b32 global;    // the global binding of name
     b32 fail;
     b32 local;     // decided in a function's scope
+    i32 depth;     // else the binding of name at this function depth
 };
 
 static Bind assignref(Shell *sh, Str name)
@@ -284,8 +287,11 @@ static Bind assignref(Shell *sh, Str name)
                 nv = n;
             }
             if (!(nv->attrs & V_NAMEREF)) {
+                // As bash, the binding seen from the nameref's scope,
+                // even when a newer one shadows it
                 b.name   = nn;
                 b.global = !c;
+                b.depth  = c;
                 return b;
             }
         }
@@ -585,6 +591,7 @@ enum : i32 {  // setvar flags
     SV_NOREF  = 1<<5,  // name itself, even a nameref
     SV_RAWKEY = 1<<6,  // an associative subscript used as it is
     SV_NEWLOCAL = 1<<7,  // a local just made: lists expand without it
+    SV_ATDEPTH  = 1<<8,  // the binding at function depth flags>>16
 };
 
 static void varchanged(Shell *, Str name);
@@ -599,6 +606,8 @@ static Value *assignslot(Shell *sh, Arena scratch, Str name, i32 flags)
     Value **slot = &v->top;
     if (flags & SV_GLOBAL) {
         while (*slot && (*slot)->depth) slot = &(*slot)->below;
+    } else if (flags & SV_ATDEPTH) {
+        while (*slot && (*slot)->depth>flags>>16) slot = &(*slot)->below;
     }
     if (flags & SV_UNDERTEMP) {
         while (*slot && ((*slot)->attrs & V_TEMP)) slot = &(*slot)->below;
@@ -1166,6 +1175,7 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
         }
         name   = b.name;
         flags |= SV_NOREF | (b.global ? SV_GLOBAL : 0);
+        flags |= b.depth ? SV_ATDEPTH|b.depth<<16 : 0;
     }
     Value *val = assignslot(sh, scratch, name, flags);
     if (!val) return 0;

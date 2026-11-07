@@ -77,10 +77,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
 - glibc's 4 KiB stdio flush before a diagnostic is not emulated (bash
   prints an error mid-line after 4 KiB without a newline). (m4.md)
 - GLOBIGNORE splitting skips quotes and groups but not `$(...)`.
-- Namerefs: assigning through a nameref into an older scope whose
-  variable is shadowed sets the visible one (bash sets that scope's);
-  bash's silent `typeset +r` after a failed `typeset r=x` on a readonly
-  nameref (nameref oracle). (m4.md)
 - A `~user` tilde prefix is left as is; bash looks the user's home
   up (`~root/x` is `/root/x`), in words and in BASH_ENV. (review)
 - `${ prog & }`, a program started straight in the background (not

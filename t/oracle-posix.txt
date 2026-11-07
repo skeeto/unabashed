@@ -53,7 +53,7 @@ jobs PASS
 lastpipe PASS
 mapfile PASS
 more-exp PASS
-nameref FAIL
+nameref PASS
 new-exp PASS
 nquote PASS
 nquote1 PASS
