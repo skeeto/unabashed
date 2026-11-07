@@ -261,6 +261,7 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
         info.env     = vwinenv(&ctx->scratch, ctx->env, ctx->nenv);
     }
     info.pid     = osvos(os)->procs[osvos(os)->cur].pid;
+    info.pgid    = osvos(os)->procs[osvos(os)->cur].pgid;
     info.sigign  = osvos(os)->procs[osvos(os)->cur].sigign;
     info.ppid    = 2;
     info.uid     = info.euid = 1000;
@@ -367,6 +368,7 @@ static OsInfo baseinfo(Os *os, Str *args, iz nargs)
     info.nargs   = nargs;
     info.pid     = 2;
     info.ppid    = 1;
+    info.pgid    = 2;
     info.uid     = info.euid = 1000;
     info.gid     = info.egid = 1000;
     info.host    = "oracle";
@@ -1328,6 +1330,81 @@ static void putvfile(Os *os, Arena a, Str path, Str data)
     os_close(os, o.h);
 }
 
+// Process groups and stops on the vos: a group signal reaches each
+// member, stops and continues are reported to IO_PROCSTOP (an exit
+// still ends the process), a fatal signal to a stopped program waits
+// for its continue, and SIGSTOP stops even a program ignoring SIGTSTP.
+static Spawned spawnsleep(Os *os, Arena a, Str secs, i64 pgid, u64 sigign = 0)
+{
+    static SpawnFd fds[] = {{1, 1}, {2, 2}};
+    Spawn s  = {};
+    Str argv[] = {"sleep", secs};
+    s.fds    = fds;
+    s.nfds   = countof(fds);
+    s.path   = "/opt/fakes/bin/sleep";
+    s.argv   = argv;
+    s.argc   = countof(argv);
+    s.cwd    = "/home/oracle";
+    s.pgid   = pgid;
+    s.sigign = sigign;
+    return os_spawn(os, a, &s);
+}
+
+static i32 procstop(Os *os, Handle proc)
+{
+    Io io = {};
+    io.op = IO_PROCSTOP;
+    io.h  = proc;
+    os_submit(os, &io);
+    if (!io.done) {
+        os_cancel(os, &io);
+        return -1;  // nothing to report
+    }
+    return (i32)io.n;
+}
+
+static void test_jobctl(Test *t)
+{
+    Os  *os = t->os;
+    startrun(os, 0, {});
+    Arena a = newarena(os, (iz)1<<20);
+
+    Spawned p = spawnsleep(os, a, "5", -1);
+    expectint(t, "jobctl spawn", p.err, 0);
+    expectint(t, "jobctl stop", os_kill(os, -p.pid, 19), 0);
+    expectint(t, "jobctl stopped", procstop(os, p.proc), WSTOP|19);
+    expectint(t, "jobctl once", procstop(os, p.proc), -1);
+    expectint(t, "jobctl held", os_kill(os, p.pid, 15), 0);
+    expectint(t, "jobctl still", procstop(os, p.proc), -1);
+    expectint(t, "jobctl cont", os_kill(os, p.pid, 18), 0);
+    expectint(t, "jobctl killed", procstop(os, p.proc), WSIGNALED|(128+15));
+
+    Spawned l = spawnsleep(os, a, "1", -1);
+    Spawned m = spawnsleep(os, a, "1", l.pid);
+    expectint(t, "jobctl tstp", os_kill(os, -l.pid, 20), 0);
+    expectint(t, "jobctl leader", procstop(os, l.proc), WSTOP|20);
+    expectint(t, "jobctl member", procstop(os, m.proc), WSTOP|20);
+    expectint(t, "jobctl group cont", os_kill(os, -l.pid, 18), 0);
+    expectint(t, "jobctl leader cont", procstop(os, l.proc), WCONT);
+    expectint(t, "jobctl member cont", procstop(os, m.proc), WCONT);
+    expectint(t, "jobctl leader exit", os_waitproc(os, l.proc), 0);
+    expectint(t, "jobctl member exit", os_waitproc(os, m.proc), 0);
+    expectint(t, "jobctl gone", os_kill(os, -l.pid, 15), E_SRCH);
+    expectint(t, "jobctl zero", os_kill(os, 0, 15), E_SRCH);
+
+    Spawned g = spawnsleep(os, a, "1", 0, (u64)1<<(20-1));
+    expectint(t, "jobctl own group", os_kill(os, -2, 0), 0);
+    expectint(t, "jobctl ignored", os_kill(os, g.pid, 20), 0);
+    expectint(t, "jobctl ignoring", procstop(os, g.proc), -1);
+    expectint(t, "jobctl setpgid", os_setpgid(os, g.pid, 0), 0);
+    expectint(t, "jobctl sigstop", os_kill(os, -g.pid, 19), 0);
+    expectint(t, "jobctl sigstopped", procstop(os, g.proc), WSTOP|19);
+    os_kill(os, g.pid, 18);
+    expectint(t, "jobctl plain wait", os_waitproc(os, g.proc), 0);
+    expectint(t, "jobctl no tty", (i32)os_tcpgrp(os, 1, 0), -E_NOTTY);
+    expect(t, "jobctl no deadlock", os->vos.err, "");
+}
+
 static void test_vwin(Test *t)
 {
     Os  *os = t->os;
@@ -1650,6 +1727,7 @@ static b32 oracle(Test *t, char *suite, char *name, b32 verbose)
     info.cwd     = "/home/oracle/tests";
     info.pid     = 2;
     info.ppid    = 1;
+    info.pgid    = 2;
     info.uid     = info.euid = 1000;
     info.gid     = info.egid = 1000;
     info.host    = "oracle";
@@ -1713,6 +1791,7 @@ int main(int argc, char **argv)
     test_sched(&t);
     test_sigpipe(&t);
     test_vwin(&t);
+    test_jobctl(&t);
     test_pathmodes(&t);
 
     if (argc>3 && (!strcmp(argv[1], "--oracle") || !strcmp(argv[1], "--oracle-v"))) {

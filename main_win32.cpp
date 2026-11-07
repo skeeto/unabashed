@@ -3365,6 +3365,17 @@ static i32 os_setrlimit(Os *os, i32 res, Rlimit r)
     return 0;
 }
 
+// No process groups here: job control on Windows is the core's.
+static i32 os_setpgid(Os *, i64, i64)
+{
+    return E_NOSYS;
+}
+
+static i64 os_tcpgrp(Os *, Handle, i64)
+{
+    return -E_NOSYS;
+}
+
 static i32 os_kill(Os *, i64 pid, i32 sig)
 {
     if (pid<=0 || pid>(i64)0x7fffffff) return E_SRCH;
@@ -3562,7 +3573,7 @@ static void os_submit(Os *os, Io *io)
     io->plt[0] = S_NONE;
     io->plt[1] = 0;
     drainwake(os);
-    if (io->op == IO_PROC) {
+    if (io->op==IO_PROC || io->op==IO_PROCSTOP) {  // nothing stops here
         if (!WaitForSingleObject(io->h, 0)) {
             io->n    = procexit(os, io->h);
             io->done = 1;

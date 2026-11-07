@@ -37,6 +37,7 @@ struct OsInfo {
                      // ("C:/Windows"), for SYSTEMROOT and ComSpec
     i64    pid;
     i64    ppid;
+    i64    pgid;     // its process group, 0 where there are none
     i64    uid;
     i64    euid;
     i64    gid;
@@ -167,6 +168,10 @@ struct Spawn {
                       // image, every descriptor listed passed; once
                       // started the child owns it (the parent's copy may
                       // be gone), else the caller frees it
+    i64      pgid;    // process group (POSIX and the vos): 0 the shell's,
+                      // -1 a new one the child leads, else that group
+    b32      fg;      // with pgid: the child's group takes terminal tty
+    Handle   tty;     // (set in both parent and child, so no race)
 };
 
 struct LevelSig {
@@ -188,7 +193,12 @@ struct Spawned {
 // starting), so the waiting level takes it as its own.
 // WNOLIB (os_waitproc, Windows): the program could not start for a
 // missing DLL; the status is 127 and the core reports it as Cygwin.
-enum : i32 { NSIGNAL = 65, WSIGNALED = 0x100, WMISSED = 0x200, WNOLIB = 0x400 };
+// WSTOP|N (IO_PROCSTOP): the program was stopped by signal N, and
+// WCONT: continued; neither is its end, so it is waited for again.
+enum : i32 {
+    NSIGNAL = 65, WSIGNALED = 0x100, WMISSED = 0x200, WNOLIB = 0x400,
+    WSTOP = 0x800, WCONT = 0x1000,
+};
 
 enum : i32 {  // os_sigmode
     SIGM_DEFAULT, SIGM_IGNORE, SIGM_CATCH,
@@ -205,6 +215,9 @@ enum : i32 {
     IO_WRITE,     // at least one byte (n), perhaps fewer than len
     IO_PROC,      // a spawned program's exit: n is os_waitproc's status
     IO_CONNECT,   // a named pipe's client opened it (os_namedpipe): n = 0
+    IO_PROCSTOP,  // as IO_PROC, but also completes when the program stops
+                  // or continues (n WSTOP|sig, WCONT), the process
+                  // released only at its exit (Windows: as IO_PROC)
 };
 
 struct Io {
@@ -253,6 +266,7 @@ struct Tty {
     u8  kill;
     u8  werase;
     u8  lnext;
+    u8  susp;
 };
 
 // A Windows console without VT processing (Tty.legacy), as vtcon.cpp
@@ -351,9 +365,17 @@ static Io     *os_wait(Os *, i64 deadline);
 // Withdraw a pending operation. False if it cannot be withdrawn (it
 // may still complete) or already completed.
 static b32     os_cancel(Os *, Io *);
-// Send signal sig to process pid, or with 0 check that it exists.
-// Returns 0 or an E_* error (E_SRCH, E_PERM, E_INVAL).
+// Send signal sig to process pid, or with 0 check that it exists; a
+// negative pid is the process group -pid (not on Windows). Returns 0 or
+// an E_* error (E_SRCH, E_PERM, E_INVAL).
 static i32     os_kill(Os *, i64 pid, i32 sig);
+// Put process pid (0 for the shell itself) in process group pgid (0 for
+// a group of its own): 0 or an E_* error, E_NOSYS on Windows.
+static i32     os_setpgid(Os *, i64 pid, i64 pgid);
+// The foreground process group of terminal tty, with pgid 0; else make
+// pgid its foreground group (as tcsetpgrp, with SIGTTOU held off), and
+// return it. A negated E_* error on failure: E_NOTTY, E_NOSYS on Windows.
+static i64     os_tcpgrp(Os *, Handle tty, i64 pgid);
 // The shell process's limit on a resource (RL_*): bytes, seconds or
 // counts as the system keeps them; RL_PIPE is the pipe buffer's size,
 // which cannot be set. err E_NOSYS where the platform has no such limit.

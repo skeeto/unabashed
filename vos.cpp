@@ -106,6 +106,10 @@ struct VProc {
     b32     failed;   // resumed to fail its blocked call (deadlock)
     b32     intr;     // resumed by a signal (shells): fail a read or os_wait
     i64     pid;
+    i64     pgid;     // its process group
+    b32     stopped;  // by a signal: it does not run until continued
+    i32     change;   // a stop or continue not yet reported (IO_PROCSTOP)
+    u64     stoppend; // fakes: fatal signals held while stopped
     u64     sigpend;  // shells: signals not yet taken by os_sigpending
     u64     grpsig;   // shells: the terminal's, not yet taken by os_siggroup
     LevelSig lsigs[16];  // shells: os_siglevel's, oldest first
@@ -155,6 +159,8 @@ struct VTty {
     b32    settling;    // vothersready: leave the terminal out
     b32    legacy;      // a console without VT: drawn with os_con
     i64    active;      // the clock at its last output or read
+    i64    fgpgrp;      // the foreground process group, 0 for the
+                        // outermost shell's
     // The editor's check (edcheck)
     b32    edoff;       // the line started off the left margin
     b32    edattr;      // ... or with attributes on
@@ -575,7 +581,9 @@ static b32 vconcurrent(Vos *v)
         iz k = p->ntasks;
         if (p->state==VP_BLOCK && p->wait==VW_PROC) k--;
         if (p->state==VP_BLOCK && p->wait==VW_IO) {
-            for (Io *io = p->ios; io; io = io->next) k -= io->op==IO_PROC;
+            for (Io *io = p->ios; io; io = io->next) {
+                k -= io->op==IO_PROC || io->op==IO_PROCSTOP;
+            }
         }
         n += k;
     }
@@ -630,6 +638,7 @@ static b32 vttyready(Vos *);
 
 static b32 vready(Vos *v, VProc *p)
 {
+    if (p->stopped) return 0;
     if (p->state == VP_RUN) return 1;
     if (p->state != VP_BLOCK) return 0;
     VPipe *q = p->wpipe;
@@ -658,7 +667,7 @@ static b32 vadvance(Vos *v)
     for (i32 i = 0; i < v->nprocs; i++) {
         VProc *p = v->procs + i;
         b32 timed = p->wait==VW_SLEEP || (p->wait==VW_IO && p->until);
-        if (p->state==VP_BLOCK && timed && (when<0 || p->until<when)) {
+        if (p->state==VP_BLOCK && timed && !p->stopped && (when<0 || p->until<when)) {
             when = p->until;
         }
     }
@@ -900,20 +909,29 @@ static void vsnap(Vos *v)
     }
 }
 
-// A signal the terminal sends to every process on it (no process
-// groups here): shells take it through os_siggroup.
+static i64  vfgpgrp(Vos *);
+static void vsignal(Os *, Vos *, VProc *, i32 sig);
+
+// A signal the terminal sends to its foreground process group: shells
+// take it through os_siggroup.
 static void vttysignal(Os *os, Vos *v, i32 sig)
 {
+    i64 fg = vfgpgrp(v);
+    VProc *self = 0;
     for (i32 i = 0; i < v->nprocs; i++) {
         VProc *p = v->procs + i;
         if (p->state!=VP_RUN && p->state!=VP_BLOCK) continue;
+        if (p->pgid != fg) continue;
         if (p->shell) {
             p->grpsig |= (u64)1 << (sig-1);
             p->intr = p != v->procs+v->cur;
+        } else if (p == v->procs+v->cur) {
+            self = p;  // last: it may stop or end here
         } else {
-            os_kill(os, p->pid, sig);
+            vsignal(os, v, p, sig);
         }
     }
+    if (self) vsignal(os, v, self, sig);
 }
 
 static b32 vnocanon(VTty *y)
@@ -957,6 +975,11 @@ static void vcooked(Os *os, Vos *v, u8 c)
         vttyout(v, (u8 *)"^C", 2);
         y->linelen = 0;
         vttysignal(os, v, 2);
+        return;
+    case 0x1a:
+        vttyout(v, (u8 *)"^Z", 2);
+        y->linelen = 0;
+        vttysignal(os, v, 20);
         return;
     case 0x04:
         if (!y->linelen) {
@@ -1146,9 +1169,24 @@ static iz vttyget(Os *os, Vos *v, u8 *buf, iz len)
 // A read from the terminal. Nobody types at one without a script: it
 // blocks until a signal fails it, or the scheduler finds nothing else
 // can ever run.
+static void vstop(Os *, Vos *, VProc *, i32 sig);
+
+// A program outside the terminal's foreground group reading it gets
+// SIGTTIN: it stops, and reads once continued, or fails (ignored).
+static b32 vttyaccess(Os *os, Vos *v)
+{
+    VProc *me = v->procs + v->cur;
+    while (!me->shell && me->pgid!=vfgpgrp(v)) {
+        if (me->sigign>>(21-1) & 1) return 0;
+        vstop(os, v, me, 21);
+    }
+    return 1;
+}
+
 static iz vttyread(Os *os, Vos *v, u8 *buf, iz len)
 {
     VProc *me = v->procs + v->cur;
+    if (!vttyaccess(os, v)) return -1;
     for (;;) {
         if (me->intr) {
             me->intr = 0;
@@ -1201,6 +1239,7 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
     r.kill   = 0x15;
     r.werase = 0x17;
     r.lnext  = 0x16;
+    r.susp   = 0x1a;
     return r;
 }
 
@@ -1895,29 +1934,111 @@ static Str os_localtz(Os *os, Arena *)
 // a program with default dispositions does, except for the signals its
 // spawner made it ignore. Stopping is not modelled: stop signals, like
 // the ones ignored by default, do nothing to a fake.
+static i64 vfgpgrp(Vos *v)
+{
+    return v->tty.fgpgrp ? v->tty.fgpgrp : v->procs[0].pgid;
+}
+
+// Stop a process by signal sig. The current one blocks here until it is
+// continued, or until nothing else can run (then it goes on).
+static void vstop(Os *os, Vos *v, VProc *p, i32 sig)
+{
+    if (p->stopped) return;
+    p->stopped = 1;
+    p->change  = WSTOP | sig;
+    if (p != v->procs+v->cur) return;
+    while (p->stopped) {
+        p->wait = VW_YIELD;
+        if (!vschedule(os, v)) {
+            vdeadlock(v);
+            p->stopped = 0;
+            p->change  = 0;
+        }
+    }
+}
+
+static void vcont(Os *os, Vos *v, VProc *p)
+{
+    if (!p->stopped) return;
+    p->stopped = 0;
+    p->change  = WCONT;
+    u64 held = p->stoppend;
+    p->stoppend = 0;
+    if (held) vsignal(os, v, p, __builtin_ctzll(held)+1);  // the first
+}
+
+// Deliver a signal as a kernel would: shells take it themselves (but
+// SIGSTOP and SIGCONT), programs die of it, stop, or ignore it.
+static void vsignal(Os *os, Vos *v, VProc *p, i32 sig)
+{
+    u64 bit = (u64)1 << (sig-1);
+    if (sig == 19) {
+        vstop(os, v, p, sig);  // cannot be caught
+        return;
+    }
+    if (sig == 18) vcont(os, v, p);
+    if (p->shell) {
+        p->sigpend |= bit;
+        p->intr = p != v->procs+v->cur;  // fail its blocked read or wait
+        return;
+    }
+    switch (sig) {
+    case 17: case 18: case 23: case 28:
+        return;  // CHLD CONT URG WINCH
+    }
+    if (sig!=9 && (p->sigign & bit)) return;
+    if (sig==20 || sig==21 || sig==22) {
+        vstop(os, v, p, sig);  // TSTP TTIN TTOU
+    } else if (p->stopped && sig!=9) {
+        p->stoppend |= bit;    // acted on once continued
+    } else {
+        vkill(os, v, p, WSIGNALED|(128+sig));
+    }
+}
+
 static i32 os_kill(Os *os, i64 pid, i32 sig)
 {
     Vos *v = osvos(os);
     if (sig<0 || sig>=NSIGNAL) return E_INVAL;
-    VProc *p = 0;
+    if (!pid) return E_SRCH;
+    VProc *self = 0;
+    b32    any  = 0;
     for (i32 i = 0; i < v->nprocs; i++) {
         VProc *q = v->procs + i;
-        if (q->pid==pid && (q->state==VP_RUN || q->state==VP_BLOCK)) p = q;
+        if (q->state!=VP_RUN && q->state!=VP_BLOCK) continue;
+        if (pid>0 ? q->pid!=pid : q->pgid!=-pid) continue;
+        any = 1;
+        if (!sig) continue;
+        if (q == v->procs+v->cur) {
+            self = q;  // last: it may stop or end here
+        } else {
+            vsignal(os, v, q, sig);
+        }
     }
-    if (!p || pid<=0) return E_SRCH;
-    if (!sig) return 0;
-    if (p->shell) {
-        p->sigpend |= (u64)1 << (sig-1);
-        p->intr = p != v->procs+v->cur;  // fail its blocked read or wait
+    if (self) vsignal(os, v, self, sig);
+    return any ? 0 : E_SRCH;
+}
+
+static i32 os_setpgid(Os *os, i64 pid, i64 pgid)
+{
+    Vos *v = osvos(os);
+    for (i32 i = 0; i < v->nprocs; i++) {
+        VProc *q = v->procs + i;
+        if (q->state!=VP_RUN && q->state!=VP_BLOCK) continue;
+        if (pid ? q->pid!=pid : i!=v->cur) continue;
+        q->pgid = pgid ? pgid : q->pid;
         return 0;
     }
-    switch (sig) {
-    case 17: case 18: case 19: case 20: case 21: case 22: case 23: case 28:
-        return 0;  // CHLD CONT STOP TSTP TTIN TTOU URG WINCH
-    }
-    if (sig!=9 && (p->sigign>>(sig-1) & 1)) return 0;
-    vkill(os, v, p, WSIGNALED|(128+sig));
-    return 0;
+    return E_SRCH;
+}
+
+static i64 os_tcpgrp(Os *os, Handle tty, i64 pgid)
+{
+    Vos *v = osvos(os);
+    if (!vistty(v, tty)) return -E_NOTTY;
+    if (!pgid) return vfgpgrp(v);
+    v->tty.fgpgrp = pgid;
+    return pgid;
 }
 
 // Resource limits as the oracle container has them (tools/README.md:
@@ -2790,6 +2911,11 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     p->failed = 0;
     p->intr   = 0;
     p->pid    = v->nextpid++;
+    p->pgid   = s->pgid<0 ? p->pid : s->pgid ? s->pgid : v->procs[v->cur].pgid;
+    p->stopped  = 0;
+    p->change   = 0;
+    p->stoppend = 0;
+    if (s->pgid && s->fg && vistty(v, s->tty)) v->tty.fgpgrp = p->pgid;
     p->sigpend = 0;
     p->nlsigs  = 0;
     p->sigign = s->sigign;
@@ -2860,7 +2986,8 @@ static i32 os_waitproc(Os *os, Handle proc)
 // Can a submitted operation complete now? Then with perform set, do it.
 static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
 {
-    VFile *f = io->op==IO_PROC ? 0 : vfile(v, io->h);
+    b32    proc = io->op==IO_PROC || io->op==IO_PROCSTOP;
+    VFile *f = proc ? 0 : vfile(v, io->h);
     switch (io->op) {
     case IO_READ:
         if (vistty(v, io->h)) {
@@ -2909,12 +3036,21 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
         }
         return 1;
     case IO_PROC:
+    case IO_PROCSTOP:
         if (io->plt[2]) return 1;  // reaped early (vreapexited): n holds
         if (!io->h || io->h>=(Handle)v->nprocs || v->procs[io->h].state==VP_FREE) {
             io->err = E_CHILD;
             return 1;
         }
-        if (v->procs[io->h].state != VP_EXIT) return 0;
+        if (v->procs[io->h].state != VP_EXIT) {
+            VProc *c = v->procs + io->h;
+            if (io->op!=IO_PROCSTOP || !c->change) return 0;
+            if (perform) {
+                io->n     = c->change;
+                c->change = 0;
+            }
+            return 1;
+        }
         if (perform) io->n = vreap(os, v, io->h);
         return 1;
     case IO_CONNECT: {
@@ -3675,6 +3811,7 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes, b32 win = 0)
     v->procs[0].state = VP_RUN;
     v->procs[0].shell = 1;
     v->procs[0].pid   = 2;  // as the harnesses' OsInfo
+    v->procs[0].pgid  = 2;
     v->procs[0].lid   = 1;
     v->procs[0].ntasks  = 1;
     v->procs[0].ingroup = 1;  // tracing: vgroup is never 0

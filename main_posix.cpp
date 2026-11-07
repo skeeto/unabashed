@@ -413,6 +413,7 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
     r.kill   = t.c_cc[VKILL]==off  ? 0 : t.c_cc[VKILL];
     r.werase = t.c_cc[VWERASE]==off ? 0 : t.c_cc[VWERASE];
     r.lnext  = t.c_cc[VLNEXT]==off ? 0 : t.c_cc[VLNEXT];
+    r.susp   = t.c_cc[VSUSP]==off  ? 0 : t.c_cc[VSUSP];
     return r;
 }
 
@@ -466,6 +467,18 @@ static Spawned forkimage(Os *, Arena, Spawn *);
 static i32     rlres(i32);
 static rlim_t  torlim(i64);
 
+// Put a new child in its process group (pid 0: in the child itself),
+// and give its group the terminal: both parent and child do it, so the
+// child runs only once it holds. Signals are blocked, SIGTTOU included.
+static void joingroup(pid_t pid, i64 pgid, b32 fg, i32 tty)
+{
+    if (!pgid) return;
+    pid_t self  = pid ? pid : getpid();
+    pid_t group = pgid<0 ? self : (pid_t)pgid;
+    setpgid(pid, group);
+    if (fg) tcsetpgrp(tty, group);
+}
+
 static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 {
     if (s->image.base) return forkimage(os, scratch, s);
@@ -488,6 +501,9 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     u64 changed = sigos ? sigos->changed : 0;
     u64 ign     = s->sigign | (sigos ? sigos->entryign : 0);
     Rlimit *rlimits = s->rlimits;
+    i64  pgid = s->pgid;
+    b32  fg   = s->fg;
+    i32  tty  = (i32)s->tty;
 
     sigset_t all, old;
     sigfillset(&all);
@@ -495,6 +511,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     i32 volatile err = 0;
     pid_t pid = vfork();
     if (!pid) {
+        joingroup(0, pgid, fg, tty);
         // Move sources out of the way first, then install the map
         i32 base = fdbase(dst, nfds);
         for (i32 i = 0; i < nfds; i++) {
@@ -532,6 +549,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
         _exit(127);
     }
     i32 e = pid<0 ? errno : err;
+    if (pid > 0) joingroup(pid, pgid, fg, tty);
     sigprocmask(SIG_SETMASK, &old, 0);
     if (pid>=0 && e) {
         waitpid(pid, 0, 0);
@@ -594,6 +612,7 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
     sigprocmask(SIG_SETMASK, &all, &old);
     pid_t pid = fork();
     if (!pid) {
+        joingroup(0, s->pgid, s->fg, (i32)s->tty);
         i32 base = fdbase(dst, nfds);
         for (i32 i = 0; i < nfds; i++) {
             if (src[i] < base) src[i] = fcntl(src[i], F_DUPFD, base);
@@ -638,6 +657,7 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         info.ninherit = in.len;
         info.pid      = getpid();
         info.ppid     = getppid();
+        info.pgid     = getpgrp();
         info.reserve  = os->reserve;
         info.stack    = os->stack;
         info.sigign   = os->entryign | s->sigign;
@@ -647,6 +667,7 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         _exit(127);  // never reached
     }
     i32 e = pid<0 ? errno : 0;
+    if (pid > 0) joingroup(pid, s->pgid, s->fg, (i32)s->tty);
     sigprocmask(SIG_SETMASK, &old, 0);
     if (e) {
         r.err = e;
@@ -793,7 +814,14 @@ static i32 waitstatus(i32 status)
 {
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) return WSIGNALED | (128 + WTERMSIG(status));
+    if (WIFSTOPPED(status)) return WSTOP | WSTOPSIG(status);
+    if (WIFCONTINUED(status)) return WCONT;
     return 127;
+}
+
+static b32 isproc(Io *io)
+{
+    return io->op==IO_PROC || io->op==IO_PROCSTOP;
 }
 
 static i32 os_waitproc(Os *, Handle proc)
@@ -905,8 +933,29 @@ static i32 os_setrlimit(Os *, i32 res, Rlimit r)
 
 static i32 os_kill(Os *, i64 pid, i32 sig)
 {
-    if (pid<=0 || pid>(i64)0x7fffffff) return E_SRCH;
+    if (!pid || pid<-(i64)0x7fffffff || pid>(i64)0x7fffffff) return E_SRCH;
     return kill((pid_t)pid, sig) ? errno : 0;
+}
+
+static i32 os_setpgid(Os *, i64 pid, i64 pgid)
+{
+    return setpgid((pid_t)pid, (pid_t)pgid) ? errno : 0;
+}
+
+static i64 os_tcpgrp(Os *, Handle tty, i64 pgid)
+{
+    if (!pgid) {
+        pid_t r = tcgetpgrp((i32)tty);
+        return r<0 ? -errno : r;
+    }
+    sigset_t ttou, old;
+    sigemptyset(&ttou);
+    sigaddset(&ttou, SIGTTOU);
+    sigprocmask(SIG_BLOCK, &ttou, &old);
+    i32 r = tcsetpgrp((i32)tty, (pid_t)pgid);
+    i32 e = errno;
+    sigprocmask(SIG_SETMASK, &old, 0);
+    return r ? -e : pgid;
 }
 
 #ifdef SIGRTMAX
@@ -1047,7 +1096,7 @@ static void initasync(Os *os)
     }
     sa = {};
     sa.sa_handler = onsigchld;
-    sa.sa_flags   = SA_RESTART | SA_NOCLDSTOP;
+    sa.sa_flags   = SA_RESTART;  // stops too, for job control
     sigemptyset(&sa.sa_mask);
     sigaction(SIGCHLD, &sa, 0);
 #ifdef SIGRTMAX
@@ -1083,11 +1132,13 @@ static b32 tryio(Io *io, i32 revents)
         io->n   = n<0 ? 0 : n;
         io->err = n<0 ? errno : 0;
     } return 1;
-    case IO_PROC: {
+    case IO_PROC:
+    case IO_PROCSTOP: {
         i32   status = 0;
+        i32   flags  = WNOHANG | (io->op==IO_PROCSTOP ? WUNTRACED|WCONTINUED : 0);
         pid_t r;
         do {
-            r = waitpid((pid_t)io->h, &status, WNOHANG);
+            r = waitpid((pid_t)io->h, &status, flags);
         } while (r<0 && errno==EINTR);
         if (!r) return 0;
         io->n   = r<0 ? 127 : waitstatus(status);
@@ -1114,7 +1165,7 @@ static void os_submit(Os *os, Io *io)
 {
     io->done = 0;
     io->next = 0;
-    if (tryio(io, io->op==IO_PROC ? 1 : pollnow(io, 0))) {
+    if (tryio(io, isproc(io) ? 1 : pollnow(io, 0))) {
         io->done = 1;
         return;
     }
@@ -1131,7 +1182,7 @@ static Io *os_wait(Os *os, i64 deadline)
         // Process exits first: the self-pipe only says "look again"
         for (Io **p = &os->pending; *p; p = &(*p)->next) {
             Io *io = *p;
-            if (io->op==IO_PROC && tryio(io, 1)) {
+            if (isproc(io) && tryio(io, 1)) {
                 *p = io->next;
                 io->done = 1;
                 return io;
@@ -1142,7 +1193,7 @@ static Io *os_wait(Os *os, i64 deadline)
         fds[n].events  = POLLIN;
         fds[n++].revents = 0;
         for (Io *io = os->pending; io && n<MAXPOLL; io = io->next) {
-            if (io->op == IO_PROC) continue;
+            if (isproc(io)) continue;
             fds[n].fd      = (i32)io->h;
             fds[n].events  = io->op==IO_READ ? POLLIN : POLLOUT;
             fds[n++].revents = 0;
@@ -1164,7 +1215,7 @@ static Io *os_wait(Os *os, i64 deadline)
         i32 k = 1;
         for (Io **p = &os->pending; *p; p = &(*p)->next) {
             Io *io = *p;
-            if (io->op == IO_PROC) continue;
+            if (isproc(io)) continue;
             if (k >= n) break;
             if (tryio(io, fds[k++].revents)) {
                 *p = io->next;
@@ -1174,7 +1225,7 @@ static Io *os_wait(Os *os, i64 deadline)
         }
         for (Io **p = &os->pending; *p; p = &(*p)->next) {
             Io *io = *p;
-            if (io->op==IO_PROC && tryio(io, 1)) {
+            if (isproc(io) && tryio(io, 1)) {
                 *p = io->next;
                 io->done = 1;
                 return io;
@@ -1309,6 +1360,7 @@ int main(int argc, char **argv)
     }
     info.pid  = getpid();
     info.ppid = getppid();
+    info.pgid = getpgrp();
     info.uid  = getuid();
     info.euid = geteuid();
     info.gid  = getgid();
