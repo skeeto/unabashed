@@ -1,6 +1,9 @@
 # Waiting for more programs at once than WaitForMultipleObjects allows
 for i in $(seq 70); do "$U" -c 'exit 0' & done
 wait
+# If $!'s program ended before wait began, as bash, wait keeps its
+# status for wait -n below: jobs reports and drops it
+jobs >/dev/null
 echo "all done"
 for i in $(seq 66); do "$U" -c "exit $((i % 5))" & done
 n=0 sum=0

@@ -111,13 +111,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
   on XP in the sandbox (M5b step 10).
   Moved from M5b: seen only on XP and only under tools/sandbox, with
   binaries from before M5b too; status reporting is job control.
-- **Win32: a bare `wait` can return before every background program
-  has been reported** (XP laptop, t/win32/003, about 1 run in 4 since
-  at least step 6): `wait -n` afterwards yields one extra status 0
-  from the first batch of 70 (`n=67` for 66 programs). Not seen on
-  Windows 11. Rechecked with real background processes (M5b step 10):
-  still about 1 run in 4 on XP, never on Windows 11.
-  Moved from M5b: XP only, and older than real background processes.
 - **XP: t/win32/014-spawn failed once in 13 runs** (M5b step 10, with
   UNABASHED_XPIO=1); the diff was lost and twelve reruns passed. Look
   for it with the other XP flakes, which may share a cause.
