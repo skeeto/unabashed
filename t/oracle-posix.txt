@@ -23,7 +23,7 @@ coproc PASS
 cprint PASS
 dbg-support PASS
 dbg-support2 PASS
-dirstack FAIL
+dirstack PASS
 dollars FAIL
 dynvar PASS
 errors FAIL

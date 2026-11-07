@@ -756,9 +756,74 @@ static Slice<Alias *> aliasesbyage(Shell *sh, Arena *a)
     return all;
 }
 
+// The directory stack
+
+
+// Replace the directory stack with v (its strings already in the
+// store). It is never changed in place, so that a subshell's changes
+// roll back with its copy of the Shell.
+static void putdirs(Shell *sh, Str *v, iz n)
+{
+    Store *st = sh->store;
+    Str   *d  = (Str *)salloc(st, (n ? n : 1)*(iz)sizeof(Str));
+    for (iz i = 0; i < n; i++) d[i] = v[i];
+    sfree(st, sh->dirs, (sh->ndirs ? sh->ndirs : 1)*(iz)sizeof(Str));
+    sh->dirs  = d;
+    sh->ndirs = n;
+}
+
+// Where +N (sign 1) or -N (sign -1) is in the stack as dirs lists it,
+// the working directory first: DIR_CWD, an index into sh->dirs, or
+// DIR_NONE when out of range.
+enum : iz { DIR_CWD = -1, DIR_NONE = -2 };
+
+static iz dirindex(Shell *sh, i64 n, i32 sign)
+{
+    iz off = sh->ndirs;
+    if (sign>0 && !n) return DIR_CWD;
+    if (n == off) return sign>0 ? (iz)0 : (iz)DIR_CWD;
+    if (n<0 || n>off) return DIR_NONE;
+    return sign>0 ? off - (iz)n : (iz)n;
+}
+
+// DIRSTACK[n]=value: replaces an entry other than the first
+static void setdirelem(Shell *sh, i64 n, Str value)
+{
+    iz i = dirindex(sh, n, 1);
+    if (!n || i<0) return;
+    Str *v = (Str *)salloc(sh->store, (sh->ndirs ? sh->ndirs : 1)*(iz)sizeof(Str));
+    for (iz k = 0; k < sh->ndirs; k++) v[k] = sh->dirs[k];
+    v[i] = sclone(sh->store, value);
+    sfree(sh->store, sh->dirs, (sh->ndirs ? sh->ndirs : 1)*(iz)sizeof(Str));
+    sh->dirs = v;
+}
+
+// The directory ~N, ~+N or ~-N names, or a null string
+static Str dirtilde(Shell *sh, Str s)
+{
+    i32 sign = 1;
+    if (s.len && (s[0]=='+' || s[0]=='-')) {
+        sign = s[0]=='-' ? -1 : 1;
+        s = cuthead(s, 1);
+    }
+    i64 n = 0;
+    s = trim(s);
+    b32 ok = s.len > 0;
+    for (iz i = 0; i < s.len; i++) ok &= s[i]>='0' && s[i]<='9';
+    if (!ok || s.len>18) return {};
+    for (iz i = 0; i < s.len; i++) n = n*10 + (s[i] - '0');
+    iz i = dirindex(sh, n, sign);
+    if (i == DIR_NONE) return {};
+    if (i == DIR_CWD) {
+        Value *pwd = rawlookup(sh, "PWD");
+        return pwd && pwd->str.data ? pwd->str : Str{};
+    }
+    return sh->dirs[i];
+}
+
 // DIRSTACK, BASH_ALIASES and BASH_CMDS, built as bash builds them when
-// read: the directory stack (the working directory alone, until pushd
-// exists), and the alias and command tables walked in bash's bucket
+// read: the directory stack (the working directory, then the stack from
+// the top), and the alias and command tables walked in bash's bucket
 // order into associative arrays of the same size. A listing shows them
 // empty, as bash shows the values it built when created.
 static Array *tablearray(Shell *sh, Arena *a, i32 d)
@@ -769,7 +834,12 @@ static Array *tablearray(Shell *sh, Arena *a, i32 d)
     if (d == DYN_DIRSTACK) {
         r = newarray(&st);
         Value *pwd = rawlookup(sh, "PWD");
-        if (!sh->listing) aput(&st, r, 0, pwd && pwd->str.data ? pwd->str : sh->wd);
+        if (!sh->listing) {
+            aput(&st, r, 0, pwd && pwd->str.data ? pwd->str : sh->wd);
+            for (iz i = 0; i < sh->ndirs; i++) {
+                aput(&st, r, i+1, sh->dirs[sh->ndirs-1-i]);
+            }
+        }
     } else if (d == DYN_BASH_CMDS) {
         r = newassoc(&st, NHASHCMD);
         for (iz b = 0; sh->cmdhash && !sh->listing && b < NHASHCMD; b++) {
@@ -1002,7 +1072,7 @@ static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str val
         }
         return 1;
     case DYN_BASH_CMDS:    hashenter(sh, key, value, 0); return 1;
-    case DYN_DIRSTACK:     return 1;  // no pushd yet
+    case DYN_DIRSTACK:     setdirelem(sh, idx, value); return 1;
     }
     toarray(sh, val);
     Array *arr = val->arr;

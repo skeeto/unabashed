@@ -26,6 +26,9 @@ static Str usage(Str name)
         {"alias",    "alias [-p] [name[=value] ... ]"},
         {"unalias",  "unalias [-a] name [name ...]"},
         {"umask",    "umask [-p] [-S] [mode]"},
+        {"pushd",    "pushd [-n] [+N | -N | dir]"},
+        {"popd",     "popd [-n] [+N | -N]"},
+        {"dirs",     "dirs [-clpv] [+N] [-N]"},
         {"ulimit",   "ulimit [-SHabcdefiklmnpqrstuvxPRT] [limit]"},
         {"getopts",  "getopts optstring name [arg ...]"},
         {"hash",     "hash [-lr] [-p pathname] [-dt] [name ...]"},
@@ -1851,7 +1854,15 @@ static void setcwd(Shell *sh, Arena scratch, Str dir, Str old)
     if (sh->pathmode != PM_POSIX) setdrivecwd(sh, scratch, ncwd);
 }
 
+static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch);
+
 static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    return cdas(sh, "cd", args, nargs, scratch);
+}
+
+// cd, its messages under name (pushd and popd run it as bash does)
+static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
 {
     b32 physical = sh->opt[O_PHYSICAL];
     iz  i = 1;
@@ -1863,7 +1874,7 @@ static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
             case 'P': physical = 1; break;
             case 'e': case '@': break;
             default:
-                invalidoption(sh, scratch, "cd", span(args[i].data+k-1, args[i].data+k+1));
+                invalidoption(sh, scratch, name, span(args[i].data+k-1, args[i].data+k+1));
                 return 2;
             }
         }
@@ -1873,17 +1884,17 @@ static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
     if (i == nargs) {
         Got g = getvar(sh, &scratch, "HOME");
         if (!g.set) {
-            builtinerror(sh, scratch, "cd", "HOME not set");
+            builtinerror(sh, scratch, name, "HOME not set");
             return 1;
         }
         dir = g.value;
     } else if (i+1 < nargs) {
-        builtinerror(sh, scratch, "cd", "too many arguments");
+        builtinerror(sh, scratch, name, "too many arguments");
         return 2;
     } else if (args[i] == "-") {
         Got g = getvar(sh, &scratch, "OLDPWD");
         if (!g.set) {
-            builtinerror(sh, scratch, "cd", "OLDPWD not set");
+            builtinerror(sh, scratch, name, "OLDPWD not set");
             return 1;
         }
         dir = g.value;
@@ -1891,7 +1902,7 @@ static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
     } else {
         dir = args[i];
         if (!dir.len) {
-            builtinerror(sh, scratch, "cd", "null directory");
+            builtinerror(sh, scratch, name, "null directory");
             return 1;
         }
     }
@@ -1936,7 +1947,7 @@ static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
     Stat st = pathstat(sh, scratch, physical ? target : logical, 1);
     if (st.err || st.type!=FT_DIR) {
         i32 err = st.err ? st.err : E_NOTDIR;
-        builtinerror(sh, scratch, "cd", concat3(&scratch, typed, Str(": "), errtext(err)));
+        builtinerror(sh, scratch, name, concat3(&scratch, typed, Str(": "), errtext(err)));
         return 1;
     }
     setcwd(sh, scratch, physical ? cdcanon(sh, &scratch, target) : logical, old);
@@ -1944,6 +1955,255 @@ static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
         bprint(sh, sh->wd);
         bprint(sh, "\n");
     }
+    return 0;
+}
+
+
+// pushd, popd and dirs: the stack is the working directory followed by
+// sh->dirs from its top. Their number arguments are words of their own
+// ("-n", "-l", "+2"), never grouped.
+
+// A directory as dirs shows it: under $HOME as ~
+static Str politedir(Shell *sh, Arena *a, Str dir)
+{
+    Got home = getvar(sh, a, "HOME");
+    if (!home.set || home.value.len<2) return dir;
+    iz n = homeprefix(sh, dir, home.value);
+    return n<0 ? dir : concat(a, "~", cuthead(dir, n));
+}
+
+// dirs' listing: the whole stack, or entry i (DIR_CWD or an index)
+enum { DIRS_LONG = 1, DIRS_LINES = 2, DIRS_NUMBERED = 4 };
+
+static void printdirs(Shell *sh, Arena a, i32 flags, b32 one, iz which)
+{
+    iz  off = sh->ndirs;
+    Buf b(&a, 256);
+    if (!one || which==DIR_CWD) {
+        Str wd = flags&DIRS_LONG ? sh->wd : politedir(sh, &a, sh->wd);
+        if (flags & DIRS_NUMBERED) print(&b, " 0  ");
+        print(&b, wd);
+    }
+    for (iz i = one ? which : off-1; i >= 0; i--) {
+        Str d = flags&DIRS_LONG ? sh->dirs[i] : politedir(sh, &a, sh->dirs[i]);
+        if (flags & DIRS_NUMBERED) {
+            if (!one) putbyte(&b, '\n');
+            Str n = fmti64(&a, off - i);
+            if (n.len < 2) putbyte(&b, ' ');
+            print(&b, n);
+            print(&b, "  ");
+        } else if (!one) {
+            putbyte(&b, flags&DIRS_LINES ? '\n' : ' ');
+        }
+        print(&b, d);
+        if (one) break;
+    }
+    putbyte(&b, '\n');
+    bprint(sh, finish(&b));
+}
+
+static void direrror(Shell *sh, Arena a, Str name, Str arg)
+{
+    if (!sh->ndirs) {
+        builtinerror(sh, a, name, "directory stack empty");
+    } else {
+        builtinerror(sh, a, name, concat(&a, arg, ": directory stack index out of range"));
+    }
+}
+
+static i32 badnumber(Shell *sh, Arena a, Str name, Str word)
+{
+    builtinerror(sh, a, name, concat(&a, word, ": invalid number"));
+    usageerror(sh, a, name);
+    return 2;
+}
+
+static i32 cdto(Shell *sh, Str name, Str dir, Arena scratch)
+{
+    Str args[] = {name, "--", dir};
+    return cdas(sh, name, args, countof(args), scratch);
+}
+
+static i32 b_dirs(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    i32 flags = 0;
+    b32 clear = 0;
+    b32 one   = 0;
+    iz  which = 0;
+    Str word  = "";
+    for (iz i = 1; i < nargs; i++) {
+        Str a = args[i];
+        if (a == "-l") {
+            flags |= DIRS_LONG;
+        } else if (a == "-c") {
+            clear = 1;
+        } else if (a == "-v") {
+            flags |= DIRS_NUMBERED;
+        } else if (a == "-p") {
+            flags |= DIRS_LINES;
+        } else if (a == "--") {
+            break;
+        } else if (a.len && (a[0]=='+' || a[0]=='-')) {
+            i64 n = 0;
+            word = cuthead(a, 1);
+            if (!parsei64(word, &n)) return badnumber(sh, scratch, "dirs", a);
+            one   = 1;
+            which = dirindex(sh, n, a[0]=='+' ? 1 : -1);
+        } else {
+            invalidoption(sh, scratch, "dirs", a);
+            return 2;
+        }
+    }
+    if (clear) {
+        putdirs(sh, 0, 0);
+        return 0;
+    }
+    if (one && which==DIR_NONE) {
+        direrror(sh, scratch, "dirs", word);
+        return 1;
+    }
+    printdirs(sh, scratch, flags, one, which);
+    return 0;
+}
+
+static i32 b_pushd(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    Store *st  = sh->store;
+    iz     off = sh->ndirs;
+    iz     i   = 1;
+    b32    skipopt = i<nargs && args[i]=="--";
+    i += skipopt;
+    if (i == nargs) {
+        if (!off) {
+            builtinerror(sh, scratch, "pushd", "no other directory");
+            return 1;
+        }
+        // exchange the top two: the stack changes even if cd fails
+        Str  top = sh->dirs[off-1];
+        Str *v   = alloc<Str>(&scratch, off);
+        for (iz k = 0; k < off; k++) v[k] = sh->dirs[k];
+        v[off-1] = sclone(st, sh->wd);
+        putdirs(sh, v, off);
+        i32 r = cdto(sh, "pushd", top, scratch);
+        if (!r) printdirs(sh, scratch, 0, 0, 0);
+        return r;
+    }
+
+    b32 nocd   = 0;
+    b32 rotate = 0;
+    i64 num    = 0;
+    for (; !skipopt && i<nargs; i++) {
+        Str a = args[i];
+        if (a == "-n") {
+            nocd = 1;
+        } else if (a == "--") {
+            i++;
+            break;
+        } else if (a == "-") {
+            break;
+        } else if (a.len && (a[0]=='+' || a[0]=='-')) {
+            if (!parsei64(cuthead(a, 1), &num)) return badnumber(sh, scratch, "pushd", a);
+            if (a[0] == '-') num = off - num;
+            if (num<0 || num>off) {
+                direrror(sh, scratch, "pushd", a);
+                return 1;
+            }
+            rotate = 1;
+        } else {
+            break;
+        }
+    }
+
+    if (rotate) {
+        // bring entry num to the top, the working directory going under
+        // the bottom; with -n, only the stack turns (and the entry that
+        // would have become the working directory is lost, as in bash)
+        if (num) {
+            Str *v   = alloc<Str>(&scratch, off);
+            Str  cur = sclone(st, sh->wd);
+            for (iz k = 0; k < off; k++) v[k] = sh->dirs[k];
+            for (i64 r = 0; r < num; r++) {
+                Str top = v[off-1];
+                for (iz k = off-1; k > 0; k--) v[k] = v[k-1];
+                v[0] = cur;
+                cur  = top;
+            }
+            putdirs(sh, v, off);
+            if (nocd) return 0;
+            i32 r = cdto(sh, "pushd", cur, scratch);
+            if (!r) printdirs(sh, scratch, 0, 0, 0);
+            return r;
+        }
+        if (nocd) return 0;
+        i32 r = cdto(sh, "pushd", sh->wd, scratch);
+        if (!r) printdirs(sh, scratch, 0, 0, 0);
+        return r;
+    }
+    if (i == nargs) return 0;
+
+    Str cur = sclone(st, sh->wd);
+    if (!nocd) {
+        iz from = skipopt ? 0 : i-1;
+        Str *cargs = alloc<Str>(&scratch, nargs-from);
+        cargs[0] = "pushd";
+        for (iz k = from+1; k < nargs; k++) cargs[k-from] = args[k];
+        if (cdas(sh, "pushd", cargs, nargs-from, scratch)) return 1;
+    }
+    Str *v = alloc<Str>(&scratch, off+1);
+    for (iz k = 0; k < off; k++) v[k] = sh->dirs[k];
+    v[off] = nocd ? sclone(st, args[i]) : cur;
+    putdirs(sh, v, off+1);
+    printdirs(sh, scratch, 0, 0, 0);
+    return 0;
+}
+
+static i32 b_popd(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    iz  off   = sh->ndirs;
+    b32 nocd  = 0;
+    i64 which = 0;
+    u8  dir   = '+';
+    Str word  = {};
+    for (iz i = 1; i < nargs; i++) {
+        Str a = args[i];
+        if (a == "-n") {
+            nocd = 1;
+        } else if (a == "--") {
+            break;
+        } else if (a.len && (a[0]=='+' || a[0]=='-')) {
+            dir = a[0];
+            if (!parsei64(cuthead(a, 1), &which)) return badnumber(sh, scratch, "popd", a);
+            word = a;
+        } else if (a.len) {
+            builtinerror(sh, scratch, "popd", concat(&scratch, a, ": invalid argument"));
+            usageerror(sh, scratch, "popd");
+            return 2;
+        } else {
+            break;
+        }
+    }
+    if (which>off || which<-off || (!off && !which)) {
+        direrror(sh, scratch, "popd", word.data ? word : Str(""));
+        return 1;
+    }
+    Str *v = alloc<Str>(&scratch, off ? off : 1);
+    for (iz k = 0; k < off; k++) v[k] = sh->dirs[k];
+    if ((dir=='+' && !which) || (dir=='-' && which==off)) {
+        if (!nocd) {
+            i32 r = cdto(sh, "popd", sh->dirs[off-1], scratch);
+            if (r) return r;
+        }
+        putdirs(sh, v, off-1);
+    } else {
+        iz k = dir=='+' ? off - (iz)which : (iz)which;
+        if (k<0 || k>=off) {
+            direrror(sh, scratch, "popd", word.data ? word : Str(""));
+            return 1;
+        }
+        for (; k < off-1; k++) v[k] = v[k+1];
+        putdirs(sh, v, off-1);
+    }
+    printdirs(sh, scratch, 0, 0, 0);
     return 0;
 }
 
@@ -3977,6 +4237,7 @@ static Builtin builtins[] = {
     {"continue", b_continue, B_SPECIAL},
     {"cygpath",  b_cygpath,  B_MSYS},
     {"declare",  b_declare,  B_DECL},
+    {"dirs",     b_dirs,     0},
     {"disown",   b_disown,   0},
     {"echo",     b_echo,     0},
     {"eval",     b_eval,     B_SPECIAL},
@@ -3995,7 +4256,9 @@ static Builtin builtins[] = {
     {"local",    b_local,    B_DECL},
     {"logout",   b_logout,   0},
     {"mapfile",  b_mapfile,  0},
+    {"popd",     b_popd,     0},
     {"printf",   b_printf,   0},
+    {"pushd",    b_pushd,    0},
     {"pwd",      b_pwd,      0},
     {"read",     b_read,     0},
     {"readarray", b_mapfile, 0},

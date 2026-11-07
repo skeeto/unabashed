@@ -567,6 +567,8 @@ struct Shell {
     Str      wd;           // logical working directory (bash's
                            // the_current_working_directory), as PWD shows
     Str      host;
+    Str     *dirs;         // the directory stack under the working
+    iz       ndirs;        // directory, bottom first (vars.cpp)
     i32      umask;
     Rlimit   rl[RL_COUNT]; // ulimit's table, read once (rlhave); in a
     b32      rlhave;       // subshell it changes alone and programs get

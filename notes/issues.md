@@ -133,7 +133,7 @@ Closed: every item was fixed or moved (m6.md, step 10).
   costs time (`(a*)(a*)\1\2x` on 600 a's: 10.6 s on master, 15.0 s)
   and memory. (m4.md)
 - Job control: `set -m`, fg/bg, stopped jobs, suspend (jobs oracle).
-- dirstack (pushd/popd/dirs), help (dirstack, redir, vredir
+- help (redir, vredir
   oracles).
 - redir12 line numbers: bash cites the line where the parser finished
   the top-level command; we cite the last simple command's. (m4.md)

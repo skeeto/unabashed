@@ -1779,16 +1779,9 @@ static Str tildeprefix(X *x, Str prefix, b32 *ok)
         Got g = getvar(sh, x->a, "OLDPWD");
         if (g.set) return g.value;
     } else {
-        // ~N, ~+N, ~-N: the directory stack, which holds only the
-        // current directory until pushd exists
-        Str n = prefix;
-        if (n[0]=='+' || n[0]=='-') n = cuthead(n, 1);
-        b32 zero = n.len > 0;
-        for (iz i = 0; i < n.len; i++) zero &= n[i] == '0';
-        if (zero) {
-            Got g = getvar(sh, x->a, "PWD");
-            return g.set ? g.value : sh->wd;
-        }
+        // ~N, ~+N, ~-N: the directory stack
+        Str d = dirtilde(sh, prefix);
+        if (d.data) return d;
     }
     *ok = 0;
     return {};
