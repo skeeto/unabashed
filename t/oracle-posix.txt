@@ -86,4 +86,4 @@ tilde2 PASS
 trap FAIL
 type PASS
 varenv PASS
-vredir FAIL
+vredir BASH

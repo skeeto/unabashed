@@ -3,6 +3,8 @@
 
 static void histoption(Shell *, i32 opt, b32 on);  // history.cpp
 
+static Str helpsynopsis(Str name);  // help.cpp
+
 static Str usage(Str name)
 {
     static struct { Str name; Str text; } usages[] = {
@@ -55,7 +57,8 @@ static Str usage(Str name)
     for (iz i = 0; i < countof(usages); i++) {
         if (usages[i].name == name) return usages[i].text;
     }
-    return name;
+    Str s = helpsynopsis(name);
+    return s.data ? s : name;
 }
 
 // Bash prints the usage line without the "NAME: line N: " prefix.
@@ -3364,7 +3367,7 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
     Builtin *b = findbuiltin(sh, args[i]);
     if (b) {
         sh->viacommand = 1;
-        i32 r = b->fn(sh, args+i, nargs-i, scratch);
+        i32 r = runbuiltin(sh, b, args+i, nargs-i, scratch);
         sh->viacommand = 0;
         return r;
     }
@@ -3390,7 +3393,7 @@ static i32 b_builtin(Shell *sh, Str *args, iz nargs, Arena scratch)
         builtinerror(sh, scratch, "builtin", concat(&scratch, args[1], ": not a shell builtin"));
         return 1;
     }
-    return b->fn(sh, args+1, nargs-1, scratch);
+    return runbuiltin(sh, b, args+1, nargs-1, scratch);
 }
 
 static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
@@ -3756,6 +3759,11 @@ static Rlimit *rltable(Shell *sh)
         for (i32 i = 0; i < RL_COUNT; i++) sh->rl[i] = os_getrlimit(sh->os, i);
     }
     return sh->rl;
+}
+
+static Rlimit nofilelimit(Shell *sh)
+{
+    return rltable(sh)[RL_NOFILE];
 }
 
 // Set a limit: in the shell's own process at the top level, so that
@@ -4343,11 +4351,13 @@ static i32 b_fg(Shell *, Str *, iz, Arena);
 static i32 b_suspend(Shell *, Str *, iz, Arena);
 
 static i32 b_enable(Shell *, Str *, iz, Arena);
+static i32 b_help(Shell *, Str *, iz, Arena);         // help.cpp
+static i32 builtinhelp(Shell *, Str name, Arena);     // help.cpp
 
 static Builtin builtins[] = {
     {".",        b_source,   B_SPECIAL},
-    {":",        b_colon,    B_SPECIAL},
-    {"[",        b_test,     0},
+    {":",        b_colon,    B_SPECIAL|B_NOHELP},
+    {"[",        b_test,     B_NOHELP},
     {"alias",    b_alias,    0},
     {"bg",       b_fg,       0},
     {"break",    b_break,    B_SPECIAL},
@@ -4357,21 +4367,22 @@ static Builtin builtins[] = {
     {"command",  b_command,  0},
     {"compgen",  b_compgen,  0},
     {"continue", b_continue, B_SPECIAL},
-    {"cygpath",  b_cygpath,  B_MSYS},
+    {"cygpath",  b_cygpath,  B_MSYS|B_NOHELP},
     {"declare",  b_declare,  B_DECL},
     {"dirs",     b_dirs,     0},
     {"disown",   b_disown,   0},
-    {"echo",     b_echo,     0},
+    {"echo",     b_echo,     B_NOHELP},
     {"enable",   b_enable,   0},
     {"eval",     b_eval,     B_SPECIAL},
     {"exec",     b_exec,     B_SPECIAL},
     {"exit",     b_exit,     B_SPECIAL},
     {"export",   b_export,   B_SPECIAL|B_DECL},
-    {"false",    b_false,    0},
+    {"false",    b_false,    B_NOHELP},
     {"fc",       b_fc,       0},
     {"fg",       b_fg,       0},
     {"getopts",  b_getopts,  0},
     {"hash",     b_hash,     0},
+    {"help",     b_help,     0},
     {"history",  b_history,  0},
     {"jobs",     b_jobs,     0},
     {"kill",     b_kill,     0},
@@ -4392,10 +4403,10 @@ static Builtin builtins[] = {
     {"shopt",    b_shopt,    0},
     {"source",   b_source,   B_SPECIAL},
     {"suspend",  b_suspend,  0},
-    {"test",     b_test,     0},
+    {"test",     b_test,     B_NOHELP},
     {"times",    b_times,    B_SPECIAL},
     {"trap",     b_trap,     B_SPECIAL},
-    {"true",     b_true,     0},
+    {"true",     b_true,     B_NOHELP},
     {"type",     b_type,     0},
     {"typeset",  b_declare,  B_DECL},
     {"ulimit",   b_ulimit,   0},
@@ -4424,6 +4435,15 @@ static void compbuiltins(Shell *sh, Arena *a, Slice<Str> *out)
     for (iz i = 0; i < countof(builtins); i++) {
         if (hasbuiltin(sh, builtins+i)) *out = push(a, *out, builtins[i].name);
     }
+}
+
+// Run a builtin: NAME --help describes it instead, as bash's do
+static i32 runbuiltin(Shell *sh, Builtin *b, Str *args, iz nargs, Arena scratch)
+{
+    if (nargs>1 && args[1]=="--help" && !(b->flags & B_NOHELP)) {
+        return builtinhelp(sh, args[0], scratch);
+    }
+    return b->fn(sh, args, nargs, scratch);
 }
 
 // A builtin by name, enabled or not (enable's own lookup)

@@ -16,9 +16,12 @@ enum : i32 {
     B_SPECIAL = 1<<0,  // POSIX special builtin
     B_DECL    = 1<<1,  // declaration builtin: assignment arguments
     B_MSYS    = 1<<2,  // msys mode only (cygpath)
+    B_NOHELP  = 1<<3,  // --help is an ordinary argument
 };
 
 static Builtin *findbuiltin(Shell *, Str name);
+static Rlimit   nofilelimit(Shell *);  // builtins.cpp
+static i32      runbuiltin(Shell *, Builtin *, Str *, iz, Arena);
 static b32      parsei64(Str, i64 *);
 static void     execute(Shell *, Node *, Arena);
 static void     showps0(Shell *);  // unabashed.cpp
@@ -876,6 +879,22 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
             while (fd<FDMAX && t->fd[fd]) fd++;
             if (fd == FDMAX) {
                 shellerror(sh, *a, "redirection error: cannot duplicate fd: Too many open files");
+                return 0;
+            }
+            Rlimit nofile = nofilelimit(sh);
+            if (!nofile.err && nofile.soft!=RL_INFINITY && fd>=nofile.soft
+                    && r->op!=R_CLOSE && r->op!=R_MOVEIN && r->op!=R_MOVEOUT) {
+                // ulimit -n below 10: bash's move up to 10 fails, then
+                // the redirection with it
+                Buf b(a, 64);
+                print(&b, sh->name);
+                print(&b, ": redirection error: cannot duplicate fd: ");
+                print(&b, errtext(E_INVAL));
+                putbyte(&b, '\n');
+                flushbout(sh);
+                fdwrite(sh, 2, finish(&b));
+                Str what = r->word ? r->word->text : fmti64(a, r->dst);
+                shellerror(sh, *a, concat3(a, what, ": ", errtext(E_INVAL)));
                 return 0;
             }
             Str var = r->srcvar->text;
@@ -2694,13 +2713,15 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             sh->bltname  = name;
             sh->bltargs  = argv.data;
             sh->nbltargs = argv.len;
-            sh->status = bi->fn(sh, argv.data, argv.len, scratch);
+            sh->nowriteerr = 0;
+            sh->status = runbuiltin(sh, bi, argv.data, argv.len, scratch);
             sh->bltname  = savedname;
             sh->bltargs  = savedargs;
             sh->nbltargs = savednargs;
             sh->compargs = savedcomp;
             sh->bout = saved;
-            if ((b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed) {
+            b32 failed = (b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed;
+            if (failed && !sh->nowriteerr) {
                 Str why = sh->writeerr==E_PIPE ? errtext(E_PIPE) : errtext(E_BADF);
                 builtinerror(sh, scratch, name, concat(&scratch, "write error: ", why));
                 sh->status = 1;

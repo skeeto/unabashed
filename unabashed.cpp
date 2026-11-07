@@ -171,6 +171,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "exec.cpp"
 #include "proc.cpp"
 #include "builtins.cpp"
+#include "help.cpp"
 #include "trap.cpp"
 #include "jobs.cpp"
 #include "history.cpp"

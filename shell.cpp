@@ -523,6 +523,7 @@ struct Shell {
                            // shared current_token): see resumeaftereof
     i32      sourcedepth;
     i32      funcdepth;
+    b32      nowriteerr;   // the builtin ignores a failed write (help)
     b32      viacommand;   // a builtin started by `command`, until it
                            // reads this (POSIX mode's fatal errors)
     b32      argsset;      // set replaced $@ outside functions, which a
