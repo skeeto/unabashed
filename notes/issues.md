@@ -43,8 +43,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
   " " depending on timing; ours always "+" (905 hides the mark).
 - **wait -f on a job killed while stopped**: bash returns 147 (the
   stop's status) after `kill -STOP` then `kill -9`; ours 137.
-- **readonly -A name** with no value: bash leaves the variable a plain
-  readonly scalar (`declare -r`), ours makes it associative.
 - **A job killed just before `;` or the prompt**: the vos sees its end
   at once, so `kill %1; wait %1` finds no job (127) where bash, which
   has usually not reaped it yet, gives 143. Timing only.

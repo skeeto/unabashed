@@ -1071,6 +1071,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
     }
 
     i32 status = 0;
+    u32 arrbits = on & (V_ARRAY|V_ASSOC);
     for (; i < nargs; i++) {
         Str a = args[i];
         if (local && a=="-") {
@@ -1118,6 +1119,11 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         }
         Str  val      = eq<a.len ? cuthead(a, eq+1) : Str{};
         b32  wordcomp = i<sh->compargs.len && sh->compargs[i];
+        if (name=="export" || name=="readonly") {
+            // As bash, -a and -A make or convert an array only with a
+            // value: export -a x and readonly -A x leave x as it is
+            on = (on & ~(V_ARRAY|V_ASSOC)) | (eq<a.len ? arrbits : 0);
+        }
         b32  mklocal  = local || (name!="export" && name!="readonly" && sh->funcdepth && !global);
         b32  onref    = !!(on & V_NAMEREF);
         if (onref && wordcomp && val.len>1 && val[0]=='(' && val[val.len-1]==')') {
@@ -1289,10 +1295,16 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                                                     : Str(": cannot convert associative to indexed array"));
             if (wordcomp && eq<a.len) {
                 // found while a literal name=(...) expands, as bash
-                // names the stale command, a function's or none
+                // names the stale command, a function's or none; at
+                // top level that abandons the command, while in a
+                // function it is reported again and the command goes on
                 Str stale = {sh->cmdname, sh->cmdnamelen};
                 builtinerror(sh, scratch, stale, msg);
-                if (global || append) builtinerror(sh, scratch, name, msg);  // and again
+                if (!sh->funcdepth) {
+                    sh->status = 1;
+                    escape(sh, ESC_DISCARD);
+                }
+                builtinerror(sh, scratch, name, msg);  // and again
             } else {
                 builtinerror(sh, scratch, name, msg);
             }
