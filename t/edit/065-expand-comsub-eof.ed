@@ -1,0 +1,10 @@
+# shell-expand-line takes a bare $( ending the line for nothing; an
+# unterminated backquote rings the bell and leaves the line alone
+size 16 60
+rc PS1='$ '
+keys echo a $(\e\C-e
+snap
+keys \C-a\C-kecho c `\e\C-e
+snap
+keys \C-a\C-kecho d ${\e\C-e
+snap

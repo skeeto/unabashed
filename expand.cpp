@@ -134,8 +134,10 @@ static XField xfinish(X *x)
 // command is abandoned. The line counts on through the rest of the text.
 // Elsewhere (a $( in a quoted ${...} word, for instance), the parse of
 // its text hits the end in a quote, or one line further on, at the
-// missing parenthesis.
-static void comsubeof(Shell *sh, Arena scratch, Str rest, b32 hd = 1)
+// missing parenthesis. In a prompt, the error is only reported, and
+// the substitution comes to nothing.
+static void comsubeof(Shell *sh, Arena scratch, Str rest, b32 hd = 1,
+                      b32 fatal = 1)
 {
     i32 line = sh->line + 1;
     for (iz i = 0; i < rest.len; i++) line += rest[i]=='\n';
@@ -162,6 +164,7 @@ static void comsubeof(Shell *sh, Arena scratch, Str rest, b32 hd = 1)
     putbyte(&b, quote ? quote : ')');
     print(&b, "'\n");
     fdwrite(sh, 2, finish(&b));
+    if (!fatal) return;
     sh->status = 1;
     escape(sh, ESC_DISCARD);
 }
@@ -2173,12 +2176,21 @@ static void expandinto(X *x, Str s, i32 ctx)
 
         if (c=='$' && i+1<s.len) {
             u8 n = s[i+1];
+            if (n=='(' && i+2==s.len) {
+                // A bare $( closing the text, as from shell-expand-line
+                // or ${x@P}: bash takes it for nothing at all
+                i = s.len;
+                continue;
+            }
             if (n == '(') {
                 b32 ended = 1;
                 iz  e = skipdollar(sh, x->a, s, i, dq||hd, &ended);
                 if (!ended && !(i+2<s.len && s[i+2]=='(')) {
                     // Parsed only now, as in bash
-                    comsubeof(sh, *x->a, cuthead(s, i), hd);
+                    b32 fatal = !(ctx & XC_PROMPT);
+                    comsubeof(sh, *x->a, cuthead(s, i), hd, fatal);
+                    i = s.len;
+                    continue;
                 }
                 if (isarith(s, i, e)) {
                     Str body = span(s.data+i+3, s.data+(e>=i+5 ? e-2 : e));

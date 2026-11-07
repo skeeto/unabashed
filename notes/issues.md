@@ -150,9 +150,6 @@ Moved from M6 (m6.md, step 10):
   (the core cannot read links), so its target keeps its mode; readline
   writes beside the target and renames over it (mode 0600). The owner
   is not restored after a rename, as readline does as root.
-- shell-expand-line on a line ending in an unterminated `$(` with
-  nothing after it: bash expands it to nothing; ours reports the
-  command substitution's unexpected EOF and gives up the line.
 
 
 ## M8 (performance)
@@ -545,3 +542,10 @@ Moved from M5a: limits of the test tiers, not of the shell.
   (1.39.0, M5a step 10): it ends the continued line at the next CR and
   leaves that line's LF unread, so the next `read` gets an empty line.
   Not copied (a busybox bug); t/winvos/011 has our reading.
+- **Accepted: the line counted in an interactive command substitution's
+  EOF message** (M7 step 9): each shell-expand-line that hits an
+  unterminated `$(` advances bash's line counter, so the message says
+  line 3, 4, 5 in turn and $LINENO lags one behind ours afterwards;
+  ours says line 2 each time. An artifact of bash's parser state. And
+  a `${x@P}` whose unterminated `$(` holds a `${` gets a second
+  message about the brace from bash's re-parse; we give one.

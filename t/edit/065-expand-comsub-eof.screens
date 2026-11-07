@@ -1,0 +1,14 @@
+== snap 1
+$ echo a
+@ 0,9
+== snap 2
+$ echo c `
+@ 0,10
+== snap 3
+$ echo d ${bash: echo d ${: bad substitution
+$
+@ 1,2
+== snap 4
+$ echo d ${bash: echo d ${: bad substitution
+$
+@ 1,2
