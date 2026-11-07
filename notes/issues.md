@@ -64,10 +64,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
 - **XP: t/win32/014-spawn failed once in 13 runs** (M5b step 10, with
   UNABASHED_XPIO=1); the diff was lost and twelve reruns passed. Look
   for it with the other XP flakes, which may share a cause.
-- **`read -t` never times out on input that never ends a line**: `read
-  -t 0.01 x </dev/zero` hangs on POSIX, where bash fails it with 142;
-  the deadline is checked only while waiting for data, and /dev/zero
-  always has some. (m5b.md, step 8)
 - **UTF-8 character classes and case folding are ASCII-only** in
   pattern.cpp, glob.cpp and regex.cpp: `[[:alpha:]]` does not match é,
   where bash (glibc) does. (m4.md)

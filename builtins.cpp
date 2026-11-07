@@ -2777,6 +2777,12 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     i32 held = NOHELD;  // a byte read ahead past a CR
     for (; !done;) {
         if (nchars>=0 && count>=nchars && !pend) break;
+        if (deadline && aoff==alen && os_now(sh->os)>=deadline) {
+            // Input that never runs dry (/dev/zero) never blocks, so
+            // the deadline is also checked here, as bash's alarm would
+            timedout = 1;
+            break;
+        }
         if (aoff==alen && seekable) {
             ahead = ahead ? ahead : allocbytes(&scratch, 1<<12);
             iz n = fdread(sh, fd, ahead, look);
