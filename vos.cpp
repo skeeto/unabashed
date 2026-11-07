@@ -1061,7 +1061,7 @@ static b32 vttyhas(Vos *v)
 // takes the script's keys in its cooked mode (echo, ^C), the pauses
 // passing in virtual time, up to anything that needs a reader (a
 // snapshot, a resize, other modes). True if it took any.
-static b32 vtype(Os *os, Vos *v)
+static b32 vtyping(Vos *v)
 {
     VTty *y = &v->tty;
     if (!y->term || y->settling || (y->mode && y->mode!=TTY_NOECHO)) return 0;
@@ -1069,20 +1069,33 @@ static b32 vtype(Os *os, Vos *v)
         VProc *p = v->procs + i;
         if (p->state==VP_BLOCK && p->wait==VW_TTY) return 0;
     }
+    return 1;
+}
+
+static b32 vtype(Os *os, Vos *v)
+{
+    VTty *y = &v->tty;
     b32 took = 0;
-    while (y->next < y->nkeys) {
+    // A typed ^C or ^Z may stop the typing process itself, others
+    // running meanwhile: the key position moves before each byte, and
+    // the conditions are checked again after it
+    while (vtyping(v) && y->next<y->nkeys) {
         VKey *k = y->keys + y->next;
         if (k->kind == VKEY_PAUSE) {
             if (!y->until) y->until = v->clock + k->ms*1000000;
             if (v->clock < y->until) break;
             y->until = 0;
+            y->next++;
         } else if (k->kind == VKEY_TEXT) {
-            while (y->pos < k->text.len) vcooked(os, v, k->text[y->pos++]);
-            y->pos = 0;
+            if (y->pos < k->text.len) {
+                vcooked(os, v, k->text[y->pos++]);
+            } else {
+                y->pos = 0;
+                y->next++;
+            }
         } else {
             break;
         }
-        y->next++;
         took = 1;
     }
     return took;

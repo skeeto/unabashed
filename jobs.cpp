@@ -560,8 +560,25 @@ static void reportkilled(Shell *sh, Arena scratch, Job *j)
 static void notifyjobs(Shell *sh, Arena scratch)
 {
     polljobs(sh);
+    if (sh->interactive) return;  // at the prompt instead
     for (Job *j = sh->jobs; j && ownjob(sh, j); j = j->next) {
         reportkilled(sh, scratch, j);
+    }
+    cleanupjobs(sh);
+}
+
+// Before an interactive shell's primary prompt: each of this level's
+// jobs that ended or stopped since last shown, as jobs lists it, then
+// drop the ended ones.
+static void notifyprompt(Shell *sh, Arena scratch)
+{
+    polljobs(sh);
+    for (Job *j = sh->jobs; j && ownjob(sh, j); j = j->next) {
+        if (j->notified || !(j->done || j->stopped)) continue;
+        Arena a = scratch;
+        flushbout(sh);
+        fdwrite(sh, 2, jobline(sh, &a, j, 0));
+        j->notified = 1;
     }
     cleanupjobs(sh);
 }
@@ -1728,6 +1745,12 @@ static i32 b_fg(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (tty) os_tcpgrp(sh->os, sh->jctty, sh->shellpgid);
         if (j->stopped) return fgstop(sh, scratch, j);
         joindone(sh, j);
+        if (tty && (j->status & WSIGNALED) && (j->status & 255)==128+2) {
+            // As runprogram: the terminal's INT reached only the job
+            if (sh->loopdepth || (!trapset(sh, 2) && sh->interactive)) {
+                sh->sig->pending |= sigbit(2);
+            }
+        }
     } else if (j->task) {
         jointask(sh->sched, j->task, &j->status);
         j->task = 0;

@@ -913,7 +913,10 @@ static b32 fillline(void *ctx, Lexer *L)
     Buf   *b     = &in->buf;
     iz     start = b->len;
     b32 seekable = f && f->kind==F_OS && os_seek(sh->os, f->h, 0, 1)>=0;
-    if (sh->interactive && L->newunit) promptcommand(sh);
+    if (sh->interactive && L->newunit) {
+        if (sh->jobs) notifyprompt(sh, *scratchat(sh, sh->capdepth+1));
+        promptcommand(sh);
+    }
     if (sh->interactive && (sh->opt[O_EMACS] || sh->opt[O_VI])) {
         Arena a  = *scratchat(sh, sh->capdepth+1);
         Str   ps = promptstr(sh, &a, psexpr(L->newunit));

@@ -1,0 +1,28 @@
+# Job control at a terminal: Ctrl-Z stops a program, which jobs lists
+# and fg resumes; bg resumes one in the background, whose end is
+# reported before a later prompt; exit with a stopped job warns once
+size 24 60
+rc PS1='$ '
+keys sleep 5\r
+pause 300
+keys \C-z
+snap
+keys jobs\r
+snap
+keys fg\r
+pause 300
+keys \C-c
+snap
+keys sleep 0.5\r
+pause 300
+keys \C-z
+keys bg\r
+pause 900
+keys \r
+snap
+keys sleep 9\r
+pause 300
+keys \C-z
+keys exit\r
+snap
+keys exit\r

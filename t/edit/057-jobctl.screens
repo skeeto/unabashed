@@ -1,0 +1,93 @@
+== snap 1
+$ sleep 5
+^Z
+[1]+  Stopped                    sleep 5
+$
+@ 3,2
+== snap 2
+$ sleep 5
+^Z
+[1]+  Stopped                    sleep 5
+$ jobs
+[1]+  Stopped                    sleep 5
+$
+@ 5,2
+== snap 3
+$ sleep 5
+^Z
+[1]+  Stopped                    sleep 5
+$ jobs
+[1]+  Stopped                    sleep 5
+$ fg
+sleep 5
+^C
+$
+@ 8,2
+== snap 4
+$ sleep 5
+^Z
+[1]+  Stopped                    sleep 5
+$ jobs
+[1]+  Stopped                    sleep 5
+$ fg
+sleep 5
+^C
+$ sleep 0.5
+^Z
+[1]+  Stopped                    sleep 0.5
+$ bg
+[1]+ sleep 0.5 &
+$
+[1]+  Done                       sleep 0.5
+$
+@ 15,2
+== snap 5
+$ sleep 5
+^Z
+[1]+  Stopped                    sleep 5
+$ jobs
+[1]+  Stopped                    sleep 5
+$ fg
+sleep 5
+^C
+$ sleep 0.5
+^Z
+[1]+  Stopped                    sleep 0.5
+$ bg
+[1]+ sleep 0.5 &
+$
+[1]+  Done                       sleep 0.5
+$ sleep 9
+^Z
+[1]+  Stopped                    sleep 9
+$ exit
+exit
+There are stopped jobs.
+$
+@ 21,2
+== snap 6
+$ sleep 5
+^Z
+[1]+  Stopped                    sleep 5
+$ jobs
+[1]+  Stopped                    sleep 5
+$ fg
+sleep 5
+^C
+$ sleep 0.5
+^Z
+[1]+  Stopped                    sleep 0.5
+$ bg
+[1]+ sleep 0.5 &
+$
+[1]+  Done                       sleep 0.5
+$ sleep 9
+^Z
+[1]+  Stopped                    sleep 9
+$ exit
+exit
+There are stopped jobs.
+$ exit
+exit
+
+@ 23,0
