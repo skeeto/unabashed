@@ -907,7 +907,10 @@ static b32 fillline(void *ctx, Lexer *L)
         EdRead opts = {};
         opts.delim = -1;
         opts.shell = 1;
-        opts.ps1   = L->newunit;
+        // A command word may start the line at PS1, and at PS2 where
+        // the parser's last token allows one, as bash asks it
+        opts.ps1   = L->newunit || cmdposition(L, L->last);
+        b32 ps2    = !L->newunit;
         opts.init  = clone(&a, sh->hist.preload);
         sfreestr(sh->store, sh->hist.preload);
         sh->hist.preload = {};
@@ -917,10 +920,12 @@ static b32 fillline(void *ctx, Lexer *L)
             if (r == ED_LINE) {
                 putbyte(b, '\n');
             } else if (r == ED_INTR) {
-                // Ctrl-C at the prompt: an empty line instead, status 130
+                // Ctrl-C at the prompt: an empty line instead, status
+                // 130, and at PS2 the command given up
                 sh->status = 128 + 2;
                 b->len = start;
                 putbyte(b, '\n');
+                L->intr = ps2;
             } else if (r == ED_ABORT) {
                 // An expansion error while editing: the same, status 1
                 sh->status = 1;

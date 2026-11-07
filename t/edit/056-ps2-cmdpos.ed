@@ -1,0 +1,32 @@
+# Command position at PS2, as bash asks the parser: after a newline in a
+# compound command or after &&, a command word; within a quoted word or
+# after a backslash-newline, a file name
+size 20 50
+rc PS1='$ ' PS2='> '
+rc mkdir dir; : > ecfile
+keys for i in 1; do\r
+keys ec\t\t
+snap
+keys \C-a\C-k
+keys \C-c
+keys true &&\r
+keys ec\t\t
+snap
+keys \C-c
+keys echo \x5c\r
+keys ec\t\t
+snap
+keys \C-c
+keys echo 'a\r
+keys ec\t\t
+snap
+keys \C-c
+keys cat <<E\r
+keys ec\t\t
+snap
+keys \C-c
+keys if true\r
+snap
+keys \C-c
+keys echo $?\r
+snap

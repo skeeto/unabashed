@@ -1,0 +1,88 @@
+== snap 1
+$ for i in 1; do
+> echo
+@ 1,7 bell 1
+== snap 2
+$ for i in 1; do
+> ^C
+$ true &&
+> echo
+@ 3,7 bell 2
+== snap 3
+$ for i in 1; do
+> ^C
+$ true &&
+> echo ^C
+$ echo \
+> ecfile
+@ 5,9 bell 3
+== snap 4
+$ for i in 1; do
+> ^C
+$ true &&
+> echo ^C
+$ echo \
+> ecfile ^C
+$ echo 'a
+> ecfile
+@ 7,9 bell 4
+== snap 5
+$ for i in 1; do
+> ^C
+$ true &&
+> echo ^C
+$ echo \
+> ecfile ^C
+$ echo 'a
+> ecfile ^C
+$ cat <<E
+> ecfile
+@ 9,9 bell 5
+== snap 6
+$ for i in 1; do
+> ^C
+$ true &&
+> echo ^C
+$ echo \
+> ecfile ^C
+$ echo 'a
+> ecfile ^C
+$ cat <<E
+> ecfile ^C
+$ if true
+>
+@ 11,2 bell 5
+== snap 7
+$ for i in 1; do
+> ^C
+$ true &&
+> echo ^C
+$ echo \
+> ecfile ^C
+$ echo 'a
+> ecfile ^C
+$ cat <<E
+> ecfile ^C
+$ if true
+> ^C
+$ echo $?
+130
+$
+@ 14,2 bell 5
+== snap 8
+$ for i in 1; do
+> ^C
+$ true &&
+> echo ^C
+$ echo \
+> ecfile ^C
+$ echo 'a
+> ecfile ^C
+$ cat <<E
+> ecfile ^C
+$ if true
+> ^C
+$ echo $?
+130
+$
+@ 14,2 bell 5

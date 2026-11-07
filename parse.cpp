@@ -328,6 +328,7 @@ struct Lexer {
     b32    (*fill)(void *ctx, Lexer *);
     void    *fillctx;
     b32      newunit;    // the next fill starts a command (PS1, not PS2)
+    b32      intr;       // a fill was interrupted (Ctrl-C at PS2)
     // History: each physical line read, and each here-document line,
     // passes through hist (the reader's), which may replace it (history
     // expansion) or drop it (null data) to have the next line read
@@ -581,6 +582,11 @@ static b32 srcend(Lexer *L)
 {
     while (L->srcpos==L->src.len && L->fill) {
         if (!L->fill(L->fillctx, L)) L->fill = 0;
+        if (L->intr) {
+            // As bash's throw to the top level: the command goes
+            L->discard = 1;
+            parsefail(L);
+        }
     }
     return L->srcpos == L->src.len;
 }

@@ -3942,7 +3942,17 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             break;
         }
         if (r.status == PARSE_DISCARD) {
-            sh->status = 1;
+            if (L->intr) {
+                // Ctrl-C at PS2: the status the interrupt set, and a
+                // new command
+                L->intr    = 0;
+                L->line    = {};
+                L->idx     = 0;
+                L->newunit = 1;
+                *L->a      = unit;
+            } else {
+                sh->status = 1;
+            }
             continue;
         }
         if (r.cmd && !sh->opt[O_NOEXEC]) {
