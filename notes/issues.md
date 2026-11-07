@@ -45,7 +45,10 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   timeout or the end of input is inserted as it is (readline may hold
   it until complete), and in the C locale readline (output-meta off)
   shows bytes past 0x7f as `\NNN` where ours draws UTF-8 whatever the
-  locale. (step 10)
+  locale. A first recording was inconclusive: \xc3\xa9 and \xff were
+  inserted and shown as \NNN, yet \xe6 ran M-f, which readline's C
+  defaults (convert-meta on) do not explain together; the .ed env
+  lines may leave LANG set twice. (M8, with input-meta and friends)
 - checkwinsize: LINES and COLUMNS follow the size each time the
   editor starts and ends a line, not after each foreground program as
   bash's checkwinsize does; a script that resizes and reads COLUMNS
