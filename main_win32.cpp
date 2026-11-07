@@ -964,9 +964,14 @@ static iz conconvert(c16 *tmp, i32 n, u8 *out)
 
 enum : i32 { CONUNITS = 1024 };  // UTF-16 units per console read
 
-enum : i32 { TK_LINES, TK_VT, TK_EVENTS };  // Os.ttykeys
+// Os.ttykeys: how console input is read. TK_SILENT and TK_CHARS take
+// Ctrl-C as a key (unprocessed input): a console read without line
+// input is not ended by it, so the read would go on and take the next
+// command's keys.
+enum : i32 { TK_LINES, TK_VT, TK_EVENTS, TK_SILENT, TK_CHARS };
 
 static void wakemain(Os *);
+static b32 __stdcall onctrl(u32);
 
 // Keys from a console in the editor's raw mode, as xterm bytes into
 // out (3*CONUNITS bytes): with VT input the console's own characters,
@@ -1017,15 +1022,59 @@ static iz conkeys(Os *os, uz h, u8 *out, i32 *code, b32 vtin)
 static iz conline(Os *os, uz h, u8 *out, i32 *code)
 {
     i32 keys = __atomic_load_n(&os->ttykeys, __ATOMIC_SEQ_CST);
-    if (keys != TK_LINES) return conkeys(os, h, out, code, keys==TK_VT);
+    if (keys==TK_VT || keys==TK_EVENTS) {
+        return conkeys(os, h, out, code, keys==TK_VT);
+    }
     c16 tmp[CONUNITS];
     i32 n = 0;
+    if (keys == TK_SILENT) {
+        // A line not echoed (read -s): the console's line input writes
+        // a newline at Enter even without echo, which a terminal does
+        // not, so the line is gathered here a character at a time,
+        // erasing with Backspace
+        for (;;) {
+            c16 c = 0;
+            i32 got = 0;
+            SetLastError(0);
+            b32 ok = ReadConsoleW(h, &c, 1, &got, 0);
+            *code = GetLastError();
+            if (!ok || (!got && *code==ERROR_OPERATION_ABORTED)) {
+                *code = ok ? ERROR_OPERATION_ABORTED : *code;
+                return -1;
+            }
+            if (!got) continue;
+            if (c == 3) {
+                onctrl(0);  // as the console would have
+                *code = ERROR_OPERATION_ABORTED;
+                return -1;
+            } else if (c=='\r' || c=='\n') {
+                tmp[n++] = '\n';
+                break;
+            } else if (c==8 || c==0x7f) {
+                n -= n>0;
+                n -= n>0 && tmp[n]>=0xdc00 && tmp[n]<=0xdfff &&
+                     tmp[n-1]>=0xd800 && tmp[n-1]<=0xdbff;
+            } else if (n < CONUNITS-1) {
+                tmp[n++] = c;
+            }
+        }
+        *code = 0;
+        iz r = conconvert(tmp, n, out);
+        return r<0 ? 0 : r;
+    }
     SetLastError(0);
     b32 ok = ReadConsoleW(h, tmp, countof(tmp), &n, 0);
     *code = GetLastError();
     if (!ok || (!n && *code==ERROR_OPERATION_ABORTED)) {
         *code = ok ? ERROR_OPERATION_ABORTED : *code;
         return -1;
+    }
+    for (i32 i = 0; keys==TK_CHARS && i<n; i++) {
+        if (tmp[i] == 3) {
+            onctrl(0);  // the keys with it go, as with line input
+            *code = ERROR_OPERATION_ABORTED;
+            return -1;
+        }
     }
     *code = 0;
     iz r = conconvert(tmp, n, out);
@@ -2838,14 +2887,14 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
             }
         } break;
         case TTY_NOECHO:
-            __atomic_store_n(&os->ttykeys, TK_LINES, __ATOMIC_SEQ_CST);
-            SetConsoleMode(in, base & ~CM_ECHO_INPUT);
+            __atomic_store_n(&os->ttykeys, TK_SILENT, __ATOMIC_SEQ_CST);
+            SetConsoleMode(in, base & ~(CM_PROCESSED_INPUT|CM_LINE_INPUT|CM_ECHO_INPUT));
             break;
         case TTY_CHARS:
         case TTY_CHARSNOECHO:
-            __atomic_store_n(&os->ttykeys, TK_LINES, __ATOMIC_SEQ_CST);
+            __atomic_store_n(&os->ttykeys, TK_CHARS, __ATOMIC_SEQ_CST);
             // The console echoes only whole lines
-            SetConsoleMode(in, base & ~(CM_LINE_INPUT|CM_ECHO_INPUT));
+            SetConsoleMode(in, base & ~(CM_PROCESSED_INPUT|CM_LINE_INPUT|CM_ECHO_INPUT));
             r.noecho = how == TTY_CHARS;
             break;
         }

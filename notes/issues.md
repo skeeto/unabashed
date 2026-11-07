@@ -26,10 +26,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 
 ## M6 (editor)
 
-- `read -s` in a non-interactive script killed by Ctrl-C: the terminal
-  is restored on the escape out of read, but not tested on a real
-  terminal; Windows `read -n` echoes the bytes itself (the console
-  echoes only whole lines). (step 2)
 - run-history: history4 and history7 both need readline on a
   non-terminal under `-i` (the item below). (step 2)
 - A history file that is a symbolic link is written through in place
