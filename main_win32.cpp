@@ -614,6 +614,8 @@ struct Os {
     Pwait     *freepwait;
     Interpose *freeip;
     u64        sigown;     // atomic: signals for the process
+    Rlimit     rl[RL_COUNT];  // os_getrlimit: modelled, as Cygwin's
+    b32        rlinit;
     SigChan   *chan;       // this shell's signal channel, or null
     uz         chanwait;   // its registered wait
     u64        siggrp;     // atomic: signals for the console group
@@ -3316,6 +3318,53 @@ static i32 exitstatus(u32 code)
 // Signals: one of our shells gets it through its channel (but KILL,
 // and STOP, which it could not act on); any other process is ended
 // outright by it, as killed by it (see SIGEXIT).
+// Resource limits: Windows has none of POSIX's, so these are Cygwin's
+// (Git Bash's ulimit -a): a table only, which ulimit reads and sets.
+// Only the core size, stack, address space and open files take a new
+// value; the stack is this program's own reservation.
+static Rlimit *rltable(Os *os)
+{
+    if (!os->rlinit) {
+        os->rlinit = 1;
+        for (i32 i = 0; i < RL_COUNT; i++) os->rl[i].err = E_NOSYS;
+        Rlimit inf = {RL_INFINITY, RL_INFINITY, 0};
+        os->rl[RL_CORE]   = {0, RL_INFINITY, 0};
+        os->rl[RL_DATA]   = inf;
+        os->rl[RL_FSIZE]  = inf;
+        os->rl[RL_NOFILE] = {3200, 3200, 0};
+        os->rl[RL_PIPE]   = {4096, 4096, 0};
+        os->rl[RL_CPU]    = inf;
+        os->rl[RL_NPROC]  = {256, 256, 0};
+        os->rl[RL_AS]     = inf;
+        byte *pe  = (byte *)GetModuleHandleW(0);
+        i32   nt  = *(i32 *)(pe + 0x3c);
+        byte *opt = pe + nt + 24;
+        i64 stack = sizeof(void *)==8 ? *(i64 *)(opt + 72) : *(u32 *)(opt + 72);
+        os->rl[RL_STACK]  = {stack, RL_INFINITY, 0};
+    }
+    return os->rl;
+}
+
+static Rlimit os_getrlimit(Os *os, i32 res)
+{
+    return rltable(os)[res];
+}
+
+static i32 os_setrlimit(Os *os, i32 res, Rlimit r)
+{
+    Rlimit *t = rltable(os) + res;
+    if (t->err) return t->err;
+    switch (res) {
+    case RL_CORE: case RL_STACK: case RL_AS: case RL_NOFILE: break;
+    default: return E_INVAL;
+    }
+    if (r.hard!=RL_INFINITY && (r.soft==RL_INFINITY || r.soft>r.hard)) return E_INVAL;
+    if (t->hard!=RL_INFINITY && (r.hard==RL_INFINITY || r.hard>t->hard)) return E_PERM;
+    t->soft = r.soft;
+    t->hard = r.hard;
+    return 0;
+}
+
 static i32 os_kill(Os *, i64 pid, i32 sig)
 {
     if (pid<=0 || pid>(i64)0x7fffffff) return E_SRCH;

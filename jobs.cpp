@@ -681,6 +681,7 @@ static i64 spawnimage(Shell *sh, Node *n, File *in, File *out, i64 *pid,
     Image img = imagebuild(sh, n, im);
 
     Spawn sp = {};
+    sp.rlimits = sh->rlmod ? sh->rl : 0;
     sp.image  = img.ref;
     sp.argv   = &sh->shellname;
     sp.argc   = 1;

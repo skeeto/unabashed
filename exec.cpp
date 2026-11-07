@@ -1695,6 +1695,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     }
 
     Spawn sp = {};
+    sp.rlimits = sh->rlmod ? sh->rl : 0;
     sp.path  = absolute(sh, &a, path);
     sp.argv  = argv;
     sp.argc  = argc;

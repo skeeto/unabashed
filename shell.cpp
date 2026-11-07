@@ -568,6 +568,9 @@ struct Shell {
                            // the_current_working_directory), as PWD shows
     Str      host;
     i32      umask;
+    Rlimit   rl[RL_COUNT]; // ulimit's table, read once (rlhave); in a
+    b32      rlhave;       // subshell it changes alone and programs get
+    b32      rlmod;        // it (rlmod), as bash's forked subshell's
     u64      exportgen;
     byte    *stacktop;     // stack position at sh_main
     iz       stackmax;     // usable stack below it

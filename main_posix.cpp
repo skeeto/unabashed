@@ -108,6 +108,16 @@ static char *cpath(Arena *a, Str s)
     return r;
 }
 
+// The lowest descriptor above every target of a spawn's map: sources
+// move there first, out of the targets' way. Not a fixed high number,
+// which a low `ulimit -n` would put out of reach.
+static i32 fdbase(i32 *dst, i32 n)
+{
+    i32 base = 3;
+    for (i32 i = 0; i < n; i++) base = dst[i]>=base ? dst[i]+1 : base;
+    return base;
+}
+
 // Keep shell-held descriptors away from the low numbers that scripts
 // redirect, and out of children.
 static i32 highfd(i32 fd)
@@ -453,6 +463,8 @@ static void closefds(i32 lo, i32 hi)
 // child has reset its dispositions, so no handler of the shell's runs
 // in it.
 static Spawned forkimage(Os *, Arena, Spawn *);
+static i32     rlres(i32);
+static rlim_t  torlim(i64);
 
 static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 {
@@ -475,6 +487,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     b32 pipedfl = !sigos || !sigos->pipeign;
     u64 changed = sigos ? sigos->changed : 0;
     u64 ign     = s->sigign | (sigos ? sigos->entryign : 0);
+    Rlimit *rlimits = s->rlimits;
 
     sigset_t all, old;
     sigfillset(&all);
@@ -483,12 +496,13 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     pid_t pid = vfork();
     if (!pid) {
         // Move sources out of the way first, then install the map
+        i32 base = fdbase(dst, nfds);
         for (i32 i = 0; i < nfds; i++) {
-            src[i] = fcntl(src[i], F_DUPFD, 256);
+            if (src[i] < base) src[i] = fcntl(src[i], F_DUPFD, base);
         }
-        closefds(0, 255);
+        closefds(0, base-1);
         for (i32 i = 0; i < nfds; i++) dup2(src[i], dst[i]);
-        closefds(256, -1);
+        closefds(base, -1);
         if (chdir(cwd)) {
             // run anyway: bash reports nothing here
         }
@@ -505,6 +519,12 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
             } else if (changed & bit) {
                 signal(sig, SIG_DFL);
             }
+        }
+        for (i32 i = 0; rlimits && i<RL_COUNT; i++) {
+            i32 n = rlres(i);
+            if (n<0 || rlimits[i].err) continue;
+            rlimit l = {torlim(rlimits[i].soft), torlim(rlimits[i].hard)};
+            setrlimit(n, &l);  // as bash's forked subshell had them
         }
         sigprocmask(SIG_SETMASK, &old, 0);
         execve(path, argv, envp);
@@ -574,14 +594,21 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
     sigprocmask(SIG_SETMASK, &all, &old);
     pid_t pid = fork();
     if (!pid) {
+        i32 base = fdbase(dst, nfds);
         for (i32 i = 0; i < nfds; i++) {
-            src[i] = fcntl(src[i], F_DUPFD, 256);
+            if (src[i] < base) src[i] = fcntl(src[i], F_DUPFD, base);
         }
-        closefds(0, 255);
+        closefds(0, base-1);
         for (i32 i = 0; i < nfds; i++) dup2(src[i], dst[i]);
-        closefds(256, -1);
+        closefds(base, -1);
         if (chdir(cwd)) {
             // as for a program: it runs anyway
+        }
+        for (i32 i = 0; s->rlimits && i<RL_COUNT; i++) {
+            i32 k = rlres(i);
+            if (k<0 || s->rlimits[i].err) continue;
+            rlimit l = {torlim(s->rlimits[i].soft), torlim(s->rlimits[i].hard)};
+            setrlimit(k, &l);
         }
         for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
             u64 bit = (u64)1 << (sig-1);
@@ -696,12 +723,14 @@ static i32 os_exec(Os *, Arena scratch, Spawn *s)
     for (iz i = 0; i < n; i++) {
         src[i] = save[i] = -1;
     }
+    i32 base = 0;
+    for (iz i = 0; i < n; i++) base = s->fds[i].fd>=base ? s->fds[i].fd+1 : base;
     for (iz i = 0; i<n && !err; i++) {
-        src[i] = fcntl((i32)s->fds[i].h, F_DUPFD_CLOEXEC, 256);
+        src[i] = fcntl((i32)s->fds[i].h, F_DUPFD_CLOEXEC, base);
         err = src[i]<0 ? errno : 0;
     }
     for (iz i = 0; i<n && !err; i++) {
-        save[i] = fcntl(s->fds[i].fd, F_DUPFD_CLOEXEC, 256);  // -1 if closed
+        save[i] = fcntl(s->fds[i].fd, F_DUPFD_CLOEXEC, base);  // -1 if closed
     }
     i32 dot = open(".", O_RDONLY|O_CLOEXEC);
     if (err || dot<0) {
@@ -799,6 +828,79 @@ static void onsignal(int sig)
     u8 c = 0;
     if (write(sigos->wakefd[1], &c, 1)) {}
     errno = saved;
+}
+
+// RL_* as the system numbers them, -1 where it has no such limit
+static i32 rlres(i32 res)
+{
+    switch (res) {
+    #ifdef RLIMIT_RTTIME
+    case RL_RTTIME:     return RLIMIT_RTTIME;
+    #endif
+    case RL_CORE:       return RLIMIT_CORE;
+    case RL_DATA:       return RLIMIT_DATA;
+    #ifdef RLIMIT_NICE
+    case RL_NICE:       return RLIMIT_NICE;
+    #endif
+    case RL_FSIZE:      return RLIMIT_FSIZE;
+    #ifdef RLIMIT_SIGPENDING
+    case RL_SIGPENDING: return RLIMIT_SIGPENDING;
+    #endif
+    case RL_MEMLOCK:    return RLIMIT_MEMLOCK;
+    case RL_RSS:        return RLIMIT_RSS;
+    case RL_NOFILE:     return RLIMIT_NOFILE;
+    #ifdef RLIMIT_MSGQUEUE
+    case RL_MSGQUEUE:   return RLIMIT_MSGQUEUE;
+    #endif
+    #ifdef RLIMIT_RTPRIO
+    case RL_RTPRIO:     return RLIMIT_RTPRIO;
+    #endif
+    case RL_STACK:      return RLIMIT_STACK;
+    case RL_CPU:        return RLIMIT_CPU;
+    case RL_NPROC:      return RLIMIT_NPROC;
+    case RL_AS:         return RLIMIT_AS;
+    #ifdef RLIMIT_LOCKS
+    case RL_LOCKS:      return RLIMIT_LOCKS;
+    #endif
+    }
+    return -1;
+}
+
+static i64 fromrlim(rlim_t v)
+{
+    return v==RLIM_INFINITY || v>(rlim_t)0x7fffffffffffffff ? RL_INFINITY : (i64)v;
+}
+
+static rlim_t torlim(i64 v)
+{
+    return v==RL_INFINITY ? RLIM_INFINITY : (rlim_t)v;
+}
+
+static Rlimit os_getrlimit(Os *, i32 res)
+{
+    Rlimit r = {};
+    if (res == RL_PIPE) {
+        r.soft = r.hard = PIPE_BUF;
+        return r;
+    }
+    i32    n = rlres(res);
+    rlimit l = {};
+    if (n<0 || getrlimit(n, &l)) {
+        r.err = E_NOSYS;
+        return r;
+    }
+    r.soft = fromrlim(l.rlim_cur);
+    r.hard = fromrlim(l.rlim_max);
+    return r;
+}
+
+static i32 os_setrlimit(Os *, i32 res, Rlimit r)
+{
+    if (res == RL_PIPE) return E_INVAL;
+    i32 n = rlres(res);
+    if (n < 0) return E_NOSYS;
+    rlimit l = {torlim(r.soft), torlim(r.hard)};
+    return setrlimit(n, &l) ? errno : 0;
 }
 
 static i32 os_kill(Os *, i64 pid, i32 sig)

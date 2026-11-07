@@ -26,6 +26,7 @@ static Str usage(Str name)
         {"alias",    "alias [-p] [name[=value] ... ]"},
         {"unalias",  "unalias [-a] name [name ...]"},
         {"umask",    "umask [-p] [-S] [mode]"},
+        {"ulimit",   "ulimit [-SHabcdefiklmnpqrstuvxPRT] [limit]"},
         {"getopts",  "getopts optstring name [arg ...]"},
         {"hash",     "hash [-lr] [-p pathname] [-dt] [name ...]"},
         {"history",  "history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]"},
@@ -3429,6 +3430,192 @@ static i32 b_getopts(Shell *sh, Str *args, iz nargs, Arena scratch)
     return r;
 }
 
+// ulimit's resources, in its -a order, as bash names and scales them
+static struct {
+    u8  opt;
+    i32 res;
+    i64 scale;  // system units per unit shown
+    Str desc;
+    Str unit;
+} const ulimits[] = {
+    {'R', RL_RTTIME,     1,    "real-time non-blocking time", "microseconds"},
+    {'c', RL_CORE,       512,  "core file size",       "blocks"},
+    {'d', RL_DATA,       1024, "data seg size",        "kbytes"},
+    {'e', RL_NICE,       1,    "scheduling priority",  ""},
+    {'f', RL_FSIZE,      512,  "file size",            "blocks"},
+    {'i', RL_SIGPENDING, 1,    "pending signals",      ""},
+    {'l', RL_MEMLOCK,    1024, "max locked memory",    "kbytes"},
+    {'m', RL_RSS,        1024, "max memory size",      "kbytes"},
+    {'n', RL_NOFILE,     1,    "open files",           ""},
+    {'p', RL_PIPE,       512,  "pipe size",            "512 bytes"},
+    {'q', RL_MSGQUEUE,   1,    "POSIX message queues", "bytes"},
+    {'r', RL_RTPRIO,     1,    "real-time priority",   ""},
+    {'s', RL_STACK,      1024, "stack size",           "kbytes"},
+    {'t', RL_CPU,        1,    "cpu time",             "seconds"},
+    {'u', RL_NPROC,      1,    "max user processes",   ""},
+    {'v', RL_AS,         1024, "virtual memory",       "kbytes"},
+    {'x', RL_LOCKS,      1,    "file locks",           ""},
+};
+
+static Rlimit *rltable(Shell *sh)
+{
+    if (!sh->rlhave) {
+        sh->rlhave = 1;
+        for (i32 i = 0; i < RL_COUNT; i++) sh->rl[i] = os_getrlimit(sh->os, i);
+    }
+    return sh->rl;
+}
+
+// Set a limit: in the shell's own process at the top level, so that
+// the shell and everything it starts have it; in a subshell only in
+// its table, which it passes to its programs, checked as a kernel
+// checks an unprivileged process.
+static i32 setrlimit(Shell *sh, i32 res, Rlimit r)
+{
+    Rlimit *t = rltable(sh) + res;
+    if (!sh->subshell) {
+        i32 err = os_setrlimit(sh->os, res, r);
+        if (!err) *t = os_getrlimit(sh->os, res);
+        return err;
+    }
+    if (res == RL_PIPE) return E_INVAL;
+    if (r.hard!=RL_INFINITY && (r.soft==RL_INFINITY || r.soft>r.hard)) return E_INVAL;
+    if (t->hard!=RL_INFINITY && (r.hard==RL_INFINITY || r.hard>t->hard)) return E_PERM;
+    t->soft = r.soft;
+    t->hard = r.hard;
+    sh->rlmod = 1;
+    return 0;
+}
+
+static void printulimit(Shell *sh, Arena a, i32 u, b32 hard, b32 named)
+{
+    Rlimit r = rltable(sh)[ulimits[u].res];
+    i64    v = hard ? r.hard : r.soft;
+    Buf b(&a, 80);
+    if (named) {
+        print(&b, ulimits[u].desc);
+        for (iz n = ulimits[u].desc.len; n < 20; n++) putbyte(&b, ' ');
+        putbyte(&b, ' ');
+        Buf unit(&a, 32);
+        print(&unit, "(");
+        if (ulimits[u].unit.len) {
+            print(&unit, ulimits[u].unit);
+            print(&unit, ", ");
+        }
+        print(&unit, "-");
+        putbyte(&unit, ulimits[u].opt);
+        print(&unit, ") ");
+        for (iz n = unit.len; n < 20; n++) putbyte(&b, ' ');
+        print(&b, finish(&unit));
+    }
+    print(&b, v==RL_INFINITY ? Str("unlimited") : fmti64(&a, v/ulimits[u].scale));
+    print(&b, "\n");
+    bprint(sh, finish(&b));
+}
+
+// ulimit [-SHa...] [limit]: each resource option may take the next
+// word as its value, unless it starts with '-', or the rest of its own
+// word; a word after the options goes to the last resource named
+// without one. With neither -H nor -S, a new value sets both.
+static i32 b_ulimit(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    enum { HARD = 1, SOFT = 2 };
+    struct { i32 u; Str arg; } cmds[64];
+    i32 ncmds = 0;
+    i32 mode  = 0;
+    b32 all   = 0;
+    iz  i     = 1;
+    for (; i < nargs; i++) {
+        Str a = args[i];
+        if (a == "--") { i++; break; }
+        if (a.len<2 || a[0]!='-') break;
+        for (iz k = 1; k < a.len; k++) {
+            u8 c = a[k];
+            if (c == 'H') { mode |= HARD; continue; }
+            if (c == 'S') { mode |= SOFT; continue; }
+            if (c == 'a') { all = 1; continue; }
+            i32 u = 0;
+            for (; u<countof(ulimits) && ulimits[u].opt!=c; u++) {}
+            if (u==countof(ulimits) || rltable(sh)[ulimits[u].res].err) {
+                invalidoption(sh, scratch, "ulimit", span(a.data+k-1, a.data+k+1));
+                return 2;
+            }
+            Str arg = {};
+            if (k+1 < a.len) {
+                arg = cuthead(a, k+1);
+                k = a.len;
+            } else if (i+1<nargs && !(args[i+1].len && args[i+1][0]=='-')) {
+                arg = args[++i];
+            }
+            if (ncmds < countof(cmds)) {
+                cmds[ncmds].u   = u;
+                cmds[ncmds].arg = arg;
+                ncmds++;
+            }
+        }
+    }
+    b32 hard = mode == HARD;
+    if (all) {
+        for (i32 u = 0; u < countof(ulimits); u++) {
+            if (!rltable(sh)[ulimits[u].res].err) printulimit(sh, scratch, u, hard, 1);
+        }
+        return 0;
+    }
+    if (!ncmds) {
+        cmds[0].u = 0;
+        for (; ulimits[cmds[0].u].opt != 'f'; cmds[0].u++) {}
+        cmds[0].arg = {};
+        ncmds = 1;
+    }
+    if (i<nargs && !cmds[ncmds-1].arg.data) cmds[ncmds-1].arg = args[i];
+
+    for (i32 k = 0; k < ncmds; k++) {
+        i32 u   = cmds[k].u;
+        i32 res = ulimits[u].res;
+        Str arg = cmds[k].arg;
+        if (!arg.data) {
+            printulimit(sh, scratch, u, hard, ncmds>1);
+            continue;
+        }
+        Rlimit cur = rltable(sh)[res];
+        i64    v   = 0;
+        if (arg == "unlimited") {
+            v = RL_INFINITY;
+        } else if (arg == "hard") {
+            v = cur.hard;
+        } else if (arg == "soft") {
+            v = cur.soft;
+        } else {
+            b32 digits = arg.len > 0;
+            for (iz j = 0; j < arg.len; j++) digits &= arg[j]>='0' && arg[j]<='9';
+            if (!digits) {
+                Str why = startswith(arg, "0x") ? Str(": invalid hex number") : ": invalid number";
+                builtinerror(sh, scratch, "ulimit", concat(&scratch, arg, why));
+                return 1;
+            }
+            for (iz j = 0; j < arg.len; j++) {
+                i64 d = arg[j] - '0';
+                v = v > (0x7fffffffffffffff-d)/10 ? 0x7fffffffffffffff : v*10 + d;
+            }
+            if (v > 0x7fffffffffffffff/ulimits[u].scale) {
+                builtinerror(sh, scratch, "ulimit", concat(&scratch, arg, ": limit out of range"));
+                return 1;
+            }
+            v *= ulimits[u].scale;
+        }
+        Rlimit r = cur;
+        if (mode != SOFT) r.hard = v;
+        if (mode != HARD) r.soft = v;
+        i32 err = setrlimit(sh, res, r);
+        if (err) {
+            Str msg = concat3(&scratch, ulimits[u].desc, ": cannot modify limit: ", errtext(err));
+            builtinerror(sh, scratch, "ulimit", msg);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static i32 b_umask(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     b32 symbolic = 0, reuse = 0;
@@ -3825,6 +4012,7 @@ static Builtin builtins[] = {
     {"true",     b_true,     0},
     {"type",     b_type,     0},
     {"typeset",  b_declare,  B_DECL},
+    {"ulimit",   b_ulimit,   0},
     {"umask",    b_umask,    0},
     {"unalias",  b_unalias,  0},
     {"unset",    b_unset,    B_SPECIAL},

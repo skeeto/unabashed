@@ -123,6 +123,20 @@ struct Dirent {
     i32     type;  // FT_*, or FT_NONE if unknown
 };
 
+// Resource limits, in bash's `ulimit -a` order (os_getrlimit)
+enum : i32 {
+    RL_RTTIME, RL_CORE, RL_DATA, RL_NICE, RL_FSIZE, RL_SIGPENDING,
+    RL_MEMLOCK, RL_RSS, RL_NOFILE, RL_PIPE, RL_MSGQUEUE, RL_RTPRIO,
+    RL_STACK, RL_CPU, RL_NPROC, RL_AS, RL_LOCKS, RL_COUNT
+};
+enum : i64 { RL_INFINITY = -1 };
+
+struct Rlimit {
+    i64 soft;  // in the system's units, RL_INFINITY for none
+    i64 hard;
+    i32 err;   // E_NOSYS: no such limit on this platform
+};
+
 struct SpawnFd {
     i32    fd;     // descriptor number in the child
     Handle h;      // parent handle it refers to
@@ -146,6 +160,8 @@ struct Spawn {
     i32      crtslot; // Windows: handle slot width (4 or 8) for passing
                       // descriptors 3 and up in the CRT's lpReserved2
                       // blob, or 0 to pass only 0-2
+    Rlimit  *rlimits; // the child's limits, RL_COUNT of them, or null
+                      // to inherit the shell's (POSIX and the vos only)
     ImageRef image;   // with a base: start this shell's own program
                       // (path and cmdline ignored) continuing from the
                       // image, every descriptor listed passed; once
@@ -338,6 +354,13 @@ static b32     os_cancel(Os *, Io *);
 // Send signal sig to process pid, or with 0 check that it exists.
 // Returns 0 or an E_* error (E_SRCH, E_PERM, E_INVAL).
 static i32     os_kill(Os *, i64 pid, i32 sig);
+// The shell process's limit on a resource (RL_*): bytes, seconds or
+// counts as the system keeps them; RL_PIPE is the pipe buffer's size,
+// which cannot be set. err E_NOSYS where the platform has no such limit.
+static Rlimit  os_getrlimit(Os *, i32 res);
+// Set this process's limit: 0, or E_PERM (a hard limit raised past
+// what it was) or E_INVAL (soft above hard; a limit that cannot be set).
+static i32     os_setrlimit(Os *, i32 res, Rlimit);
 // Send signal sig to virtual process level (a subshell's BASHPID, not
 // a process of its own) of our own shell process pid, through the
 // signal channel: its os_levelsig returns it. Returns 0 or an E_*

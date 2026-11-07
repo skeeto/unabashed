@@ -126,6 +126,7 @@ struct VProc {
     u64     ingroup;  // tracing: the writer group it was started in
     FakeCtx ctx;
     Arena   mem;      // a fixed block: the program's memory
+    Rlimit  rl[RL_COUNT];  // os_getrlimit: inherited, as a kernel's
 };
 
 // The terminal behind the outermost shell's descriptors 0-2 and
@@ -1919,6 +1920,62 @@ static i32 os_kill(Os *os, i64 pid, i32 sig)
     return 0;
 }
 
+// Resource limits as the oracle container has them (tools/README.md:
+// ulimit -n 1024, the rest Docker's defaults for a user), or in the
+// Windows personality as main_win32.cpp models Cygwin's
+static void vrldefault(Rlimit *rl, b32 win)
+{
+    Rlimit inf = {RL_INFINITY, RL_INFINITY, 0};
+    for (i32 i = 0; i < RL_COUNT; i++) rl[i] = inf;
+    if (win) {
+        for (i32 i = 0; i < RL_COUNT; i++) rl[i].err = E_NOSYS;
+        rl[RL_CORE]   = {0, RL_INFINITY, 0};
+        rl[RL_DATA]   = inf;
+        rl[RL_FSIZE]  = inf;
+        rl[RL_NOFILE] = {3200, 3200, 0};
+        rl[RL_PIPE]   = {4096, 4096, 0};
+        rl[RL_STACK]  = {(i64)1<<24, RL_INFINITY, 0};
+        rl[RL_CPU]    = inf;
+        rl[RL_NPROC]  = {256, 256, 0};
+        rl[RL_AS]     = inf;
+        return;
+    }
+    rl[RL_NICE]       = {0, 0, 0};
+    rl[RL_SIGPENDING] = {79961, 79961, 0};
+    rl[RL_MEMLOCK]    = {(i64)64<<20, (i64)64<<20, 0};
+    rl[RL_NOFILE]     = {1024, 1024, 0};
+    rl[RL_PIPE]       = {4096, 4096, 0};
+    rl[RL_MSGQUEUE]   = {819200, 819200, 0};
+    rl[RL_RTPRIO]     = {0, 0, 0};
+    rl[RL_STACK]      = {(i64)8<<20, RL_INFINITY, 0};
+}
+
+static Rlimit os_getrlimit(Os *os, i32 res)
+{
+    Vos *v = osvos(os);
+    return v->procs[v->cur].rl[res];
+}
+
+// As Linux for an unprivileged user (or main_win32.cpp's model)
+static i32 os_setrlimit(Os *os, i32 res, Rlimit r)
+{
+    Vos    *v = osvos(os);
+    Rlimit *t = v->procs[v->cur].rl + res;
+    if (t->err) return t->err;
+    if (res == RL_PIPE) return E_INVAL;
+    if (v->win) {
+        switch (res) {
+        case RL_CORE: case RL_STACK: case RL_AS: case RL_NOFILE: break;
+        default: return E_INVAL;
+        }
+    }
+    if (r.hard!=RL_INFINITY && (r.soft==RL_INFINITY || r.soft>r.hard)) return E_INVAL;
+    if (t->hard!=RL_INFINITY && (r.hard==RL_INFINITY || r.hard>t->hard)) return E_PERM;
+    t->soft = r.soft;
+    t->hard = r.hard;
+    return 0;
+}
+
 static i32 os_siglevel(Os *os, i64 pid, i64 level, i32 sig)
 {
     Vos *v = osvos(os);
@@ -2723,6 +2780,9 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     p->sigpend = 0;
     p->nlsigs  = 0;
     p->sigign = s->sigign;
+    for (i32 i = 0; i < RL_COUNT; i++) {
+        p->rl[i] = s->rlimits ? s->rlimits[i] : v->procs[v->cur].rl[i];
+    }
     p->wait   = VW_NONE;
     if (s->image.base) {
         p->wait  = VW_SLEEP;
@@ -3605,6 +3665,7 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes, b32 win = 0)
     v->procs[0].lid   = 1;
     v->procs[0].ntasks  = 1;
     v->procs[0].ingroup = 1;  // tracing: vgroup is never 0
+    vrldefault(v->procs[0].rl, win);
 
     v->root = vnew(v, 0, "", FT_DIR, 0755);
     if (win) {

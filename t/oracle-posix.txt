@@ -69,7 +69,7 @@ posixpat PASS
 posixpipe PASS
 precedence PASS
 printf FAIL
-procsub FAIL
+procsub PASS
 quote PASS
 quotearray PASS
 read BASH
