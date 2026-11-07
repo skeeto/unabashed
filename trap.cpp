@@ -354,8 +354,11 @@ static b32 signoop(Shell *sh, i32 sig)
 {
     if (sig==2 && interactivetop(sh)) {
         // Back to the prompt, on a line of its own after the ^C the
-        // terminal echoed
-        fdwrite(sh, 2, "\n");
+        // terminal echoed (a cooked Windows console echoes nothing)
+        File  *in  = sh->fds->fd[0];
+        Handle err = sh->sched->err;
+        Handle h   = in && in->kind==F_OS ? in->h : err;
+        if (!os_tty(sh->os, h, err, TTY_QUERY).noctl) fdwrite(sh, 2, "\n");
         sh->status = 128 + 2;
         escape(sh, ESC_INTR);
     }

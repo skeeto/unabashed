@@ -2861,8 +2861,9 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
     i32 imode = 0;
     i32 omode = 0;
     ConsoleInfo ci = {};
-    if (!GetConsoleMode(in, &imode) || !GetConsoleMode(out, &omode)
-            || !GetConsoleScreenBufferInfo(out, &ci)) {
+    b32 conin = GetConsoleMode(in, &imode);
+    r.noctl = conin && !os->ttyraw;  // even if out is not the console
+    if (!conin || !GetConsoleMode(out, &omode) || !GetConsoleScreenBufferInfo(out, &ci)) {
         r.err = E_NOTTY;
         return r;
     }

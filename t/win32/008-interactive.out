@@ -1,4 +1,5 @@
 unabashed-5.3$ $ $ status=130
 $ trapped
 after 130
-$ status 4
+$ exit
+status 4

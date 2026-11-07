@@ -260,6 +260,8 @@ struct Tty {
     b32 legacy; // a Windows console without VT processing (vtcon.cpp)
     b32 noecho; // TTY_CHARS asked for an echo the terminal cannot give
                 // (a Windows console): the caller echoes what it reads
+    b32 noctl;  // a typed interrupt echoes nothing, no ^C (a Windows
+                // console outside raw mode), set even with err
     u8  intr;   // the terminal's special characters, 0 if none
     u8  eof;
     u8  erase;
