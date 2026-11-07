@@ -224,6 +224,15 @@ static void varchanged(Shell *sh, Str name)
         sh->opt[O_IGNOREEOF] = !!lookup(sh, name);  // set or not
     } else if (name == "PIPESTATUS") {
         sh->pstatdirty = 1;
+    } else if (name == "HOSTFILE") {
+        // Unset, completion forgets its host names; set, it reads the
+        // file again, adding to them (as bash's sv_hostfile)
+        Arena none = {};
+        if (!getvar(sh, &none, name).set) {
+            sfreestr(sh->store, sh->hosts);
+            sh->hosts = {};
+        }
+        sh->hostsread = 0;
     } else if (name == "PATH") {
         sh->cmdhash = 0;  // bash forgets remembered paths
     } else if (name == "OPTIND") {

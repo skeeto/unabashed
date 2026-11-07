@@ -500,42 +500,89 @@ static Slice<Str> compvariables(Shell *sh, Comp *c, Str w)
     return m;
 }
 
-// Host names from HOSTFILE or /etc/hosts (§4.7)
-static Slice<Str> comphosts(Shell *sh, Comp *c, Str w, i32 depth = 0)
+static b32 hostblank(u8 c)
 {
-    Arena *a = c->a;
-    Str pre = w.len && w[0]=='@' ? Str("@") : Str("");
-    Str nw  = cuthead(w, pre.len);
-    Got hf  = getvar(sh, a, "HOSTFILE");
-    Str file = hf.set && hf.value.len ? hf.value : Str("/etc/hosts");
-    i32 err = 0;
-    Str text = readwholefile(sh, a, file, &err);
-    Slice<Str> m = {};
+    return c==' ' || c=='\t' || c=='\r';
+}
+
+// Host names from one hosts file, as bash reads it: in pieces of at
+// most 254 bytes (its fgets buffer), each a line of its own; # starts a
+// comment only where a word would; a leading address (a word starting
+// with a digit) is skipped; "$include FILE" reads FILE in its place.
+static void hostfile(Shell *sh, Arena *a, Buf *names, Str file, i32 depth)
+{
+    i32    err  = 0;
+    Str    text = readwholefile(sh, a, file, &err);
     for (Str rest = text; rest.len;) {
         Cut l = cut(rest, '\n');
-        rest = l.tail;
         Str s = l.head;
-        iz  i = 0;
-        while (i<s.len && (s[i]==' ' || s[i]=='\t')) i++;
+        if (s.len > 254) {
+            s    = takehead(rest, 254);
+            rest = cuthead(rest, 254);
+        } else {
+            rest = l.tail;
+        }
+        iz i = 0;
+        while (i<s.len && hostblank(s[i])) i++;
         if (i==s.len || s[i]=='#') continue;
-        b32 first = 1;
+        if (startswith(cuthead(s, i), "$include ")) {
+            iz b = i + 9;
+            while (b<s.len && (s[b]==' ' || s[b]=='\t')) b++;
+            iz e = b;
+            while (e<s.len && !hostblank(s[e])) e++;
+            if (depth < 32) {
+                Str inc = span(s.data+b, s.data+e);
+                hostfile(sh, a, names, inc, depth+1);
+            }
+            continue;
+        }
+        b32 addr = s[i]>='0' && s[i]<='9';
         while (i < s.len) {
-            while (i<s.len && (s[i]==' ' || s[i]=='\t')) i++;
+            while (i<s.len && hostblank(s[i])) i++;
             if (i==s.len || s[i]=='#') break;
             iz b = i;
-            while (i<s.len && s[i]!=' ' && s[i]!='\t' && s[i]!='#') i++;
+            while (i<s.len && !hostblank(s[i])) i++;
             Str name = span(s.data+b, s.data+i);
-            if (first && name[0]>='0' && name[0]<='9') {
-                first = 0;
+            if (addr) {
+                addr = 0;
                 continue;
             }
-            first = 0;
-            if (startswith(name, nw)) m = compadd(c, m, concat(a, "@", name));
+            print(names, name);
+            putbyte(names, '\n');
         }
     }
-    (void)depth;
+}
+
+// Host names from HOSTFILE (else hostname_completion_file, else
+// /etc/hosts), read once there are any, and again, adding to them,
+// after HOSTFILE is assigned (§4.7)
+static Slice<Str> comphosts(Shell *sh, Comp *c, Str w)
+{
+    Arena *a = c->a;
+    if (!sh->hostsread) {
+        Got g = getvar(sh, a, "HOSTFILE");
+        if (!g.set) g = getvar(sh, a, "hostname_completion_file");
+        Str file = g.set ? g.value : Str("/etc/hosts");
+        Buf names(a, 256);
+        print(&names, sh->hosts);
+        hostfile(sh, a, &names, file, 0);
+        Str all = finish(&names);
+        if (all.len > sh->hosts.len) {
+            sfreestr(sh->store, sh->hosts);
+            sh->hosts = sclone(sh->store, all);
+        }
+        sh->hostsread = sh->hosts.len > 0;
+    }
+    Str nw = cuthead(w, w.len && w[0]=='@');
+    Slice<Str> m = {};
+    for (Str rest = sh->hosts; rest.len;) {
+        Cut l = cut(rest, '\n');
+        rest = l.tail;
+        if (startswith(l.head, nw)) m = compadd(c, m, concat(a, "@", l.head));
+    }
     return m;
 }
+
 
 // Every word of every history line (M-TAB)
 static Slice<Str> comphistory(Shell *sh, Comp *c, Str w)

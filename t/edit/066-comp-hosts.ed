@@ -1,0 +1,27 @@
+# Host name completion reads HOSTFILE as bash does: an address first
+# on a line is skipped, # starts a comment only at a word, a CR is a
+# blank, and "$include FILE" reads another file in its place; the names
+# are kept, added to when HOSTFILE is assigned, forgotten when unset
+size 16 60
+rc PS1='$ '
+rc printf '10.0.0.1 alpha alpine # amber\r\nalto#x\n  # all\n$include inc\nazure\n' > hosts
+rc printf '192.168.0.9\tapex\n$include\tnope\n' > inc
+rc HOSTFILE=hosts
+keys echo @a\e?
+snap
+keys \C-a\C-kecho @al\t\t
+snap
+keys \C-a\C-kecho @ap\t
+snap
+keys \C-a\C-kHOSTFILE=inc\r
+keys echo @\e?
+snap
+keys \C-a\C-kecho bravo >> inc\r
+keys echo @b\t
+snap
+keys \C-a\C-kunset HOSTFILE; HOSTFILE=\r
+keys echo @\e?
+snap
+keys \C-a\C-kHOSTFILE=inc\r
+keys echo @\e?
+snap

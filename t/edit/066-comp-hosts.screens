@@ -1,0 +1,87 @@
+== snap 1
+$ echo @a
+@alpha   @alpine  @alto#x  @apex    @azure
+$ echo @a
+@ 2,9
+== snap 2
+$ echo @a
+@alpha   @alpine  @alto#x  @apex    @azure
+$ echo @al
+@alpha   @alpine  @alto#x
+$ echo @al
+@ 4,10 bell 1
+== snap 3
+$ echo @a
+@alpha   @alpine  @alto#x  @apex    @azure
+$ echo @al
+@alpha   @alpine  @alto#x
+$ echo @apex
+@ 4,13 bell 1
+== snap 4
+$ echo @a
+@alpha   @alpine  @alto#x  @apex    @azure
+$ echo @al
+@alpha   @alpine  @alto#x
+$ HOSTFILE=inc
+$ echo @
+@$include  @alpine    @apex      @nope
+@alpha     @alto#x    @azure
+$ echo @
+@ 8,8 bell 1
+== snap 5
+$ echo @a
+@alpha   @alpine  @alto#x  @apex    @azure
+$ echo @al
+@alpha   @alpine  @alto#x
+$ HOSTFILE=inc
+$ echo @
+@$include  @alpine    @apex      @nope
+@alpha     @alto#x    @azure
+$ echo bravo >> inc
+$ echo @b
+@ 9,9 bell 2
+== snap 6
+$ echo @a
+@alpha   @alpine  @alto#x  @apex    @azure
+$ echo @al
+@alpha   @alpine  @alto#x
+$ HOSTFILE=inc
+$ echo @
+@$include  @alpine    @apex      @nope
+@alpha     @alto#x    @azure
+$ echo bravo >> inc
+$ unset HOSTFILE; HOSTFILE=
+$ echo @
+@ 10,8 bell 3
+== snap 7
+$ echo @a
+@alpha   @alpine  @alto#x  @apex    @azure
+$ echo @al
+@alpha   @alpine  @alto#x
+$ HOSTFILE=inc
+$ echo @
+@$include  @alpine    @apex      @nope
+@alpha     @alto#x    @azure
+$ echo bravo >> inc
+$ unset HOSTFILE; HOSTFILE=
+$ HOSTFILE=inc
+$ echo @
+@$include  @apex      @bravo     @nope
+$ echo @
+@ 13,8 bell 3
+== snap 8
+$ echo @a
+@alpha   @alpine  @alto#x  @apex    @azure
+$ echo @al
+@alpha   @alpine  @alto#x
+$ HOSTFILE=inc
+$ echo @
+@$include  @alpine    @apex      @nope
+@alpha     @alto#x    @azure
+$ echo bravo >> inc
+$ unset HOSTFILE; HOSTFILE=
+$ HOSTFILE=inc
+$ echo @
+@$include  @apex      @bravo     @nope
+$ echo @
+@ 13,8 bell 3

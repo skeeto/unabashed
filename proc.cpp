@@ -392,6 +392,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->lastarg    = {(u8 *)salloc(st, c->lastargcap), sh->lastarg.len};
     copybytes(c->lastarg.data, sh->lastarg.data, sh->lastarg.len);
     c->host       = sclone(st, sh->host);
+    c->hosts      = sclone(st, sh->hosts);
     c->badenv     = (Str *)salloc(st, (sh->nbadenv ? sh->nbadenv : 1)*(iz)sizeof(Str));
     for (iz i = 0; i < sh->nbadenv; i++) c->badenv[i] = sclone(st, sh->badenv[i]);
     c->bltname    = {};  // the running builtin's, in the parent's memory

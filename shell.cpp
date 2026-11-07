@@ -583,6 +583,8 @@ struct Shell {
     Str      wd;           // logical working directory (bash's
                            // the_current_working_directory), as PWD shows
     Str      host;
+    Str      hosts;        // completion's host names, one per line,
+    b32      hostsread;    // kept from HOSTFILE once there are any
     Str     *dirs;         // the directory stack under the working
     iz       ndirs;        // directory, bottom first (vars.cpp)
     i32      umask;
