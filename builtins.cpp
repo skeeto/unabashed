@@ -210,6 +210,24 @@ static void pferror(void *ctx, Str msg)
     builtinerror(c->sh, *c->a, "", msg);  // msg names printf
 }
 
+// Might a printf format hold a %(...)T, flags, width and precision
+// included? Then it needs the time zone.
+static b32 hastimeconv(Str fmt)
+{
+    for (iz i = 0; i < fmt.len; i++) {
+        if (fmt[i] != '%') continue;
+        iz j = i + 1;
+        for (; j < fmt.len; j++) {
+            u8 c = fmt[j];
+            b32 flag = c=='-' || c=='+' || c==' ' || c=='#' || c=='\'' ||
+                       c=='.' || c=='*' || (c>='0' && c<='9');
+            if (!flag) break;
+        }
+        if (j<fmt.len && fmt[j]=='(') return 1;
+    }
+    return 0;
+}
+
 static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     iz  i   = 1;
@@ -240,11 +258,10 @@ static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
     PrintfEnv env = {};
     env.ctx        = &ctx;
     env.utf8       = sh->utf8;
+    env.radix      = sh->radix;
     env.now        = pfnow;
     env.shellstart = sh->start / 1000000000;
-    if (find(args[i], "%(") >= 0) {
-        env.zone = shellzone(sh, &scratch);
-    }
+    if (hastimeconv(args[i])) env.zone = shellzone(sh, &scratch);
     env.error      = pferror;
     env.flush      = var.data ? 0 : pfflushout;
     env.setint     = pfsetint;
@@ -486,10 +503,28 @@ static i32 b_eval(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 sourcetext(Shell *, Str *args, iz nargs, Str src, Arena, b32 startup);
 
+// A file name as bash's printable_filename shows it in a message:
+// $'...' when it has unprintable characters, else, for re-input
+// (portable), single-quoted when it has shell metacharacters.
+static Str printablename(Shell *sh, Arena *a, Str s, b32 portable)
+{
+    if (shouldquote(s, sh->utf8)) {
+        Buf b(a, 4*s.len+3);
+        ansicquote(&b, s, sh->utf8);
+        return finish(&b);
+    } else if (portable && shellmetas(s)) {
+        Buf b(a, s.len+8);
+        singlequote(&b, s);
+        return finish(&b);
+    }
+    return s;
+}
+
 // A file . cannot find: in POSIX mode this ends a non-interactive
 // shell, unless `command` ran it
 static i32 sourcenotfound(Shell *sh, Arena scratch, Str name, Str file, b32 cmd)
 {
+    file = printablename(sh, &scratch, file, 0);
     builtinerror(sh, scratch, name, concat(&scratch, file, ": file not found"));
     if (sh->opt[O_POSIX] && !sh->interactive && !cmd) {
         sh->status  = 1;
@@ -2145,7 +2180,8 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
         }
     }
     if (r < 0) {
-        builtinerror(sh, scratch, name, concat3(&scratch, dir, Str(": "), errtext(err)));
+        Str shown = printablename(sh, &scratch, dir, 0);
+        builtinerror(sh, scratch, name, concat3(&scratch, shown, Str(": "), errtext(err)));
         return 1;
     }
     return r;
@@ -3709,7 +3745,9 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
             return 127;
         }
     }
-    return runexternal(sh, scratch, args+i, nargs-i, env, found);
+    i32 status = runexternal(sh, scratch, args+i, nargs-i, env, found);
+    chldreaped(sh, 1);
+    return status;
 }
 
 static i32 b_builtin(Shell *sh, Str *args, iz nargs, Arena scratch)
@@ -4435,9 +4473,9 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
             for (HashCmd *h = sh->cmdhash[b]; h; h = h->next) {
                 if (list) {
                     bprint(sh, "builtin hash -p ");
-                    bprint(sh, h->path);
+                    bprint(sh, printablename(sh, &scratch, h->path, 1));
                     bprint(sh, " ");
-                    bprint(sh, h->name);
+                    bprint(sh, printablename(sh, &scratch, h->name, 1));
                     bprint(sh, "\n");
                     any = 1;
                     continue;
@@ -4476,7 +4514,7 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
                 builtinerror(sh, scratch, "hash", concat(&scratch, name, ": not found"));
                 status = 1;
             }
-        } else if (show || list) {
+        } else if (show) {  // -l alone with names hashes them, as bash
             HashCmd *h = hashfind(sh, name);
             if (!h) {
                 builtinerror(sh, scratch, "hash", concat(&scratch, name, ": not found"));
@@ -4484,7 +4522,7 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
                 continue;
             }
             hashhit(sh, h);
-            if (list) {
+            if (list) {  // unquoted here, unlike the full listing
                 bprint(sh, "builtin hash -p ");
                 bprint(sh, h->path);
                 bprint(sh, " ");
@@ -4498,6 +4536,7 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
             }
             bprint(sh, "\n");
         } else if (!haspath(sh, name) && !findbuiltin(sh, name) && !findfunc(sh, name)) {
+            hashremove(sh, name);  // looked up afresh, gone if not found
             Str found = pathlookup(sh, &scratch, name);
             if (!found.data) {
                 builtinerror(sh, scratch, "hash", concat(&scratch, name, ": not found"));
@@ -4512,7 +4551,10 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 b_times(Shell *sh, Str *, iz, Arena)
 {
-    bprint(sh, "0m0.000s 0m0.000s\n0m0.000s 0m0.000s\n");
+    Str line = "0m0.000s 0m0.000s\n";
+    if (sh->radix) line = sh->radix==',' ? Str("0m0,000s 0m0,000s\n") : line;
+    bprint(sh, line);
+    bprint(sh, line);
     return 0;
 }
 

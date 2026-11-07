@@ -374,8 +374,29 @@ static void intrnewline(Shell *sh)
 }
 
 // Act on this level's pending signals, lowest first.
+// A child that bash would have forked was reaped. With a CHLD trap set
+// its action runs once for it at the next safe point, as bash's
+// SIGCHLD handling queues one per child: right after a foreground wait,
+// inside the command's redirections, or later for a background job.
+static void chldreaped(Shell *sh, i32 n)
+{
+    if (n>0 && !sh->inchld && trapset(sh, 17)) sh->chldtraps += n;
+}
+
+static void runchld(Shell *sh)
+{
+    while (sh->chldtraps > 0) {
+        sh->chldtraps--;
+        if (!trapset(sh, 17)) continue;
+        sh->inchld = 1;
+        runtrap(sh, 17);
+        sh->inchld = 0;
+    }
+}
+
 static void runsigs(Shell *sh, Arena scratch)
 {
+    if (sh->chldtraps) runchld(sh);
     Sigproc *p = sh->sig;
     while (p->pending) {
         i32 sig = __builtin_ctzll(p->pending) + 1;
@@ -486,10 +507,18 @@ static void waitdone(Shell *sh, u64 died, b32 failed)
 }
 
 // A safe point for signals.
+static void polljobs(Shell *);
+static void reappsubs(Shell *);
+
 static void checksigs(Shell *sh, Arena scratch)
 {
     takeossigs(sh);
-    if (sh->sig->pending) runsigs(sh, scratch);
+    // Background jobs and procsubs that ended owe their CHLD traps now
+    if (!sh->inchld && (sh->jobs || sh->psubs) && trapset(sh, 17)) {
+        polljobs(sh);
+        reappsubs(sh);
+    }
+    if (sh->sig->pending || sh->chldtraps) runsigs(sh, scratch);
 }
 
 // A pending signal whose default action ends this level does so now.

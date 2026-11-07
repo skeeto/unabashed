@@ -17,6 +17,7 @@ struct PfZone;
 struct PrintfEnv {
     void *ctx;
     b32   utf8;                             // UTF-8 locale, else C
+    u8    radix;                            // decimal point, 0 for '.'
     i64   (*now)(void *ctx);                // seconds since the epoch
     i64   shellstart;                       // for %(...)T with -2
     Str   tz;                               // TZ if exported, else null
@@ -1811,7 +1812,21 @@ static F80 getfloat(Printf *p)
     if (byteat(s, 0)=='\'' || byteat(s, 0)=='"') {
         return f80fromint(asciicode(p));
     }
-    F80Parse r = f80parse(s, *p->out->a);
+    u8  radix = p->env->radix;
+    Str t     = s;
+    if (radix && radix!='.') {
+        // As strtold: the locale's point, and '.' ends the number
+        t = clone(p->out->a, s);
+        for (iz i = 0; i < t.len; i++) {
+            if (t[i] == '.') {
+                t = takehead(t, i);
+                break;
+            } else if (t[i] == radix) {
+                t.data[i] = '.';
+            }
+        }
+    }
+    F80Parse r = f80parse(t, *p->out->a);
     chkconv(p, s, r.end, r.range);
     p->next++;
     return r.v;
@@ -2442,7 +2457,15 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs)
                     fs.width = cs.width;
                     fs.prec  = cs.prec;
                     reserve(out, f80bound(&fs));  // working memory beyond
+                    iz start = out->len;
                     f80format(out, v, sp.conv, &fs, *out->a);
+                    u8 radix = p->env->radix;
+                    for (iz i = start; radix && i<out->len; i++) {
+                        if (out->data[i] == '.') {
+                            out->data[i] = radix;
+                            break;
+                        }
+                    }
                 }
             } break;
 

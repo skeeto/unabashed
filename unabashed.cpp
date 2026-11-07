@@ -204,12 +204,91 @@ static void nativepath(Shell *sh)
     }
 }
 
+// Could setlocale take this locale? Only C, POSIX and UTF-8 ones are
+// supported, so any other (zh_TW.big5, ru_RU.CP1251, a bare en_US) is
+// as a locale that is not installed.
+static b32 localeok(Str v)
+{
+    if (!v.len || v=="C" || v=="POSIX") return 1;
+    Cut c = cut(v, '.');
+    if (!c.ok) return 0;
+    Str cs = cut(c.tail, '@').head;
+    return equalfold(cs, "UTF-8") || equalfold(cs, "utf8");
+}
+
+// Assigning a locale variable that names no usable locale warns, as
+// bash's sv_locale does when setlocale fails (LANG alone is quiet).
+// Linux only: Cygwin takes nearly any name, busybox-w32 none.
+static void localewarn(Shell *sh, Str name)
+{
+    if (sh->pathmode!=PM_POSIX || sh->nolocwarn) return;
+    byte  mem[512];
+    Arena a = {mem, mem+sizeof(mem)};
+    Got   g = getvar(sh, &a, name);
+    if (!g.set || localeok(g.value)) return;
+    Str v = g.value.len>200 ? takehead(g.value, 200) : g.value;
+    Buf b(&a, 300);
+    print(&b, "warning: setlocale: ");
+    print(&b, name);
+    print(&b, ": cannot change locale (");
+    print(&b, v);
+    print(&b, "): No such file or directory");
+    shellerror(sh, a, finish(&b));
+}
+
+// The decimal point of a locale's language and territory, as glibc's
+// LC_NUMERIC has it: a comma across most of Europe and beyond.
+static u8 localeradix(Str v)
+{
+    static char const comma[][3] = {
+        "af","az","be","bg","bs","ca","cs","da","de","el","eo","es","et",
+        "eu","fi","fo","fr","gl","hr","hu","hy","id","is","it","ka","kk",
+        "ky","lt","lv","mk","mn","nb","nl","nn","no","oc","pl","pt","ro",
+        "ru","sk","sl","sq","sr","sv","tg","tk","tr","tt","uk","uz","vi",
+    };
+    static char const point[][6] = {  // territories that differ
+        "de_CH","de_LI","it_CH","es_MX","es_US","es_DO","es_GT","es_HN",
+        "es_NI","es_PA","es_PR","es_SV",
+    };
+    Str lang = cut(cut(cut(v, '.').head, '@').head, '_').head;
+    Str terr = cut(cut(v, '.').head, '@').head;
+    for (iz i = 0; i < countof(point); i++) {
+        if (terr == Str(point[i])) return 0;
+    }
+    for (iz i = 0; i < countof(comma); i++) {
+        if (lang == Str(comma[i])) return ',';
+    }
+    return 0;
+}
+
+// LC_ALL, else LC_NUMERIC, else LANG chose another numeric locale. One
+// that cannot be set leaves the current one, as a failed setlocale.
+static void numericchanged(Shell *sh)
+{
+    Arena none = {};
+    Str v = getvar(sh, &none, "LC_ALL").value;
+    if (!v.len) v = getvar(sh, &none, "LC_NUMERIC").value;
+    if (!v.len) v = getvar(sh, &none, "LANG").value;
+    if (sh->pathmode == PM_NATIVE) {
+        sh->radix = 0;  // busybox-w32 has no locales
+    } else if (localeok(v)) {
+        sh->radix = localeradix(v);
+    }
+}
+
 static void varchanged(Shell *sh, Str name)
 {
     if (name=="HISTSIZE" || name=="HISTCONTROL" || name=="histchars" ||
             name=="HISTTIMEFORMAT" || name=="HISTFILESIZE") {
         histvarchanged(sh, name);
+    } else if (name=="LC_TIME" || name=="LC_COLLATE" || name=="LC_MESSAGES") {
+        localewarn(sh, name);
+    } else if (name == "LC_NUMERIC") {
+        localewarn(sh, name);
+        numericchanged(sh);
     } else if (name == "LC_ALL" || name == "LC_CTYPE" || name == "LANG") {
+        if (name != "LANG") localewarn(sh, name);
+        numericchanged(sh);
         Arena none = {};
         Str v = getvar(sh, &none, "LC_ALL").value;
         if (!v.len) v = getvar(sh, &none, "LC_CTYPE").value;

@@ -289,6 +289,7 @@ static void polljobs(Shell *sh)
             j->done = 1;
             j->notified = 0;  // a change jobs has not shown
             coprocended(sh, j->pid);
+            chldreaped(sh, 1);
         }
     }
 }
@@ -708,6 +709,7 @@ static void joindone(Shell *sh, Job *j)
     j->stopped  = 0;
     j->notified = 0;
     coprocended(sh, j->pid);
+    chldreaped(sh, 1);
 }
 
 static Job *jobbypid(Shell *sh, i64 pid)
@@ -747,6 +749,7 @@ static b32 waitjob(Shell *sh, Job *j, i32 *status, b32 force = 0)
         sh->sched->nbg--;
         j->task   = 0;
         j->done   = 1;
+        chldreaped(sh, 1);
         j->notified = 0;
         j->status = st;
         coprocended(sh, j->pid);
@@ -1796,6 +1799,7 @@ static i32 b_fg(Shell *sh, Str *args, iz nargs, Arena scratch)
         j->task = 0;
         j->done = 1;
         coprocended(sh, j->pid);
+        chldreaped(sh, 1);
     }
     if (term && (j->status & WSIGNALED) && (j->status & 255)==128+2) {
         // As runprogram: the terminal's INT reached only the job

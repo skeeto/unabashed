@@ -449,6 +449,9 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->trapbusy = 0;
     c->intrread = 0;
     c->intredit = 0;
+    c->nolocwarn = 0;
+    c->chldtraps = 0;
+    c->inchld   = 0;
     c->jobs     = copyjobs(st, sh->jobs);  // to list, not to wait for
     c->jobctl   = 0;
     c->spawngrp = 0;
@@ -667,6 +670,7 @@ static void reappsubs(Shell *sh)
             *p = t->sib;
             sh->psubpid    = t->pid;
             sh->psubstatus = taskjoin(sh->sched, t) & 255;
+            chldreaped(sh, 1);
         } else {
             p = &t->sib;
         }
@@ -681,6 +685,7 @@ static void joinpsubs(Shell *sh)
         Task *t = sh->psubs;
         sh->psubs = t->sib;
         taskjoin(sh->sched, t);
+        chldreaped(sh, 1);
     }
 }
 
@@ -701,6 +706,7 @@ static i32 waitpsub(Shell *sh, i64 pid, b32 *found)
             *p = t->sib;
             sh->psubpid    = pid;
             sh->psubstatus = st & 255;
+            chldreaped(sh, 1);
             return sh->psubstatus;
         }
     }
@@ -1135,6 +1141,9 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         if (!failed) failed = st & 255;
     }
     waitdone(sh, died, extbad);
+    i32 forked = 0;
+    for (i32 k = 0; k < nstages; k++) forked += ran[k] && (k<last || !inhere);
+    chldreaped(sh, forked);
     for (i32 k = 0; k < last; k++) {
         if (procs[k] != BADHANDLE) {
             checkwinsize(sh);

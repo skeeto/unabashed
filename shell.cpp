@@ -545,6 +545,7 @@ struct Shell {
     b32      loggedout;    // ~/.bash_logout has run
     i32      retprev;      // the status before the last return builtin
     b32      utf8;         // UTF-8 locale, else bytes
+    u8       radix;        // LC_NUMERIC's decimal point, 0 for '.'
     b32      win32;        // on Windows: platform facts, not paths
     PathMode pathmode;     // how paths read and print (paths.cpp)
     PathCtx *paths;        // the mount table and the rest, from startup
@@ -663,7 +664,10 @@ struct Shell {
                            // a descriptor they replace closes at once
     b32      noreport;     // in command and process substitutions: no reports
     b32      intrread;     // in the read builtin: trap actions run at once
+    b32      nolocwarn;    // binding a program's temporary environment
     b32      intredit;     // in the editor's read: a signal ends it (-4)
+    i32      chldtraps;    // CHLD trap actions owed, one per child reaped
+    b32      inchld;       // running one of them
     b32      execed;       // replaced by exec: no EXIT trap
     b32      exitcalled;   // the exit builtin: EXIT trap in the function
     b32      execing;      // exec's program may replace the process

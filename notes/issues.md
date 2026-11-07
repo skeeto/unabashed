@@ -408,7 +408,12 @@ Moved from M5a: limits of the test tiers, not of the shell.
   bash's shortcut gives up; more than 10 divergent brackets in one
   sequence are not forked.
 - No Big5 or other non-UTF-8 multibyte locale (glob-test's zh_TW
-  part).
+  part, intl's ru_RU.CP1251): such a locale is as one not installed,
+  with bash's setlocale warning.
+- Locales: every UTF-8 locale counts as installed (bash warns for one
+  that is not, and keeps the old one); LC_NUMERIC's decimal point comes
+  from a table of languages and territories, and `%'` groups nothing;
+  messages are never translated (bash under de_DE says "Zeile").
 - Windows: ctime is reported as mtime and blocks estimated from size;
   a program that exits nonzero after Ctrl-C counts as killed by it;
   a program under 100 ms old that has not yet attached to the console

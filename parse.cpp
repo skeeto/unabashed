@@ -1019,10 +1019,15 @@ static Str ansiexpand(Arena *a, Str s, b32 utf8, b32 keepnul = 0)
                 v = c;
             } else if (u <= 0x7f) {
                 v = (i32)u;
-            } else if (utf8 && u <= 0x10ffff) {
-                u8 tmp[4];
-                iz len = utf8encode(tmp, (i32)u);
-                print(&b, Str{tmp, len});
+            } else if (u > 0x7fffffff) {
+                continue;  // as bash's u32cconv: nothing at all
+            } else if (utf8) {
+                // UTF-8 extended to 31 bits, as printf's \U
+                i32 m = u<0x800 ? 2 : u<0x10000 ? 3 : u<0x200000 ? 4 : u<0x4000000 ? 5 : 6;
+                putbyte(&b, (u8)(0xff00>>m | u>>(6*(m-1))));
+                for (i32 k = m-2; k >= 0; k--) {
+                    putbyte(&b, (u8)(0x80 | (u>>(6*k) & 0x3f)));
+                }
                 continue;
             } else {
                 // Not representable: an escape, in uppercase hex

@@ -440,7 +440,7 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
         i64 t = dynnow(sh);
         Buf b(a, 32);
         print(&b, t/1000000000);
-        putbyte(&b, '.');
+        putbyte(&b, sh->radix ? sh->radix : '.');
         printpad(&b, t/1000%1000000, 6);
         return finish(&b);
     }

@@ -54,6 +54,7 @@ static b32      rundebugtrap(Shell *, Arena);
 static b32      trapset(Shell *, i32 idx);
 static void     runreturntrap(Shell *, Arena);
 static void     subshelltraps(Shell *);
+static void     chldreaped(Shell *, i32);
 static void     sigenter(Shell *, Sigproc *, i64 pid, Task *);
 static i64      newvpid(Shell *);
 static void     sigleave(Shell *, Sigproc *);
@@ -776,6 +777,7 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
         i32 childsig = sh->childsig;
         i64 childpid = sh->childpid;
         subshell(sh, &j, child, cap);
+        chldreaped(sh, 1);
         // Its death is not a program's: were it left as one, the
         // command expanding it would be reported killed by it
         sh->childsig = childsig;
@@ -2217,6 +2219,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
             sh->inhandler = 1;
             i32 status = subshell(sh, &j, a, 0);
             sh->inhandler = 0;
+            chldreaped(sh, 1);
             return status;
         }
         if (!path.data && !getvar(sh, &a, "PATH").set) {
@@ -2818,6 +2821,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         // K=x A=${K#?} cmd
         Word *w      = assigns;
         b32  *pushed = alloc<b32>(a, nassign);
+        sh->nolocwarn = 1;  // not yet the command's binding
         for (iz i = 0; i < nassign; i++, w = w->next) {
             as[i] = splitassign(sh, a, w->text);
             b32 later = 0;
@@ -2832,6 +2836,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         for (iz i = nassign-1; i >= 0; i--) {
             if (pushed[i]) poptemp(sh, as[i].name);
         }
+        sh->nolocwarn = 0;
     }
     {
         // An array element cannot be bound for one command: reported,
@@ -3029,9 +3034,12 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         // Also bound in the shell while the program is looked up, as
         // bash's temporary environment: a PATH there is searched, and
         // command_not_found_handle sees them all
+        // (no setlocale warning: bash sets the locale only in the child)
+        sh->nolocwarn = 1;
         for (iz i = 0; i < nassign; i++) {
             pushtemp(sh, scratch, as[i].name, tempvalue(sh, &scratch, as[i]));
         }
+        sh->nolocwarn = 0;
         // As bash, a program finds its own path in $_
         Str path = find(name, "/")>=0 ? name : pathlookup(sh, a, name);
         if (path.len) {
@@ -3050,6 +3058,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         sh->attail  = n==sh->tailnode && sh->taillevel==sh->subshell+1;
         sh->status = runexternal(sh, scratch, argv.data, argv.len, env);
         sh->attail  = 0;
+        if (!direct) chldreaped(sh, 1);
         for (iz i = nassign-1; i >= 0; i--) poptemp(sh, as[i].name);
         reportchild(sh, scratch, n);
     }
@@ -3398,7 +3407,7 @@ static b32 arithpart(Shell *sh, Arena scratch, Word *w, Arith *r = 0)
 
 // A duration in ns as the time keyword prints it: seconds with prec
 // decimals (truncated), or minutes and seconds when long.
-static void printduration(Buf *b, i64 ns, i32 prec, b32 islong)
+static void printduration(Buf *b, i64 ns, i32 prec, b32 islong, u8 radix)
 {
     if (ns < 0) ns = 0;
     i64 sec = ns / 1000000000;
@@ -3410,7 +3419,7 @@ static void printduration(Buf *b, i64 ns, i32 prec, b32 islong)
     }
     print(b, sec);
     if (prec) {
-        putbyte(b, '.');
+        putbyte(b, radix ? radix : '.');
         for (i32 i = 0; i < prec; i++) {
             frac *= 10;
             putbyte(b, (u8)('0' + frac/1000000000));
@@ -3460,9 +3469,9 @@ static void timereport(Shell *sh, Arena scratch, i64 real, b32 posix)
             continue;
         }
         switch (fmt[j]) {
-        case 'R': printduration(&b, real, prec, islong); break;
+        case 'R': printduration(&b, real, prec, islong, sh->radix); break;
         case 'U':
-        case 'S': printduration(&b, 0, prec, islong);    break;
+        case 'S': printduration(&b, 0, prec, islong, sh->radix);    break;
         case 'P': print(&b, "0.00");                     break;
         default: {
             // As bash: an error instead of the whole report
@@ -3552,6 +3561,7 @@ static void execsubshell(Shell *sh, Node *n, Arena scratch)
     sh->tailnode  = tailcommand(n->a);
     sh->taillevel = sh->subshell + 2;
     sh->status = subshell(sh, &j, scratch, 0);
+    chldreaped(sh, 1);
     sh->tailnode  = 0;
     sh->taillevel = 0;
     if (!n->redirs) reportchild(sh, scratch, n);  // else once they are undone
