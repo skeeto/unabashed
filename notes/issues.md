@@ -26,64 +26,7 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 
 ## M6 (editor)
 
-- run-history: history4 and history7 both need readline on a
-  non-terminal under `-i` (the item below). (step 2)
-- A history file that is a symbolic link is written through in place
-  (the core cannot read links), so its target keeps its mode; readline
-  writes beside the target and renames over it (mode 0600). The owner
-  is not restored after a rename, as readline does as root. (M7)
-- `bash -i` whose input is not a terminal still reads with readline
-  and echoes each line it reads; ours reads plainly. (step 2)
-- Invalid UTF-8 in the line is drawn as U+FFFD, a column per byte,
-  which is what a terminal shows for the raw bytes readline writes;
-  a byte that breaks a sequence in self-insert becomes a key of its
-  own. Not checked against recordings: a sequence cut short by the key
-  timeout or the end of input is inserted as it is (readline may hold
-  it until complete), and in the C locale readline (output-meta off)
-  shows bytes past 0x7f as `\NNN` where ours draws UTF-8 whatever the
-  locale. A first recording was inconclusive: \xc3\xa9 and \xff were
-  inserted and shown as \NNN, yet \xe6 ran M-f, which readline's C
-  defaults (convert-meta on) do not explain together; the .ed env
-  lines may leave LANG set twice. (M8, with input-meta and friends)
-- A WINCH trap: the editor only catches SIGWINCH itself (POSIX) when
-  its disposition is the default, and its trap action runs later than
-  bash's. (step 2)
-
-- inputrc variables kept for `$if` (and M8's `bind -v`) but without
-  effect: blink-matching-paren, colored-stats and
-  colored-completion-prefix, echo-control-characters, enable-keypad,
-  enable-meta-key, expand-tilde, history-preserve-point,
-  horizontal-scroll-mode, mark-modified-lines, revert-all-at-newline,
-  show-mode-in-prompt and the mode strings, the active region colours,
-  byte-oriented, input-meta, output-meta and convert-meta. (step 10)
-- editing-mode vi is recorded and vi keymaps take bindings, but the
-  editor stays in emacs mode; vi-* and other unimplemented function
-  names (dabbrev-expand, paste-from-clipboard, ...) bind nothing, so
-  they ring and do not shadow. (M8)
-- inputrc binding nothing to a prefix (`"\C-x":` alone): readline
-  stores a do-nothing shadow, and folds an emptied keymap back into
-  its parent; ours leaves the prefix unbound. Bash's own keys and the
-  arrow keys are bound before the inputrc rather than after it "if
-  unbound", which differs only when the inputrc unbinds one. (step 10)
-- inputrc with CRLF lines: msys mode strips the CR (checked with an
-  install's CRLF /etc/inputrc on a Windows console); POSIX keeps it, as
-  readline does, but no script records that (the vos runs one
-  personality). (step 10)
-- A terminal special character that stops being one (stty) becomes
-  self-insert on the next line, as readline; untested, since neither
-  the vos nor the oracle's PATH has stty. (step 10)
-
-Moved from M5a: needs the completion engine.
-
-- User name completion (`~user`, M-~) finds nothing: no user database
-  is read; bash reads the password file. Hosts are read from
-  HOSTFILE or /etc/hosts without `$include`. (step 10)
-- dabbrev-expand and export-completions are not implemented. (step 10)
-- shell-expand-line on a line ending in an unterminated `$(` with
-  nothing after it: bash expands it to nothing; ours reports the
-  command substitution's unexpected EOF and gives up the line. (M7)
-- The completion stat hook does not canonicalize against `$PWD`, and
-  dirspell is not done. (step 10)
+Closed: every item was fixed or moved (m6.md, step 10).
 
 
 ## M7 (job control and fidelity)
@@ -306,6 +249,33 @@ the Git Bash corpus reaches; M7 is where fidelity is finished):
   Seen while checking Claude Code (m5a.md, exit criteria).
 
 
+Moved from M6 (m6.md, step 10):
+
+- `bash -i` whose input is not a terminal still reads with readline:
+  it interprets the editing keys (C-b, C-r, arrows) and writes
+  readline's redisplay to stderr, terminal escapes and all (TERM=dumb:
+  backspaces), each line echoed. Ours reads plainly. The bytes are
+  readline's, which the editor's screen-not-bytes redisplay does not
+  give; it belongs with invocation. run-history's history4 and
+  history7 wait on it.
+- A WINCH trap: the editor only catches SIGWINCH itself (POSIX) when
+  its disposition is the default, and its trap action runs later than
+  bash's (with the trap fidelity work).
+- User name completion (`~user`, M-~) finds nothing: no user database
+  is read; bash reads the password file (with the `~user` tilde
+  prefix above, which needs the same lookup). Hosts are read from
+  HOSTFILE or /etc/hosts without `$include`.
+- cdspell and dirspell are not done, and the completion stat hook does
+  not canonicalize against `$PWD` (with cd's other options).
+- A history file that is a symbolic link is written through in place
+  (the core cannot read links), so its target keeps its mode; readline
+  writes beside the target and renames over it (mode 0600). The owner
+  is not restored after a rename, as readline does as root.
+- shell-expand-line on a line ending in an unterminated `$(` with
+  nothing after it: bash expands it to nothing; ours reports the
+  command substitution's unexpected EOF and gives up the line.
+
+
 ## M8 (performance)
 
 - POSIX: if another process reads the same pipe as a shell task, a read
@@ -337,6 +307,39 @@ the Git Bash corpus reaches; M7 is where fidelity is finished):
   (up to 256 MiB; `^(a+)+\1$` on 1000 a's takes 96 MB) leaves that
   much committed. plan.md's `os_decommit` is not implemented. (m4.md,
   review)
+
+
+Moved from M6 (m6.md, step 10), with bind and the rest of editor 2:
+
+- inputrc variables kept for `$if` (and `bind -v`) but without
+  effect: blink-matching-paren, colored-stats and
+  colored-completion-prefix, echo-control-characters, enable-keypad,
+  enable-meta-key, expand-tilde, history-preserve-point,
+  horizontal-scroll-mode, mark-modified-lines, revert-all-at-newline,
+  show-mode-in-prompt and the mode strings, the active region colours,
+  byte-oriented, input-meta, output-meta and convert-meta.
+- inputrc binding nothing to a prefix (`"\C-x":` alone): readline
+  stores a do-nothing shadow, and folds an emptied keymap back into
+  its parent; ours leaves the prefix unbound. Bash's own keys and the
+  arrow keys are bound before the inputrc rather than after it "if
+  unbound", which differs only when the inputrc unbinds one (or bind
+  does).
+- dabbrev-expand and export-completions are not implemented.
+- editing-mode vi is recorded and vi keymaps take bindings, but the
+  editor stays in emacs mode; vi-* and other unimplemented function
+  names (dabbrev-expand, paste-from-clipboard, ...) bind nothing, so
+  they ring and do not shadow.
+- Invalid UTF-8 in the line is drawn as U+FFFD, a column per byte,
+  which is what a terminal shows for the raw bytes readline writes;
+  a byte that breaks a sequence in self-insert becomes a key of its
+  own. Not checked against recordings: a sequence cut short by the key
+  timeout or the end of input is inserted as it is (readline may hold
+  it until complete), and in the C locale readline (output-meta off)
+  shows bytes past 0x7f as `\NNN` where ours draws UTF-8 whatever the
+  locale. A first recording was inconclusive: \xc3\xa9 and \xff were
+  inserted and shown as \NNN, yet \xe6 ran M-f, which readline's C
+  defaults (convert-meta on) do not explain together; the .ed env
+  lines may leave LANG set twice (with input-meta and friends).
 
 
 ## Test infrastructure
@@ -409,6 +412,15 @@ Moved from M5a: limits of the test tiers, not of the shell.
   rules (tools/README.md) keep writes in WORKDIR. Untried: an
   AppContainer, or the sandbox pre-creating the msys
   `\BaseNamedObjects\msys-2.0S5-<key>` directory with a Low label.
+
+
+- inputrc with CRLF lines: msys mode strips the CR (checked with an
+  install's CRLF /etc/inputrc on a Windows console); POSIX keeps it, as
+  readline does, but no script records that (the vos runs one
+  personality). (m6.md)
+- A terminal special character that stops being one (stty) becomes
+  self-insert on the next line, as readline; untested, since neither
+  the vos nor the oracle's PATH has stty. (m6.md)
 
 
 ## Accepted deviations

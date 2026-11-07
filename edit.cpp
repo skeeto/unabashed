@@ -460,7 +460,7 @@ static void edbindings(Editor *ed)
         u8 seq[] = {0x1b, c};
         keybind(a, r, {seq, 2}, EF_DIGIT_ARGUMENT);
     }
-    struct { char const *seq; i32 fn; } map[] = {
+    struct { Str seq; i32 fn; } map[] = {
         {"\x00", EF_SET_MARK},
         {"\x01", EF_BEGINNING_OF_LINE},   {"\x02", EF_BACKWARD_CHAR},
         {"\x04", EF_DELETE_CHAR},         {"\x05", EF_END_OF_LINE},
@@ -535,9 +535,7 @@ static void edbindings(Editor *ed)
         {"\x18\x12", EF_RE_READ_INIT_FILE},
     };
     for (iz i = 0; i < countof(map); i++) {
-        iz  len = map[i].seq[0] ? (iz)__builtin_strlen(map[i].seq) : 1;
-        Str seq = {(u8 *)map[i].seq, len};
-        keybind(a, r, seq, map[i].fn);
+        keybind(a, r, map[i].seq, map[i].fn);  // literal lengths, NUL too
     }
 }
 
