@@ -59,8 +59,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
   search records a span for most pairs of position and length, which
   costs time (`(a*)(a*)\1\2x` on 600 a's: 10.6 s on master, 15.0 s)
   and memory. (m4.md)
-- redir12 line numbers: bash cites the line where the parser finished
-  the top-level command; we cite the last simple command's. (m4.md)
 - With extquote off, a here-document's `${x#${$'x1'}}` is a bad
   substitution with our usual message; bash reports "bad substitution:
   no closing `}' in" followed by the whole body. (m7.md, step 6)

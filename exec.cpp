@@ -2428,6 +2428,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     code->refs++;
     Str srcname = sh->srcname;
     sh->srcname = code->file;
+    i32 ctlline = sh->ctlline;
 
     // Pop this call on the way out of an escape too, so that a shell
     // that resumes after an expansion error has no stale frames
@@ -2470,6 +2471,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     }
     sh->loopdepth = loopdepth;
     sh->srcname   = srcname;
+    sh->ctlline   = ctlline;
     leaveframe(sh, &f);
     sh->args = saved;
     if (escaped) {
@@ -2868,8 +2870,14 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
 
     // exec without a command makes its redirections permanent
     // (outside a subshell only once all of them succeed: a failure
-    // undoes the rest, as in bash)
-    b32 execonly = name=="exec" && (argv.len==1 || (argv.len==2 && argv[1]=="--"));
+    // undoes the rest, as in bash), also run through command
+    iz ex = 0;
+    while (ex<argv.len && argv[ex]=="command" && !findfunc(sh, "command")) {
+        for (ex++; ex<argv.len && argv[ex]=="-p"; ex++) {}
+        ex += ex<argv.len && argv[ex]=="--";
+    }
+    b32 execonly = ex<argv.len && argv[ex]=="exec" &&
+                   (argv.len==ex+1 || (argv.len==ex+2 && argv[ex+1]=="--"));
     b32 commit   = execonly && !sh->subshell;
     i64 lastbg   = sh->lastbg;
     Str savedname = sh->bltname;
@@ -3845,6 +3853,11 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         for (Redir *r = n->redirs; r; r = r->next) {
             sh->stdinredir |= r->src==0 && !r->srcvar;  // & reads it then
         }
+        // As bash, a compound command's redirections are at its line
+        // as only some commands set it: that of the enclosing for,
+        // case, select or call, else where the parser finished the
+        // top-level command
+        sh->line = sh->ctlline;
         if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs)) {
             sh->stdinredir = stdinredir;
             unwind(sh, mark);
@@ -3939,21 +3952,27 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         sh->status = status;
     } break;
 
-    case N_SELECT:
+    case N_SELECT: {
+        i32 ctlline = sh->ctlline;  // theirs only while they run
         runselect(sh, n, scratch);
-        break;
+        sh->ctlline = ctlline;
+    } break;
 
-    case N_FOR:
+    case N_FOR: {
+        i32 ctlline = sh->ctlline;
         execfor(sh, n, scratch);
-        break;
+        sh->ctlline = ctlline;
+    } break;
 
     case N_ARITHFOR:
         execarithfor(sh, n, scratch);
         break;
 
-    case N_CASE:
+    case N_CASE: {
+        i32 ctlline = sh->ctlline;
         execcase(sh, n, scratch);
-        break;
+        sh->ctlline = ctlline;
+    } break;
 
     case N_ARITH:
         execarith(sh, n, scratch);

@@ -73,7 +73,7 @@ procsub PASS
 quote PASS
 quotearray PASS
 read BASH
-redir FAIL
+redir PASS
 rhs-exp PASS
 rsh PASS
 set-e PASS
