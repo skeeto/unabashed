@@ -1394,6 +1394,9 @@ struct RxCtx {
                     // 0 inside a character, 0xff for an invalid byte
     i64    budget;  // steps left for back-references, negative for no limit
     b32    gaveup;
+    b32  (*stop)(void *);  // polled now and then: true gives up
+    void  *stopctx;
+    u32    ticks;
     i32    words;   // u32 words in a node bitset
     iz     memomax; // bytes for each back-reference search's RxMemo
 };
@@ -1922,6 +1925,10 @@ static b32 rxsame(RxCtx *c, iz a, iz b, iz len)
 
 static b32 rxspend(RxCtx *c)
 {
+    if (c->stop && !(++c->ticks & 0xfff) && c->stop(c->stopctx)) {
+        c->gaveup = 1;
+        return 0;
+    }
     if (c->budget < 0) return 1;
     if (!c->budget) {
         c->gaveup = 1;
@@ -2600,13 +2607,17 @@ static RxLong rxlongest(RxCtx *c, iz s, u32 *closes, b32 record, Arena *perm)
 
 // Match s against re: 1 with m[0..nsub] filled for a match (-1 for an
 // unset group), 0 for none, -1 when budget steps (back-references and
-// submatches) ran out; a negative budget has no limit.
-static i32 rxexec(Regex *re, Str s, RxMatch *m, Arena scratch, i64 budget = -1)
+// submatches) ran out, or stop (polled every few thousand of them)
+// returned true; a negative budget has no limit.
+static i32 rxexec(Regex *re, Str s, RxMatch *m, Arena scratch, i64 budget = -1,
+                  b32 (*stop)(void *) = 0, void *stopctx = 0)
 {
     RxCtx c = {};
-    c.re     = re;
-    c.s      = s;
-    c.budget = budget;
+    c.re      = re;
+    c.s       = s;
+    c.budget  = budget;
+    c.stop    = stop;
+    c.stopctx = stopctx;
     c.words  = (re->nnodes + 31) / 32;
     if (re->backrefs && s.len<0x7fffffff) {
         // Up to 256 MiB, and half of what remains

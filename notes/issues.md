@@ -47,16 +47,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
 - **XP: t/win32/014-spawn failed once in 13 runs** (M5b step 10, with
   UNABASHED_XPIO=1); the diff was lost and twelve reruns passed. Look
   for it with the other XP flakes, which may share a cause.
-- `[[ =~ ]]` does not check for Ctrl-C (signals act only at safe points
-  between commands). Some patterns run for minutes or more here and in
-  glibc alike: `(.{,2}\>a*{1,})*` on `a` (the walk, no
-  back-references), and compiling
-  `(()?((\b){1,2}((\')?(){0,1}(()*a*b*|[ab]?))*))+` (found by an
-  old-against-new comparison of the regex.cpp memo; both verified to
-  hang bash 5.3 past 60 s too), and `(\b$){1,}*\>\'` on `x\xFFcAB`
-  (regex_diff --random 4, case 2936180: glibc and ours both still
-  running after 15 s in a few MB; --random has no per-case timeout,
-  so that seed stops there). (m4.md)
 - regex.cpp differs from glibc on back-reference patterns without
   repetition where `rxlongest`'s first pass records close nodes reached
   through back-references glibc finds no span for, which then hide the
@@ -76,7 +66,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
   no closing `}' in" followed by the whole body. (m7.md, step 6)
 - glibc's 4 KiB stdio flush before a diagnostic is not emulated (bash
   prints an error mid-line after 4 KiB without a newline). (m4.md)
-- GLOBIGNORE splitting skips quotes and groups but not `$(...)`.
 - `${ prog & }`, a program started straight in the background (not
   a vproc job, procsub or coprocess), holds up the substitution until
   it closes its output: its pump has no owner to check, so endcapture
@@ -371,6 +360,16 @@ Moved from M5a: limits of the test tiers, not of the shell.
 
 ## Accepted deviations
 
+- **Accepted: slow regexes, as glibc's.** Some patterns run for
+  minutes or more here and in glibc alike: `(.{,2}\>a*{1,})*` on `a`
+  (the walk, no back-references), compiling
+  `(()?((\b){1,2}((\')?(){0,1}(()*a*b*|[ab]?))*))+` (both verified to
+  hang bash 5.3 past 60 s too), and `(\b$){1,}*\>\'` on `x\xFFcAB`
+  (regex_diff --random 4, case 2936180; --random has no per-case
+  timeout, so that seed stops there). Unlike bash, a search stops for
+  an untrapped Ctrl-C (rxsigstop, polled at the back-reference and
+  submatch steps); compiling does not, nor a search with INT trapped,
+  which bash cannot stop either. (m4.md, M7 step 9)
 - **Accepted: no users on Windows**: `~user` is left as it is, `~`
   with HOME unset too, and M-~ finds nothing, there being no password
   file; Cygwin's bash makes them up from the account database

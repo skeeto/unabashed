@@ -3220,6 +3220,22 @@ static void tracecond(Shell *sh, Arena a, b32 invert, Str op, Str lhs, Str *rhs)
     traceline(sh, a, finish(&b));
 }
 
+// Whether a signal that would end this level (an untrapped Ctrl-C) is
+// pending, to stop a regex search. Unlike glibc's, ours stops: some
+// patterns take minutes, or longer.
+static b32 signoop(Shell *, i32);
+
+static b32 rxsigstop(void *ctx)
+{
+    Shell *sh = (Shell *)ctx;
+    takeossigs(sh);
+    for (u64 m = sh->sig->pending; m; m &= m-1) {
+        i32 sig = __builtin_ctzll(m) + 1;
+        if (!trapignored(sh, sig) && !trapset(sh, sig) && !signoop(sh, sig)) return 1;
+    }
+    return 0;
+}
+
 // [[ s =~ re ]]: 0 for a match, 1 for none, 2 for an invalid regular
 // expression. BASH_REMATCH is emptied, then gets the match and its
 // groups, an unset group as an empty string, as bash's sh_regmatch.
@@ -3236,7 +3252,9 @@ static i32 condregex(Shell *sh, Arena a, Str s, Str re)
     }
     i32      ng = rc.re->nsub + 1;
     RxMatch *m  = alloc<RxMatch>(&a, ng);
-    b32      ok = rxexec(rc.re, s, m, a) == 1;
+    i32      r  = rxexec(rc.re, s, m, a, -1, rxsigstop, sh);
+    if (r < 0) sigfatal(sh);  // stopped by a signal that ends this level
+    b32      ok = r == 1;
 
     i32 aflags = SV_FORCE;
     Str name   = arraytarget(sh, a, "BASH_REMATCH", &aflags, 1);

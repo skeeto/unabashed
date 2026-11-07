@@ -462,8 +462,9 @@ static GlobRes globfile(Glob *g, Str path, i32 flags)
 // GLOBIGNORE
 
 // The end of the GLOBIGNORE pattern starting at i: the next colon not
-// quoted, in a bracket expression or in an extglob group (bash's
-// skip_to_delim, without its command substitutions).
+// quoted, in a bracket expression, an extglob group, or what looks like
+// an expansion or substitution (bash's skip_to_delim: the patterns
+// are never expanded, but `$(x:y)` stays one).
 static iz ignoreend(Str s, iz i, b32 extglob)
 {
     while (i < s.len) {
@@ -472,6 +473,31 @@ static iz ignoreend(Str s, iz i, b32 extglob)
             i += 2;
         } else if (c == ':') {
             return i;
+        } else if (c == '`') {
+            for (i++; i<s.len && s[i]!='`'; i++) {
+                if (s[i] == '\\') i++;
+            }
+            i++;
+        } else if ((c=='$' || c=='<' || c=='>') && i+1<s.len &&
+                   (s[i+1]=='(' || (c=='$' && (s[i+1]=='{' || s[i+1]=='[')))) {
+            // To the matching close, counting nested opens
+            u8  open  = s[i+1];
+            u8  close = open=='(' ? ')' : open=='{' ? '}' : ']';
+            i32 depth = 1;
+            for (i += 2; i<s.len && depth; i++) {
+                if (s[i] == '\\') {
+                    i++;
+                } else if (s[i]=='\'' || s[i]=='"') {
+                    u8 q = s[i];
+                    for (i++; i<s.len && s[i]!=q; i++) {
+                        if (q=='"' && s[i]=='\\') i++;
+                    }
+                } else if (s[i] == open) {
+                    depth++;
+                } else if (s[i] == close) {
+                    depth--;
+                }
+            }
         } else if (c=='\'' || c=='"') {
             for (i++; i<s.len && s[i]!=c; i++) {
                 if (c=='"' && s[i]=='\\') i++;
