@@ -253,6 +253,24 @@ static Str arithindex(Shell *sh, Arena *a, Str name, Str sub)
     return finish(&b);
 }
 
+// Whether a subscript's shell quoting is left open (let "a[$b]" with
+// b="80's"): bash cannot expand such a key.
+static b32 openquote(Str s)
+{
+    for (iz i = 0; i < s.len; i++) {
+        if (s[i] == 0x5c) {
+            i++;
+        } else if (s[i]==0x27 || s[i]==0x22) {
+            u8 q = s[i];
+            for (i++; i<s.len && s[i]!=q; i++) {
+                i += q==0x22 && s[i]==0x5c;
+            }
+            if (i >= s.len) return 1;
+        }
+    }
+    return 0;
+}
+
 // Evaluate an indexed subscript in arithmetic: expanded first, unless
 // let runs under array_expand_once, which takes it as it is.
 static i64 arithsubindex(ShellArith *c, X *x, Arena *a, Str sub)
@@ -282,6 +300,14 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
             // may follow (a[RANDOM%6]++) reuses this index
             ref->sub = fmti64(a, arithsubindex(c, x, a, ref->sub));
         }
+        if (assoc && !c->rawsub && openquote(ref->sub)) {
+            // As bash: reported (twice) and read as unset
+            Str msg = concat3(a, ref->name, "[", concat(a, ref->sub, "]: bad array subscript"));
+            shellerror(c->sh, *a, msg);
+            shellerror(c->sh, *a, msg);
+            *isset = 0;
+            return {};
+        }
         if (assoc && c->rawsub && !allsub(ref->sub)) {
             // let under array_expand_once: the key as it is
             HItem *t = hfind(v->arr, ref->sub);
@@ -308,9 +334,9 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
         Value *var = lookup(c->sh, ref->name);
         b32    assoc = var && var->arr && var->arr->bucket;
         ref->sub = arithindex(c->sh, a, ref->name, ref->sub);
-        if (!assoc && !ref->sub.len) {
+        if ((!assoc && !ref->sub.len) || (assoc && !c->rawsub && openquote(ref->sub))) {
             // As bash: reported, and the expression goes on without it
-            Str msg = concat3(a, "`", ref->name, "[]': not a valid identifier");
+            Str msg = concat3(a, "`", ref->name, concat3(a, "[", ref->sub, "]': not a valid identifier"));
             if (c->who.len) msg = concat3(a, c->who, ": ", msg);
             shellerror(c->sh, *a, msg);
             return {};

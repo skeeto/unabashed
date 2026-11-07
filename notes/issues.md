@@ -47,9 +47,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
 - **XP: t/win32/014-spawn failed once in 13 runs** (M5b step 10, with
   UNABASHED_XPIO=1); the diff was lost and twelve reruns passed. Look
   for it with the other XP flakes, which may share a cause.
-- **UTF-8 character classes and case folding are ASCII-only** in
-  pattern.cpp, glob.cpp and regex.cpp: `[[:alpha:]]` does not match é,
-  where bash (glibc) does. (m4.md)
 - `[[ =~ ]]` does not check for Ctrl-C (signals act only at safe points
   between commands). Some patterns run for minutes or more here and in
   glibc alike: `(.{,2}\>a*{1,})*` on `a` (the walk, no
@@ -74,13 +71,9 @@ Closed: every item was fixed or moved (m6.md, step 10).
   and memory. (m4.md)
 - redir12 line numbers: bash cites the line where the parser finished
   the top-level command; we cite the last simple command's. (m4.md)
-- `let` with an unterminated quote in an associative key (without
-  assoc_expand_once) differs. (m4.md)
 - With extquote off, a here-document's `${x#${$'x1'}}` is a bad
   substitution with our usual message; bash reports "bad substitution:
   no closing `}' in" followed by the whole body. (m7.md, step 6)
-- In a mapfile callback, `return 3 0 x` at top level gives another
-  message and does not abandon the rest of the line. (m4.md)
 - glibc's 4 KiB stdio flush before a diagnostic is not emulated (bash
   prints an error mid-line after 4 KiB without a newline). (m4.md)
 - GLOBIGNORE splitting skips quotes and groups but not `$(...)`.
@@ -88,9 +81,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
   variable is shadowed sets the visible one (bash sets that scope's);
   bash's silent `typeset +r` after a failed `typeset r=x` on a readonly
   nameref (nameref oracle). (m4.md)
-- `${!c[@]:N}` on an unset `c` expands to nothing; bash reports an
-  invalid indirect expansion. `read -t` of 2^31 seconds or more is
-  rejected; bash wraps. (review)
 - A `~user` tilde prefix is left as is; bash looks the user's home
   up (`~root/x` is `/root/x`), in words and in BASH_ENV. (review)
 - `${ prog & }`, a program started straight in the background (not

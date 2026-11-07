@@ -19,6 +19,7 @@
 #include <string.h>
 #include <time.h>
 #include "../../base.cpp"
+#include "../../unicode.cpp"
 #include "../../pattern.cpp"
 
 [[noreturn]] static void os_oom()

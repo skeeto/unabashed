@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../../base.cpp"
+#include "../../unicode.cpp"
 #include "../../pattern.cpp"
 #include "../../regex.cpp"
 
@@ -201,19 +202,9 @@ static b32 knowngap(Str pat, Str s, i32 flags)
             repeat |= c=='*' || c=='+' || c=='?' || c=='{';
         }
     }
-    if (backref && repeat) return 1;
-    if (!(flags & REX_UTF8)) return 0;
-    if (allascii(s) && allascii(pat)) return 0;
-    if (flags & REX_ICASE) return 1;
-    for (iz i = 0; i+1 < pat.len; i++) {
-        if (pat[i]=='[' && pat[i+1]==':') return 1;
-        if (pat[i] == '\\') {
-            u8 c = pat[++i];
-            if (c=='w' || c=='W' || c=='s' || c=='S' || c=='b' || c=='B' ||
-                    c=='<' || c=='>') return 1;
-        }
-    }
-    return 0;
+    (void)s;
+    (void)flags;
+    return backref && repeat;
 }
 
 static void showcase(FILE *f, Str pat, Str s, i32 flags)

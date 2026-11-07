@@ -560,28 +560,30 @@ static iz findunquoted(Str s, u8 c, b32 arith = 0)
     return -1;
 }
 
-// ^ uppercases, , lowercases, and ~ toggles; doubled, every character.
+// ^ uppercases, , lowercases, and ~ toggles; doubled, every character
+// (in UTF-8 a whole character, as towupper and towlower map it). With a
+// pattern, only the characters it matches change.
 static Str casemod(Arena *a, Str v, Str op, Str pat, i32 pflags, b32 utf8)
 {
-    b32 upper = op[0]=='^' || op[0]=='~';
-    b32 lower = op[0]==',' || op[0]=='~';
-    b32 all   = op.len == 2;
-    Str r = clone(a, v);
-    for (iz i = 0; i < r.len; i++) {
-        u8  c = r[i];
-        u8  t = upper && c>='a' && c<='z' ? (u8)(c-32)
-              : lower && c>='A' && c<='Z' ? (u8)(c+32)
-              : c;
-        if (t != c) {
-            Str one = {&c, 1};
-            if (!pat.len || patmatch(pat, one, pflags, *a)) {
-                r[i] = t;
-            }
+    i32 mode = op[0]=='^' ? CM_UPPER : op[0]==',' ? CM_LOWER : CM_TOGGLE;
+    b32 all  = op.len == 2;
+    Buf b(a, v.len + 8);
+    iz  i = 0;
+    while (i < v.len) {
+        iz  beg = i;
+        i32 c   = utf8 ? utf8strict(v, &i) : v[i++];
+        Str one = span(v.data+beg, v.data+i);
+        i32 t   = c<0 || (!utf8 && c>=0x80) ? c : casecp(c, mode);
+        if (t!=c && (!pat.len || patmatch(pat, one, pflags, *a))) {
+            u8 enc[4];
+            print(&b, Str{enc, utf8 ? utf8encode(enc, t) : (enc[0] = (u8)t, 1)});
+        } else {
+            print(&b, one);
         }
         if (!all) break;
     }
-    (void)utf8;
-    return r;
+    print(&b, cuthead(v, i));
+    return finish(&b);
 }
 
 // Single-quote a string for reuse as input, as ${x@Q} does.
@@ -798,9 +800,9 @@ static Str transform(X *x, Str name, Str v, u8 t)
     case 'k': return quoteforreuse(x->a, v);
     case 'E': return ansiexpand(x->a, v, x->sh->utf8);
     case 'P': return promptdecode(x, v);
-    case 'U': return casemod(x->a, v, "^^", {}, 0, 0);
-    case 'L': return casemod(x->a, v, ",,", {}, 0, 0);
-    case 'u': return casemod(x->a, v, "^", {}, 0, 0);
+    case 'U': return casemod(x->a, v, "^^", {}, 0, x->sh->utf8);
+    case 'L': return casemod(x->a, v, ",,", {}, 0, x->sh->utf8);
+    case 'u': return casemod(x->a, v, "^", {}, 0, x->sh->utf8);
     }
     return v;
 }
@@ -1423,6 +1425,10 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     }
     if (indirect) {
         if (q.list && !q.ln) {
+            if (hassub && !lookup(sh, name)) {  // a missing array, as above
+                Arena a = *x->a;
+                expansionerror(sh, a, concat(&a, uname, ": invalid indirect expansion"));
+            }
             return;  // nothing to name a variable
         }
         if (q.list) {

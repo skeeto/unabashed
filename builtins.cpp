@@ -376,13 +376,22 @@ static i32 b_caller(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 b_return(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
-    iz first = skipdashdash(args, nargs, 1);
-    if (nargs-first > 1) {
-        // As bash, before anything else: abandon the -c, eval or
-        // source text
-        builtinerror(sh, scratch, "return", "too many arguments");
-        sh->status = 2;
-        escape(sh, ESC_ABORT);
+    // As bash, the argument is checked first: a number, then alone
+    // (too many abandons the -c, eval or source text), and only then
+    // whether there is anything to return from
+    iz  i   = skipdashdash(args, nargs, 1);
+    b32 bad = 0;
+    i64 v   = 0;
+    if (i < nargs) {
+        if (!parsei64(args[i], &v)) {
+            builtinerror(sh, scratch, "return", concat(&scratch, args[i], ": numeric argument required"));
+            sh->bifatal = 1;
+            bad = 1;
+        } else if (i+1 < nargs) {
+            builtinerror(sh, scratch, "return", "too many arguments");
+            sh->status = 2;
+            escape(sh, ESC_ABORT);
+        }
     }
     if (!sh->funcdepth && !sh->sourcedepth) {
         builtinerror(sh, scratch, "return", "can only `return' from a function or sourced script");
@@ -393,20 +402,10 @@ static i32 b_return(Shell *sh, Str *args, iz nargs, Arena scratch)
     b32 intrap = sh->intrap && sh->funcdepth==sh->trapfuncs;
     i32 status = intrap ? sh->trapstatus : sh->status;
     sh->retprev = sh->status;
-    iz  i = skipdashdash(args, nargs, 1);
-    if (i < nargs) {
-        i64 v;
-        if (!parsei64(args[i], &v)) {
-            builtinerror(sh, scratch, "return", concat(&scratch, args[i], ": numeric argument required"));
-            sh->bifatal = 1;
-            status = 2;
-        } else if (i+1 < nargs) {
-            builtinerror(sh, scratch, "return", "too many arguments");
-            sh->status = 2;
-            escape(sh, ESC_ABORT);
-        } else {
-            status = (i32)(v & 255);
-        }
+    if (bad) {
+        status = 2;
+    } else if (i < nargs) {
+        status = (i32)(v & 255);
     }
     sh->flow = FLOW_RETURN;
     return status;
@@ -2522,7 +2521,8 @@ static i32 readnext(Shell *sh, i32 fd, u8 *ahead, iz *aoff, iz alen, i64 deadlin
 
 // Parse a read -t timeout, a non-negative decimal with an optional
 // fraction of which microseconds count, into nanoseconds. False if
-// invalid.
+// invalid. As bash's timer, the seconds wrap at 2^32, and -1 when that
+// leaves nothing of a timeout that was not zero: no timer at all.
 static b32 parsetimeout(Str s, i64 *ns)
 {
     b32 dot = 0;
@@ -2533,14 +2533,15 @@ static b32 parsetimeout(Str s, i64 *ns)
         } else if (!digit(s[i])) {
             return 0;
         } else if (!dot) {
-            if (sec > (i64)1<<31) return 0;
+            if (sec > (0x7fffffffffffffff - 9)/10) return 0;
             sec = sec*10 + (s[i] - '0');
         } else if (scale) {
             usec += (s[i] - '0') * scale;
             scale /= 10;
         }
     }
-    *ns = sec*1000000000 + usec*1000;
+    i64 wrap = sec & 0xffffffff;
+    *ns = !wrap && !usec && sec ? -1 : wrap*1000000000 + usec*1000;
     return 1;
 }
 
@@ -2668,6 +2669,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         Got tm = getvar(sh, &scratch, "TMOUT");  // the default timeout
         if (tm.set && !parsetimeout(tm.value, &timeout)) timeout = 0;
     }
+    timeout = timeout<0 ? 0 : timeout;
     if (timeout && in) {
         // Not for a regular file, nor text in memory, which never wait
         if (in->kind==F_MEM || (in->kind==F_OS && os_fstat(sh->os, in->h).type==FT_FILE)) {

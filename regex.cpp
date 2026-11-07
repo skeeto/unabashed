@@ -36,10 +36,14 @@
 // In a UTF-8 locale, . and brackets consume whole characters, and
 // invalid bytes and the inside of characters match only themselves,
 // where matches may also start when glibc runs the pattern byte by
-// byte (see rxstart). Classes, word characters
-// and case folding are ASCII-only there, a known gap: glibc asks
-// iswctype and towupper, so [[:alpha:]] and \w match é in glibc and not
-// here.
+// byte (see rxstart). A bracket's classes take multibyte characters as
+// iswctype does ([[:alpha:]] matches é), as do \w and \s. The word
+// anchors ask iswalnum of the characters around them, an invalid byte
+// counting as the code point of its value (\xff as ÿ). Under REG_ICASE
+// glibc raises the subject and the pattern a character at a time
+// (towupper): sets compare a multibyte character raised, and a
+// multibyte character of the pattern that has case becomes a set of
+// itself raised.
 //
 // This is free and unencumbered software released into the public domain.
 
@@ -127,7 +131,9 @@ struct RxRange {
 struct RxSet {
     u32            bits[8];
     Slice<RxRange> ranges;
+    u32            classes;  // UC_* classes of multibyte characters
     b32            neg;
+    b32            fold;     // REG_ICASE: compare characters raised
 };
 
 struct Rt {
@@ -382,6 +388,26 @@ static void rxsetbit(RxSet *s, i32 c)
     s->bits[c>>5] |= 1u << (c&31);
 }
 
+// A class's UC_* bit, for multibyte characters
+static u32 rxucclass(i32 cc)
+{
+    switch (cc) {
+    case PCC_ALNUM:  return UC_ALNUM;
+    case PCC_ALPHA:  return UC_ALPHA;
+    case PCC_BLANK:  return UC_BLANK;
+    case PCC_CNTRL:  return UC_CNTRL;
+    case PCC_DIGIT:  return UC_DIGIT;
+    case PCC_GRAPH:  return UC_GRAPH;
+    case PCC_LOWER:  return UC_LOWER;
+    case PCC_PRINT:  return UC_PRINT;
+    case PCC_PUNCT:  return UC_PUNCT;
+    case PCC_SPACE:  return UC_SPACE;
+    case PCC_UPPER:  return UC_UPPER;
+    case PCC_XDIGIT: return UC_XDIGIT;
+    }
+    return 0;
+}
+
 static void rxaddclass(RxSet *s, i32 cc)
 {
     for (i32 c = 0; c < 256; c++) {
@@ -410,8 +436,10 @@ static Rt *rxclassop(RxParse *p, i32 type)
     if (type==TK_WORD || type==TK_NOTWORD) {
         rxaddclass(s, PCC_ALNUM);
         rxsetbit(s, '_');
+        s->classes = UC_ALNUM;
     } else {
         rxaddclass(s, PCC_SPACE);
+        s->classes = UC_SPACE;
     }
     rxsetdone(p, s, type==TK_NOTWORD || type==TK_NOTSPACE);
     Rt *t = newrt(p, RT_SET);
@@ -524,8 +552,10 @@ static void rxaddelem(RxParse *p, RxSet *s, RxElem e)
         rxsetbit(s, e.c);
         break;
     case EL_MB: {
-        RxRange r = {e.c, e.c};
+        i32     c = p->flags&REX_ICASE ? cpupper(e.c) : e.c;
+        RxRange r = {c, c};
         s->ranges = push(p->a, s->ranges, r);
+        if (c < 0x80) rxsetbit(s, c);  // raised to ASCII (ı is I)
         p->wide   = 1;
     } break;
     case EL_COLL:
@@ -544,6 +574,7 @@ static void rxaddelem(RxParse *p, RxSet *s, RxElem e)
             return;
         }
         rxaddclass(s, cc);
+        s->classes |= rxucclass(cc);
         p->wide = 1;
     } break;
     }
@@ -589,6 +620,7 @@ static void rxaddrange(RxParse *p, RxSet *s, RxElem lo, RxElem hi)
 static Rt *rxbracket(RxParse *p)
 {
     RxSet *s   = alloc<RxSet>(p->a);
+    s->fold    = !!(p->flags & REX_ICASE);
     b32    neg = 0;
     RxTok  t   = rxpeekbracket(p);
     if (t.type == TK_END) {
@@ -772,6 +804,23 @@ static Rt *rxexpr(RxParse *p, i32 nest)
     RxTok tok = p->tok;
     switch (tok.type) {
     case TK_CHAR:
+        if ((p->flags & REX_ICASE) && p->lead && p->pos<p->pat.len && !p->lead[p->pos]) {
+            // a multibyte character with case, compared raised
+            iz  at = p->pos - 1;
+            for (; at>0 && !p->lead[at]; at--) {}
+            i32 c  = unitat(p->raw, at, 1).c;
+            if (cpupper(c)!=c || cplower(c)!=c) {
+                while (p->pos<p->pat.len && !p->lead[p->pos]) rxfetch(p);
+                RxSet  *s = alloc<RxSet>(p->a);
+                RxRange r = {cpupper(c), cpupper(c)};
+                s->ranges = push(p->a, s->ranges, r);
+                s->fold   = 1;
+                if (r.lo < 0x80) rxsetbit(s, r.lo);  // raised to ASCII
+                t = newrt(p, RT_SET);
+                t->set = s;
+                break;
+            }
+        }
         t = newrt(p, RT_CHAR, 0, 0, tok.c);
         while (p->lead && p->pos<p->pat.len && !p->lead[p->pos]) {
             rxfetch(p);  // the rest of a multibyte character
@@ -1369,6 +1418,17 @@ static b32 rxwordbyte(u8 b)
     return (b>='0' && b<='9') || (b>='a' && b<='z') || (b>='A' && b<='Z') || b=='_';
 }
 
+// Whether the character holding byte i is a word character. In UTF-8
+// glibc asks iswalnum, and takes an invalid byte as the code point of
+// its value (ÿ as ÿ, a letter).
+static b32 rxwordat(RxCtx *c, iz i)
+{
+    if (!c->ulen || c->s[i]<0x80) return rxwordbyte(c->s[i]);
+    for (; i>0 && !c->ulen[i]; i--) {}
+    i32 cp = c->ulen[i]==0xff ? c->s[i] : unitat(c->s, i, 1).c;
+    return !!(cpclasses(cp) & UC_ALNUM);
+}
+
 // Whether the constraints k on what precedes p hold, in a match from
 // st: the start of the subject or a character, but a newline counts as
 // one only when the match itself consumed it, as glibc's automaton
@@ -1376,7 +1436,7 @@ static b32 rxwordbyte(u8 b)
 static b32 rxprev(RxCtx *c, i32 k, iz p, iz st)
 {
     Str s  = c->s;
-    b32 pw = p>0 && rxwordbyte(s[p-1]);
+    b32 pw = p>0 && rxwordat(c, p-1);
     if ((k & RC_PREVWORD)    && !pw) return 0;
     if ((k & RC_PREVNOTWORD) &&  pw) return 0;
     if ((k & RC_PREVNEWLINE) && p>0 && !(p>st && s[p-1]=='\n')) return 0;
@@ -1392,7 +1452,7 @@ static b32 rxnext(RxCtx *c, i32 k, iz p, b32 consume)
 {
     Str s  = c->s;
     iz  n  = s.len;
-    b32 w  = p<n && rxwordbyte(s[p]);
+    b32 w  = p<n && rxwordat(c, p);
     b32 nl = p==n || (consume && s[p]=='\n');
     if ((k & RC_NEXTWORD)    && !w)  return 0;
     if ((k & RC_NEXTNOTWORD) &&  w)  return 0;
@@ -1409,6 +1469,10 @@ static iz rxaccept(RxCtx *c, RxNode *x, iz p)
     u8 n = c->ulen ? c->ulen[p] : 1;
     switch (x->type) {
     case RT_CHAR:
+        if (n>1 && n!=0xff && (c->re->flags & REX_ICASE)) {
+            // a character raised to ASCII, as ı to I
+            return cpupper(unitat(c->s, p, 1).c)==x->arg ? n : 0;
+        }
         return rxtr(c, b) == x->arg;
     case RT_ANY:
         return n==0xff ? 0 : n;
@@ -1420,7 +1484,9 @@ static iz rxaccept(RxCtx *c, RxNode *x, iz p)
         }
         if (!n || n==0xff) return 0;
         i32 cp = unitat(c->s, p, 1).c;
-        b32 in = 0;
+        cp = s->fold ? cpupper(cp) : cp;
+        if (cp < 0x80) return (s->bits[cp>>5]>>(cp&31) & 1) ? n : 0;  // raised to ASCII
+        b32 in = s->classes && (cpclasses(cp) & s->classes);
         for (iz i = 0; i < s->ranges.len; i++) {
             in |= s->ranges[i].lo<=cp && cp<=s->ranges[i].hi;
         }
@@ -1595,7 +1661,7 @@ static iz rxstall(RxCtx *c, iz p, Arena scratch)
     Str    s  = c->s;
     i32    nn = re->nnodes;
     i32    w  = c->words;
-    i32    c0 = p==0 ? 3 : rxwordbyte(s[p-1]) ? 1 : 0;  // the state's context
+    i32    c0 = p==0 ? 3 : rxwordat(c, p-1) ? 1 : 0;  // the state's context
     i32   *stack = alloc<i32>(&scratch, nn);
     u32   *next  = alloc<u32>(&scratch, w);
     iz     k     = 0;

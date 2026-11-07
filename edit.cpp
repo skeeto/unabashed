@@ -668,25 +668,6 @@ static Str layregion(u8 *buf, Str bytes)
     return {buf, n};
 }
 
-// Decode as a terminal does, and mbrtowc: -1 for a byte that starts no
-// valid sequence (a stray continuation, a sequence cut short, overlong,
-// a surrogate, past U+10FFFF), which goes alone.
-static i32 utf8strict(Str s, iz *i)
-{
-    iz  beg = *i;
-    u8  c   = s[beg];
-    i32 cp  = utf8decode(s, i);
-    iz  n   = *i - beg;
-    b32 bad = (n==1 && c>=0x80) || (n==2 && cp<0x80) ||
-              (n==3 && (cp<0x800 || (cp>=0xd800 && cp<=0xdfff))) ||
-              (n==4 && (c>0xf4 || cp<0x10000 || cp>0x10ffff));
-    if (bad) {
-        *i = beg + 1;
-        return -1;
-    }
-    return cp;
-}
-
 // An invalid byte is drawn as the terminal would show it, U+FFFD, so
 // that one cut short at the end of the output is not held back.
 static Str badbyte = "\xef\xbf\xbd";

@@ -555,19 +555,25 @@ static Str attrletters(Arena *a, u32 attrs)
     return finish(&b);
 }
 
-static Str convertcase(Arena *a, Str s, u32 attrs)
+// declare -u, -l and -c: every character raised or lowered, or the
+// first raised and the rest lowered (in UTF-8 whole characters).
+static Str convertcase(Arena *a, Str s, u32 attrs, b32 utf8)
 {
     if (!(attrs & (V_LOWER|V_UPPER|V_CAPITAL)) || !s.len) return s;
-    Str r = clone(a, s);
-    for (iz i = 0; i < r.len; i++) {
-        u8 c = r[i];
-        if ((attrs&V_UPPER) || ((attrs&V_CAPITAL) && i==0)) {
-            if (c>='a' && c<='z') r[i] = (u8)(c - 32);
-        } else if (c>='A' && c<='Z') {
-            r[i] = (u8)(c + 32);
+    Buf b(a, s.len + 8);
+    for (iz i = 0; i < s.len;) {
+        iz  beg  = i;
+        i32 c    = utf8 ? utf8strict(s, &i) : s[i++];
+        b32 up   = (attrs&V_UPPER) || ((attrs&V_CAPITAL) && beg==0);
+        i32 t    = c<0 || (!utf8 && c>=0x80) ? c : up ? cpupper(c) : cplower(c);
+        if (t == c) {
+            print(&b, span(s.data+beg, s.data+i));
+        } else {
+            u8 enc[4];
+            print(&b, Str{enc, utf8 ? utf8encode(enc, t) : (enc[0] = (u8)t, 1)});
         }
     }
-    return r;
+    return finish(&b);
 }
 
 enum : i32 {  // setvar flags
@@ -626,7 +632,7 @@ static Str assignedvalue(Shell *sh, Arena *scratch, u32 attrs, Str old, Str valu
     } else if (flags & SV_APPEND) {
         value = concat(scratch, old, value);
     }
-    return convertcase(scratch, value, attrs);
+    return convertcase(scratch, value, attrs, sh->utf8);
 }
 
 static void assigned(Shell *sh, Value *val, Str name)
@@ -1377,7 +1383,7 @@ static b32 pushtemp(Shell *sh, Arena scratch, Str name, Str value)
         Arith r = evalinteger(sh, &scratch, value);
         value = fmti64(&scratch, r.ok ? r.value : 0);
     }
-    val->str = sclone(st, convertcase(&scratch, value, val->attrs));
+    val->str = sclone(st, convertcase(&scratch, value, val->attrs, sh->utf8));
     sh->exportgen++;
     varchanged(sh, name);
     return 1;

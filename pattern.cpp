@@ -131,9 +131,15 @@ static PatUnit unitat(Str s, iz i, b32 wide)
     return u;
 }
 
+enum : i32 { PM_WIDE = 1<<29 };  // internal: units are code points
+
+// A unit folded for nocasematch, as towlower; in byte mode a byte past
+// ASCII is no character, so it stays.
 static i32 patfold(i32 c, i32 flags)
 {
-    return (flags&PM_NOCASE) && c>='A' && c<='Z' ? c+32 : c;
+    if (!(flags & PM_NOCASE)) return c;
+    if (c<0x80 || (flags & PM_WIDE)) return cplower(c);
+    return c;
 }
 
 enum : i32 {
@@ -147,11 +153,31 @@ static Str ctypenames[] = {
     "lower", "print", "punct", "space", "upper", "word", "xdigit",
 };
 
-// Class membership, ASCII only. bash in a UTF-8 locale classifies other
-// characters with iswctype (so é is alpha and € is punct); that belongs
-// here once the core has Unicode tables, along with case folding.
-static b32 inctype(i32 c, i32 cc)
+// Class membership of a unit: in wide mode (PM_WIDE) a code point
+// classified as glibc's iswctype does in C.UTF-8 (é is alpha, € is
+// punct); otherwise a byte, of which only ASCII ones have classes.
+static b32 inctype(i32 c, i32 cc, i32 flags = 0)
 {
+    if (c>=0x80 && (flags & PM_WIDE)) {
+        u32 m = cpclasses(c);
+        switch (cc) {
+        case PCC_ALNUM:  return !!(m & UC_ALNUM);
+        case PCC_ALPHA:  return !!(m & UC_ALPHA);
+        case PCC_ASCII:  return 0;
+        case PCC_BLANK:  return !!(m & UC_BLANK);
+        case PCC_CNTRL:  return !!(m & UC_CNTRL);
+        case PCC_DIGIT:  return !!(m & UC_DIGIT);
+        case PCC_GRAPH:  return !!(m & UC_GRAPH);
+        case PCC_LOWER:  return !!(m & UC_LOWER);
+        case PCC_PRINT:  return !!(m & UC_PRINT);
+        case PCC_PUNCT:  return !!(m & UC_PUNCT);
+        case PCC_SPACE:  return !!(m & UC_SPACE);
+        case PCC_UPPER:  return !!(m & UC_UPPER);
+        case PCC_WORD:   return !!(m & UC_ALNUM);
+        case PCC_XDIGIT: return !!(m & UC_XDIGIT);
+        }
+        return 0;
+    }
     b32 lower = c>='a' && c<='z';
     b32 upper = c>='A' && c<='Z';
     b32 dig   = c>='0' && c<='9';
@@ -489,7 +515,7 @@ static b32 elemmatch(PatElem *e, i32 c, i32 flags)
     case PE_CHAR:
     case PE_EQUIV: return t == e->lo;
     case PE_RANGE: return t>=e->lo && t<=e->hi;
-    case PE_CLASS: return inctype(c, e->lo);
+    case PE_CLASS: return inctype(c, e->lo, flags);
     }
     return 0;
 }
@@ -884,7 +910,7 @@ static i32 groupstar(PatSeq q)
 static PatSeq patcompile(PatComp *k, Str pat, i32 flags, b32 wide, Arena *a)
 {
     k->pat       = pat;
-    k->flags     = flags;
+    k->flags     = flags | (wide ? PM_WIDE : 0);
     k->wide      = wide;
     k->quirk     = 0;
     k->nest      = 0;
@@ -1157,7 +1183,7 @@ static PatCtx makectx(Str s, i32 flags, b32 wide, Arena *a)
     PatCtx x = {};
     x.s        = s;
     x.words    = (s.len>>6) + 1;
-    x.flags    = flags;
+    x.flags    = flags | (wide ? PM_WIDE : 0);
     x.wide     = wide;
     x.fixedend = -1;
     if (wide) {
@@ -1689,7 +1715,7 @@ static b32 runpat(PatSeq q, PatComp *k, Str s, i32 flags, b32 wide, Arena scratc
         // Without a slash in s, PM_PATHNAME changes nothing here
         PatCtx x = {};
         x.s     = s;
-        x.flags = flags;
+        x.flags = flags | (wide ? PM_WIDE : 0);
         x.wide  = wide;
         return twoptr(&x, q);
     }
@@ -2023,6 +2049,7 @@ static b32 firstchar(Str pat, Str s, iz p, i32 flags, b32 wide)
     if (p == s.len) {
         return pat[0] == '*';
     }
+    flags   |= wide ? PM_WIDE : 0;
     i32 c    = unitat(pat, 0, wide).c;
     i32 next = pat.len>1 ? unitat(pat, 1, wide).c : 0;
     i32 sc   = patfold(unitat(s, p, wide).c, flags);
