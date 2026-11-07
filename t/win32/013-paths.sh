@@ -46,7 +46,8 @@ rm -f "$long\\t."
 # (PATH reaches it in msys form until step 7 converts the environment)
 cp "$U" sh.exe
 ./sh.exe -c 'cd a/b && case $PWD in [A-Z]:/*/013-paths/a/b) echo "native PWD";; esac
-cd /Windows && echo "$PWD"
+mkdir MixCase && cd mixcase && echo "${PWD##*/}"
+cd / && echo "$PWD"
 echo $OSTYPE'
 # busybox-w32's import, values slashed, only for a Windows parent's
 # environment (a mixed-case Path, ComSpec or ProgramData)

@@ -590,6 +590,12 @@ struct SigChan {
     ChanSig levels[32];
 };
 
+// A process os_kill ended, and the exit code it gave
+struct Killed {
+    i32 pid;
+    u32 code;
+};
+
 struct Os {
     Fibers fibers;
     void (__stdcall *now)(Filetime *);  // precise clock where available
@@ -632,6 +638,8 @@ struct Os {
     i64        freq;       // QueryPerformanceCounter ticks per second
     i64        youngticks; // 100 ms: programs judged at a Ctrl-C
     Recent     recent[32];
+    Killed     killed[16]; // os_kill's exit codes, for XP (procexit)
+    i32        nkilled;
     uz         jobport;    // job messages for watched programs
     b32        ttyraw;     // os_tty: the console's modes were changed
     i32        ttykeys;    // atomic: reads give keys (TK_*), not lines
@@ -1435,11 +1443,25 @@ static void releaselends(Os *os, uz proc);
 static i32  exitstatus(u32 code);
 static b32  takemissed(Os *os, uz proc);
 
-// A process's exit status, releasing its handle.
+static i32 procpid(Os *os, uz proc);
+
+// A process's exit status, releasing its handle. XP gives 0 for a
+// process terminated before it finished starting, whatever code
+// TerminateProcess passed, so a process os_kill ended that reads 0
+// takes the code it was given.
 static i32 procexit(Os *os, uz proc)
 {
     i32 code = 127;
     if (!GetExitCodeProcess(proc, &code)) code = 127;
+    if (!code && os->nkilled) {
+        i32 pid = procpid(os, proc);
+        for (i32 i = 0; pid && i<countof(os->killed); i++) {
+            if (os->killed[i].pid == pid) {
+                code = (i32)os->killed[i].code;
+                os->killed[i] = {};
+            }
+        }
+    }
     i32 missed = takemissed(os, proc) ? WMISSED : 0;
     CloseHandle(proc);
     releaselends(os, proc);
@@ -1726,6 +1748,16 @@ static byte *pebslot(Os *os, uz proc, iz i)
     iz    n  = 0;
     byte *at = (byte *)pbi[1] + i*(iz)sizeof(uz);
     return ReadProcessMemory(proc, at, &r, sizeof(r), &n) ? r : 0;
+}
+
+// A process's id from its handle (GetProcessId is XP SP1), 0 if unknown.
+static i32 procpid(Os *os, uz proc)
+{
+    uz pbi[6] = {};  // PROCESS_BASIC_INFORMATION
+    if (!os->queryproc || os->queryproc(proc, 0, pbi, sizeof(pbi), 0)) {
+        return 0;
+    }
+    return (i32)pbi[4];  // UniqueProcessId
 }
 
 // Is the process's image a console program? Read through its PEB, so
@@ -3383,7 +3415,7 @@ static i64 os_tcpgrp(Os *, Handle, i64)
     return -E_NOSYS;
 }
 
-static i32 os_kill(Os *, i64 pid, i32 sig)
+static i32 os_kill(Os *os, i64 pid, i32 sig)
 {
     if (pid<=0 || pid>(i64)0x7fffffff) return E_SRCH;
     if (sig<0 || sig>=NSIGNAL) return E_INVAL;
@@ -3400,8 +3432,17 @@ static i32 os_kill(Os *, i64 pid, i32 sig)
     switch (sig) {
     case 0: case 17: case 18: case 19: case 20: case 21: case 22: case 23: case 28:
         break;  // existence check, or ignored by default
-    default:
-        ok = TerminateProcess(h, sig==2 ? 0xc000013au : SIGEXIT|(u32)(128+sig));
+    default: {
+        u32 code = sig==2 ? 0xc000013au : SIGEXIT|(u32)(128+sig);
+        ok = TerminateProcess(h, code);
+        if (ok) {  // see procexit
+            i32     i = os->nkilled % countof(os->killed);
+            Killed *k = os->killed + i;
+            k->pid  = (i32)pid;
+            k->code = code;
+            os->nkilled = i + 1;  // never 0 again
+        }
+    }
     }
     CloseHandle(h);
     return ok ? 0 : E_PERM;
