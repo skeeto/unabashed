@@ -296,8 +296,9 @@ static Str flagstring(Arena *a, Shell *sh)
         }
     }
     // bash orders $- by its flag table: a b e f h k m n p t u v x B C H
-    static u8 order[] = "abefhkmnptuvxBCEHPT";
+    static u8 order[] = "abefhkmnprtuvxBCEHPT";
     for (iz k = 0; order[k]; k++) {
+        if (order[k]=='r' && sh->restricted) putbyte(&b, 'r');
         for (i32 i = 0; i < O_COUNT; i++) {
             if (setoptions[i].letter==order[k] && sh->opt[i]) {
                 putbyte(&b, order[k]);

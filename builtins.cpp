@@ -458,6 +458,50 @@ static i32 sourcenotfound(Shell *sh, Arena scratch, Str name, Str file, b32 cmd)
     return 1;
 }
 
+// Restricted shells (rbash, -r, set -r)
+
+// bash's "CMD: restricted", or "CMD: WHAT: restricted"; status 1
+static i32 restricted(Shell *sh, Arena scratch, Str cmd, Str what = {})
+{
+    Str msg = what.data ? concat(&scratch, what, ": restricted") : Str("restricted");
+    builtinerror(sh, scratch, cmd, msg);
+    return 1;
+}
+
+static b32 restrictedhash(Shell *sh, Arena scratch, Str cmd, Str path)
+{
+    if (!sh->restricted) return 1;
+    if (haspath(sh, path)) {
+        if (cmd.data) {
+            restricted(sh, scratch, cmd, path);
+        } else {
+            shellerror(sh, scratch, concat(&scratch, path, ": restricted"));
+        }
+        return 0;
+    }
+    if (!pathlookup(sh, &scratch, path).data) {
+        Str msg = concat(&scratch, path, ": not found");
+        if (cmd.data) {
+            builtinerror(sh, scratch, cmd, msg);
+        } else {
+            shellerror(sh, scratch, msg);
+        }
+        return 0;
+    }
+    return 1;
+}
+
+// Make the shell restricted: the variables it may not change become
+// readonly, as bash's maybe_make_restricted does.
+static void makerestricted(Shell *sh)
+{
+    Str names[] = {"PATH", "SHELL", "ENV", "BASH_ENV", "HISTFILE"};
+    for (iz i = 0; i < countof(names); i++) {
+        setattrs(sh, names[i], V_READONLY, 0);
+    }
+    sh->restricted = 1;
+}
+
 static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     b32 cmd  = sh->viacommand;
@@ -489,6 +533,9 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
         builtinerror(sh, scratch, name, "filename argument required");
         usageerror(sh, scratch, name);
         return 2;
+    }
+    if (sh->restricted && (only || haspath(sh, args[i]))) {
+        return restricted(sh, scratch, name, args[i]);
     }
     Str file = args[i];
     Str path = file;
@@ -1622,7 +1669,8 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
                 }
                 continue;
             }
-            b32 found = 0;
+            b32 found = c=='r' && (on || !sh->restricted);
+            if (c=='r' && on) makerestricted(sh);
             for (i32 o = 0; o < O_COUNT; o++) {
                 if (setoptions[o].letter == c) {
                     sh->opt[o] = on;
@@ -1632,7 +1680,7 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
             }
             if (!found) {
                 invalidoption(sh, scratch, "set", span(a.data+k-1, a.data+k+1));
-                return 2;
+                return c=='r' ? 1 : 2;  // +r: bash's change_flag failing
             }
         }
     }
@@ -1753,7 +1801,9 @@ static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (hidden && (set || unset)) {
             setpathmode(sh, scratch, set ? PM_MSYS : PM_NATIVE);
         } else if (set || unset) {
-            if (oflag || idx!=S_LOGIN_SHELL) *slot = set;  // read-only, quietly
+            if (oflag || (idx!=S_LOGIN_SHELL && idx!=S_RESTRICTED_SHELL)) {
+                *slot = set;  // the others read-only, quietly
+            }
             if (oflag) histoption(sh, idx, set);
             if (!oflag && (idx==S_ARRAY_EXPAND_ONCE || idx==S_ASSOC_EXPAND_ONCE)) {
                 // two names for one option
@@ -1900,6 +1950,7 @@ static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
 // cd, its messages under name (pushd and popd run it as bash does)
 static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
 {
+    if (sh->restricted) return restricted(sh, scratch, name);
     b32 physical = sh->opt[O_PHYSICAL];
     iz  i = 1;
     for (; i<nargs && args[i].len>1 && args[i][0]=='-'; i++) {
@@ -3356,6 +3407,7 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
     }
     if (i == nargs) return 0;
+    if (std && sh->restricted) return restricted(sh, scratch, "command", "-p");
     if (mode) {
         i32 status = 0;
         for (; i < nargs; i++) {
@@ -3434,6 +3486,7 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
     }
     if (i == nargs) return 0;  // redirections were made permanent
+    if (sh->restricted) return restricted(sh, scratch, "exec");
     Slice<Str> env = clear ? Slice<Str>{} : makeenv(sh, &scratch);
     flushbout(sh);  // pending builtin output first
 
@@ -4118,6 +4171,7 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
         return 0;
     }
 
+    if (path.data && !restrictedhash(sh, scratch, "hash", path)) return 1;
     i32 status = 0;
     b32 multi  = nargs-i > 1;
     for (; i < nargs; i++) {
@@ -4502,6 +4556,7 @@ static i32 b_enable(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
     }
 
+    if (sh->restricted && (flags & D)) return restricted(sh, scratch, "enable");
     if (i==nargs || (flags & P)) {
         Buf b(&scratch, 1024);
         for (iz k = 0; k < countof(builtins); k++) {
@@ -4539,6 +4594,8 @@ static i32 b_enable(Shell *sh, Str *args, iz nargs, Arena scratch)
             u64 bit = (u64)1 << (k&63);
             if (flags & N) {
                 sh->disabled[k>>6] |= bit;
+            } else if (sh->restricted && (sh->disabled[k>>6] & bit)) {
+                status = restricted(sh, scratch, "enable");
             } else {
                 sh->disabled[k>>6] &= ~bit;
             }

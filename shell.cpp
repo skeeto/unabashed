@@ -525,6 +525,8 @@ struct Shell {
     i32      funcdepth;
     b32      nowriteerr;   // the builtin ignores a failed write (help)
     b32      viacommand;
+    b32      restricted;   // set -r, rbash: the restrictions apply now
+    b32      rshell;       // started restricted (shopt restricted_shell)
     i32      dumpstrings;  // 1: -D, --dump-strings; 2: in po form too
     b32      prettyprint;  // --pretty-print: print the script, not run it   // a builtin started by `command`, until it
                            // reads this (POSIX mode's fatal errors)

@@ -812,8 +812,11 @@ static File *openwin(Shell *sh, Arena *a, Str name, i32 flags)
     return f;
 }
 
+static b32 restrictedwrite(Shell *, Arena *, Str);
+
 static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
 {
+    if ((flags & OF_WRITE) && restrictedwrite(sh, a, name)) return 0;
     if (!name.len) {
         // absolute() would turn it into the working directory
         shellerror(sh, *a, concat(a, name, ": No such file or directory"));
@@ -852,9 +855,19 @@ static i32 parsefd(Str s)
     return n;
 }
 
+// A restricted shell writes no files by redirection, as bash: a write
+// redirection to a file is refused, reported, true.
+static b32 restrictedwrite(Shell *sh, Arena *a, Str name)
+{
+    if (!sh->restricted) return 0;
+    shellerror(sh, *a, concat(a, name, ": restricted: cannot redirect output"));
+    return 1;
+}
+
 // Under set -C, refuse to truncate an existing regular file.
 static b32 clobbers(Shell *sh, Arena *a, Str name)
 {
+    if (restrictedwrite(sh, a, name)) return 1;
     if (!sh->opt[O_NOCLOBBER]) return 0;
     Stat st = pathstat(sh, *a, name, 1);
     if (!st.err && st.type==FT_FILE) {
@@ -2019,6 +2032,10 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
     Str name = argv[0];
     Str path = found;
     b32 slash = haspath(sh, name);
+    if (sh->restricted && slash) {
+        shellerror(sh, a, concat3(&a, name, Str(": restricted: "), "cannot specify `/' in command names"));
+        return 1;
+    }
     if (found.data) {
         slash = haspath(sh, found);
     } else if (slash) {
@@ -2091,6 +2108,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->psubs       = 0;
         sh->aliases     = 0;
         sh->cflag       = 0;
+        sh->restricted  = 0;  // as bash, the script runs unrestricted
         defaultoptions(sh, 1);
         sh->capdepth++;
         // As a new shell: what was ignored is ignored on entry, caught

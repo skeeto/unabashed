@@ -1789,6 +1789,10 @@ static i32 histfileop(Shell *sh, i32 op, Str *args, iz nargs, iz i, Arena scratc
         builtinerror(sh, scratch, "history", msg);
         return !sh->interactive;
     }
+    if (sh->restricted && find(file, "/")>=0) {
+        builtinerror(sh, scratch, "history", concat(&scratch, file, ": restricted"));
+        return 1;
+    }
     i32 err = 0;
     switch (op) {
     case 'a':

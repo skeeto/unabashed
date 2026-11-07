@@ -75,7 +75,7 @@ quotearray PASS
 read BASH
 redir FAIL
 rhs-exp PASS
-rsh FAIL
+rsh PASS
 set-e PASS
 set-x PASS
 shopt PASS

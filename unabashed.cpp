@@ -268,6 +268,7 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
     Str name = cuttail(cuthead(var, 10), 2);
     if (!name.len || !startswith(value, "() {")) return;
     if (!exportablefunc(name) || (sh->opt[O_POSIX] && !validvarname(name))) return;
+    if (sh->rshell) return;  // restricted: no functions from outside
     Lexer *L = newlexer(&scratch, concat3(&scratch, name, " ", value));
     L->stackmax = (iz)1<<20;
     Parsed p = parseunit(L);
@@ -445,6 +446,7 @@ static void logoutfiles(Shell *sh, Arena scratch)
 // options it names, as in bash.
 static void importopts(Shell *sh, Arena scratch, b32 shopt)
 {
+    if (sh->rshell) return;  // as bash, a restricted shell ignores them
     Str list = getvar(sh, &scratch, shopt ? Str("BASHOPTS") : Str("SHELLOPTS")).value;
     while (list.len) {
         Cut c = cut(list, ':');
@@ -1204,6 +1206,42 @@ static Str const longopts[] = {
     "pretty-print", "rcfile", "restricted", "verbose", "version",
 };
 
+// Will this shell be restricted: named rbash, or given -r or
+// --restricted? Known before the environment is imported, which a
+// restricted shell does without functions, SHELLOPTS and BASHOPTS.
+static b32 startsrestricted(OsInfo *info)
+{
+    if (!info->nargs) return 0;
+    Str prog = info->args[0];
+    prog = progbase(startswith(prog, "-") ? cuthead(prog, 1) : prog);
+    if (equalfold(prog, "rbash")) return 1;
+    iz i = 1;
+    for (; i<info->nargs && startswith(info->args[i], "-"); i++) {
+        Str a    = info->args[i];
+        b32 lng  = a.len>2 && a[1]=='-';
+        Str name = cuthead(a, lng ? 2 : 1);
+        if (name == "restricted") return 1;
+        if (name=="rcfile" || name=="init-file") {
+            i++;
+            continue;
+        }
+        b32 known = 0;
+        for (iz k = 0; k < countof(longopts); k++) known |= name==longopts[k];
+        if (!known) break;
+    }
+    for (; i < info->nargs; i++) {
+        Str a = info->args[i];
+        if (a.len<1 || (a[0]!='-' && a[0]!='+') || a=="-" || a=="--") break;
+        iz next = i + 1;
+        for (iz k = 1; k < a.len; k++) {
+            if (a[k]=='r' && a[0]=='-') return 1;
+            next += a[k]=='o' || a[k]=='O';
+        }
+        i = next - 1;
+    }
+    return 0;
+}
+
 // The options summary, as bash prints it for --help or a bad option
 static void shellusage(Shell *sh, Buf *b)
 {
@@ -1382,6 +1420,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
 
     if (!__builtin_setjmp(top.jmp)) {
         pathsetup(sh, info, &perm, scratch);
+        sh->rshell = startsrestricted(info);
         initvars(sh, info, scratch);
         entrytraps(sh);
         if (sh->pathmode==PM_MSYS && !msysargv(sh, info, &perm, scratch)) {
@@ -1611,6 +1650,10 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         if (!selftest_) {
             st.posix = sh->opt[O_POSIX];
             startup(sh, scratch, info->nargs ? info->args[0] : Str("bash"), &st);
+            // As bash: the restrictions start after the startup files
+            sh->rshell |= st.restricted;
+            sh->shopt[S_RESTRICTED_SHELL] = sh->rshell;
+            if (sh->rshell || sh->restricted) makerestricted(sh);
         }
         if (sh->interactive && sh->opt[O_HISTORY] && !sh->hist.session) {
             histload(sh);  // unless the startup files added lines

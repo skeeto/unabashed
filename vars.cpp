@@ -98,6 +98,11 @@ static b32 exportablefunc(Str name)
     return 1;
 }
 
+// A restricted shell remembers a command's path only by a name PATH
+// finds, as bash: a path with a slash is refused, a name PATH lacks
+// not found. Reported by the builtin CMD, if any.
+static b32 restrictedhash(Shell *sh, Arena scratch, Str cmd, Str path);
+
 static Var *findvar(Shell *sh, Str name)
 {
     Var *v = sh->vars;
@@ -1081,7 +1086,9 @@ static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str val
             defalias(sh, key, value);
         }
         return 1;
-    case DYN_BASH_CMDS:    hashenter(sh, key, value, 0); return 1;
+    case DYN_BASH_CMDS:
+        if (restrictedhash(sh, scratch, {}, value)) hashenter(sh, key, value, 0);
+        return 1;
     case DYN_DIRSTACK:     setdirelem(sh, idx, value); return 1;
     }
     toarray(sh, val);
@@ -1554,7 +1561,7 @@ static Slice<Str> makeenv(Shell *sh, Arena *a)
     Slice<Str> env = {};
     collectexports(sh, sh->vars, a, &env);
     for (iz i = 0; i < sh->nbadenv; i++) env = push(a, env, sh->badenv[i]);
-    exportfuncs(sh->funcs, a, &env);
+    if (!sh->restricted) exportfuncs(sh->funcs, a, &env);  // as bash
     sort(env.data, env.len, envless, *a);
     return env;
 }
