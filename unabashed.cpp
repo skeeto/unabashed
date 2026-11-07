@@ -1030,6 +1030,10 @@ static b32 fillstdin(void *ctx, Lexer *L)
             }
         }
         fdwrite(sh, 2, concat(&a, word, "\n"));
+        if (exitwarning(sh)) {
+            L->newunit = 1;
+            continue;
+        }
         return 0;
     }
 }
@@ -1395,6 +1399,8 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     sh->bashpid = info->pid;
     sh->sched->pid = info->pid;
     sh->ppid    = info->ppid;
+    sh->startpgid = info->pgid;
+    sh->jctty   = BADHANDLE;
     sh->uid     = info->uid;
     sh->euid    = info->euid;
     sh->gid     = info->gid;
@@ -1593,6 +1599,9 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             updatesigmode(sh, 2);
             updatesigmode(sh, 3);
             updatesigmode(sh, 15);
+            if (os_isatty(os, info->std[0]) || os_isatty(os, info->std[2])) {
+                sh->opt[O_MONITOR] = 1;  // job control, as bash
+            }
             sh->shopt[S_EXPAND_ALIASES] = 1;
             if (!st.noediting && !sh->opt[O_VI]) sh->opt[O_EMACS] = 1;
             if (!getvar(sh, &scratch, "PS1").set) setvar(sh, scratch, "PS1", "\\s-\\v\\$ ");
@@ -1615,6 +1624,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         for (iz k = 0; k < shopts.len; k += 2) {
             startoption(sh, scratch, 'O', shopts[k]=="-", &shopts[k+1]);
         }
+        if (sh->opt[O_MONITOR]) histoption(sh, O_MONITOR, 1);
 
         // $0 and the positional parameters, then the startup files
         Str file = {};
@@ -1762,6 +1772,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         }
         histexit(sh);
     }
+    jobctloff(sh);
     if (sh->jobs) orphanjobs(sh);
     if (sh->psubs || sh->sched->orphans) {
         // Procsubs and background jobs still running end on EOF once

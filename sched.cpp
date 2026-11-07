@@ -38,6 +38,8 @@ struct Task {
                        // so its reads never block outside the scheduler
     b32     timedout;  // its wait was failed by its deadline
     b32     waitany;   // woken when any task finishes (wait -n)
+    i32     change;    // a waiter's: its program's last stop (WSTOP|sig)
+                       // or continue (WCONT) the jobs have not seen
     i64     deadline;  // os_now time when its pipe or OS wait fails, or 0
     Task   *joiner;    // a task waiting for this one to finish
     Task   *sib;       // its creator's list of procsubs to join later
@@ -407,6 +409,18 @@ static void safepoint(Sched *s)
 
 // Tasks
 
+// Wake the tasks waiting for t: its joiner, and any in wait -n.
+static void wakejoiners(Sched *s, Task *t)
+{
+    if (t->joiner) {
+        wake(s, t->joiner);
+        t->joiner = 0;
+    }
+    for (Task *w = s->all; w; w = w->all) {
+        if (w->waitany && w->state==TS_BLOCKED && w->wait==W_JOIN) wake(s, w);
+    }
+}
+
 static void taskentry(Os *, void *arg)
 {
     Task  *t = (Task *)arg;
@@ -415,13 +429,7 @@ static void taskentry(Os *, void *arg)
         t->fn(t);
         t->state = TS_DONE;
         s->ntasks--;
-        if (t->joiner) {
-            wake(s, t->joiner);
-            t->joiner = 0;
-        }
-        for (Task *w = s->all; w; w = w->all) {
-            if (w->waitany && w->state==TS_BLOCKED && w->wait==W_JOIN) wake(s, w);
-        }
+        wakejoiners(s, t);
         schedule(s);  // returns when the task is reused
     }
 }
@@ -671,6 +679,22 @@ static i32 taskwaitproc(Sched *s, Handle proc)
     taskio(s, io);
     s->cur->failed = 0;
     return io->err ? 127 : (i32)io->n;
+}
+
+// As taskwaitproc, for a program in a process group of its own under
+// job control: it also ends when the program stops (WSTOP|sig).
+static i32 taskwaitstop(Sched *s, Handle proc)
+{
+    for (;;) {
+        Io *io = &s->cur->io;
+        *io = {};
+        io->op = IO_PROCSTOP;
+        io->h  = proc;
+        taskio(s, io);
+        s->cur->failed = 0;
+        if (io->err) return 127;
+        if (!((i32)io->n & WCONT)) return (i32)io->n;
+    }
 }
 
 

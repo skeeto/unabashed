@@ -447,6 +447,8 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->intredit = 0;
     c->jobs     = copyjobs(st, sh->jobs);  // to list, not to wait for
     c->jobctl   = 0;
+    c->spawngrp = 0;
+    c->exitwarned = 0;
     c->bgstats  = 0;
     closecoproc(c);
     copytraps(c, sh);

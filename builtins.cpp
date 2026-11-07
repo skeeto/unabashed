@@ -2,6 +2,7 @@
 // This is free and unencumbered software released into the public domain.
 
 static void histoption(Shell *, i32 opt, b32 on);  // history.cpp
+static b32  exitwarning(Shell *);                  // jobs.cpp
 
 static Str helpsynopsis(Str name);  // help.cpp
 
@@ -253,6 +254,7 @@ static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     if (sh->interactive && !sh->subshell) {
         fdwrite(sh, 2, sh->login ? Str("logout\n") : "exit\n");
+        if (exitwarning(sh)) return 1;
     }
     // In a trap action, the status from before the action (POSIX)
     i32 status = sh->intrap ? sh->trapstatus : sh->status;

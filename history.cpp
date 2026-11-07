@@ -504,6 +504,7 @@ static void histoption(Shell *sh, i32 opt, b32 on)
     Hist *h = &sh->hist;
     if (opt == O_MONITOR) {
         sh->jobctl = on;
+        if (on) jobctlon(sh);
     } else if (opt==O_NOEXEC && sh->interactive) {
         sh->opt[O_NOEXEC] = 0;
     } else if (opt == O_HISTORY) {

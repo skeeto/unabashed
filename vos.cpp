@@ -115,6 +115,8 @@ struct VProc {
     LevelSig lsigs[16];  // shells: os_siglevel's, oldest first
     i32     nlsigs;
     u64     sigign;   // fakes: signals they ignore (Spawn.sigign)
+    u64     nodfl;    // shells: signals not in their default mode
+                      // (os_sigmode), so TSTP TTIN TTOU stop it if not
     i64     until;    // VW_SLEEP, VW_IO with a deadline: time to wake at
     Fiber  *fiber;    // where to resume it
     Fiber  *own;      // its own fiber, freed once reaped
@@ -1977,6 +1979,15 @@ static void vsignal(Os *os, Vos *v, VProc *p, i32 sig)
         return;
     }
     if (sig == 18) vcont(os, v, p);
+    if (sig==9 && p->shell && p->stopped) {
+        // SIGKILL ends a stopped process too: a shell takes it running
+        p->stopped = 0;
+        p->change  = 0;
+    }
+    if (p->shell && sig>=20 && sig<=22 && !(p->nodfl & bit)) {
+        vstop(os, v, p, sig);  // as the kernel's default action
+        return;
+    }
     if (p->shell) {
         p->sigpend |= bit;
         p->intr = p != v->procs+v->cur;  // fail its blocked read or wait
@@ -2138,6 +2149,7 @@ static u64 os_sigpending(Os *os)
     VProc *me = v->procs + v->cur;
     u64    r  = me->sigpend;
     me->sigpend = 0;
+    if (!me->grpsig) me->intr = 0;  // taken: no wait fails for them later
     return r;
 }
 
@@ -2148,6 +2160,7 @@ static u64 os_siggroup(Os *os)
     VTty  *y  = &v->tty;
     u64    r  = me->grpsig;
     me->grpsig = 0;
+    if (!me->sigpend) me->intr = 0;
     if (y->term && !y->ended && !vothersready(v)) {
         // A busy shell: a millisecond passes at each look, and keys
         // are typed once the terminal has been quiet a while, as
@@ -2184,9 +2197,15 @@ static void os_racy(Os *os)
     osvos(os)->racy = 1;
 }
 
-static void os_sigmode(Os *, i32, i32)
+// Shells take every signal through os_sigpending, but for the stop
+// signals in their default mode.
+static void os_sigmode(Os *os, i32 sig, i32 mode)
 {
-    // shells take every signal through os_sigpending
+    Vos *v = osvos(os);
+    if (sig<1 || sig>=NSIGNAL) return;
+    u64 bit = (u64)1 << (sig-1);
+    VProc *me = v->procs + v->cur;
+    me->nodfl = mode==SIGM_DEFAULT ? me->nodfl&~bit : me->nodfl|bit;
 }
 
 enum { VIMAGE = 1024 };  // size of a fake program's file, mostly NULs

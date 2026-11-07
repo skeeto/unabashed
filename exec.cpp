@@ -35,6 +35,8 @@ static void     joinpsubs(Shell *);
 static void     closeall(Shell *);
 
 // Jobs (jobs.cpp)
+static b32      fgjobctl(Shell *);
+static i32      fgstopped(Shell *, Arena, Handle proc, i64 pid, i32 sig);
 static void     runasync(Shell *, Node *, Arena);
 static void     runcoproc(Shell *, Node *, Arena);
 static void     notifyjobs(Shell *, Arena);
@@ -48,6 +50,7 @@ static void     hidecoproc(Shell *, Arena *);
 static void     checksigs(Shell *, Arena);
 static void     runerrtrap(Shell *);
 static b32      rundebugtrap(Shell *, Arena);
+static b32      trapset(Shell *, i32 idx);
 static void     runreturntrap(Shell *, Arena);
 static void     subshelltraps(Shell *);
 static void     sigenter(Shell *, Sigproc *, i64 pid, Task *);
@@ -1782,6 +1785,18 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         sp.nenv    = tg.env.len;
         sp.crtslot = tg.crtslot;
     }
+    // Under job control a background job's program joins the job's
+    // group (spawngrp), and a foreground program leads a group of its
+    // own that holds the terminal while it runs
+    b32 group = 0;
+    if (sh->spawngrp) {
+        sp.pgid = sh->spawngrp;
+    } else if (!execing && fgjobctl(sh) && !sh->spawnto && !capfile && !npumps && !br.n) {
+        group   = 1;
+        sp.pgid = -1;
+        sp.fg   = sh->jctty != BADHANDLE;
+        sp.tty  = sh->jctty;
+    }
     // The last command of a background job in a process of its own,
     // which bash would exec in the job's place
     b32 jobtail = !execing && sh->attail && sh->subshell==sh->procbase &&
@@ -1874,9 +1889,26 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     takeossigs(sh);  // those from before the wait are this level's own
     sh->sig->fgwait  = !r.err;
     sh->sig->execpid = sh->attail && !r.err ? r.pid : 0;
-    i32 status = r.err ? -r.err : taskwaitproc(s, r.proc);
+    i32 status = r.err ? -r.err : group ? taskwaitstop(s, r.proc) : taskwaitproc(s, r.proc);
     sh->sig->execpid = 0;
     sh->childsig = 0;
+    if (group && !r.err) {
+        if (sp.fg) {
+            os_tcpgrp(sh->os, sh->jctty, sh->shellpgid);
+            if ((status & WSIGNALED) && (status & 255)==128+2) {
+                // The terminal's INT reached only the program: in a
+                // loop (or untrapped, interactively) the shell acts as
+                // if it had it too, as bash
+                b32 trapped = trapset(sh, 2);
+                if (sh->loopdepth || (!trapped && sh->interactive)) {
+                    sh->sig->waitsig |= sigbit(2);
+                }
+            }
+        }
+        if (status>=0 && (status & WSTOP)) {
+            status = fgstopped(sh, a, r.proc, r.pid, status & 255);
+        }
+    }
     if (!r.err) {
         // A signal the program missed is the level's own, as its
         // forked bash child would have had it

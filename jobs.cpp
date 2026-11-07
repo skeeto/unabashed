@@ -45,21 +45,43 @@ static Job *jobbyid(Shell *sh, i32 id)
     return 0;
 }
 
+// A waiter's program stopped or continued (its IO_PROCSTOP reported a
+// change): note it for polljobs, and wait again. True if so.
+static b32 waiterchange(Sched *s, Task *t)
+{
+    b32 r = 0;
+    while (t->io.done && !t->io.err && ((i32)t->io.n & (WSTOP|WCONT))) {
+        t->change  = (i32)t->io.n;
+        t->io.done = 0;
+        t->io.n    = 0;
+        os_submit(s->os, &t->io);
+        if (!t->io.done) s->npending++;
+        r = 1;
+    }
+    return r;
+}
+
 // A job whose program a waiter watches, rather than a vproc. Its wait
 // is submitted at once (spawnwaiter), so that the program's end is
-// noticed even before the waiter first runs.
+// noticed even before the waiter first runs. Under job control it
+// also sees stops, which wake a task waiting for the job (fg, wait).
 static void waitermain(Task *t)
 {
-    while (!t->io.done) {
-        block(t->s, W_IO);
+    Sched *s = t->s;
+    for (;;) {
+        while (!t->io.done) {
+            block(s, W_IO);
+        }
+        if (!waiterchange(s, t)) break;
+        wakejoiners(s, t);
     }
     t->status = t->io.err ? 127 : (i32)t->io.n & ~(WMISSED|WNOLIB);
 }
 
-static Task *spawnwaiter(Sched *s, Handle proc)
+static Task *spawnwaiter(Sched *s, Handle proc, b32 stops = 0)
 {
     Task *t = taskspawn(s, waitermain, (void *)proc, SMALLSTACK);
-    t->io.op  = IO_PROC;
+    t->io.op  = stops ? IO_PROCSTOP : IO_PROC;
     t->io.h   = proc;
     t->io.ctx = t;
     os_submit(s->os, &t->io);
@@ -151,7 +173,89 @@ static void throttlejobs(Shell *sh)
 }
 
 
+// Job control's process groups and terminal
+
+// Does job control make process groups here? At the outermost level of
+// a shell under set -m, on a platform with groups.
+static b32 fgjobctl(Shell *sh)
+{
+    return sh->jobctl && sh->shellpgid && !sh->subshell;
+}
+
+// set -m turned job control on: jobs get process groups of their own
+// from now on. The terminal (fd 2, else fd 0) goes to foreground jobs
+// when the shell's group holds it. An interactive shell leads a group
+// of its own and takes the terminal; a script stays in its group, as
+// bash.
+static void jobctlon(Shell *sh)
+{
+    if (sh->subshell || !sh->startpgid || sh->shellpgid) return;
+    sh->shellpgid = sh->startpgid;
+    sh->jctty     = BADHANDLE;
+    Handle tty = BADHANDLE;
+    for (i32 fd = 2; fd >= 0; fd -= 2) {
+        File *f = fd<sh->fds->top ? sh->fds->fd[fd] : 0;
+        if (f && f->kind==F_OS && os_isatty(sh->os, f->h)) {
+            tty = f->h;
+            break;
+        }
+    }
+    if (tty == BADHANDLE) return;
+    if (sh->interactive && sh->startpgid!=sh->pid && !os_setpgid(sh->os, 0, 0)) {
+        sh->shellpgid = sh->pid;
+        os_tcpgrp(sh->os, tty, sh->shellpgid);
+    }
+    if (os_tcpgrp(sh->os, tty, 0) != sh->shellpgid) return;
+    sh->jctty = os_dup(sh->os, tty);
+    if (interactivetop(sh)) {
+        for (i32 sig = 20; sig <= 22; sig++) updatesigmode(sh, sig);
+    }
+}
+
+// As the shell exits: an interactive shell's stopped jobs are ended
+// (TERM, then CONT to act on it), and the group and terminal it started
+// with restored.
+static void jobctloff(Shell *sh)
+{
+    if (sh->subshell || !sh->shellpgid) return;
+    for (Job *j = sh->jobs; sh->interactive && j && ownjob(sh, j); j = j->next) {
+        if (j->stopped && !j->done && j->pgid) {
+            os_kill(sh->os, -j->pgid, 15);
+            os_kill(sh->os, -j->pgid, 18);
+        }
+    }
+    if (sh->shellpgid != sh->startpgid) {
+        if (sh->jctty != BADHANDLE) os_tcpgrp(sh->os, sh->jctty, sh->startpgid);
+        os_setpgid(sh->os, 0, sh->startpgid);
+    }
+    if (sh->jctty != BADHANDLE) os_close(sh->os, sh->jctty);
+    sh->jctty     = BADHANDLE;
+    sh->shellpgid = 0;
+}
+
 // The table
+
+static void setcurrent(Shell *, i32 id);
+
+// Apply the stop or continue a job's waiter saw: a job that stops
+// becomes the current one.
+static void jobchange(Shell *sh, Job *j)
+{
+    Task *t = j->task;
+    i32   c = t->change;
+    t->change = 0;
+    if (!c) return;
+    if (c & WSTOP) {
+        if (j->stopped) return;
+        j->stopped  = 1;
+        j->stopsig  = c & 255;
+        j->notified = 0;
+        setcurrent(sh, j->id);
+    } else if (j->stopped) {
+        j->stopped  = 0;
+        j->notified = 0;
+    }
+}
 
 // Notice the jobs that have ended: finished tasks are joined.
 static void polljobs(Shell *sh)
@@ -173,7 +277,12 @@ static void polljobs(Shell *sh)
     for (Job *j = sh->jobs; j; j = j->next) {
         Task *t = j->task;
         if (!t || !ownjob(sh, j)) continue;
-        b32 exited = iswaiter(t) && t->state==TS_READY && t->io.op==IO_PROC && t->io.done;
+        if (iswaiter(t)) {
+            waiterchange(s, t);
+            jobchange(sh, j);
+        }
+        b32 proc   = t->io.op==IO_PROC || t->io.op==IO_PROCSTOP;
+        b32 exited = iswaiter(t) && t->state==TS_READY && proc && t->io.done;
         if (t->state==TS_DONE || exited) {
             jointask(s, t, &j->status);
             j->task = 0;
@@ -187,7 +296,7 @@ static void polljobs(Shell *sh)
 // Is a job running, as far as the shell knows?
 static b32 jobrunning(Job *j)
 {
-    return !j->done;
+    return !j->done && !j->stopped;
 }
 
 // The newest running job older than job id (or of all, if 0).
@@ -199,22 +308,33 @@ static i32 lastrunning(Shell *sh, i32 id)
     return 0;
 }
 
+// The newest stopped job but job skip, or 0.
+static i32 laststopped(Shell *sh, i32 skip)
+{
+    for (Job *j = sh->jobs; j; j = j->next) {
+        if (j->id!=skip && j->stopped && !j->done) return j->id;
+    }
+    return 0;
+}
+
 // Bash's current (+) and previous (-) jobs: the newest running job,
-// and the next newest.
+// and the next newest, though stopped jobs come first.
 static void setcurrent(Shell *sh, i32 id)
 {
     if (sh->curjob != id) {
         sh->prevjob = sh->curjob;
         sh->curjob  = id;
     }
-    Job *cur = jobbyid(sh, id);
-    i32  cand = cur && jobrunning(cur) ? lastrunning(sh, id) : lastrunning(sh, 0);
+    Job *cur  = jobbyid(sh, id);
+    i32  cand = laststopped(sh, id);
+    if (!cand) cand = cur && jobrunning(cur) ? lastrunning(sh, id) : lastrunning(sh, 0);
     sh->prevjob = cand ? cand : sh->curjob;
 }
 
 static void resetcurrent(Shell *sh)
 {
-    i32 cand = lastrunning(sh, 0);
+    i32 cand = laststopped(sh, 0);
+    if (!cand) cand = lastrunning(sh, 0);
     if (cand) {
         setcurrent(sh, cand);
     } else {
@@ -338,8 +458,11 @@ static Job *copyjobs(Store *st, Job *j)
 }
 
 // How a job ended, or that it runs, as jobs describes it.
-static Str jobstate(Shell *sh, Arena *a, Job *j)
+static Str jobstate(Shell *sh, Arena *a, Job *j, i32 form = 0)
 {
+    if (j->stopped && !j->done) {
+        return form=='l' && j->stopsig>0 && j->stopsig<32 ? sigdescs[j->stopsig] : Str("Stopped");
+    }
     if (jobrunning(j)) return "Running";
     i32 st = j->status;
     if (st & WSIGNALED) {
@@ -364,15 +487,10 @@ static void padpid(Buf *b, i64 pid)
     print(b, finish(&t));
 }
 
-// List one job: form 0 as jobs, 'l' with its pid, 'p' its pid alone.
-static void printjob(Shell *sh, Arena a, Job *j, i32 form)
+// One job as jobs lists it: form 0, or 'l' with its pid.
+static Str jobline(Shell *sh, Arena *perm, Job *j, i32 form)
 {
-    if (form == 'p') {
-        bprinti(sh, j->pid);
-        bprint(sh, "\n");
-        return;
-    }
-    Buf b(&a, 128);
+    Buf b(perm, 128);
     print(&b, "[");
     print(&b, (i64)j->id);
     print(&b, "]");
@@ -382,7 +500,7 @@ static void printjob(Shell *sh, Arena a, Job *j, i32 form)
         padpid(&b, j->pid);
     }
     putbyte(&b, ' ');
-    Str st = jobstate(sh, &a, j);
+    Str st = jobstate(sh, perm, j, form);
     print(&b, st);
     for (iz i = st.len; i < 27; i++) putbyte(&b, ' ');
     print(&b, j->text);
@@ -390,7 +508,7 @@ static void printjob(Shell *sh, Arena a, Job *j, i32 form)
     if (!(j->wd == sh->wd)) {
         // As bash's polite form: HOME as ~
         Str wd   = j->wd;
-        Got home = getvar(sh, &a, "HOME");
+        Got home = getvar(sh, perm, "HOME");
         print(&b, "  (wd: ");
         iz  n    = homeprefix(sh, wd, home.value);
         if (n >= 0) {
@@ -401,7 +519,18 @@ static void printjob(Shell *sh, Arena a, Job *j, i32 form)
         print(&b, ")");
     }
     putbyte(&b, '\n');
-    bprint(sh, finish(&b));
+    return finish(&b);
+}
+
+// List one job: form 0 as jobs, 'l' with its pid, 'p' its pid alone.
+static void printjob(Shell *sh, Arena a, Job *j, i32 form)
+{
+    if (form == 'p') {
+        bprinti(sh, j->pid);
+        bprint(sh, "\n");
+        return;
+    }
+    bprint(sh, jobline(sh, &a, j, form));
     if (ownjob(sh, j)) j->notified = 1;
 }
 
@@ -493,6 +622,41 @@ static Job *findjob(Shell *sh, Arena scratch, Str who, Str spec, b32 *ambiguous)
     return found;
 }
 
+// Wait until a job's waiter finishes, or its program stops. False if
+// a signal interrupted the wait (intr: as the wait builtin).
+static b32 joinorstop(Shell *sh, Job *j, b32 intr)
+{
+    Sched *s    = sh->sched;
+    Task  *self = s->cur;
+    Task  *t    = j->task;
+    self->introk = intr;
+    for (;;) {
+        waiterchange(s, t);
+        jobchange(sh, j);
+        if (t->state==TS_DONE || j->stopped) break;
+        t->joiner = self;
+        block(s, W_JOIN);
+        if (intr && self->intr) {
+            t->joiner    = 0;
+            self->introk = 0;
+            return 0;
+        }
+    }
+    self->introk = 0;
+    return 1;
+}
+
+// A job whose waiter finished: it is done, with the waiter's status.
+static void joindone(Shell *sh, Job *j)
+{
+    j->status   = taskjoin(sh->sched, j->task);
+    j->task     = 0;
+    j->done     = 1;
+    j->stopped  = 0;
+    j->notified = 0;
+    coprocended(sh, j->pid);
+}
+
 static Job *jobbypid(Shell *sh, i64 pid)
 {
     for (Job *j = sh->jobs; j; j = j->next) {
@@ -505,16 +669,28 @@ static Job *jobbypid(Shell *sh, i64 pid)
 // interrupted the wait, with *status 128 plus its number.
 static b32 waitjob(Shell *sh, Job *j, i32 *status)
 {
-    if (j->task) {
+    if (j->task && iswaiter(j->task)) {
+        // It may stop meanwhile, under job control
+        if (!joinorstop(sh, j, 1)) {
+            sh->sched->cur->intr = 0;
+            u64 pend = sh->sig->pending;
+            *status = pend ? 128 + __builtin_ctzll(pend) + 1 : 128;
+            return 0;
+        }
+        if (j->stopped) {
+            *status = 128 + j->stopsig;
+            return 1;
+        }
+        joindone(sh, j);
+    } else if (j->task) {
         i32 st;
-        b32 waiter = iswaiter(j->task);
         if (!taskjoinintr(sh->sched, j->task, &st)) {
             sh->sched->cur->intr = 0;
             u64 pend = sh->sig->pending;
             *status = pend ? 128 + __builtin_ctzll(pend) + 1 : 128;
             return 0;
         }
-        sh->sched->nbg -= !waiter;
+        sh->sched->nbg--;
         j->task   = 0;
         j->done   = 1;
         j->notified = 0;
@@ -679,6 +855,7 @@ static i64 spawnimage(Shell *sh, Node *n, File *in, File *out, i64 *pid,
     ImageRef im = os_imagenew(sh->os, sh->reserve);
     if (!im.base) return -1;
     BgFds fds = bgfds(sh, &scratch, in, out);
+    i64   grp = sh->spawngrp;
     Image img = imagebuild(sh, n, im);
 
     Spawn sp = {};
@@ -689,7 +866,9 @@ static i64 spawnimage(Shell *sh, Node *n, File *in, File *out, i64 *pid,
     sp.cwd    = spawncwd(sh, &scratch);
     sp.fds    = fds.fds;
     sp.nfds   = fds.nfds;
-    sp.sigign = ignoredsigs(sh) | (u64)1<<1 | (u64)1<<2;  // INT, QUIT
+    sp.sigign = ignoredsigs(sh);
+    sp.pgid   = grp;
+    if (!grp) sp.sigign |= (u64)1<<1 | (u64)1<<2;  // INT, QUIT
     Spawned r = os_spawn(sh->os, scratch, &sp);
     for (iz i = 0; i < fds.nclose; i++) {
         os_close(sh->os, fds.close[i]);
@@ -727,7 +906,7 @@ static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid,
         }
     }
     i64   proc = spawnimage(sh, n, in, out, pid, scratch);
-    if (proc >= 0) return spawnwaiter(sh->sched, (Handle)proc);
+    if (proc >= 0) return spawnwaiter(sh->sched, (Handle)proc, sh->spawngrp!=0);
     Vproc *m = vprocwith(sh, in, out);
     Shell *c = m->sh;
     closecoproc(c);
@@ -798,14 +977,19 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     i64   pid    = 0;
     b32   retry  = 1;
     i32   status = 0;
+    // Under job control it is a process group of its own, which the
+    // terminal's INT and QUIT do not reach (so not ignored), and it
+    // may stop
+    b32 grouped = fgjobctl(sh);
+    sh->spawngrp = grouped ? -1 : 0;
     if (directbg(sh, scratch, n, nullin)) {
         u64 ign = sh->asyncign;
-        sh->asyncign |= (u64)1<<1 | (u64)1<<2;  // INT, QUIT
+        if (!grouped) sh->asyncign |= (u64)1<<1 | (u64)1<<2;  // INT, QUIT
         Handle proc = spawndirect(sh, n, in, 0, scratch, &status, &retry, 0);
         sh->asyncign = ign;
         pid = sh->childpid;
         if (proc != BADHANDLE) {
-            t = spawnwaiter(s, proc);
+            t = spawnwaiter(s, proc, grouped);
         } else if (!retry) {
             pid = newvpid(sh);  // it failed as its own process would
         }
@@ -817,8 +1001,10 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
         sh->debugdone = 0;
         sh->forked    = 0;
     }
+    sh->spawngrp = 0;
     fileunref(sh, in);
     Job *j = newjob(sh, scratch, n, t, pid, 0);
+    if (grouped && t && iswaiter(t)) j->pgid = pid;
     if (!t) {
         j->done   = 1;
         j->status = status & 255;
@@ -865,17 +1051,22 @@ static void hidecoproc(Shell *sh, Arena *scratch)
     sh->coprocs = 0;
 }
 
-// The pid a kill job spec names, or -1 after reporting why not.
-static i64 jobspecpid(Shell *sh, Arena scratch, Str who, Str spec)
+// kill %spec: to the job's process group if it has one, continuing a
+// stopped job to take TERM or HUP, as bash; else to its pid. Returns -1
+// after reporting no such job, else 0 or an E_* error.
+static i32 jobkill(Shell *sh, Arena scratch, Str spec, i32 sig)
 {
     polljobs(sh);
     b32  amb;
-    Job *j = findjob(sh, scratch, who, spec, &amb);
+    Job *j = findjob(sh, scratch, "kill", spec, &amb);
     if (!j) {
-        if (!amb) builtinerror(sh, scratch, who, concat(&scratch, spec, ": no such job"));
+        if (!amb) builtinerror(sh, scratch, "kill", concat(&scratch, spec, ": no such job"));
         return -1;
     }
-    return j->pid;
+    if (!j->pgid) return killpid(sh, j->pid, sig);
+    i32 err = os_kill(sh->os, -j->pgid, sig);
+    if (!err && j->stopped && (sig==15 || sig==1)) os_kill(sh->os, -j->pgid, 18);
+    return err;
 }
 
 static void setcoprocvars(Shell *sh, Arena scratch, Coproc *c)
@@ -1105,7 +1296,8 @@ static i32 b_jobs(Shell *sh, Str *args, iz nargs, Arena scratch)
         for (Job *j = sh->jobs; j && n<countof(list); j = j->next) list[n++] = j;
         for (i32 k = n-1; k >= 0; k--) {
             Job *j = list[k];
-            if (stopped || (running && !jobrunning(j)) || (changed && j->notified)) continue;
+            b32 skip = (running && !jobrunning(j)) || (stopped && !(j->stopped && !j->done));
+            if (skip || (changed && j->notified)) continue;
             printjob(sh, scratch, j, form);
         }
         if (!running && !stopped) cleanupjobs(sh);
@@ -1180,7 +1372,7 @@ static i32 waitany(Shell *sh, Arena scratch, Str *ids, iz nids, Str var)
             for (i32 k = 0; k < nwant; k++) wanted |= want[k] == j;
             if (!wanted) continue;
             if (j->done && !j->notified) found = j;  // the oldest
-            if (j->task) live = j;
+            if (j->task && !j->stopped) live = j;
         }
         if (found) {
             i32 st  = found->status & 255;
@@ -1199,6 +1391,18 @@ static i32 waitany(Shell *sh, Arena scratch, Str *ids, iz nids, Str var)
             return pend ? 128 + __builtin_ctzll(pend) + 1 : 128;
         }
     }
+}
+
+// Plain wait passes over a stopped job, saying so.
+static void waitstopped(Shell *sh, Arena scratch, Job *j)
+{
+    Buf b(&scratch, 64);
+    print(&b, "warning: job ");
+    print(&b, (i64)j->id);
+    print(&b, "[");
+    print(&b, j->pid);
+    print(&b, "] stopped");
+    builtinerror(sh, scratch, "wait", finish(&b));
 }
 
 static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
@@ -1248,16 +1452,30 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
 
     if (i == nargs) {
-        // Every running job, then the last procsub if $! names it
+        // Every running job, then the last procsub if $! names it.
+        // Stopped ones are passed over, with a warning
+        Job *list[256];
+        i32  n = 0;
+        for (Job *j = sh->jobs; j && ownjob(sh, j) && n<countof(list); j = j->next) {
+            list[n++] = j;
+        }
+        polljobs(sh);
+        for (i32 k = n-1; k >= 0; k--) {
+            if (list[k]->stopped && !list[k]->done) waitstopped(sh, scratch, list[k]);
+        }
         for (;;) {
             polljobs(sh);
             Job *live = 0;
             for (Job *j = sh->jobs; j && ownjob(sh, j); j = j->next) {
-                if (j->task) live = j;  // the oldest
+                if (j->task && !j->stopped) live = j;  // the oldest
             }
             if (!live) break;
             i32 st;
             if (!waitjob(sh, live, &st)) return st;
+            if (live->stopped) {
+                waitstopped(sh, scratch, live);
+                continue;
+            }
             reportkilled(sh, scratch, live);  // as bash, when it collects it
             live->notified = 1;  // waited for: dropped, even $!'s
         }
@@ -1289,6 +1507,10 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (j && !ownjob(sh, j)) j = 0;
             if (j) {
                 if (!waitjob(sh, j, &status)) return status;
+                if (j->stopped) {
+                    lastpid = pid;
+                    continue;
+                }
                 reportkilled(sh, scratch, j);
                 j->notified = 1;
                 if (sh->opt[O_POSIX]) {
@@ -1327,10 +1549,15 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
                 lastpid = -1;
                 continue;
             }
+            if (j->stopped) {
+                Str msg = concat3(&scratch, "warning: wait_for_job: job ", fmti64(&scratch, j->id), " is stopped");
+                shellerror(sh, scratch, msg);
+            }
             if (!waitjob(sh, j, &status)) return status;
+            lastpid = j->pid;
+            if (j->stopped) continue;
             reportkilled(sh, scratch, j);
             j->notified = 1;
-            lastpid = j->pid;
             if (sh->opt[O_POSIX]) cleanupjobs(sh);
         } else {
             builtinerror(sh, scratch, "wait", concat3(&scratch, "`", a, "': not a pid or valid job spec"));
@@ -1340,6 +1567,20 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     if (var.data && lastpid>=0) waitvar(sh, scratch, var, lastpid);
     return status;
+}
+
+// Drop a job from the table, warning of one left stopped, as bash.
+static void disownjob(Shell *sh, Arena scratch, Job *j)
+{
+    if (j->stopped && !j->done) {
+        Buf b(&scratch, 96);
+        print(&b, "warning: deleting stopped job ");
+        print(&b, (i64)j->id);
+        print(&b, " with process group ");
+        print(&b, j->pgid ? j->pgid : j->pid);
+        shellerror(sh, scratch, finish(&b));
+    }
+    deletejob(sh, j);
 }
 
 static i32 b_disown(Shell *sh, Str *args, iz nargs, Arena scratch)
@@ -1367,7 +1608,7 @@ static i32 b_disown(Shell *sh, Str *args, iz nargs, Arena scratch)
                 if (nohup) {
                     j->nohup = 1;
                 } else {
-                    deletejob(sh, j);
+                    disownjob(sh, scratch, j);
                 }
             }
             j = next;
@@ -1395,7 +1636,7 @@ static i32 b_disown(Shell *sh, Str *args, iz nargs, Arena scratch)
         } else if (nohup) {
             j->nohup = 1;
         } else {
-            deletejob(sh, j);
+            disownjob(sh, scratch, j);
         }
         i++;
     } while (i < nargs);
@@ -1453,6 +1694,8 @@ static Str jobtext(Shell *sh, Arena *a, Job *j, Str sep)
     return concat3(a, j->text, sep, concat3(a, "(wd: ", wd, ")"));
 }
 
+static i32 fgstop(Shell *, Arena, Job *);
+
 static i32 b_fg(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     if (!sh->jobctl) {
@@ -1464,7 +1707,7 @@ static i32 b_fg(Shell *sh, Str *args, iz nargs, Arena scratch)
     polljobs(sh);
     Job *j = fgbgjob(sh, scratch, "fg", i<nargs ? args+i : 0);  // the rest ignored
     if (!j) return 1;
-    if (!jobrunning(j)) {
+    if (j->done) {
         builtinerror(sh, scratch, "fg", "job has terminated");
         return 1;
     }
@@ -1472,7 +1715,20 @@ static i32 b_fg(Shell *sh, Str *args, iz nargs, Arena scratch)
     bprint(sh, concat(&scratch, jobtext(sh, &scratch, j, "\t"), "\n"));
     flushbout(sh);
     // As a foreground command: trapped signals wait for its end
-    if (j->task) {
+    if (j->task && iswaiter(j->task) && j->pgid) {
+        // Its group holds the terminal, continued if stopped, until it
+        // ends or stops again
+        b32 tty = sh->jctty != BADHANDLE;
+        if (tty) os_tcpgrp(sh->os, sh->jctty, j->pgid);
+        if (j->stopped) {
+            os_kill(sh->os, -j->pgid, 18);
+            j->stopped = 0;
+        }
+        joinorstop(sh, j, 0);
+        if (tty) os_tcpgrp(sh->os, sh->jctty, sh->shellpgid);
+        if (j->stopped) return fgstop(sh, scratch, j);
+        joindone(sh, j);
+    } else if (j->task) {
         jointask(sh->sched, j->task, &j->status);
         j->task = 0;
         j->done = 1;
@@ -1502,9 +1758,22 @@ static i32 b_bg(Shell *sh, Str *args, iz nargs, Arena scratch)
         Job *j = fgbgjob(sh, scratch, "bg", i<nargs ? args+i : 0);
         if (!j) {
             status = 1;
-        } else if (!jobrunning(j)) {
+        } else if (j->done) {
             builtinerror(sh, scratch, "bg", "job has terminated");
             status = 1;
+        } else if (j->stopped && j->pgid) {
+            os_kill(sh->os, -j->pgid, 18);
+            j->stopped = 0;
+            sh->lastbg = j->pgid;
+            Buf b(&scratch, 128);
+            print(&b, "[");
+            print(&b, (i64)j->id);
+            print(&b, "]");
+            putbyte(&b, j->id==sh->curjob ? '+' : j->id==sh->prevjob ? '-' : ' ');
+            putbyte(&b, ' ');
+            print(&b, j->text);
+            print(&b, " &\n");
+            bprint(sh, finish(&b));
         } else {
             sh->lastbg = j->pid;  // as bash, its process group
             Str msg = concat3(&scratch, "job ", fmti64(&scratch, j->id), " already in background");
@@ -1516,13 +1785,86 @@ static i32 b_bg(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 b_suspend(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
+    b32 force = 0;
     for (iz i = 1; i<nargs && args[i].len>1 && args[i][0]=='-'; i++) {
         Str a = args[i];
         if (a == "--") break;
         for (iz k = 1; k < a.len; k++) {
             if (a[k] != 'f') return jobsusage(sh, scratch, "suspend", span(a.data+k-1, a.data+k+1));
+            force = 1;
         }
     }
-    builtinerror(sh, scratch, "suspend", "cannot suspend: no job control");
+    if (!sh->jobctl || !sh->shellpgid) {
+        builtinerror(sh, scratch, "suspend", "cannot suspend: no job control");
+        return 1;
+    }
+    if (sh->login && !force) {
+        builtinerror(sh, scratch, "suspend", "cannot suspend a login shell");
+        return 1;
+    }
+    // As bash, the shell's whole group stops; continued, it takes the
+    // terminal back
+    flushbout(sh);
+    os_kill(sh->os, -sh->shellpgid, 19);
+    if (sh->jctty != BADHANDLE) os_tcpgrp(sh->os, sh->jctty, sh->shellpgid);
+    return 0;
+}
+
+// A foreground job stopped: it becomes the current job, and the
+// command's status is 128 plus the signal. An interactive shell says
+// so (a script does not), and a stop by TSTP breaks out of every loop
+// running, as bash.
+static i32 fgstop(Shell *sh, Arena scratch, Job *j)
+{
+    setcurrent(sh, j->id);
+    if (sh->interactive) {
+        flushbout(sh);
+        fdwrite(sh, 2, concat(&scratch, "\n", jobline(sh, &scratch, j, 0)));
+        j->notified = 1;
+    }
+    if (j->stopsig==20 && sh->loopdepth) {
+        sh->flow      = FLOW_BREAK;
+        sh->flowcount = sh->loopdepth;
+    }
+    return 128 + j->stopsig;
+}
+
+// The foreground program runprogram waited for stopped by sig: it
+// becomes a stopped job, its text the command's.
+static i32 fgstopped(Shell *sh, Arena scratch, Handle proc, i64 pid, i32 sig)
+{
+    Node  none = {};
+    none.kind = N_SIMPLE;
+    Task *t = spawnwaiter(sh->sched, proc, 1);
+    Job  *j = newjob(sh, scratch, sh->current ? sh->current : &none, t, pid, 0);
+    j->pgid    = pid;
+    j->stopped = 1;
+    j->stopsig = sig;
+    return fgstop(sh, scratch, j);
+}
+
+// Asked to exit, an interactive shell with stopped jobs (or running
+// ones, under checkjobs) says so and stays: true then. An exit right
+// after goes ahead.
+static b32 exitwarning(Shell *sh)
+{
+    if (!sh->interactive || sh->subshell || !sh->jobctl) return 0;
+    if (sh->exitwarned && sh->cmdnumber-sh->exitwarned<=1) return 0;
+    polljobs(sh);
+    b32 stopped = 0, running = 0;
+    for (Job *j = sh->jobs; j && ownjob(sh, j); j = j->next) {
+        stopped |= j->stopped && !j->done;
+        running |= jobrunning(j);
+    }
+    Str msg = {};
+    if (stopped) {
+        msg = "There are stopped jobs.\n";
+    } else if (running && sh->shopt[S_CHECKJOBS]) {
+        msg = "There are running jobs.\n";
+    }
+    if (!msg.len) return 0;
+    flushbout(sh);
+    fdwrite(sh, 2, msg);
+    sh->exitwarned = sh->cmdnumber;
     return 1;
 }

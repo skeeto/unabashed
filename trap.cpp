@@ -162,6 +162,8 @@ static void updatesigmode(Shell *sh, i32 sig)
         mode = SIGM_CATCH;
     } else if (interactivetop(sh) && (sig==2 || sig==3 || sig==15)) {
         mode = SIGM_CATCH;  // acted on here (signoop, sigdefault)
+    } else if (interactivetop(sh) && sh->shellpgid && sig>=20 && sig<=22) {
+        mode = SIGM_IGNORE;  // TSTP TTIN TTOU: under job control
     } else if (trapset(sh, TRAP_EXIT)) {
         switch (sig) {
         case 1: case 2: case 3: case 10: case 12: case 14: case 15:
@@ -878,6 +880,11 @@ static i32 killpid(Shell *sh, i64 pid, i32 sig)
 {
     Sched *s = sh->sched;
     Sigproc *p = findsigproc(s, pid);
+    if (p && pid==s->pid && (sig==19 || (sig>=20 && sig<=22))) {
+        // A stop signal to the process itself: the kernel's to act on
+        // (stop it, or a trap or ignored mode takes it)
+        return os_kill(sh->os, pid, sig);
+    }
     if (p) {
         sigsend(sh, p, sig);
         return 0;
@@ -891,7 +898,7 @@ static i32 killpid(Shell *sh, i64 pid, i32 sig)
     return os_kill(sh->os, pid, sig);
 }
 
-static i64 jobspecpid(Shell *, Arena, Str who, Str spec);  // jobs.cpp
+static i32 jobkill(Shell *, Arena, Str spec, i32 sig);  // jobs.cpp
 
 static i32 b_kill(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
@@ -937,13 +944,10 @@ static i32 b_kill(Shell *sh, Str *args, iz nargs, Arena scratch)
         Str a = args[i];
         i64 pid;
         if (a.len && a[0]=='%') {
-            pid = jobspecpid(sh, scratch, "kill", a);
-            if (pid < 0) {
+            i32 err = jobkill(sh, scratch, a, sig);
+            if (err < 0) {
                 status = 1;
-                continue;
-            }
-            i32 err = killpid(sh, pid, sig);
-            if (err) {
+            } else if (err) {
                 builtinerror(sh, scratch, "kill", concat3(&scratch, a, Str(": "), errtext(err)));
                 status = 1;
             }

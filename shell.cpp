@@ -381,6 +381,9 @@ struct Job {
     b32    notified;  // listed as done, or waited for
     b32    nohup;     // disown -h
     b32    jc;        // started under job control
+    i64    pgid;      // its process group, or 0 if none of its own
+    i32    stopsig;   // what stopped it, while stopped
+    b32    stopped;
 };
 
 struct Bgstat {       // the status of a job no longer listed
@@ -617,6 +620,14 @@ struct Shell {
     b32      forked;       // the next simple command is a stage or job
                            // bash forks first: %N is no command there
     b32      asyncpct;     // the next simple command is "%N &", so bg
+    i64      shellpgid;    // the shell's process group under job control
+                           // (once set -m turned it on), else 0: no groups
+    i64      startpgid;    // the group it started in, or 0 if the
+                           // platform has none (OsInfo.pgid)
+    Handle   jctty;        // with shellpgid: the terminal it hands to
+                           // foreground jobs, or BADHANDLE
+    i64      spawngrp;     // Spawn.pgid for the job being started
+    i64      exitwarned;   // cmdnumber when exit warned of stopped jobs
 
     // Signals and traps (trap.cpp)
     Str     *traps;        // NTRAP actions in the store, or null
