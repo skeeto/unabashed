@@ -177,11 +177,15 @@ the Git Bash corpus reaches; M7 is where fidelity is finished):
 - **Startup gaps** (step 9): a syntax error in a native-mode profile is
   not fatal and is reported bash's way (busybox exits 2); native mode
   accepts `--noprofile`/`--norc` and has `logout` (busybox has
-  neither); long options after short ones are accepted (bash prints
-  its usage, 2); bash's bashrc for ssh/rshd-started shells
+  neither); bash's bashrc for ssh/rshd-started shells
   (SSH_CLIENT) is not done; the `-i` job-control complaints test
   stdin and stderr for a terminal, not a controlling terminal.
   (m5a.md, step 9)
+- **Invocation leftovers** (step 9): a trailing backslash at the end
+  of an `eval` string inside an unfinished command counts one line
+  fewer than bash in the end-of-file error (exportfunc); `--debugger`
+  looks only for `/usr/local/share/bashdb/bashdb-main.inc`, bash's
+  default prefix; `-i` sets interactive even as `+i`.
 - **MSYS2 programs get no `/dev/fd/N` bridge** (step 8): they are
   passed `/dev/fd/N` unchanged, which they cannot open, so `cat <(x)`
   with Git's cat fails. They take `\\.\pipe\NAME` (not

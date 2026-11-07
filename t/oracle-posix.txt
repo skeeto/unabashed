@@ -47,7 +47,7 @@ ifs-posix PASS
 input-test PASS
 intl FAIL
 invert PASS
-invocation FAIL
+invocation PASS
 iquote PASS
 jobs FAIL
 lastpipe PASS

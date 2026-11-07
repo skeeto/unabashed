@@ -88,6 +88,16 @@ static b32 validvarname(Str s)
     return 1;
 }
 
+// May a function by this name go into the environment? As bash: not
+// with a slash or an equals sign.
+static b32 exportablefunc(Str name)
+{
+    for (iz i = 0; i < name.len; i++) {
+        if (name[i]=='/' || name[i]=='=') return 0;
+    }
+    return 1;
+}
+
 static Var *findvar(Shell *sh, Str name)
 {
     Var *v = sh->vars;

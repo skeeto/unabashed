@@ -21,8 +21,8 @@ echo 'echo bash_env' >env.sh
 bash -l -c 'echo login; exit 4' zero one
 echo "status $?"
 bash -i -c 'echo interactive' 2>/dev/null
-bash -i --rcfile rc.sh -c 'echo rcfile' 2>/dev/null
-bash -i --norc -c 'echo norc' 2>/dev/null
+bash --rcfile rc.sh -i -c 'echo rcfile' 2>/dev/null
+bash --norc -i -c 'echo norc' 2>/dev/null
 BASH_ENV=env.sh bash -c 'echo after'
 bash --noprofile -l -c 'echo noprofile; exit'
 (exec -a -bash bash -i -c 'echo dash' 2>/dev/null)

@@ -267,6 +267,7 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
 {
     Str name = cuttail(cuthead(var, 10), 2);
     if (!name.len || !startswith(value, "() {")) return;
+    if (!exportablefunc(name) || (sh->opt[O_POSIX] && !validvarname(name))) return;
     Lexer *L = newlexer(&scratch, concat3(&scratch, name, " ", value));
     L->stackmax = (iz)1<<20;
     Parsed p = parseunit(L);
@@ -293,6 +294,7 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
 
 struct Startup {
     Str rcfile;     // --rcfile, --init-file
+    b32 restricted; // -r, --restricted
     b32 noediting;  // --noediting
     b32 login;      // -l, --login
     b32 noprofile;  // --noprofile
@@ -770,6 +772,12 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     setattrs(sh, "BASH_VERSINFO", V_READONLY, 0);
     dynamic(sh, "GROUPS", DYN_GROUPS, V_ARRAY|V_NOASSIGN);
     dynamic(sh, "BASH_ARGV0", DYN_BASH_ARGV0);
+    for (iz i = 0; i < info->nenv; i++) {
+        Cut c = cut(info->env[i], '=');
+        if (c.ok && c.head=="BASH_ARGV0") {
+            setvar(sh, scratch, "BASH_ARGV0", c.tail);  // and so $0
+        }
+    }
     dynamic(sh, "HISTCMD", DYN_HISTCMD, V_INTEGER);
     varchanged(sh, "LANG");
 }
@@ -1180,8 +1188,79 @@ static void startoption(Shell *sh, Arena scratch, u8 c, b32 on, Str *name)
         Str cmd = c=='o' ? sh->name : Str{};
         builtinerror(sh, scratch, cmd, concat(&scratch, *name, msg));
         sh->status = 2;
-        escape(sh, ESC_FATAL);
+        escape(sh, ESC_EXIT);
     }
+}
+
+// The long options, in bash's order, which its usage lists
+enum {
+    LO_DEBUG, LO_DEBUGGER, LO_DUMPPO, LO_DUMP, LO_HELP, LO_INITFILE,
+    LO_LOGIN, LO_NOEDITING, LO_NOPROFILE, LO_NORC, LO_POSIX, LO_PRETTY,
+    LO_RCFILE, LO_RESTRICTED, LO_VERBOSE, LO_VERSION,
+};
+static Str const longopts[] = {
+    "debug", "debugger", "dump-po-strings", "dump-strings", "help",
+    "init-file", "login", "noediting", "noprofile", "norc", "posix",
+    "pretty-print", "rcfile", "restricted", "verbose", "version",
+};
+
+// The options summary, as bash prints it for --help or a bad option
+static void shellusage(Shell *sh, Buf *b)
+{
+    print(b, "Usage:\t");
+    print(b, sh->name);
+    print(b, " [GNU long option] [option] ...\n\t");
+    print(b, sh->name);
+    print(b, " [GNU long option] [option] script-file ...\n");
+    print(b, "GNU long options:\n");
+    for (iz i = 0; i < countof(longopts); i++) {
+        print(b, "\t--");
+        print(b, longopts[i]);
+        putbyte(b, '\n');
+    }
+    print(b, "Shell options:\n");
+    print(b, "\t-ilrsD or -c command or -O shopt_option\t\t(invocation only)\n");
+    print(b, "\t-abefhkmnptuvxBCEHPT or -o option\n");
+}
+
+// A bad startup option, OPT or its sign and the letter C: complain,
+// show the usage and exit with status 2, as bash.
+static void badoption(Shell *sh, Arena scratch, Str opt, u8 c = 0)
+{
+    Buf b(&scratch, 1024);
+    print(&b, sh->name);
+    print(&b, ": ");
+    print(&b, opt);
+    if (c) putbyte(&b, c);
+    print(&b, ": invalid option\n");
+    shellusage(sh, &b);
+    fdwrite(sh, 2, finish(&b));
+    sh->status = 2;
+    escape(sh, ESC_EXIT);
+}
+
+// --debugger: source bashdb's start file with extdebug on, as bash
+// does, or say why not and carry on without it.
+static void startdebugger(Shell *sh, Arena scratch)
+{
+    Str  path = "/usr/local/share/bashdb/bashdb-main.inc";
+    Stat st   = pathstat(sh, scratch, path, 1);
+    if (st.err) {
+        Buf b(&scratch, 256);
+        print(&b, errname(sh));
+        print(&b, ": ");
+        print(&b, path);
+        print(&b, ": ");
+        print(&b, errtext(st.err));
+        putbyte(&b, '\n');
+        print(&b, errname(sh));
+        print(&b, ": warning: cannot start debugger; debugging mode disabled\n");
+        fdwrite(sh, 2, finish(&b));
+        return;
+    }
+    setshoptbyname(sh, scratch, "extdebug", 1);
+    Str args[] = {"source", path};
+    sh->status = b_source(sh, args, 2, scratch);
 }
 
 // A self-spawned background shell: take over the parent's image
@@ -1321,55 +1400,94 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             escape(sh, ESC_EXIT);
         }
 
-        // Options before the command string or script
+        // Options before the command string or script: bash's long
+        // options first (-name too), then the short ones
         iz  i = 1;
         Str cmd = {};
         b32 havecmd = 0;
         b32 selftest_ = 0;
+        b32 wanthelp = 0, wantversion = 0, debugger = 0;
         Startup st = {};
         st.busybox = sh->pathmode == PM_NATIVE;
-        for (; i < info->nargs; i++) {
+        for (; i<info->nargs && startswith(info->args[i], "-"); i++) {
             Str a = info->args[i];
             if (a == "--unabashed-selftest") {
                 selftest_ = 1;
                 break;
             }
-            if (a=="--" || a=="-") {
-                i++;
-                break;
+            b32 longarg = a.len>2 && a[1]=='-';
+            Str name = cuthead(a, longarg ? 2 : 1);
+            i32 opt = -1;
+            for (i32 k = 0; k < countof(longopts); k++) {
+                opt = name==longopts[k] ? k : opt;
             }
-            if (a == "--norc") {
-                st.norc = 1;
-                continue;
-            } else if (a == "--noprofile") {
-                st.noprofile = 1;
-                continue;
-            } else if (a == "--login") {
-                st.login = 1;
-                continue;
-            } else if (a == "--noediting") {
-                st.noediting = 1;
-                continue;
-            } else if (a=="--rcfile" || a=="--init-file") {
+            if (opt<0 && longarg) {
+                badoption(sh, scratch, a);
+            } else if (opt < 0) {
+                break;  // perhaps short options
+            }
+            switch (opt) {
+            case LO_DEBUG:      break;
+            case LO_DEBUGGER:   debugger = 1; break;
+            case LO_DUMPPO:     sh->dumpstrings |= 3; break;
+            case LO_DUMP:       sh->dumpstrings |= 1; break;
+            case LO_HELP:       wanthelp = 1; break;
+            case LO_LOGIN:      st.login = 1; break;
+            case LO_NOEDITING:  st.noediting = 1; break;
+            case LO_NOPROFILE:  st.noprofile = 1; break;
+            case LO_NORC:       st.norc = 1; break;
+            case LO_POSIX:      setposix(sh, 1); break;
+            case LO_PRETTY:     sh->prettyprint = 1; break;
+            case LO_RESTRICTED: st.restricted = 1; break;
+            case LO_VERBOSE:    sh->opt[O_VERBOSE] = 1; break;
+            case LO_VERSION:    wantversion = 1; break;
+            case LO_INITFILE:
+            case LO_RCFILE:
                 if (i+1 == info->nargs) {
                     Buf b(&scratch, 64);
                     print(&b, sh->name);
                     print(&b, ": ");
-                    print(&b, cuthead(a, 2));
+                    print(&b, name);
                     print(&b, ": option requires an argument\n");
                     fdwrite(sh, 2, finish(&b));
                     sh->status = 2;
                     escape(sh, ESC_EXIT);
                 }
                 st.rcfile = info->args[++i];
-                continue;
+                break;
             }
-            if (a == "--posix") {
-                setposix(sh, 1);
-                continue;
+        }
+        if (wanthelp || wantversion) {
+            // As bash: before the short options are even looked at
+            Buf b(&scratch, 2048);
+            if (wanthelp) {
+                print(&b, helpversion(sh, &scratch));
+                putbyte(&b, '\n');
+                shellusage(sh, &b);
+                print(&b, "Type `");
+                print(&b, sh->name);
+                print(&b, " -c \"help set\"' for more information about shell options.\n");
+                print(&b, "Type `");
+                print(&b, sh->name);
+                print(&b, " -c help' for more information about shell builtin commands.\n");
+            } else {
+                print(&b, helpversion(sh, &scratch));
+                print(&b, "\nThis is free and unencumbered software released into the public domain.\n");
             }
-            if (a.len<2 || (a[0]!='-' && a[0]!='+') || startswith(a, "--")) break;
-            b32 on = a[0] == '-';
+            fdwrite(sh, 1, finish(&b));
+            sh->status = 0;
+            escape(sh, ESC_EXIT);
+        }
+        Slice<Str> shopts = {};  // -O and +O: applied after the setup
+        for (; !selftest_ && i<info->nargs; i++) {
+            Str a = info->args[i];
+            if (a.len<1 || (a[0]!='-' && a[0]!='+')) break;
+            if (a=="-" || a=="--") {
+                i++;
+                break;
+            }
+            b32 on   = a[0] == '-';
+            iz  next = i + 1;  // -o and -O take the arguments that follow
             for (iz k = 1; k < a.len; k++) {
                 u8 c = a[k];
                 if (c == 'c') {
@@ -1378,20 +1496,34 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                     sh->sflag = 1;
                 } else if (c == 'i') {
                     sh->interactive = 1;
-                } else if (c=='o' || c=='O') {
-                    Str *name = i+1<info->nargs ? &info->args[++i] : 0;
+                } else if (c == 'o') {
+                    Str *name = next<info->nargs ? &info->args[next++] : 0;
                     startoption(sh, scratch, c, on, name);
+                } else if (c=='O' && next>=info->nargs) {
+                    startoption(sh, scratch, c, on, 0);
+                } else if (c == 'O') {
+                    shopts = push(&scratch, shopts, Str(on ? "-" : "+"));
+                    shopts = push(&scratch, shopts, info->args[next++]);
                 } else if (c == 'l') {
                     st.login = 1;
-                } else if (c=='r' || c=='D') {
-                    // restricted, dump strings: accepted
+                } else if (c=='r' && on) {
+                    st.restricted = 1;
+                } else if (c == 'D') {
+                    sh->dumpstrings |= 1;
                 } else {
+                    b32 found = 0;
                     for (i32 o = 0; o < O_COUNT; o++) {
-                        if (setoptions[o].letter == c) sh->opt[o] = on;
+                        if (setoptions[o].letter == c) {
+                            sh->opt[o] = on;
+                            found = 1;
+                        }
                     }
+                    if (!found) badoption(sh, scratch, span(a.data, a.data+1), c);
                 }
             }
+            i = next - 1;
         }
+        if (sh->dumpstrings) sh->opt[O_NOEXEC] = 1;  // as bash: dump only
 
         if (!sh->interactive && !sh->cflag && (sh->sflag || i>=info->nargs) &&
                 os_isatty(os, info->std[0]) && os_isatty(os, info->std[2])) {
@@ -1441,6 +1573,10 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             }
         }
 
+        for (iz k = 0; k < shopts.len; k += 2) {
+            startoption(sh, scratch, 'O', shopts[k]=="-", &shopts[k+1]);
+        }
+
         // $0 and the positional parameters, then the startup files
         Str file = {};
         if (selftest_) {
@@ -1480,6 +1616,16 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             histload(sh);  // unless the startup files added lines
         }
         if (sh->interactive) checkwinsize(sh);  // as bash, once at the start
+        if (sh->prettyprint && sh->interactive) {
+            Buf b(&scratch, 128);
+            print(&b, errname(sh));
+            print(&b, ": warning: pretty-printing mode ignored in interactive shells\n");
+            fdwrite(sh, 2, finish(&b));
+        }
+        sh->prettyprint &= !havecmd && !sh->interactive;  // -c just runs
+        if (debugger && !selftest_ && (file.data || !sh->interactive)) {
+            startdebugger(sh, scratch);
+        }
 
         if (selftest_) {
             Output *out = newoutput(os, &perm, info->std[1]);
@@ -1493,6 +1639,29 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             // A script file
             i32  err;
             Str  src = readwholefile(sh, &scratch, file, &err);
+            Got  path = getvar(sh, &scratch, "PATH");
+            if (err==E_NOENT && path.set && !haspath(sh, file)) {
+                // As bash: a script found along PATH, whose found name
+                // the messages then use, though $0 keeps the given one
+                for (Str rest = path.value;;) {
+                    Cut c = cut(rest, listsep(sh));
+                    Str cand = joinpath(&scratch, c.head.len ? c.head : Str("."), file);
+                    Stat cs = pathstat(sh, scratch, cand, 1);
+                    if (!cs.err && cs.type==FT_FILE) {
+                        i32 e = 0;
+                        Str s = readwholefile(sh, &scratch, cand, &e);
+                        if (!e) {
+                            file = cand;
+                            src  = s;
+                            err  = 0;
+                        }
+                        break;
+                    }
+                    if (!c.ok) break;
+                    rest = c.tail;
+                }
+                sh->iname = file;
+            }
             Stat st  = pathstat(sh, scratch, file, 1);
             Str  bad = {};
             if (!err && !st.err && st.type==FT_DIR) {

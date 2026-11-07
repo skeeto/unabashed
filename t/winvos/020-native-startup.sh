@@ -18,7 +18,7 @@ lash -c 'echo lash'
 sh -c 'echo plain'
 BASH_ENV=C:/work/env.sh sh -c 'echo no bash_env'
 ENV='$PWD/env.sh' sh -i -c 'echo interactive'
-ENV=C:/work/env.sh sh -l -i --norc -c 'echo both'
+ENV=C:/work/env.sh sh --norc -l -i -c 'echo both'
 sh --noprofile -l -c 'echo noprofile'
 rm C:/w64/etc/profile "$HOME/.profile"
 mkdir "$HOME/.profile"

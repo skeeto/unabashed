@@ -883,6 +883,10 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                     bprint(sh, f->code->src.len ? f->code->src : sh->name);
                 }
                 bprint(sh, "\n");
+            } else if (!print && name=="export" && (on & V_EXPORT) &&
+                       !exportablefunc(args[i])) {
+                builtinerror(sh, scratch, name, concat(&scratch, args[i], ": cannot export"));
+                status = 1;
             } else if (!print && ((on|off) & fattrs)) {
                 uz attrs = (f->attrs | (on & fattrs)) & ~(uz)(off & fattrs);
                 jwrite(sh->store, &f->attrs, attrs);

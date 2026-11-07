@@ -2126,6 +2126,19 @@ static VProgram vprogram(Vos *v, Arena *a, Str path)
         return r;
     }
     i32 prog = vimageprog(v, n);
+    if (!prog && !v->win && startswith(n->data, "#!")) {
+        // As the kernel: a #! line naming no file fails to start
+        Str d = cuthead(n->data, 2);
+        iz  i = 0;
+        for (; i<d.len && (d[i]==' ' || d[i]=='\t'); i++) {}
+        iz beg = i;
+        for (; i<d.len && d[i]!=' ' && d[i]!='\t' && d[i]!='\n'; i++) {}
+        Str interp = span(d.data+beg, d.data+i);
+        if (interp.len && !vresolve(v, a, interp, 1).node) {
+            r.err = E_NOENT;
+            return r;
+        }
+    }
     if (!prog) {
         r.err = E_NOEXEC;
         return r;

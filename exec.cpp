@@ -1894,6 +1894,27 @@ static b32 isshellscript(Shell *sh, Arena a, Str path)
     return 1;
 }
 
+// The interpreter a file's #! line names, as bash reports it when the
+// kernel refuses the file: from a 128-byte sample less its last byte,
+// with a trailing CR shown as ^M. Null without a #! line.
+static Str scriptinterp(Shell *sh, Arena *a, Str path)
+{
+    Opened o = os_open(sh->os, *a, absolute(sh, a, path), OF_READ, 0);
+    if (o.err) return {};
+    u8 buf[128];
+    iz n = os_read(sh->os, o.h, buf, countof(buf));
+    os_close(sh->os, o.h);
+    if (n<3 || buf[0]!='#' || buf[1]!='!') return {};
+    n--;
+    iz i = 2;
+    for (; i<n && (buf[i]==' ' || buf[i]=='\t'); i++) {}
+    iz beg = i;
+    for (; i<n && buf[i] && buf[i]!=' ' && buf[i]!='\t' && buf[i]!='\n'; i++) {}
+    Str r = clone(a, span(buf+beg, buf+i));
+    if (r.len && r[r.len-1]=='\r') r = concat(a, takehead(r, r.len-1), "^M");
+    return r;
+}
+
 // Does a script look like a binary? As bash: a NUL in the first line,
 // within its first 80 bytes.
 static b32 binaryfile(Str s)
@@ -2109,6 +2130,22 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
     Stat s = pathstat(sh, a, path, 1);
     if (!s.err && s.type==FT_DIR) {
         err = E_ISDIR;
+    } else if (canexec(sh, s) && err!=E_2BIG && err!=E_NOMEM) {
+        // The kernel refused an executable file: say why, as bash
+        Str interp = scriptinterp(sh, &a, path);
+        if (interp.data) {
+            Buf b(&a, 256);
+            print(&b, path);
+            print(&b, ": ");
+            print(&b, interp);
+            print(&b, ": bad interpreter: ");
+            print(&b, errtext(err));
+            syserror(sh, a, finish(&b));
+            return 126;
+        } else if (err == E_NOENT) {
+            shellerror(sh, a, concat(&a, path, ": cannot execute: required file not found"));
+            return 127;
+        }
     }
     if (err == E_NOENT) {
         // a stale remembered path is reported as such
@@ -2662,7 +2699,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     Builtin *bi = findbuiltin(sh, name);
     b32 special = bi && (bi->flags & B_SPECIAL);
     if (!(special && sh->opt[O_POSIX])) {
-        if (!haspath(sh, name)) fn = findfunc(sh, name);
+        // as bash, a name with a slash too, outside POSIX mode
+        if (!sh->opt[O_POSIX] || !haspath(sh, name)) fn = findfunc(sh, name);
     }
 
     if (fn || bi) {
@@ -3858,6 +3896,40 @@ static void runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
     sh->current     = 0;
 }
 
+// A $"..." string the parser found under -D or --dump-po-strings,
+// printed as bash does: as written, or as a po file entry citing the
+// input and line.
+static void dumpstring(Shell *sh, Arena scratch, Str s, i32 line)
+{
+    Buf b(&scratch, 2*s.len+64);
+    if (!(sh->dumpstrings & 2)) {
+        putbyte(&b, '"');
+        print(&b, s);
+        print(&b, "\"\n");
+        fdwrite(sh, 1, finish(&b));
+        return;
+    }
+    print(&b, "#: ");
+    print(&b, sh->iname);
+    putbyte(&b, ':');
+    print(&b, (i64)line);
+    print(&b, "\nmsgid ");
+    b32 nl = 0;
+    for (iz i = 0; i < s.len; i++) nl |= s[i] == '\n';
+    if (nl) print(&b, "\"\"\n");
+    putbyte(&b, '"');
+    for (iz i = 0; i < s.len; i++) {
+        if (s[i] == '\n') {
+            print(&b, "\\n\"\n\"");
+            continue;
+        }
+        if (s[i]=='"' || s[i]=='\\') putbyte(&b, '\\');
+        putbyte(&b, s[i]);
+    }
+    print(&b, "\"\nmsgstr \"\"\n");
+    fdwrite(sh, 1, finish(&b));
+}
+
 // Parse and run src one command at a time, as -c, eval, source and
 // command substitution do, numbering its lines from line. Returns the
 // final status. With comsub, src is the printed text of a $(...) or
@@ -3895,6 +3967,8 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
     sh->lexer  = L;
     sh->iname  = iname;
     sh->lexeof = 0;
+    L->dump    = sh->dumpstrings;
+    b32 prettynl = 0;
     for (;;) {
         Arena unit = *L->a;  // reset after each complete line
         iz     pos  = L->srcpos;
@@ -3925,6 +3999,10 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
         b32   noline   = sh->interactive && !sh->sourcedepth && !(iname=="PROMPT_COMMAND");
         for (Message *m = L->msgs; m; m = m->next) {
             if (noline && m->kind==MSG_LINE) continue;
+            if (m->kind == MSG_DUMP) {
+                dumpstring(sh, msgarena, m->text, m->line);
+                continue;
+            }
             Buf b(&msgarena, 128);
             print(&b, errname(sh));
             if (noline) {
@@ -3949,6 +4027,9 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
         }
         L->msgs    = 0;
         L->msgtail = &L->msgs;
+        if (r.status==PARSE_EOF && sh->prettyprint && !outer && !prettynl) {
+            fdwrite(sh, 1, "\n");
+        }
         if (r.status == PARSE_EOF) break;
         if (r.status == PARSE_ERROR) {
             if (L->overflow) {
@@ -3964,6 +4045,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             } else if (L->reported || !sh->status) {
                 sh->status = 2;
             }
+            if (sh->prettyprint && !outer) sh->status = 1;  // as bash's
             if (!sh->interactive && !sh->evaldepth && !sh->sourcedepth) {
                 sh->exiting = 1;
             } else if (reader && fill && sh->interactive && !L->eofreached) {
@@ -3995,7 +4077,23 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             }
             continue;
         }
-        if (r.cmd && !sh->opt[O_NOEXEC]) {
+        if (sh->prettyprint && !outer) {
+            // --pretty-print: each command as bash prints it, and a
+            // blank line for a run of empty ones
+            if (r.cmd) {
+                Arena t = *L->a;
+                Printer *p = newprinter(&t);
+                p->posix    = 1;
+                p->external = 1;
+                printcmd(p, r.cmd);
+                putbyte(&p->b, '\n');
+                fdwrite(sh, 1, finish(&p->b));
+                prettynl = 0;
+            } else if (!prettynl) {
+                fdwrite(sh, 1, "\n");
+                prettynl = 1;
+            }
+        } else if (r.cmd && !sh->opt[O_NOEXEC]) {
             // As in bash, LINENO is where the parser stopped until a
             // command sets it: a compound command's redirections cite
             // its last line

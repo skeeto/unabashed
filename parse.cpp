@@ -296,7 +296,8 @@ struct Token {
     Cond *cond;    // T_CONDCMD
 };
 
-enum : i32 { MSG_ERROR, MSG_WARNING, MSG_LINE };  // MSG_LINE: the line quoted
+enum : i32 { MSG_ERROR, MSG_WARNING, MSG_LINE, MSG_DUMP };
+// MSG_LINE: the line quoted; MSG_DUMP: a $"..." string, for -D
 
 struct Message {   // a diagnostic from the parser
     Message *next;
@@ -373,6 +374,7 @@ struct Lexer {
     b32      utf8;       // UTF-8 locale, else C
     b32      expandaliases;
     b32      posix;
+    i32      dump;       // report $"..." strings (MSG_DUMP), as -D
     Alias  **aliases;
 
     // Diagnostics
@@ -1402,6 +1404,7 @@ static Str parsematched(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
                     r.len -= 2;  // back up before the $'
                 } else if (wasdol && ch=='"' && (L->extquote || !(rflags & P_DQUOTE))) {
                     // Locale translation is the identity: keep "..."
+                    if (L->dump) message(L, L->lineno, cuttail(nest, 1), MSG_DUMP);
                     Tokbuf t = {};
                     tokput(L, &t, '"');
                     tokputs(L, &t, cuttail(nest, 1));
@@ -1844,11 +1847,15 @@ static i32 readtokenword(Lexer *L, i32 ch)
                 alldigit = 0;
                 goto next;
             } else if (ch=='$' && (peek=='\'' || peek=='"')) {
+                i32 line0 = L->lineno;
                 pushdelim(L, peek);
                 Str t = parsematched(L, peek, peek, peek, peek=='\'' ? P_ALLOWESC : 0);
                 popdelim(L);
                 if (!t.data) {
                     return T_ERROR;
+                }
+                if (peek=='"' && L->dump) {
+                    message(L, line0, cuttail(t, 1), MSG_DUMP);
                 }
                 if (peek == '\'') {
                     t = singlequote(L->a, ansiexpand(L->a, cuttail(t, 1), L->utf8));
