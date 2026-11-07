@@ -562,6 +562,10 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (!found && (only || sh->opt[O_POSIX])) {
             return sourcenotfound(sh, scratch, name, file, cmd);
         }
+    } else if (!slash && sh->opt[O_POSIX]) {
+        // as bash, never from the working directory, even without
+        // sourcepath, which then searches nothing
+        return sourcenotfound(sh, scratch, name, file, cmd);
     }
     Stat st = pathstat(sh, scratch, path, 1);
     if (!st.err && st.type==FT_DIR) {

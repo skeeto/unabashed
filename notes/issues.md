@@ -137,7 +137,9 @@ Closed: every item was fixed or moved (m6.md, step 10).
   the top-level command; we cite the last simple command's. (m4.md)
 - `let` with an unterminated quote in an associative key (without
   assoc_expand_once) differs. (m4.md)
-- POSIX mode does not model source_searches_cwd. (m4.md)
+- With extquote off, a here-document's `${x#${$'x1'}}` is a bad
+  substitution with our usual message; bash reports "bad substitution:
+  no closing `}' in" followed by the whole body. (m7.md, step 6)
 - In a mapfile callback, `return 3 0 x` at top level gives another
   message and does not abandon the rest of the line. (m4.md)
 - glibc's 4 KiB stdio flush before a diagnostic is not emulated (bash

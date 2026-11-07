@@ -30,6 +30,8 @@ enum : i32 {  // expansion contexts
     XC_NOPSUB  = 1<<7,  // <(...) and >(...) are plain text
     XC_SUBQ    = 1<<8,  // array subscripts expand once, quoted (as in arithmetic)
     XC_PROMPT  = 1<<9,  // prompt string: as in double quotes, but " is literal
+    XC_LITANSI = 1<<10, // a pattern within a quoted operator word: $'...'
+                        // is literal, as bash in a here-document
 };
 
 enum : i32 {  // expandwords flags
@@ -169,6 +171,7 @@ static iz skipdollar(Shell *sh, Arena *a, Str s, iz i, b32 dquote = 0, b32 *ende
     Lexer *L = newlexer(a, {});
     L->extglob = sh->shopt[S_EXTGLOB];
     L->posix   = sh->opt[O_POSIX];
+    L->extquote = sh->shopt[S_EXTQUOTE];
     if (i+2<s.len && s[i+1]=='(' && s[i+2]=='(') {
         // $((...)): the matching )) at depth zero
         i32 depth = 0;
@@ -411,6 +414,19 @@ static void putlist(X *x, Str *v, iz n, b32 star, i32 ctx)
         Str  sep = star ? starsep(sh) : Str(" ");
         xput(x, joinparams(x->a, a, sep), dq ? XF_QUOTED : XF_SPLIT);
         return;
+    }
+    if (!dq && !star && n && (ctx & XC_PARAM)) {
+        // As bash (POSIX interp 888): an unquoted $@ in an operator's
+        // word, IFS set and not starting with a space, is the
+        // parameters joined by spaces as if quoted, so not split
+        b32 set;
+        Str ifs = ifsvalue(sh, &set);
+        if (set && ifs.len && ifs[0]!=' ') {
+            Args a = {v, n};
+            xput(x, joinparams(x->a, a, " "), XF_QUOTED);
+            x->quoted = 1;
+            return;
+        }
     }
     if (dq && !n) {
         // "$@" vanishes, though not inside an operator's word
@@ -1245,6 +1261,58 @@ static iz assignwords(X *x, Str name, Str *out)
 
 static b32 assignelem(Shell *, Arena, Str name, Str sub, Str lhs, Str value, i32 flags);
 
+static Str singlequote(Arena *, Str);
+
+// Translate the $'...' in ${...} text the parser left alone, as in a
+// pattern in a here-document, as bash would have parsed it: a name
+// with extquote as the bare text, elsewhere single-quoted.
+static Str translateansi(X *x, Str s)
+{
+    Shell *sh = x->sh;
+    Buf b(x->a, s.len*2);
+    i32 depth = 0;
+    for (iz i = 0; i < s.len; i++) {
+        u8 c = s[i];
+        if (c == '\\' && i+1<s.len) {
+            putbyte(&b, c);
+            putbyte(&b, s[++i]);
+        } else if (c == '\'') {
+            iz e = i + 1;
+            for (; e<s.len && s[e]!='\''; e++) {}
+            print(&b, span(s.data+i, s.data+(e<s.len ? e+1 : e)));
+            i = e;
+        } else if (c=='$' && i+1<s.len && s[i+1]=='{') {
+            depth++;
+            print(&b, "${");
+            i++;
+        } else if (c=='}' && depth) {
+            depth--;
+            putbyte(&b, c);
+        } else if (c=='$' && i+1<s.len && s[i+1]=='\'' && !depth) {
+            iz e = i + 2;
+            for (; e<s.len && s[e]!='\''; e++) {
+                if (s[e]=='\\' && e+1<s.len) e++;
+            }
+            if (e == s.len) {
+                print(&b, cuthead(s, i));
+                break;
+            }
+            Str t = ansiexpand(x->a, span(s.data+i+2, s.data+e), sh->utf8);
+            if (i==0 && sh->shopt[S_EXTQUOTE]) {
+                print(&b, t);  // the name
+            } else if (i) {
+                print(&b, singlequote(x->a, t));
+            } else {
+                print(&b, span(s.data, s.data+e+1));
+            }
+            i = e;
+        } else {
+            putbyte(&b, c);
+        }
+    }
+    return finish(&b);
+}
+
 static void expandbraced(X *x, Str whole, i32 ctx)
 {
     Shell *sh = x->sh;
@@ -1252,6 +1320,15 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     iz     i  = 0;
     b32    length   = 0;
     b32    indirect = 0;
+
+    b32 quoted = ctx & (XC_DQUOTE|XC_HEREDOC|XC_LITANSI);
+    if ((ctx & XC_PARAM) && !quoted && find(s, "$'")>=0) {
+        Str t = translateansi(x, s);
+        if (x->text.data==s.data-2 && x->text.len==s.len+3) {
+            x->text = concat3(x->a, "${", t, "}");  // for messages
+        }
+        s = whole = t;
+    }
 
     if (s.len>1 && s[0]=='#') {
         // ${#name}, unless # is the name followed by an operator. With
@@ -1265,9 +1342,11 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             i = 1;
         }
     } else if (s.len>1 && s[0]=='!') {
-        // ${!name}, unless ! is the name: ${!-word} ${!:0}
-        u8 n = s[1];
-        if (identstart(n) || digit(n) || n=='#' || n=='?' || n=='@' || n=='*') {
+        // ${!name}, unless ! is the name: ${!-word} ${!:0}, and in
+        // POSIX mode ${!?word} ${!#}, as bash
+        u8  n = s[1];
+        b32 special = n=='@' || n=='*' || (!sh->opt[O_POSIX] && (n=='#' || n=='?'));
+        if (identstart(n) || digit(n) || special) {
             indirect = 1;
             i = 1;
         }
@@ -1442,8 +1521,10 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         rest = cuthead(rest, 1);
         op = rest[0];
     }
-    i32 wctx = (ctx & (XC_DQUOTE|XC_HEREDOC)) | XC_PARAM;
+    i32 wctx = (ctx & (XC_DQUOTE|XC_HEREDOC|XC_LITANSI)) | XC_PARAM;
     i32 pctx = XC_PARAM;  // patterns and replacements: as if unquoted
+    b32 nestq = (ctx & XC_PARAM) && (ctx & (XC_DQUOTE|XC_HEREDOC));
+    pctx |= nestq ? XC_LITANSI : ctx&XC_LITANSI;
 
     if (op=='-' || op=='=' || op=='?' || op=='+') {
         Str word = cuthead(rest, 1);
@@ -1614,6 +1695,15 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         if (!body.len) badsubst(x, whole);
         Str off  = c2<0 ? body : takehead(body, c2);
         Str len  = c2<0 ? Str{} : cuthead(body, c2+1);
+        if (!p.set && !(p.list && !p.array)) {
+            // as bash, an unset parameter's offset is not expanded
+            if (p.list) {
+                putlist(x, 0, 0, p.star, ctx);
+            } else {
+                putvalue(x, {}, ctx);
+            }
+            return;
+        }
         Value *val = p.array ? lookup(sh, name) : 0;
         Array *arr = varray(sh, x->a, val);  // dynamic arrays too
         if (p.list && p.array && !arr) {
@@ -2029,7 +2119,7 @@ static void expandinto(X *x, Str s, i32 ctx)
             continue;
         }
 
-        if (c=='$' && i+1<s.len && s[i+1]=='\'' && !dq && !hd) {
+        if (c=='$' && i+1<s.len && s[i+1]=='\'' && !dq && !hd && !(ctx & XC_LITANSI)) {
             // $'...' the parser left alone: a pattern in a here-document
             iz e = i + 2;
             for (; e<s.len && s[e]!='\''; e++) {

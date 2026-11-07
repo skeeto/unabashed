@@ -63,7 +63,7 @@ nquote4 PASS
 nquote5 PASS
 parser PASS
 posix2 PASS
-posixexp FAIL
+posixexp PASS
 posixexp2 PASS
 posixpat PASS
 posixpipe PASS

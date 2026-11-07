@@ -3195,6 +3195,7 @@ static iz skipexpansion(Lexer *outer, Str s, iz i, b32 dquote, b32 *ended = 0)
     Lexer *L = newlexer(outer->a, cuthead(s, i+2));
     L->extglob  = outer->extglob;
     L->posix    = outer->posix;
+    L->extquote = outer->extquote;
     L->utf8     = outer->utf8;
     L->stacktop = outer->stacktop;
     L->stackmax = outer->stackmax;

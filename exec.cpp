@@ -349,7 +349,12 @@ static Arith arithraw(Shell *sh, Arena *a, Str expr)
 static Arith evalarith(Shell *sh, Arena *a, Str expr)
 {
     Arith r = arithraw(sh, a, expr);
-    if (!r.ok) {
+    if (!r.ok && sh->opt[O_POSIX] && !sh->interactive) {
+        // as bash: fatal in a POSIX non-interactive shell, status 127
+        shellerror(sh, *a, r.err);
+        sh->status = 127;
+        escape(sh, ESC_FATAL);
+    } else if (!r.ok) {
         expansionerror(sh, *a, r.err);
     }
     return r;
@@ -877,9 +882,40 @@ static b32 clobbers(Shell *sh, Arena *a, Str name)
     return 0;
 }
 
+static b32 applyredirs(Shell *, Redir *, Arena *, b32);
+
 // Apply a command's redirections. Returns false after reporting an
-// error (the redirections done so far are left for the caller to undo).
+// error (the redirections done so far are left for the caller to undo),
+// with the command's status in sh->redirfail. As bash, an expansion
+// error in a redirection, even a fatal one such as ${x?}, only fails
+// the redirection, keeping the error's status.
 static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
+{
+    Escape e = {};
+    e.up        = sh->esc;
+    e.bout      = sh->bout;
+    e.undo      = sh->undo;
+    e.frame     = sh->frame;
+    e.loopdepth = sh->loopdepth;
+    sh->esc = &e;
+    b32 ok = 0;
+    sh->redirfail = 1;
+    if (!__builtin_setjmp(e.jmp)) {
+        ok = applyredirs(sh, list, a, keep);
+        sh->esc = e.up;
+        return ok;
+    }
+    sh->esc = e.up;
+    if (e.why!=ESC_DISCARD && e.why!=ESC_FATAL && e.why!=ESC_ABORT) {
+        escape(sh, e.why);
+    }
+    sh->bout      = e.bout;
+    sh->loopdepth = e.loopdepth;
+    sh->redirfail = e.why==ESC_FATAL ? 127 : 1;  // as the shell would exit
+    return 0;
+}
+
+static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
 {
     Fdtab *t = sh->fds;
     for (Redir *r = list; r; r = r->next) {
@@ -2624,7 +2660,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         i32  laststatus = sh->nsubst==nsubst ? 0 : sh->status;
         if (n->redirs && !doredirs(sh, n->redirs, a, 0)) {
             unwind(sh, mark);
-            sh->status = 1;
+            sh->status = sh->redirfail;
             checkerrexit(sh);
             return;
         }
@@ -2699,7 +2735,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     sh->bltname = savedname;
     if (!redirected) {
         unwind(sh, mark);
-        sh->status = 1;
+        sh->status = sh->redirfail;
         checkerrexit(sh);
         return;
     }
@@ -3609,7 +3645,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs)) {
             sh->stdinredir = stdinredir;
             unwind(sh, mark);
-            sh->status = 1;
+            sh->status = sh->redirfail;
             if (invert) sh->noerrexit--;
             else checkerrexit(sh);
             return;
@@ -3970,6 +4006,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
     L->expandaliases = L->aliasopt = sh->shopt[S_EXPAND_ALIASES];
     L->extglob       = L->extglobopt = sh->shopt[S_EXTGLOB];
     L->posix         = sh->opt[O_POSIX];
+    L->extquote      = sh->shopt[S_EXTQUOTE];
     L->utf8          = sh->utf8;
     if ((reader || hist) && !comsub) {
         // The lines it reads go into the history: the reader's, and -c's
@@ -4128,6 +4165,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
         }
         L->extglob       = L->extglobopt = sh->shopt[S_EXTGLOB];
         L->posix         = sh->opt[O_POSIX];
+        L->extquote      = sh->shopt[S_EXTQUOTE];
         if (sh->exiting || sh->flow) break;
         if (!L->pushed && L->idx>=L->line.len && !L->nheredoc) {
             // Nothing refers to the unit's memory now: function
