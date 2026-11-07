@@ -45,62 +45,9 @@ Closed: every item was fixed or moved (m6.md, step 10).
   stop's status) after `kill -STOP` then `kill -9`; ours 137.
 - **readonly -A name** with no value: bash leaves the variable a plain
   readonly scalar (`declare -r`), ours makes it associative.
-- **Win32: fg's Ctrl-C ends only the job's own process**: a foreign
-  program is ended with TerminateProcess, so what it started runs on
-  (w64devkit's alias stubs leave busybox running), as `kill -INT` does
-  on Windows. A job of this shell's image takes the signal, but it
-  started with INT ignored, so its `trap ... INT` cannot be set and
-  bash's job (in a group of its own, INT not ignored) would run the
-  trap. Fix with a job object per background program (Windows 8 and
-  later) and an image flag saying INT is not really ignored.
 - **A job killed just before `;` or the prompt**: the vos sees its end
   at once, so `kill %1; wait %1` finds no job (127) where bash, which
   has usually not reaped it yet, gives 143. Timing only.
-- **Win32 Ctrl-C a starting program can still miss** (m3b.md, "Programs
-  that miss a Ctrl-C"): unnoticed are one over 100 ms old and still
-  not attached; the real program of a wrapper that starts it more than
-  50 ms after the event; one in a job of over 64 live processes (only
-  64 are listed; such a program is not watched either); and every
-  descendant when the program's job could not be made (it is taken to
-  have had it, with all it started). A process that came and went
-  between listing a job and binding its port counts as missed even if
-  it was spared or ended. Only the Windows tests cover it: vos has no
-  group signals (`os_siggroup` is 0), so the core's `WMISSED` handling
-  (the fallback when a missed program cannot be ended) has no tests.exe
-  coverage; untested on Windows 8 and 10 (disassociating a job's port
-  may fail there: handled, later messages are ignored). On the XP
-  laptop 006 and 012 passed 100 runs, 008 failed 1 in 60 ("after 0":
-  `g | "$U" -c "cat >/dev/null"`, the child shell missed the Ctrl-C),
-  down from 3 in 40 before programs started after an unseen Ctrl-C were
-  ended (os_spawn's unseen rule) and before notemissedspawn compared
-  creation times; the cause of the rest is not known. A 32-bit shell
-  reading a 64-bit child's PEB (console image, Ctrl-C ignored,
-  initializing, same image) gets "unknown". On Windows 11 the i686
-  build in XP I/O mode (-x) fails 008 ("after 0") about 3 runs in 10,
-  as much with builds from before M5b step 6.
-  Moved from M5b: the Ctrl-C work belongs with job control, and none of
-  it is about background processes.
-- **Win32: a foreign program's Ctrl-C handler that starts a program is
-  taken for a wrapper**: a young program, attached and childless at a
-  Ctrl-C, is watched for 50 ms, since w64devkit's aliases ignore Ctrl-C
-  with a handler function and only then start busybox, which missed it.
-  A program that handles Ctrl-C by starting another (another shell's
-  trap, a cleanup tool) looks the same: what it starts within 50 ms is
-  ended, or, if it exits normally first, the parent takes SIGINT. bash
-  would run the cleanup and go on. A child running this shell's own
-  image is exempt (it judges its own children), as are programs
-  started with Ctrl-C ignored; the image path is compared, so another
-  copy or build of unabashed is foreign.
-  Moved from M5b: with the other Ctrl-C items.
-- **Win32 Ctrl-C before SIGPIPE, single-task shell** (unobserved): a
-  shell process writing to a native program that dies of Ctrl-C can
-  see the broken pipe before its own control handler thread runs, and
-  die of SIGPIPE (only PIPESTATUS differs; the parent still acts on the
-  failed program stage). Waiting for a late Ctrl-C before dying of
-  SIGPIPE would delay every `yes`-style loop into `head`. Moved here
-  from Next: never seen, and its only fix costs throughput; revisit
-  with the Ctrl-C work above. (m3b.md)
-  Moved from M5b: with the other Ctrl-C items.
 - **XP, in the sandbox only: a killed background job's status is
   often 0**: `sleep 3 & kill $!; wait $!` (also `"$U" -c "sleep 3" &`)
   ends the job at once but `wait` gives 0 for most iterations after the
@@ -111,6 +58,9 @@ Closed: every item was fixed or moved (m6.md, step 10).
   on XP in the sandbox (M5b step 10).
   Moved from M5b: seen only on XP and only under tools/sandbox, with
   binaries from before M5b too; status reporting is job control.
+  Not seen on Windows 11 in the sandbox (i686, XP I/O mode, 24 runs
+  of 016 and 010, M7 step 8); left for step 10's XP check, the
+  laptop being unreachable then.
 - **XP: t/win32/014-spawn failed once in 13 runs** (M5b step 10, with
   UNABASHED_XPIO=1); the diff was lost and twelve reruns passed. Look
   for it with the other XP flakes, which may share a cause.
@@ -124,9 +74,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
 - POSIX: a terminal SIGINT is the process's own signal (no `si_code`
   check), so a trapped INT at top level does not reach a running
   subshell level. (m3b.md)
-- Win32: a Ctrl-C from GenerateConsoleCtrlEvent does not end a console
-  read in progress; Ctrl-C during CreateProcess counts against the
-  shell even if the program handled it. (m3b.md)
 - Globbing does not check for Ctrl-C between directory entries.
 - `[[ =~ ]]` does not check for Ctrl-C (signals act only at safe points
   between commands). Some patterns run for minutes or more here and in
@@ -150,7 +97,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
   search records a span for most pairs of position and length, which
   costs time (`(a*)(a*)\1\2x` on 600 a's: 10.6 s on master, 15.0 s)
   and memory. (m4.md)
-- Job control: `set -m`, fg/bg, stopped jobs, suspend (jobs oracle).
 - redir12 line numbers: bash cites the line where the parser finished
   the top-level command; we cite the last simple command's. (m4.md)
 - `let` with an unterminated quote in an associative key (without
@@ -300,6 +246,17 @@ Moved from M6 (m6.md, step 10):
 
 ## M8 (performance)
 
+- **Win32: fg's Ctrl-C ends only the job's own process**: a foreign
+  program is ended with TerminateProcess, so what it started runs on
+  (w64devkit's alias stubs leave busybox running), as `kill -INT` does
+  on Windows. A job of this shell's image takes the signal, but it
+  started with INT ignored, so its `trap ... INT` cannot be set and
+  bash's job (in a group of its own, INT not ignored) would run the
+  trap. Fix with a job object per background program (Windows 8 and
+  later) and an image flag saying INT is not really ignored.
+  Moved from M7 (step 8): background programs get no job now, and
+  the image flag changes the image format; Windows only, and only
+  after fg of a wrapper or of a shell with an INT trap.
 - POSIX: if another process reads the same pipe as a shell task, a read
   after poll can block the whole shell until data arrives. (m3a.md)
   Moved from M5b: never seen in a test; it belongs with the read-ahead
@@ -447,6 +404,62 @@ Moved from M5a: limits of the test tiers, not of the shell.
 
 ## Accepted deviations
 
+- **Accepted: Win32 console Ctrl-C limits**: a Ctrl-C from
+  GenerateConsoleCtrlEvent does not end a console read in progress (a
+  typed one does); Ctrl-C during CreateProcess counts against the
+  shell even if the program handled it. (m3b.md; accepted in M7, step
+  8: the first is the console's, the second the unseen rule's price.)
+- **Accepted: Win32 Ctrl-C a starting program can still miss** (m3b.md, "Programs
+  that miss a Ctrl-C"): unnoticed are one over 100 ms old and still
+  not attached; the real program of a wrapper that starts it more than
+  50 ms after the event; one in a job of over 64 live processes (only
+  64 are listed; such a program is not watched either); and every
+  descendant when the program's job could not be made (it is taken to
+  have had it, with all it started). A process that came and went
+  between listing a job and binding its port counts as missed even if
+  it was spared or ended. Only the Windows tests cover it: vos has no
+  group signals (`os_siggroup` is 0), so the core's `WMISSED` handling
+  (the fallback when a missed program cannot be ended) has no tests.exe
+  coverage; untested on Windows 8 and 10 (disassociating a job's port
+  may fail there: handled, later messages are ignored). On the XP
+  laptop 006 and 012 passed 100 runs, 008 failed 1 in 60 ("after 0":
+  `g | "$U" -c "cat >/dev/null"`, the child shell missed the Ctrl-C),
+  down from 3 in 40 before programs started after an unseen Ctrl-C were
+  ended (os_spawn's unseen rule) and before notemissedspawn compared
+  creation times; the cause of the rest is not known. A 32-bit shell
+  reading a 64-bit child's PEB (console image, Ctrl-C ignored,
+  initializing, same image) gets "unknown". On Windows 11 the i686
+  build in XP I/O mode (-x) fails 008 ("after 0") about 3 runs in 10,
+  as much with builds from before M5b step 6.
+  Accepted in M7 (step 8): a console delivers Ctrl-C only to the
+  processes attached at that moment, and each case above is
+  narrowed as far as the console lets a shell see; the 008 failure
+  (also 1 run in 12 on Windows 11, i686 in XP I/O mode) is the
+  wrapper case: w64devkit's cat.exe stub starting busybox late.
+  Native mode, which skips the stubs, does not have it.
+- **Accepted: Win32: a foreign program's Ctrl-C handler that starts a program is
+  taken for a wrapper**: a young program, attached and childless at a
+  Ctrl-C, is watched for 50 ms, since w64devkit's aliases ignore Ctrl-C
+  with a handler function and only then start busybox, which missed it.
+  A program that handles Ctrl-C by starting another (another shell's
+  trap, a cleanup tool) looks the same: what it starts within 50 ms is
+  ended, or, if it exits normally first, the parent takes SIGINT. bash
+  would run the cleanup and go on. A child running this shell's own
+  image is exempt (it judges its own children), as are programs
+  started with Ctrl-C ignored; the image path is compared, so another
+  copy or build of unabashed is foreign.
+  Accepted in M7 (step 8): the watch is what catches the stubs'
+  late busybox; a cleanup program started within 50 ms of a Ctrl-C
+  is the rarer case.
+- **Accepted: Win32 Ctrl-C before SIGPIPE, single-task shell** (unobserved): a
+  shell process writing to a native program that dies of Ctrl-C can
+  see the broken pipe before its own control handler thread runs, and
+  die of SIGPIPE (only PIPESTATUS differs; the parent still acts on the
+  failed program stage). Waiting for a late Ctrl-C before dying of
+  SIGPIPE would delay every `yes`-style loop into `head`. Moved here
+  from Next: never seen, and its only fix costs throughput; revisit
+  with the Ctrl-C work above. (m3b.md)
+  Accepted in M7 (step 8): never seen, and only PIPESTATUS differs.
 - **Accepted: Win32 programs run in a job of their own** (Windows 8 and
   later, see judge): `IsProcessInJob` is always true;
   `QueryInformationJobObject(NULL)` describes that job, not the shell's,
