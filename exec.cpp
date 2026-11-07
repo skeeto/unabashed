@@ -159,6 +159,21 @@ static Arena *scratchat(Shell *sh, i32 depth)
     return sh->pool[depth];
 }
 
+// checkwinsize: after a foreground program, LINES and COLUMNS take the
+// size of the terminal on the shell's own standard error (not the
+// program's, which a redirection may have changed), as bash does
+// outside subshells, interactive or not.
+static void checkwinsize(Shell *sh)
+{
+    if (!sh->shopt[S_CHECKWINSIZE] || sh->subshell) return;
+    Handle h = sh->sched->err;
+    Tty    t = os_tty(sh->os, h, h, TTY_QUERY);
+    if (t.err || t.rows<1 || t.cols<1) return;
+    Arena a = *scratchat(sh, sh->capdepth+1);
+    setvar(sh, a, "LINES",   fmti64(&a, t.rows));
+    setvar(sh, a, "COLUMNS", fmti64(&a, t.cols));
+}
+
 // Before memory holding the BASH_COMMAND node is reused, keep its text
 // in the store instead.
 static void keepcmdtext(Shell *sh, byte *beg, byte *end)
@@ -1803,6 +1818,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     if (s->cur->intr) {
         sigtaken(sh);  // killed while waiting: the program runs on
     }
+    if (!r.err) checkwinsize(sh);
     if (status>=0 && (status & WNOLIB)) {
         // As Cygwin reports a native program that could not load a DLL
         // (recorded from Git Bash: the image's POSIX path, .exe kept)

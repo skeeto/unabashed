@@ -1056,6 +1056,12 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         if (!failed) failed = st & 255;
     }
     waitdone(sh, died, extbad);
+    for (i32 k = 0; k < last; k++) {
+        if (procs[k] != BADHANDLE) {
+            checkwinsize(sh);
+            break;
+        }
+    }
     if (lastsig) reportpipeline(sh, scratch, stages, nstages, statuses, pids, n);
     // As bash, stages extdebug skipped are left out of PIPESTATUS, and
     // $? is the last started one's

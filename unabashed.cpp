@@ -1476,6 +1476,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         if (sh->interactive && sh->opt[O_HISTORY] && !sh->hist.session) {
             histload(sh);  // unless the startup files added lines
         }
+        if (sh->interactive) checkwinsize(sh);  // as bash, once at the start
 
         if (selftest_) {
             Output *out = newoutput(os, &perm, info->std[1]);

@@ -49,10 +49,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   inserted and shown as \NNN, yet \xe6 ran M-f, which readline's C
   defaults (convert-meta on) do not explain together; the .ed env
   lines may leave LANG set twice. (M8, with input-meta and friends)
-- checkwinsize: LINES and COLUMNS follow the size each time the
-  editor starts and ends a line, not after each foreground program as
-  bash's checkwinsize does; a script that resizes and reads COLUMNS
-  within one line sees the old size. (step 2)
 - A WINCH trap: the editor only catches SIGWINCH itself (POSIX) when
   its disposition is the default, and its trap action runs later than
   bash's. (step 2)
