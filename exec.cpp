@@ -394,13 +394,29 @@ static Arith evalarithcmd(Shell *sh, Arena *a, Str expr, Str who)
     return r;
 }
 
+// Errors that end a non-interactive shell in POSIX mode, as bash.
+static b32 posixfatal(Shell *sh)
+{
+    return sh->opt[O_POSIX] && !sh->interactive;
+}
+
+// A for or select variable that is not a name ends a POSIX shell.
+static void posixbadvar(Shell *sh)
+{
+    if (posixfatal(sh)) {
+        sh->status  = 2;
+        sh->exiting = 1;
+        escape(sh, ESC_EXIT);
+    }
+}
+
 // An expansion error abandons the current complete command, and so
 // ends a subshell.
 static void expansionerror(Shell *sh, Arena a, Str msg)
 {
     shellerror(sh, a, msg);
     sh->status = 1;
-    escape(sh, ESC_DISCARD);
+    escape(sh, posixfatal(sh) ? ESC_FATAL : ESC_DISCARD);  // as bash
 }
 
 // A fatal expansion error, such as an unbound variable, ends the shell.
@@ -493,6 +509,10 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     }
     if (!__builtin_setjmp(e.jmp)) {
         runjob(sh, j, scratch);
+    } else if (e.why==ESC_ABORT && (j->kind==SUB_SOURCE || sh->cflag)) {
+        // As bash, whose comsub (and -c) text is abandoned with status
+        // 1, while a script's reader keeps the command's
+        sh->status = 1;
     }
     if (!sh->execed && !sh->killsig && sh->traps) {
         if (sh->errexited) unwind(sh, saved.undo);
@@ -2366,6 +2386,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
             skip = rundebugtrap(sh, scratch) || sh->flow;
         }
         if (code->body->redirs) sh->line = code->body->line;
+        sh->ctlline = code->body->line;
         if (!skip) execute(sh, code->body, scratch);
         if (sh->traps) {
             sh->line = code->body->line;  // RETURN sees it too
@@ -2715,9 +2736,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         }
         unwind(sh, mark);
         sh->status = ok ? laststatus : 1;
-        if (!ok && !sh->interactive && sh->opt[O_POSIX]) {
-            sh->exiting = 1;
-            escape(sh, ESC_EXIT);
+        if (!ok && posixfatal(sh)) {
+            escape(sh, ESC_FATAL);
         } else if (!ok) {
             escape(sh, ESC_DISCARD);  // as bash abandons the command
         }
@@ -2799,6 +2819,11 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     if (!redirected) {
         unwind(sh, mark);
         sh->status = sh->redirfail;
+        Builtin *sb = findbuiltin(sh, name);
+        if (sb && (sb->flags & B_SPECIAL) && posixfatal(sh)) {
+            sh->exiting = 1;  // as bash: a special builtin's, fatal
+            escape(sh, ESC_EXIT);
+        }
         checkerrexit(sh);
         return;
     }
@@ -2818,6 +2843,20 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     if (!(special && sh->opt[O_POSIX]) && !jobspec) {
         // as bash, a name with a slash too, outside POSIX mode
         if (!sh->opt[O_POSIX] || !haspath(sh, name)) fn = findfunc(sh, name);
+    }
+
+    if (posixfatal(sh)) {
+        // As bash, an assignment that fails ends the shell before a
+        // special builtin, or abandons the command before another
+        for (iz i = 0; i < nassign; i++) {
+            Value *cur = lookup(sh, as[i].name);
+            if (cur && (cur->attrs & V_READONLY)) {
+                shellerror(sh, scratch, concat(&scratch, as[i].name, ": readonly variable"));
+                unwind(sh, mark);
+                sh->status = 1;
+                escape(sh, special&&!fn ? ESC_FATAL : ESC_DISCARD);
+            }
+        }
     }
 
     if (fn || bi) {
@@ -2869,7 +2908,22 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             sh->bltargs  = argv.data;
             sh->nbltargs = argv.len;
             sh->nowriteerr = 0;
+            sh->bifatal    = 0;
             sh->status = runbuiltin(sh, bi, argv.data, argv.len, scratch);
+            b32 fatal = special && sh->bifatal && posixfatal(sh) && !sh->noerrexit;
+            sh->bifatal = 0;
+            if (fatal) {
+                // As bash, a special builtin's error (a usage error, an
+                // invalid identifier, ...) ends a POSIX shell
+                sh->bltname  = savedname;
+                sh->bltargs  = savedargs;
+                sh->nbltargs = savednargs;
+                sh->compargs = savedcomp;
+                sh->bout     = saved;
+                if (b.b.len) fdwrite(sh, 1, finish(&b.b));
+                sh->exiting = 1;
+                escape(sh, ESC_EXIT);
+            }
             sh->bltname  = savedname;
             sh->bltargs  = savedargs;
             sh->nbltargs = savednargs;
@@ -3376,6 +3430,7 @@ static void execfuncdef(Shell *sh, Node *n, Arena scratch)
         }
         return;
     }
+    i32 errline = sh->line;
     sh->line = n->line;
     Node *body = n->a;
     if (n->redirs) {
@@ -3389,6 +3444,7 @@ static void execfuncdef(Shell *sh, Node *n, Arena scratch)
     }
     Func *old = findfunc(sh, name);
     if (old && (old->attrs & V_READONLY)) {
+        sh->line = errline;  // as bash: where the parser got to
         shellerror(sh, scratch, concat(&scratch, name, ": readonly function"));
         sh->status = 1;
         return;
@@ -3420,7 +3476,8 @@ static void execsubshell(Shell *sh, Node *n, Arena scratch)
 [[gnu::noinline]]
 static void execfor(Shell *sh, Node *n, Arena scratch)
 {
-    sh->line = n->line;
+    sh->line    = n->line;
+    sh->ctlline = n->line;
     Slice<Str> list = {};
     if (n->words) {
         list = expandwords(sh, &scratch, n->words, 0);
@@ -3443,6 +3500,7 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
     if (!validvarname(var)) {
         shellerror(sh, scratch, concat3(&scratch, "`", var, "': not a valid identifier"));
         sh->status = 1;
+        posixbadvar(sh);
         return;
     }
     // $? carries into the body, perhaps from the list's expansion
@@ -3480,6 +3538,7 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
             }
         } else if (!setvar(sh, it, var, list[i])) {
             sh->status = 1;
+            if (posixfatal(sh)) escape(sh, ESC_FATAL);  // as bash
             break;
         }
         execute(sh, n->b, it);
@@ -3564,7 +3623,8 @@ static b32 debugheader(Shell *sh, Str head, i32 line)
 [[gnu::noinline]]
 static void execcase(Shell *sh, Node *n, Arena scratch)
 {
-    sh->line = n->line;
+    sh->line    = n->line;
+    sh->ctlline = n->line;
     if (sh->traps && debugheader(sh, concat3(&scratch, "case ", n->words->text, " in "), n->line)) {
         return;
     }
@@ -3920,10 +3980,16 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
     }
     Str var = n->name->text;
     if (!validvarname(var)) {
+        // As bash, which checks before it sets its line: the error cites
+        // the line of the enclosing for, case, call or top-level command
+        sh->line = sh->ctlline;
         shellerror(sh, scratch, concat3(&scratch, "`", var, "': not a valid identifier"));
+        sh->line = n->line;
         sh->status = 1;
+        posixbadvar(sh);
         return;
     }
+    sh->ctlline = n->line;
     if (!list.len) {
         sh->status = 0;
         return;
@@ -3954,6 +4020,7 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
         b32 ok = parsei64(trim(reply), &choice) && choice>=1 && choice<=list.len;
         if (!setvar(sh, it, var, ok ? list[(iz)choice-1] : Str(""))) {
             sh->status = 1;
+            if (posixfatal(sh)) escape(sh, ESC_FATAL);  // as bash
             break;
         }
         execute(sh, n->b, it);
@@ -4164,6 +4231,9 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
                 sh->status = 2;
             }
             if (sh->prettyprint && !outer) sh->status = 1;  // as bash's
+            if (sh->evaldepth || sh->sourcedepth) {
+                sh->bifatal = 1;  // eval's or source's: fatal in POSIX mode
+            }
             if (!sh->interactive && !sh->evaldepth && !sh->sourcedepth) {
                 sh->exiting = 1;
             } else if (reader && fill && sh->interactive && !L->eofreached) {
@@ -4215,7 +4285,8 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             // As in bash, LINENO is where the parser stopped until a
             // command sets it: a compound command's redirections cite
             // its last line
-            sh->line = L->lineno;
+            sh->line    = L->lineno;
+            sh->ctlline = L->lineno;
             if (sh->jobs && !outer) notifyjobs(sh, *L->a);
             if (fill && sh->interactive) showps0(sh);
             if (reader) sh->cmdnumber++;

@@ -696,11 +696,11 @@ static b32 waitjob(Shell *sh, Job *j, i32 *status, b32 force = 0)
             *status = pend ? 128 + __builtin_ctzll(pend) + 1 : 128;
             return 0;
         }
-        if (j->stopped) {
+        if (j->stopped && j->task->state!=TS_DONE) {
             *status = 128 + j->stopsig;
             return 1;
         }
-        joindone(sh, j);
+        joindone(sh, j);  // perhaps ended before its continue was seen
     } else if (j->task) {
         i32 st;
         if (!taskjoinintr(sh->sched, j->task, &st)) {

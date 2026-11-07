@@ -41,6 +41,10 @@ Closed: every item was fixed or moved (m6.md, step 10).
   process with its own pid and state. Job holds one waiter.
 - **A job killed by TERM after a stop**: bash shows its mark as "+" or
   " " depending on timing; ours always "+" (905 hides the mark).
+- **wait -f on a job killed while stopped**: bash returns 147 (the
+  stop's status) after `kill -STOP` then `kill -9`; ours 137.
+- **readonly -A name** with no value: bash leaves the variable a plain
+  readonly scalar (`declare -r`), ours makes it associative.
 - **Win32 Ctrl-C a starting program can still miss** (m3b.md, "Programs
   that miss a Ctrl-C"): unnoticed are one over 100 ms old and still
   not attached; the real program of a wrapper that starts it more than

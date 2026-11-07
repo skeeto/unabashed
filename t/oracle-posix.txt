@@ -26,7 +26,7 @@ dbg-support2 PASS
 dirstack PASS
 dollars FAIL
 dynvar PASS
-errors FAIL
+errors PASS
 execscript FAIL
 exp-tests PASS
 exportfunc FAIL

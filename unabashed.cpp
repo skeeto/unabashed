@@ -1759,6 +1759,8 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         }
     } else if (top.why==ESC_FATAL && sh->cflag) {
         sh->status = 127;  // as bash's -c reports a fatal error
+    } else if (top.why==ESC_ABORT && sh->cflag) {
+        sh->status = 1;  // as bash's -c, its text abandoned
     }
     if (!sh->execed && !sh->killsig) {
         // A login shell's logout files, signals still pending, then the

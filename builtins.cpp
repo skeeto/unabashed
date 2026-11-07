@@ -65,6 +65,7 @@ static Str usage(Str name)
 // Bash prints the usage line without the "NAME: line N: " prefix.
 static void usageerror(Shell *sh, Arena a, Str name)
 {
+    sh->bifatal = 1;
     flushbout(sh);
     Str msg = concat3(&a, name, ": usage: ", usage(name));
     fdwrite(sh, 2, concat(&a, msg, "\n"));
@@ -76,8 +77,36 @@ static void invalidoption(Shell *sh, Arena a, Str name, Str opt)
     usageerror(sh, a, name);
 }
 
+// Options as bash's builtins scan them: clusters of the letters in
+// opts, up to "--" or the first word that is not an option. Each letter
+// seen sets its bit (its index in opts) in *flags. The first operand's
+// index, or -1 once an invalid option was reported with the usage.
+static iz scanopts(Shell *sh, Arena a, Str name, Str *args, iz nargs,
+                   Str opts, u32 *flags)
+{
+    *flags = 0;
+    iz i = 1;
+    for (; i < nargs; i++) {
+        Str w = args[i];
+        if (w.len<2 || w[0]!='-') break;
+        if (w == "--") return i + 1;
+        for (iz k = 1; k < w.len; k++) {
+            iz at = 0;
+            for (; at<opts.len && opts[at]!=w[k]; at++) {}
+            if (at == opts.len) {
+                u8 opt[2] = {'-', w[k]};
+                invalidoption(sh, a, name, clone(&a, Str{opt, 2}));
+                return -1;
+            }
+            *flags |= (u32)1 << at;
+        }
+    }
+    return i;
+}
+
 static void notident(Shell *sh, Arena a, Str name, Str word)
 {
+    sh->bifatal = 1;
     builtinerror(sh, a, name, concat3(&a, "`", word, "': not a valid identifier"));
 }
 
@@ -264,11 +293,12 @@ static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (!parsei64(args[i], &v)) {
             // bash 5.3 reports it and carries on without exiting
             builtinerror(sh, scratch, "exit", concat(&scratch, args[i], ": numeric argument required"));
+            sh->bifatal = 1;
             return 2;
         } else if (i+1 < nargs) {
             // As bash, abandon the -c, eval or source text
             builtinerror(sh, scratch, "exit", "too many arguments");
-            sh->status = 1;
+            sh->status = 2;
             escape(sh, ESC_ABORT);
         } else {
             status = (i32)(v & 255);
@@ -346,8 +376,17 @@ static i32 b_caller(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 b_return(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
+    iz first = skipdashdash(args, nargs, 1);
+    if (nargs-first > 1) {
+        // As bash, before anything else: abandon the -c, eval or
+        // source text
+        builtinerror(sh, scratch, "return", "too many arguments");
+        sh->status = 2;
+        escape(sh, ESC_ABORT);
+    }
     if (!sh->funcdepth && !sh->sourcedepth) {
         builtinerror(sh, scratch, "return", "can only `return' from a function or sourced script");
+        sh->bifatal = 1;
         return 2;
     }
     // In a trap action itself, the status from before the action
@@ -359,10 +398,11 @@ static i32 b_return(Shell *sh, Str *args, iz nargs, Arena scratch)
         i64 v;
         if (!parsei64(args[i], &v)) {
             builtinerror(sh, scratch, "return", concat(&scratch, args[i], ": numeric argument required"));
+            sh->bifatal = 1;
             status = 2;
         } else if (i+1 < nargs) {
             builtinerror(sh, scratch, "return", "too many arguments");
-            sh->status = 1;
+            sh->status = 2;
             escape(sh, ESC_ABORT);
         } else {
             status = (i32)(v & 255);
@@ -396,7 +436,7 @@ static i32 loopcontrol(Shell *sh, Str *args, iz nargs, Arena scratch, i32 flow)
         if (i+1 < nargs) {
             // As bash, abandon the -c, eval or source text
             builtinerror(sh, scratch, name, "too many arguments");
-            sh->status = 1;
+            sh->status = 2;
             escape(sh, ESC_ABORT);
         }
         if (n < 1) {
@@ -849,6 +889,18 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                     invalidoption(sh, scratch, name, span(a.data+k-1, a.data+k+1));
                     return 2;
                 }
+            } else if (name == "readonly") {
+                // only -a, -A, -f, -n (no readonly then) and -p
+                switch (a[k]) {
+                case 'f': funcs = 1; continue;
+                case 'p': print = 1; continue;
+                case 'n': on &= ~V_READONLY; continue;
+                case 'a': on |= V_ARRAY; continue;
+                case 'A': on |= V_ASSOC; continue;
+                default:
+                    invalidoption(sh, scratch, name, span(a.data+k-1, a.data+k+1));
+                    return 2;
+                }
             } else switch (a[k]) {
             case 'a': bit = V_ARRAY;    break;
             case 'A': bit = V_ASSOC;    break;
@@ -895,6 +947,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             collectfuncs(sh->funcs, &all, &scratch);
             sort(all.data, all.len, funcless, scratch);
             u32 want = on & fattrs;
+            if (on & (V_INTEGER|V_NAMEREF|V_ARRAY|V_ASSOC)) return 0;  // none has
             for (iz k = 0; k < all.len; k++) {
                 Func *f = all[k].f;
                 if (want && ((u32)f->attrs & want) != want) continue;
@@ -906,8 +959,24 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             }
             return 0;
         }
+        if (i<nargs && name!="export" && name!="readonly") {
+            // As bash, attributes no function can have (in its order)
+            u32 bad[] = {V_INTEGER, V_NAMEREF, V_ARRAY, V_ASSOC};
+            Str opt[] = {"-i", "-n", "-a", "-A"};
+            for (i32 k = 0; k < countof(bad); k++) {
+                if (on & bad[k]) {
+                    builtinerror(sh, scratch, name, concat(&scratch, opt[k], ": invalid option"));
+                    return 1;
+                }
+            }
+        }
         i32 status = 0;
         for (; i < nargs; i++) {
+            if (!print && find(args[i], "=")>=0 && !findfunc(sh, args[i])) {
+                builtinerror(sh, scratch, name, "cannot use `-f' to make functions");
+                status = 1;
+                continue;
+            }
             if (sh->opt[O_POSIX] && (name=="declare" || name=="typeset") &&
                     !validvarname(args[i])) {
                 // POSIX mode cannot name such functions here, though it
@@ -926,7 +995,18 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 status = 1;
                 continue;
             }
-            if (funcnames) {
+            b32 modify = !print && (on|off);  // attributes, not a listing
+            if (modify && name=="export" && (on & V_EXPORT) &&
+                    !exportablefunc(args[i])) {
+                builtinerror(sh, scratch, name, concat(&scratch, args[i], ": cannot export"));
+                status = 1;
+            } else if (modify && (off & V_READONLY) && (f->attrs & V_READONLY)) {
+                builtinerror(sh, scratch, name, concat(&scratch, args[i], ": readonly function"));
+                status = 1;
+            } else if (modify) {
+                uz attrs = (f->attrs | (on & fattrs)) & ~(uz)(off & fattrs);
+                jwrite(sh->store, &f->attrs, attrs);
+            } else if (funcnames) {
                 bprint(sh, args[i]);
                 if (sh->shopt[S_EXTDEBUG]) {
                     // where it was defined, as bash's extdebug shows it
@@ -936,15 +1016,12 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                     bprint(sh, f->code->src.len ? f->code->src : sh->name);
                 }
                 bprint(sh, "\n");
-            } else if (!print && name=="export" && (on & V_EXPORT) &&
-                       !exportablefunc(args[i])) {
-                builtinerror(sh, scratch, name, concat(&scratch, args[i], ": cannot export"));
-                status = 1;
-            } else if (!print && ((on|off) & fattrs)) {
-                uz attrs = (f->attrs | (on & fattrs)) & ~(uz)(off & fattrs);
-                jwrite(sh->store, &f->attrs, attrs);
-            } else {
+            } else if (print) {
                 printfunc(sh, &scratch, args[i], f);
+            } else {
+                // as bash, the body alone when named without -p
+                bprint(sh, printfunction(&scratch, args[i], f->body, sh->opt[O_POSIX]));
+                bprint(sh, "\n");
             }
         }
         return status;
@@ -1034,6 +1111,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         if (!validvarname(vname) || (hassub && (name=="export" || name=="readonly"))) {
             notident(sh, scratch, name, a);
             status = 1;
+            if (sh->opt[O_POSIX] && (name=="export" || name=="readonly")) {
+                return 1;  // as bash, the rest left alone
+            }
             continue;
         }
         Str  val      = eq<a.len ? cuthead(a, eq+1) : Str{};
@@ -1178,6 +1258,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 } else {
                     builtinerror(sh, scratch, name, msg);
                 }
+                sh->bifatal = 1;  // a special builtin's assignment error
                 status = 1;
                 continue;
             }
@@ -1378,6 +1459,7 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
     Value *cur = v->top;
     if (cur->attrs & V_READONLY) {
         builtinerror(sh, scratch, "unset", concat(&scratch, name, ": cannot unset: readonly variable"));
+        sh->bifatal = 1;
         return 1;
     }
     X *x = newx(sh, &scratch);
@@ -1479,6 +1561,7 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
             Func *f = findfunc(sh, name);
             if (f && (f->attrs & V_READONLY)) {
                 builtinerror(sh, scratch, "unset", concat(&scratch, name, ": cannot unset: readonly function"));
+                sh->bifatal = 1;
                 status = 1;
             } else if (f) {
                 unsetfunc(sh, name);
@@ -1506,8 +1589,17 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
                 base = r.name;
             }
         }
-        if (!unsetvar(sh, base)) {
+        Value *cur = rawlookup(sh, base);
+        i32    dyn = cur ? cur->dyn : 0;
+        if (dyn==DYN_BASH_LINENO || dyn==DYN_BASH_SOURCE ||
+                dyn==DYN_BASH_ARGV || dyn==DYN_BASH_ARGC) {
+            // As bash, the call stack's arrays are not unsettable
+            builtinerror(sh, scratch, "unset", concat(&scratch, base, ": cannot unset"));
+            sh->bifatal = 1;
+            status = 1;
+        } else if (!unsetvar(sh, base)) {
             builtinerror(sh, scratch, "unset", concat(&scratch, base, ": cannot unset: readonly variable"));
+            sh->bifatal = 1;
             status = 1;
         }
     }
@@ -1521,12 +1613,13 @@ static i32 b_shift(Shell *sh, Str *args, iz nargs, Arena scratch)
     if (i < nargs) {
         if (!parsei64(args[i], &n)) {
             builtinerror(sh, scratch, "shift", concat(&scratch, args[i], ": numeric argument required"));
+            sh->bifatal = 1;
             return 2;
         }
         if (i+1 < nargs) {
             // As bash, abandon the -c, eval or source text
             builtinerror(sh, scratch, "shift", "too many arguments");
-            sh->status = 1;
+            sh->status = 2;
             escape(sh, ESC_ABORT);
         }
     }
@@ -1671,6 +1764,7 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
                 Str oname = args[++i];
                 if (!setoptionbyname(sh, oname, on)) {
                     builtinerror(sh, scratch, "set", concat(&scratch, oname, ": invalid option name"));
+                    sh->bifatal = 1;
                     return 2;
                 }
                 continue;
@@ -1930,7 +2024,7 @@ static Str cdcanon(Shell *sh, Arena *a, Str path)
 // Make dir, canonical in the mode's form, the working directory: PWD
 // and OLDPWD, the native directory the platform sees (none for a
 // virtual msys directory such as /proc), and its drive's =X: entry.
-static void setcwd(Shell *sh, Arena scratch, Str dir, Str old)
+static b32 setcwd(Shell *sh, Arena scratch, Str dir, Str old)
 {
     Str ncwd = dir;
     if (sh->pathmode == PM_MSYS) {
@@ -1939,11 +2033,14 @@ static void setcwd(Shell *sh, Arena scratch, Str dir, Str old)
         if (startswith(ncwd, "//?/") && hasdrive(cuthead(ncwd, 4))) ncwd = cuthead(ncwd, 4);
         for (; ncwd.len>1 && ncwd[ncwd.len-1]=='/' && !(ncwd.len==3 && hasdrive(ncwd)); ncwd.len--) {}
     }
-    setvar(sh, scratch, "OLDPWD", old, SV_FORCE);
-    setvar(sh, scratch, "PWD", dir, SV_FORCE);
+    // As bash, a readonly PWD or OLDPWD is reported and fails cd,
+    // though the directory changes
+    b32 ok = setvar(sh, scratch, "OLDPWD", old);
+    ok &= setvar(sh, scratch, "PWD", dir);
     sh->wd  = sclone(sh->store, dir);
     sh->cwd = ncwd.data==dir.data ? sh->wd : sclone(sh->store, ncwd);
     if (sh->pathmode != PM_POSIX) setdrivecwd(sh, scratch, ncwd);
+    return ok;
 }
 
 static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch);
@@ -2043,12 +2140,12 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
         builtinerror(sh, scratch, name, concat3(&scratch, typed, Str(": "), errtext(err)));
         return 1;
     }
-    setcwd(sh, scratch, physical ? cdcanon(sh, &scratch, target) : logical, old);
+    b32 ok = setcwd(sh, scratch, physical ? cdcanon(sh, &scratch, target) : logical, old);
     if (printdir) {
         bprint(sh, sh->wd);
         bprint(sh, "\n");
     }
-    return 0;
+    return !ok;
 }
 
 
@@ -3449,13 +3546,16 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 b_builtin(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
-    if (nargs < 2) return 0;
-    Builtin *b = findbuiltin(sh, args[1]);
+    u32 flags;
+    iz  i = scanopts(sh, scratch, "builtin", args, nargs, "", &flags);
+    if (i < 0) return 2;
+    if (i == nargs) return 0;
+    Builtin *b = findbuiltin(sh, args[i]);
     if (!b) {
-        builtinerror(sh, scratch, "builtin", concat(&scratch, args[1], ": not a shell builtin"));
+        builtinerror(sh, scratch, "builtin", concat(&scratch, args[i], ": not a shell builtin"));
         return 1;
     }
-    return runbuiltin(sh, b, args+1, nargs-1, scratch);
+    return runbuiltin(sh, b, args+i, nargs-i, scratch);
 }
 
 static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
@@ -3567,10 +3667,10 @@ static void printalias(Shell *sh, Arena scratch, Alias *a, b32 reusable)
 
 static i32 b_alias(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
-    iz  i     = 1;
-    b32 pflag = i<nargs && args[i]=="-p";
-    i += pflag;
-    i = skipdashdash(args, nargs, i);
+    u32 flags;
+    iz  i = scanopts(sh, scratch, "alias", args, nargs, "p", &flags);
+    if (i < 0) return 2;
+    b32 pflag    = flags & 1;
     b32 reusable = pflag || !sh->opt[O_POSIX];
     if (i==nargs || pflag) {
         // list, sorted
@@ -3593,7 +3693,7 @@ static i32 b_alias(Shell *sh, Str *args, iz nargs, Arena scratch)
         for (iz k = 0; k < all.len; k++) {
             printalias(sh, scratch, all[k], reusable);
         }
-        if (i == nargs) return 0;
+        return 0;  // as bash, -p ignores any names
     }
     i32 status = 0;
     for (; i < nargs; i++) {
@@ -3621,12 +3721,13 @@ static i32 b_alias(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 b_unalias(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
-    iz i = 1;
-    if (i<nargs && args[i]=="-a") {
+    u32 flags;
+    iz  i = scanopts(sh, scratch, "unalias", args, nargs, "a", &flags);
+    if (i < 0) return 2;
+    if (flags & 1) {
         sh->aliases = 0;
         return 0;
     }
-    i = skipdashdash(args, nargs, i);
     if (i == nargs) {
         usageerror(sh, scratch, "unalias");
         return 2;
@@ -4144,9 +4245,19 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
             }
         }
     }
+    if (!sh->opt[O_HASHALL]) {
+        builtinerror(sh, scratch, "hash", "hashing disabled");
+        return 1;
+    }
     if (reset) sh->cmdhash = 0;
     if (i == nargs) {
-        if (path.data || del || show) {
+        if (del || show) {
+            // as bash: the option's argument is a name
+            Str msg = del ? Str("-d: option requires an argument") : "-t: option requires an argument";
+            builtinerror(sh, scratch, "hash", msg);
+            return 1;
+        }
+        if (path.data) {
             usageerror(sh, scratch, "hash");
             return 2;
         }

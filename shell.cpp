@@ -509,6 +509,8 @@ struct Shell {
     Node    *cmdnode;      // BASH_COMMAND, printed when read, or
     Str      cmdtext;      // its text once the node may be freed
     i32      line;         // LINENO
+    i32      ctlline;      // bash's line as only some commands set it
+                           // (top level, calls, for, case, select)
     i32      status;       // $?
     i32      npstat;       // PIPESTATUS: the last pipeline's statuses
     u8       pstat[256];
@@ -631,6 +633,8 @@ struct Shell {
     b32      pipetail;     // the program is a grouped pipeline's last:
                            // its stop is reported (Sched.stopproc)
     i64      exitwarned;   // cmdnumber when exit warned of stopped jobs
+    b32      bifatal;      // the builtin's error ends a POSIX shell, if
+                           // the builtin is special (usage, identifier)
 
     // Signals and traps (trap.cpp)
     Str     *traps;        // NTRAP actions in the store, or null
