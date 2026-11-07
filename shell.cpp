@@ -523,6 +523,10 @@ struct Shell {
                            // shared current_token): see resumeaftereof
     i32      sourcedepth;
     i32      funcdepth;
+    b32      viacommand;   // a builtin started by `command`, until it
+                           // reads this (POSIX mode's fatal errors)
+    b32      argsset;      // set replaced $@ outside functions, which a
+                           // sourced file with arguments then keeps
     b32      exiting;
     b32      interactive;
     b32      login;        // a login shell (logout, ~/.bash_logout)
@@ -570,6 +574,7 @@ struct Shell {
     Str     *dirs;         // the directory stack under the working
     iz       ndirs;        // directory, bottom first (vars.cpp)
     i32      umask;
+    u64      disabled[2];  // enable -n: builtins by registry index
     Rlimit   rl[RL_COUNT]; // ulimit's table, read once (rlhave); in a
     b32      rlhave;       // subshell it changes alone and programs get
     b32      rlmod;        // it (rlmod), as bash's forked subshell's

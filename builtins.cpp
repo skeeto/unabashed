@@ -26,6 +26,7 @@ static Str usage(Str name)
         {"alias",    "alias [-p] [name[=value] ... ]"},
         {"unalias",  "unalias [-a] name [name ...]"},
         {"umask",    "umask [-p] [-S] [mode]"},
+        {"enable",   "enable [-a] [-dnps] [-f filename] [name ...]"},
         {"pushd",    "pushd [-n] [+N | -N | dir]"},
         {"popd",     "popd [-n] [+N | -N]"},
         {"dirs",     "dirs [-clpv] [+N] [-N]"},
@@ -441,8 +442,23 @@ static i32 b_eval(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 sourcetext(Shell *, Str *args, iz nargs, Str src, Arena, b32 startup);
 
+// A file . cannot find: in POSIX mode this ends a non-interactive
+// shell, unless `command` ran it
+static i32 sourcenotfound(Shell *sh, Arena scratch, Str name, Str file, b32 cmd)
+{
+    builtinerror(sh, scratch, name, concat(&scratch, file, ": file not found"));
+    if (sh->opt[O_POSIX] && !sh->interactive && !cmd) {
+        sh->status  = 1;
+        sh->exiting = 1;
+        escape(sh, ESC_EXIT);
+    }
+    return 1;
+}
+
 static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
+    b32 cmd  = sh->viacommand;
+    sh->viacommand = 0;
     Str name = args[0];
     iz  i    = 1;
     Got g    = {};  // the search path
@@ -491,9 +507,10 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (!c.ok) break;
             rest = c.tail;
         }
-        if (only && !found) {
-            builtinerror(sh, scratch, name, concat(&scratch, file, ": file not found"));
-            return 1;
+        // Not found: the working directory next, except with -p and
+        // in POSIX mode (bash's source_searches_cwd)
+        if (!found && (only || sh->opt[O_POSIX])) {
+            return sourcenotfound(sh, scratch, name, file, cmd);
         }
     }
     Stat st = pathstat(sh, scratch, path, 1);
@@ -505,6 +522,11 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     Str src = readwholefile(sh, &scratch, path, &err);
     if (err) {
         shellerror(sh, scratch, concat3(&scratch, file, Str(": "), errtext(err)));
+        if (sh->opt[O_POSIX] && !sh->interactive && !cmd) {
+            sh->status  = 1;  // as a file not found
+            sh->exiting = 1;
+            escape(sh, ESC_EXIT);
+        }
         return 1;
     }
     // As bash: many NUL bytes make a binary, and fewer are dropped
@@ -518,6 +540,7 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
         builtinerror(sh, scratch, name, concat(&scratch, file, ": cannot execute binary file"));
         return 126;
     }
+    args[i] = path;  // the name it goes by: "./f" when . found it
     return sourcetext(sh, args+i, nargs-i, src, scratch, 0);
 }
 
@@ -529,6 +552,8 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
 {
     Str  file  = args[0];
     Args saved = sh->args;
+    b32  wasset = sh->argsset;
+    sh->argsset = 0;
     if (nargs > 1) {
         sh->args.v = args + 1;
         sh->args.n = nargs - 1;
@@ -592,7 +617,10 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
     }
     sh->line = line;
     sh->sourcedepth--;
-    if (nargs > 1) sh->args = saved;
+    // As bash: arguments end with the file, unless it set its own
+    // outside a function and was not sourced from one
+    if (nargs>1 && (sh->funcdepth || !sh->argsset)) sh->args = saved;
+    sh->argsset = nargs>1 ? 0 : wasset|sh->argsset;
     return status;
 }
 
@@ -1607,6 +1635,7 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
         for (iz k = 0; k < n; k++) v[k] = sclone(sh->store, args[i+k]);
         sh->args.v = v;
         sh->args.n = n;
+        sh->argsset |= !sh->funcdepth;
     }
     return 0;
 }
@@ -3334,7 +3363,10 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     Builtin *b = findbuiltin(sh, args[i]);
     if (b) {
-        return b->fn(sh, args+i, nargs-i, scratch);
+        sh->viacommand = 1;
+        i32 r = b->fn(sh, args+i, nargs-i, scratch);
+        sh->viacommand = 0;
+        return r;
     }
     // Flush pending builtin output before the program writes
     Slice<Str> env = makeenv(sh, &scratch);
@@ -3876,6 +3908,68 @@ static i32 b_ulimit(Shell *sh, Str *args, iz nargs, Arena scratch)
     return 0;
 }
 
+// A chmod-style symbolic mode applied to the permission bits in mode
+// (for umask, the complement of the mask), as bash applies it: clauses
+// of who (ugoa, default all), then operators (+-=), each followed by
+// permissions (rwxXst) or a class to copy from the original bits.
+// -1 after an error message.
+static i32 symbolicmode(Shell *sh, Arena scratch, Str s, i32 mode)
+{
+    i32 bits = mode;
+    iz  i    = 0;
+    for (;;) {
+        i32 who = 0;
+        for (; i<s.len && find(Str("agou"), Str{s.data+i, 1})>=0; i++) {
+            switch (s[i]) {
+            case 'u': who |= 0700; break;
+            case 'g': who |= 0070; break;
+            case 'o': who |= 0007; break;
+            case 'a': who |= 0777; break;
+            }
+        }
+        who = who ? who : 0777;
+        for (;;) {
+            u8 op = i<s.len ? s[i] : 0;
+            i++;
+            if (op!='+' && op!='-' && op!='=') {
+                u8 c[1] = {op};
+                Str msg = concat3(&scratch, "`", Str{c, 1}, "': invalid symbolic mode operator");
+                builtinerror(sh, scratch, "umask", msg);
+                return -1;
+            }
+            i32 perm = 0;
+            for (; i<s.len && find(Str("rwxXstugo"), Str{s.data+i, 1})>=0; i++) {
+                switch (s[i]) {
+                case 'u': perm = (mode>>6 & 7) * 0111; break;
+                case 'g': perm = (mode>>3 & 7) * 0111; break;
+                case 'o': perm = (mode    & 7) * 0111; break;
+                case 'r': perm |= 0444; break;
+                case 'w': perm |= 0222; break;
+                case 'X': if (mode & 0111) perm |= 0111; break;
+                case 'x': perm |= 0111; break;
+                case 's': case 't': break;  // no such bits in a mask
+                }
+            }
+            perm &= who;
+            switch (op) {
+            case '+': bits |= perm; break;
+            case '-': bits &= ~perm; break;
+            case '=': bits = (bits & ~who) | perm; break;
+            }
+            if (i == s.len) return bits;
+            if (s[i]=='+' || s[i]=='-' || s[i]=='=') continue;
+            if (s[i] == ',') {
+                i++;
+                break;
+            }
+            u8 c[1] = {s[i]};
+            Str msg = concat3(&scratch, "`", Str{c, 1}, "': invalid symbolic mode character");
+            builtinerror(sh, scratch, "umask", msg);
+            return -1;
+        }
+    }
+}
+
 static i32 b_umask(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     b32 symbolic = 0, reuse = 0;
@@ -3915,14 +4009,32 @@ static i32 b_umask(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     Str s = args[i];
     i32 m = 0;
-    for (iz k = 0; k < s.len; k++) {
-        if (s[k]>='0' && s[k]<='7') m = m*8 + (s[k] - '0');
-        if (s[k]<'0' || s[k]>'7' || m>07777) {
-            builtinerror(sh, scratch, "umask", concat(&scratch, s, ": octal number out of range"));
-            return 1;
+    if (s.len && s[0]>='0' && s[0]<='9') {
+        for (iz k = 0; k < s.len; k++) {
+            if (s[k]>='0' && s[k]<='7') m = m*8 + (s[k] - '0');
+            if (s[k]<'0' || s[k]>'7' || m>07777) {
+                builtinerror(sh, scratch, "umask", concat(&scratch, s, ": octal number out of range"));
+                return 1;
+            }
         }
+    } else {
+        m = symbolicmode(sh, scratch, s, ~sh->umask & 0777);
+        if (m < 0) return 1;
+        m = ~m;
     }
     sh->umask = m & 0777;
+    if (symbolic) {
+        Str who[3] = {"u=", "g=", "o="};
+        for (i32 w = 0; w < 3; w++) {
+            if (w) bprint(sh, ",");
+            bprint(sh, who[w]);
+            i32 bits = ~sh->umask >> (6 - 3*w) & 7;
+            if (bits & 4) bprint(sh, "r");
+            if (bits & 2) bprint(sh, "w");
+            if (bits & 1) bprint(sh, "x");
+        }
+        bprint(sh, "\n");
+    }
     return 0;
 }
 
@@ -3998,7 +4110,15 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
     b32 multi  = nargs-i > 1;
     for (; i < nargs; i++) {
         Str name = args[i];
+        if (!show && find(name, "/")>=0) continue;  // as bash: never hashed
         if (path.data) {
+            Stat st = pathstat(sh, scratch, path, 1);
+            if (!st.err && st.type==FT_DIR) {
+                Str msg = concat3(&scratch, path, ": ", errtext(E_ISDIR));
+                builtinerror(sh, scratch, "hash", msg);
+                status = 1;
+                continue;
+            }
             hashenter(sh, name, path, 0);
         } else if (del) {
             if (!hashremove(sh, name)) {
@@ -4222,6 +4342,8 @@ static i32 b_disown(Shell *, Str *, iz, Arena);
 static i32 b_fg(Shell *, Str *, iz, Arena);
 static i32 b_suspend(Shell *, Str *, iz, Arena);
 
+static i32 b_enable(Shell *, Str *, iz, Arena);
+
 static Builtin builtins[] = {
     {".",        b_source,   B_SPECIAL},
     {":",        b_colon,    B_SPECIAL},
@@ -4240,6 +4362,7 @@ static Builtin builtins[] = {
     {"dirs",     b_dirs,     0},
     {"disown",   b_disown,   0},
     {"echo",     b_echo,     0},
+    {"enable",   b_enable,   0},
     {"eval",     b_eval,     B_SPECIAL},
     {"exec",     b_exec,     B_SPECIAL},
     {"exit",     b_exit,     B_SPECIAL},
@@ -4267,7 +4390,7 @@ static Builtin builtins[] = {
     {"set",      b_set,      B_SPECIAL},
     {"shift",    b_shift,    B_SPECIAL},
     {"shopt",    b_shopt,    0},
-    {"source",   b_source,   0},
+    {"source",   b_source,   B_SPECIAL},
     {"suspend",  b_suspend,  0},
     {"test",     b_test,     0},
     {"times",    b_times,    B_SPECIAL},
@@ -4288,6 +4411,14 @@ static b32 hasbuiltin(Shell *sh, Builtin *b)
     return !(b->flags & B_MSYS) || sh->pathmode==PM_MSYS;
 }
 
+static_assert(countof(builtins) <= 128, "Shell.disabled holds 128");
+
+static b32 isdisabled(Shell *sh, Builtin *b)
+{
+    iz i = b - builtins;
+    return (sh->disabled[i>>6] >> (i&63)) & 1;
+}
+
 static void compbuiltins(Shell *sh, Arena *a, Slice<Str> *out)
 {
     for (iz i = 0; i < countof(builtins); i++) {
@@ -4295,7 +4426,8 @@ static void compbuiltins(Shell *sh, Arena *a, Slice<Str> *out)
     }
 }
 
-static Builtin *findbuiltin(Shell *sh, Str name)
+// A builtin by name, enabled or not (enable's own lookup)
+static Builtin *anybuiltin(Shell *sh, Str name)
 {
     iz lo = 0, hi = countof(builtins);
     while (lo < hi) {
@@ -4305,4 +4437,88 @@ static Builtin *findbuiltin(Shell *sh, Str name)
         if (c < 0) lo = mid + 1; else hi = mid;
     }
     return 0;
+}
+
+static Builtin *findbuiltin(Shell *sh, Str name)
+{
+    Builtin *b = anybuiltin(sh, name);
+    return b && !isdisabled(sh, b) ? b : 0;
+}
+
+// enable [-a] [-dnps] [-f file] [name ...]: there are no loadable
+// builtins, so -f is refused as bash built without dlopen refuses it,
+// and -d finds nothing it loaded. Disabling is per subshell, like the
+// rest of the Shell.
+static i32 b_enable(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    enum { A = 1, D = 2, N = 4, P = 8, S = 16 };
+    i32 flags = 0;
+    iz  i     = 1;
+    for (; i<nargs && args[i].len>1 && args[i][0]=='-'; i++) {
+        if (args[i] == "--") { i++; break; }
+        for (iz k = 1; k < args[i].len; k++) {
+            switch (args[i][k]) {
+            case 'a': flags |= A; break;
+            case 'd': flags |= D; break;
+            case 'n': flags |= N; break;
+            case 'p': flags |= P; break;
+            case 's': flags |= S; break;
+            case 'f':
+                if (k+1==args[i].len && i+1==nargs) {
+                    builtinerror(sh, scratch, "enable", "-f: option requires an argument");
+                    usageerror(sh, scratch, "enable");
+                    return 2;
+                }
+                builtinerror(sh, scratch, "enable", "dynamic loading not available");
+                return 2;
+            default:
+                invalidoption(sh, scratch, "enable", span(args[i].data+k-1, args[i].data+k+1));
+                return 2;
+            }
+        }
+    }
+
+    if (i==nargs || (flags & P)) {
+        Buf b(&scratch, 1024);
+        for (iz k = 0; k < countof(builtins); k++) {
+            Builtin *bi = builtins + k;
+            if (!hasbuiltin(sh, bi)) continue;
+            if ((flags&S) && !(bi->flags&B_SPECIAL)) continue;
+            b32 off = isdisabled(sh, bi);
+            b32 on  = flags&A || !(flags&N);
+            b32 dis = flags&A || flags&N;
+            if (!off && on) {
+                print(&b, "enable ");
+            } else if (off && dis) {
+                print(&b, "enable -n ");
+            } else {
+                continue;
+            }
+            print(&b, bi->name);
+            putbyte(&b, '\n');
+        }
+        bprint(sh, finish(&b));
+        return 0;
+    }
+
+    i32 status = 0;
+    for (; i < nargs; i++) {
+        Builtin *b = anybuiltin(sh, args[i]);
+        if (!b) {
+            builtinerror(sh, scratch, "enable", concat(&scratch, args[i], ": not a shell builtin"));
+            status = 1;
+        } else if (flags & D) {
+            builtinerror(sh, scratch, "enable", concat(&scratch, args[i], ": not dynamically loaded"));
+            status = 1;
+        } else {
+            iz  k   = b - builtins;
+            u64 bit = (u64)1 << (k&63);
+            if (flags & N) {
+                sh->disabled[k>>6] |= bit;
+            } else {
+                sh->disabled[k>>6] &= ~bit;
+            }
+        }
+    }
+    return status;
 }
