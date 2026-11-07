@@ -97,21 +97,24 @@ death by signal records 128+N.
 
 ## bash's test suite on the POSIX build (oracle-posix)
 
-    tools/oracle-posix [-v] SHELL [NAME...|all]
+    tools/oracle-posix [-v] [-m t/oracle-posix.txt] SHELL [NAME...|all]
 
 Runs bash 5.3's run-NAME tests (category c of notes/research/tests.md
 by default, the ones needing real processes; `all` for every one) as
 run-all does, `sh run-NAME` in the suite's directory with `THIS_SH` the
-given Linux build of our shell. A test passes if it prints nothing but
-`warning:` lines; `-v` prints a failure's output. One container from
+given Linux build of our shell. A test passes (PASS) if it prints
+nothing but `warning:` lines. A failing one runs again with the image's
+bash 5.3: identical output means the environment fails it for both
+(BASH), else the failure is ours (FAIL), and `-v` prints our output as
+a diff against bash's. `-m` compares the results with the manifest,
+t/oracle-posix.txt, and fails on any test doing worse. One container from
 the oracle image, as for recording (`--network none`, read-only root,
 tmpfs `/tmp` and workdir, uid 1000, no capabilities); the suite is
 unpacked from `bash-5.3.tar.gz` afresh for each test. PATH has bash's
 helpers and Debian's coreutils, not the fakes. `ORACLE_TIMEOUT` limits
-each test (300 seconds). Real bash, given as SHELL (copy
-`/usr/local/bin/bash` out of the image), fails a few here too (signal
-listing order, no terminal, no en_US.UTF-8, ulimit): results are read
-against its own.
+each test (300 seconds). Real bash fails a few here too (no terminal,
+no zh_TW.big5 or en_US.UTF-8, build-tree files): those are the BASH
+results.
 
 ## Editor sessions (t/edit, ptyrun, edrecord)
 

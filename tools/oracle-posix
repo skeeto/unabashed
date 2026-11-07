@@ -1,14 +1,21 @@
 #!/bin/sh
 # Run bash 5.3's own run-* tests on our POSIX build, in a container
 #
-#   tools/oracle-posix [-v] SHELL [NAME...]
+#   tools/oracle-posix [-v] [-m MANIFEST] SHELL [NAME...]
 #
 # SHELL is a Linux build of unabashed (make unabashed, in WSL or Linux).
 # Each NAME runs as run-all runs it, "sh run-NAME" in the suite's
-# directory with THIS_SH our shell, and passes if it prints nothing but
-# "warning:" lines; -v shows the output of failures. Without names it
-# runs category c (notes/research/tests.md), the tests that need real
-# processes; "all" runs every run-* test.
+# directory with THIS_SH our shell, and passes (PASS) if it prints
+# nothing but "warning:" lines. A failing test is run again with the
+# image's bash 5.3 as THIS_SH: if bash prints exactly the same, the
+# failure is this environment's (BASH: no terminal, missing locales),
+# else it is ours (FAIL). -v shows each FAIL's output as a diff against
+# bash's. Without names it runs category c (notes/research/tests.md),
+# the tests that need real processes; "all" runs every run-* test.
+#
+# With -m, the results are compared with MANIFEST, lines of "NAME
+# RESULT" (t/oracle-posix.txt): any test doing worse than listed is
+# reported and the exit status is 1; one doing better is noted.
 #
 # One container from the oracle image (tools/Dockerfile.bash53) for the
 # whole run: --network none, read-only but for tmpfs /tmp and workdir,
@@ -30,12 +37,16 @@ case "$(uname -s)" in
 esac
 
 verbose=
-if [ "${1:-}" = -v ]; then
-    verbose=1
-    shift
-fi
+manifest=
+while :; do
+    case "${1:-}" in
+    -v) verbose=1; shift;;
+    -m) manifest=${2:-}; shift 2;;
+    *)  break;;
+    esac
+done
 if [ $# -lt 1 ] || [ ! -f "$1" ]; then
-    echo "usage: tools/oracle-posix [-v] SHELL [NAME...|all]" >&2
+    echo "usage: tools/oracle-posix [-v] [-m MANIFEST] SHELL [NAME...|all]" >&2
     exit 2
 fi
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -61,33 +72,50 @@ if [ "$*" = all ]; then
     set -- $(tar -tzf /opt/src/bash-5.3.tar.gz | sed -n "s,^bash-5.3/tests/run-,,p" |
              grep -v "^all\$\|^minimal\$\|^gprof\$")
 fi
-for name; do
+# Run test $1 with THIS_SH a copy of $2, the output in $3
+runone() {
+    cd /home/oracle
     rm -rf "$B" /tmp/* /tmp/.[!.]* 2>/dev/null
     tar -xzf /opt/src/bash-5.3.tar.gz -C /home/oracle bash-5.3/tests bash-5.3/y.tab.c
     head -c 20000 /dev/zero | tr "\0" "x" >$B/config.h
     head -c 2000 /dev/zero | tr "\0" "x" >$B/version.h
-    cp /opt/under/bash $B/bash
+    cp "$2" $B/bash
     cd $B/tests
-    out=$(env -i LANG=C TZ=UTC HOME=/home/oracle TMPDIR=/tmp \
-          PATH=.:/usr/local/bin:/usr/bin:/bin THIS_SH=$B/bash BUILD_DIR=$B \
-          BASH_TSTOUT=/tmp/bashtst-1 timeout "$ORACLE_TIMEOUT" sh run-$name 2>&1 </dev/null)
+    env -i LANG=C TZ=UTC HOME=/home/oracle TMPDIR=/tmp \
+        PATH=.:/usr/local/bin:/usr/bin:/bin THIS_SH=$B/bash BUILD_DIR=$B \
+        BASH_TSTOUT=/tmp/bashtst-1 timeout "$ORACLE_TIMEOUT" sh run-$1 \
+        >"$3" 2>&1 </dev/null
     st=$?
-    bad=$(printf "%s\n" "$out" | grep -v "^warning: \|^\$" | head -c 1)
+    [ $st -eq 124 ] && echo "(timed out after ${ORACLE_TIMEOUT}s)" >>"$3"
+    return $st
+}
+nbash=0
+for name; do
+    runone "$name" /opt/under/bash /home/oracle/.ours
+    st=$?
+    bad=$(grep -v "^warning: \|^\$" /home/oracle/.ours | head -c 1)
     total=$((total + 1))
     if [ -z "$bad" ] && [ $st -ne 124 ]; then
         pass=$((pass + 1))
         printf "%-20s PASS\n" "$name"
+        continue
+    fi
+    runone "$name" /usr/local/bin/bash /home/oracle/.bash
+    if cmp -s /home/oracle/.ours /home/oracle/.bash; then
+        nbash=$((nbash + 1))
+        printf "%-20s BASH\n" "$name"
     else
-        [ $st -eq 124 ] && out="$out
-(timed out after ${ORACLE_TIMEOUT}s)"
-        printf "%-20s FAIL (%d bytes)\n" "$name" ${#out}
-        [ -z "$ORACLE_VERBOSE" ] || printf "%s\n" "$out"
+        printf "%-20s FAIL (%d bytes)\n" "$name" $(wc -c </home/oracle/.ours)
+        [ -z "$ORACLE_VERBOSE" ] ||
+            diff /home/oracle/.bash /home/oracle/.ours | sed "s/^/    /"
     fi
 done
-echo "$pass of $total pass"
+echo "$pass of $total pass, $nbash more fail as bash does"
 '
 
-exec docker run -i --rm --init --network none --read-only \
+results=$(mktemp)
+trap 'rm -f "$results"' EXIT
+docker run -i --rm --init --network none --read-only \
     --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777 \
     --tmpfs /home/oracle:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=755 \
     --workdir /home/oracle --user oracle --hostname oracle \
@@ -96,4 +124,21 @@ exec docker run -i --rm --init --network none --read-only \
     --volume="$shell:/opt/under/bash:ro" \
     --volume="$tarball:/opt/src/bash-5.3.tar.gz:ro" \
     -e ORACLE_TIMEOUT="$limit" -e ORACLE_VERBOSE="$verbose" \
-    "$image" /bin/sh -c "$inner" sh $names </dev/null
+    "$image" /bin/sh -c "$inner" sh $names </dev/null | tee "$results"
+[ -n "$manifest" ] || exit 0
+
+# Worse than the manifest: PASS > BASH > FAIL
+rank() { case $1 in PASS) echo 2;; BASH) echo 1;; *) echo 0;; esac; }
+status=0
+while read -r name want; do
+    case $name in ''|'#'*) continue;; esac
+    got=$(awk -v n="$name" '$1 == n { print $2 }' "$results")
+    [ -n "$got" ] || continue
+    if [ "$(rank "$got")" -lt "$(rank "$want")" ]; then
+        echo "REGRESSION: $name $got, manifest $want"
+        status=1
+    elif [ "$(rank "$got")" -gt "$(rank "$want")" ]; then
+        echo "better: $name $got, manifest $want"
+    fi
+done <"$manifest"
+exit $status
