@@ -937,11 +937,18 @@ static b32 fillline(void *ctx, Lexer *L)
                 putbyte(b, '\n');
             } else if (r == ED_INTR) {
                 // Ctrl-C at the prompt: an empty line instead, status
-                // 130, and at PS2 the command given up
+                // 130, and at PS2 the command given up. A trap for INT
+                // runs now, as bash's, over the row of the echoed ^C,
+                // then a new line
                 sh->status = 128 + 2;
                 b->len = start;
                 putbyte(b, '\n');
                 L->intr = ps2;
+                if (trapset(sh, 2) && interactivetop(sh)) {
+                    runtrap(sh, 2);
+                    sh->status = 128 + 2;
+                    fdwrite(sh, 2, "\n");
+                }
             } else if (r == ED_ABORT) {
                 // An expansion error while editing: the same, status 1
                 sh->status = 1;

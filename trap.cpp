@@ -347,18 +347,26 @@ static b32 signoop(Shell *sh, i32 sig)
     escape(sh, ESC_EXIT);
 }
 
+// An interactive shell's outermost level: a new line after the ^C the
+// terminal echoed (a cooked Windows console echoes nothing), when INT
+// abandons the command, or when a foreground job died of it while INT
+// is trapped, as bash.
+static void intrnewline(Shell *sh)
+{
+    if (!interactivetop(sh)) return;
+    File  *in  = sh->fds->fd[0];
+    Handle err = sh->sched->err;
+    Handle h   = in && in->kind==F_OS ? in->h : err;
+    if (!os_tty(sh->os, h, err, TTY_QUERY).noctl) fdwrite(sh, 2, "\n");
+}
+
 // The default action of a signal that does something: an interactive
 // shell's outermost level abandons the command on INT (status 130),
 // anything else dies.
 [[noreturn]] static void sigdefault(Shell *sh, i32 sig, Arena scratch)
 {
     if (sig==2 && interactivetop(sh)) {
-        // Back to the prompt, on a line of its own after the ^C the
-        // terminal echoed (a cooked Windows console echoes nothing)
-        File  *in  = sh->fds->fd[0];
-        Handle err = sh->sched->err;
-        Handle h   = in && in->kind==F_OS ? in->h : err;
-        if (!os_tty(sh->os, h, err, TTY_QUERY).noctl) fdwrite(sh, 2, "\n");
+        intrnewline(sh);  // back to the prompt, on a line of its own
         sh->status = 128 + 2;
         escape(sh, ESC_INTR);
     }
@@ -373,6 +381,10 @@ static void runsigs(Shell *sh, Arena scratch)
         i32 sig = __builtin_ctzll(p->pending) + 1;
         p->pending &= ~sigbit(sig);
         if (trapignored(sh, sig)) continue;
+        if (p->bydefault & sigbit(sig)) {
+            p->bydefault &= ~sigbit(sig);
+            sigdefault(sh, sig, scratch);
+        }
         if (sh->traps && sh->traps[sig].data) {
             runtrap(sh, sig);
             continue;
@@ -550,6 +562,7 @@ static void sigenter(Shell *sh, Sigproc *p, i64 pid, Task *task)
     p->waitsig = 0;
     p->fgwait  = 0;
     p->execpid = 0;
+    p->bydefault = 0;
     p->next    = s->sigprocs;
     s->sigprocs = p;
     sh->sig    = p;

@@ -1,0 +1,44 @@
+== snap 1
+$ trap 'echo top' INT
+$ ( while :; do sleep 0.1; done ); echo "after $?"
+^C
+after 130
+$ sleep 5; echo "after $?"
+^C
+after 130
+$ ( trap 'echo sub; exit 4' INT; while :; do sleep 0.1; done
+ ); echo "after $?"
+^Csub
+after 4
+$ for i in 1 2 3; do sleep 2; echo "i=$i"; done; echo "end $
+?"
+^C
+$ echo "st=$?"
+st=130
+$ trap - INT; ( while :; do sleep 0.1; done ); echo "x $?"
+^C
+$ :
+$
+@ 19,2
+== snap 2
+$ trap 'echo top' INT
+$ ( while :; do sleep 0.1; done ); echo "after $?"
+^C
+after 130
+$ sleep 5; echo "after $?"
+^C
+after 130
+$ ( trap 'echo sub; exit 4' INT; while :; do sleep 0.1; done
+ ); echo "after $?"
+^Csub
+after 4
+$ for i in 1 2 3; do sleep 2; echo "i=$i"; done; echo "end $
+?"
+^C
+$ echo "st=$?"
+st=130
+$ trap - INT; ( while :; do sleep 0.1; done ); echo "x $?"
+^C
+$ :
+$
+@ 19,2

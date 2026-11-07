@@ -50,10 +50,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
 - **UTF-8 character classes and case folding are ASCII-only** in
   pattern.cpp, glob.cpp and regex.cpp: `[[:alpha:]]` does not match é,
   where bash (glibc) does. (m4.md)
-- POSIX: a terminal SIGINT is the process's own signal (no `si_code`
-  check), so a trapped INT at top level does not reach a running
-  subshell level. (m3b.md)
-- Globbing does not check for Ctrl-C between directory entries.
 - `[[ =~ ]]` does not check for Ctrl-C (signals act only at safe points
   between commands). Some patterns run for minutes or more here and in
   glibc alike: `(.{,2}\>a*{1,})*` on `a` (the walk, no

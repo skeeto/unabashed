@@ -58,6 +58,23 @@ static void     sigenter(Shell *, Sigproc *, i64 pid, Task *);
 static i64      newvpid(Shell *);
 static void     sigleave(Shell *, Sigproc *);
 static void     reportsig(Shell *, Arena, i32 sig, i64 pid, Str text);
+static void     intrnewline(Shell *);
+
+// Under job control the terminal's INT reached only the foreground job,
+// which died of it. As bash, the shell acts as if it had it too in a
+// loop, or untrapped interactively; an interactive loop is abandoned
+// even if INT is trapped (the trap waits for an INT of its own).
+// Otherwise a trapped INT starts a new line after the echoed ^C.
+static void intrjob(Shell *sh)
+{
+    b32 trapped = trapset(sh, 2);
+    b32 abandon = sh->interactive && sh->loopdepth;
+    if (sh->loopdepth || (!trapped && sh->interactive)) {
+        sh->sig->waitsig |= sigbit(2);
+        if (trapped && abandon) sh->sig->bydefault |= sigbit(2);
+    }
+    if (trapped && !abandon) intrnewline(sh);
+}
 static b32      trapignored(Shell *, i32 sig);
 
 // Signals the current level ignores, for the programs it starts.
@@ -554,7 +571,18 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sh->childsig = killed;
     sh->childpid = pid;
     if (sh->sig->waitsig && !sh->sig->fgwait) {
-        waitdone(sh, killed ? sigbit(killed) : 0, 0);
+        u64 died = killed ? sigbit(killed) : 0;
+        if (fgjobctl(sh)) {
+            // Under job control bash's subshell is a job of its own, so
+            // the terminal's signals reached only it: as for a program
+            // (runprogram), only an INT death counts, in a loop or
+            // untrapped interactively
+            u64 got = sh->sig->waitsig;
+            sh->sig->waitsig = 0;
+            if (killed==2 && (got & sigbit(2))) intrjob(sh);
+            died &= sigbit(2);
+        }
+        waitdone(sh, died, 0);
     }
     return status;
 }
@@ -1940,10 +1968,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
                 // The terminal's INT reached only the program: in a
                 // loop (or untrapped, interactively) the shell acts as
                 // if it had it too, as bash
-                b32 trapped = trapset(sh, 2);
-                if (sh->loopdepth || (!trapped && sh->interactive)) {
-                    sh->sig->waitsig |= sigbit(2);
-                }
+                intrjob(sh);
             }
         }
         if (status>=0 && (status & WSTOP)) {

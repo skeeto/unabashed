@@ -1,0 +1,40 @@
+== snap 1
+$ trap 'echo "t$?"' INT
+$ false
+t130
+
+$ echo "s=$?"
+s=130
+t130
+
+$ echo "s=$?"
+s=130
+$ trap 'echo "t$?"; return 7' INT
+t130
+bash: return: can only `return' from a function or sourced s
+cript
+
+$ echo "s=$?"
+s=130
+$
+@ 17,2
+== snap 2
+$ trap 'echo "t$?"' INT
+$ false
+t130
+
+$ echo "s=$?"
+s=130
+t130
+
+$ echo "s=$?"
+s=130
+$ trap 'echo "t$?"; return 7' INT
+t130
+bash: return: can only `return' from a function or sourced s
+cript
+
+$ echo "s=$?"
+s=130
+$
+@ 17,2

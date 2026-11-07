@@ -1,0 +1,24 @@
+# ^C at the prompt with INT trapped: the line goes, the trap runs
+# ($? 130) over the row of the echoed ^C, then a new line and prompt;
+# $? stays 130
+size 24 60
+rc PS1='$ '
+keys trap 'echo "t$?"' INT\r
+pause 100
+keys false\r
+pause 100
+keys \C-c
+pause 300
+keys echo "s=$?"\r
+pause 100
+keys echo abc\C-c
+pause 300
+keys echo "s=$?"\r
+pause 100
+keys trap 'echo "t$?"; return 7' INT\r
+pause 100
+keys \C-c
+pause 300
+keys echo "s=$?"\r
+pause 100
+snap

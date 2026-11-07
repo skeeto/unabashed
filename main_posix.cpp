@@ -38,6 +38,7 @@ struct Os {
 };
 
 static u64 volatile sigbits;  // caught signals not yet taken
+static u64 volatile grpbits;  // the terminal's, sent to its foreground group
 
 // Level signals from another of our shells (os_siglevel), queued by
 // the handler of a real-time signal: one producer (the handler, which
@@ -344,7 +345,7 @@ static Stat os_fstat(Os *, Handle h)
     return tostat(&s);
 }
 
-static void onsignal(int);
+static void onsignal(int, siginfo_t *, void *);
 
 static b32 os_con(Os *, Handle, ConOp *)
 {
@@ -389,8 +390,8 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
         struct sigaction sa = {};
         if (how==TTY_RAW && !sigaction(SIGWINCH, 0, &sa) && sa.sa_handler==SIG_DFL) {
             sigemptyset(&sa.sa_mask);
-            sa.sa_flags   = SA_RESTART;
-            sa.sa_handler = onsignal;
+            sa.sa_flags     = SA_RESTART | SA_SIGINFO;
+            sa.sa_sigaction = onsignal;
             sigaction(SIGWINCH, &sa, 0);
         }
     } else if (how==TTY_RESTORE && os->ttyraw) {
@@ -642,6 +643,7 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         os->pending = 0;
         os->peekfd[0] = os->peekfd[1] = 0;
         sigbits = 0;
+        grpbits = 0;
         levelhead = 0;
         leveltail = 0;
         static OsInfo info;
@@ -706,6 +708,7 @@ static i32 os_forkexec(Os *os, Arena scratch, Spawn *s)
         if (n) _exit(0);  // the original carries on
         close(sync[0]);
         sigbits = 0;  // signals were for the original's pid
+        grpbits = 0;
         levelhead = 0;
         leveltail = 0;
         sigprocmask(SIG_SETMASK, &old, 0);
@@ -848,11 +851,22 @@ static void onsigchld(int)
     errno = saved;
 }
 
-// A trapped signal: note it and wake os_wait.
-static void onsignal(int sig)
+// A trapped signal: note it and wake os_wait. The terminal's INT, QUIT
+// and TSTP, which the kernel sends to its whole foreground group, are
+// told apart from those sent to this process (kill): every level of
+// the shell gets them, as every process of bash's foreground job would.
+static void onsignal(int sig, siginfo_t *info, void *)
 {
     i32 saved = errno;
-    __atomic_fetch_or(&sigbits, (u64)1<<(sig-1), __ATOMIC_RELAXED);
+    b32 tty   = sig==SIGINT || sig==SIGQUIT || sig==SIGTSTP;
+    #ifdef SI_KERNEL
+    b32 grp   = tty && info && info->si_code==SI_KERNEL;
+    #else
+    b32 grp   = 0;
+    (void)tty;
+    (void)info;
+    #endif
+    __atomic_fetch_or(grp ? &grpbits : &sigbits, (u64)1<<(sig-1), __ATOMIC_RELAXED);
     u8 c = 0;
     if (write(sigos->wakefd[1], &c, 1)) {}
     errno = saved;
@@ -1037,7 +1051,7 @@ static u64 os_sigpending(Os *)
 
 static u64 os_siggroup(Os *)
 {
-    return 0;  // terminal signals arrive as the process's own
+    return __atomic_exchange_n(&grpbits, (u64)0, __ATOMIC_RELAXED);
 }
 
 static void os_tasktag(Os *, u64, iz, u64)
@@ -1067,7 +1081,8 @@ static void os_sigmode(Os *os, i32 sig, i32 mode)
         break;
     case SIGM_CATCH:
     case SIGM_CLAIM:
-        sa.sa_handler = onsignal;
+        sa.sa_flags     = SA_RESTART | SA_SIGINFO;
+        sa.sa_sigaction = onsignal;
         break;
     }
     sigaction(sig, &sa, 0);
@@ -1211,7 +1226,7 @@ static Io *os_wait(Os *os, i64 deadline)
             u8 buf[64];
             while (read(os->wakefd[0], buf, sizeof(buf)) > 0) {}
         }
-        if (sigbits || levelhead!=leveltail) return 0;  // the core first
+        if (sigbits || grpbits || levelhead!=leveltail) return 0;  // the core first
         i32 k = 1;
         for (Io **p = &os->pending; *p; p = &(*p)->next) {
             Io *io = *p;

@@ -218,8 +218,15 @@ static Dirent *pathlist(Shell *sh, Arena *a, Str dir, i32 *err)
     return list;
 }
 
+static void takeossigs(Shell *);
+static void sigfatal(Shell *);
+
 static GlobDir *listdir(Glob *g, Str dir)
 {
+    // A safe point before each listing: an untrapped Ctrl-C ends a long
+    // walk (**), as bash's glob checks for interrupts
+    takeossigs(g->sh);
+    sigfatal(g->sh);
     Str key = dir;
     for (; key.len>1 && key[key.len-1]=='/'; key.len--) {}
     GlobDir **m = &g->dirs;

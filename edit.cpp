@@ -3324,7 +3324,10 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     } else if (ed->hscroll) {
         if (ed->result == ED_INTR) edput(ed, "^C");
     } else if (ed->result == ED_INTR) {
-        if (isread) {
+        // At the prompt with INT trapped, as bash: the line goes, and
+        // the trap writes over it from the start of its row (fillline)
+        b32 trapped = opts->shell && trapset(sh, 2) && interactivetop(sh);
+        if (isread || trapped) {
             // read -e: as readline on SIGINT, the line goes first
             ed->line.len = ed->point = 0;
             redisplay(ed, sh);
@@ -3333,6 +3336,10 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         // terminal's own line discipline
         edput(ed, "^C");
         if (ed->crow < l->nrows-1) edmove(ed, l->nrows-1, 0);
+        if (trapped) {
+            edput(ed, "\r");
+            crlf = 0;
+        }
     } else if (l->nrows>1 && !l->rows[l->nrows-1].ncells && !ed->ccol && !ed->pending) {
         // As readline: the cursor alone at the start of the empty row
         // past a full one is already past the line

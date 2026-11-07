@@ -1,0 +1,35 @@
+# The terminal's ^C under job control reaches only the foreground job:
+# a subshell running a loop dies of it (status 130) and the shell's INT
+# trap does not run, as for a program; a subshell's own trap runs. The
+# shell starts a new line after a job that died of INT, trap or none.
+# An interactive loop whose job died of INT is abandoned, even with a
+# trap, which does not run.
+size 24 60
+rc PS1='$ '
+keys trap 'echo top' INT\r
+pause 100
+keys ( while :; do sleep 0.1; done ); echo "after $?"\r
+pause 400
+keys \C-c
+pause 300
+keys sleep 5; echo "after $?"\r
+pause 400
+keys \C-c
+pause 300
+keys ( trap 'echo sub; exit 4' INT; while :; do sleep 0.1; done
+keys  ); echo "after $?"\r
+pause 400
+keys \C-c
+pause 300
+keys for i in 1 2 3; do sleep 2; echo "i=$i"; done; echo "end $?"\r
+pause 400
+keys \C-c
+pause 300
+keys echo "st=$?"\r
+pause 100
+keys trap - INT; ( while :; do sleep 0.1; done ); echo "x $?"\r
+pause 400
+keys \C-c
+pause 300
+keys :\r
+snap
