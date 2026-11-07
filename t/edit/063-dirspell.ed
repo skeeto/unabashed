@@ -1,0 +1,20 @@
+# dirspell: completing a word whose directory does not exist corrects
+# that directory's spelling first, as cdspell does
+size 16 60
+rc PS1='$ '
+rc mkdir -p abcd/efgh xyz; : > abcd/file1 > abcd/file2
+keys ls bacd/fi\t
+snap
+keys \C-a\C-kshopt -s dirspell direxpand\r
+keys ls bacd/fi\t
+snap
+keys \t
+snap
+keys \C-a\C-kls bacd/efg\t
+snap
+keys \C-a\C-kls xzy/\t
+snap
+keys \C-a\C-kls bacd/qq\t
+snap
+keys \C-a\C-kcd abxd/e\t
+snap

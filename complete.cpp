@@ -329,6 +329,29 @@ static Slice<Str> compfiles(Editor *ed, Shell *sh, Comp *c, Str w, i32 keep)
         odir = compexpdir(sh, a, odir);
         if (sh->shopt[S_DIREXPAND] && udir.len) udir = odir;
     }
+    if (c->dirhook && !sh->opt[O_PHYSICAL] && !isabsolute(sh, odir)) {
+        // As bash's hook, a relative directory is read as cd would take
+        // it, against $PWD: ../ under a symbolic link is its parent
+        Got pwd = getvar(sh, a, "PWD");
+        Str abs = joinpath(a, pwd.set && pwd.value.len ? pwd.value : sh->wd, odir);
+        Str can = cdcanon(sh, a, abs);
+        Stat st = pathstat(sh, *a, can, 1);
+        if (!st.err && st.type==FT_DIR) odir = can;
+    }
+    if (c->dirhook && sh->shopt[S_DIREXPAND] && sh->shopt[S_DIRSPELL] &&
+            udir.len && part.len && !compexists(sh, *a, odir)) {
+        // As bash's directory hook, a misspelled directory is corrected
+        // as cd's cdspell does, then made absolute and canonical
+        Got pwd = getvar(sh, a, "PWD");
+        Str abs = isabsolute(sh, odir) ? odir
+                : joinpath(a, pwd.set ? pwd.value : sh->wd, odir);
+        Str fix = spellpath(sh, a, abs);
+        if (fix.data) {
+            fix  = cdcanon(sh, a, fix);
+            fix  = concat(a, fix, fix.len && fix[fix.len-1]=='/' ? Str("") : Str("/"));
+            odir = udir = fix;
+        }
+    }
     c->udir  = udir;
     c->odir  = odir;
     c->files = 1;

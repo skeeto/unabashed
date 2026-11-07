@@ -1,0 +1,27 @@
+== snap 1
+$ ls ../
+.edrc    link/    real/    top/     topfile
+$ ls ../
+@ 2,8 bell 1
+== snap 2
+$ ls ../
+.edrc    link/    real/    top/     topfile
+$ ls ../top
+@ 2,11 bell 2
+== snap 3
+$ ls ../
+.edrc    link/    real/    top/     topfile
+$ ls ../rf
+@ 2,10 bell 3
+== snap 4
+$ ls ../
+.edrc    link/    real/    top/     topfile
+$ set -P
+$ ls ../rfile
+@ 3,14 bell 3
+== snap 5
+$ ls ../
+.edrc    link/    real/    top/     topfile
+$ set -P
+$ ls ../rfile
+@ 3,14 bell 3

@@ -1,0 +1,122 @@
+== snap 1
+$ cd ../bacd; pwd
+bash: cd: ../bacd: No such file or directory
+/home/oracle/abcd
+$ shopt -s cdspell
+$ cd ../bacd; pwd
+../abcd
+/home/oracle/abcd
+$ cd efhg; pwd
+efgh
+/home/oracle/abcd/efgh
+$ cd ../../xzy; pwd
+../../xyz
+/home/oracle/xyz
+$ cd ../abxd/efgh; pwd
+../abcd/efgh
+/home/oracle/abcd/efgh
+$ cd ../../xy; pwd
+../../xyz
+/home/oracle/xyz
+$ cd ../xyzz; pwd
+../xyz
+/home/oracle/xyz
+$ cd ../.hdi; pwd
+../.hid
+/home/oracle/.hid
+$ cd ../ab; pwd
+bash: cd: ../ab: No such file or directory
+/home/oracle/.hid
+$ cd ../abcdef; pwd
+bash: cd: ../abcdef: No such file or directory
+/home/oracle/.hid
+$ cd ../qqq; echo $?; pwd
+bash: cd: ../qqq: No such file or directory
+1
+/home/oracle/.hid
+$
+@ 35,2
+== snap 2
+../xyz
+/home/oracle/xyz
+$ cd ../.hdi; pwd
+../.hid
+/home/oracle/.hid
+$ cd ../ab; pwd
+bash: cd: ../ab: No such file or directory
+/home/oracle/.hid
+$ cd ../abcdef; pwd
+bash: cd: ../abcdef: No such file or directory
+/home/oracle/.hid
+$ cd ../qqq; echo $?; pwd
+bash: cd: ../qqq: No such file or directory
+1
+/home/oracle/.hid
+$ cd /usr/lcoal; pwd
+/usr/local
+/usr/local
+$ cd ~/abd; pwd
+/home/oracle/abcd
+/home/oracle/abcd
+$ CDPATH=/home/oracle cd xzy; pwd
+bash: cd: xzy: No such file or directory
+/home/oracle/abcd
+$ cd ~/abcd/egfh/; pwd
+/home/oracle/abcd/efgh/
+/home/oracle/abcd/efgh
+$ cd ~/abcd/efgh2; pwd
+/home/oracle/abcd/efhg2
+/home/oracle/abcd/efhg2
+$ cd ../xbcd; pwd
+bash: cd: ../xbcd: No such file or directory
+/home/oracle/abcd/efhg2
+$ cd -P ../../xxz; pwd
+../../xyz
+/home/oracle/xyz
+$ cd ../../xyz/..//abdc; pwd
+bash: cd: ../../xyz/..//abdc: No such file or directory
+/home/oracle/xyz
+$
+@ 39,2
+== snap 3
+../xyz
+/home/oracle/xyz
+$ cd ../.hdi; pwd
+../.hid
+/home/oracle/.hid
+$ cd ../ab; pwd
+bash: cd: ../ab: No such file or directory
+/home/oracle/.hid
+$ cd ../abcdef; pwd
+bash: cd: ../abcdef: No such file or directory
+/home/oracle/.hid
+$ cd ../qqq; echo $?; pwd
+bash: cd: ../qqq: No such file or directory
+1
+/home/oracle/.hid
+$ cd /usr/lcoal; pwd
+/usr/local
+/usr/local
+$ cd ~/abd; pwd
+/home/oracle/abcd
+/home/oracle/abcd
+$ CDPATH=/home/oracle cd xzy; pwd
+bash: cd: xzy: No such file or directory
+/home/oracle/abcd
+$ cd ~/abcd/egfh/; pwd
+/home/oracle/abcd/efgh/
+/home/oracle/abcd/efgh
+$ cd ~/abcd/efgh2; pwd
+/home/oracle/abcd/efhg2
+/home/oracle/abcd/efhg2
+$ cd ../xbcd; pwd
+bash: cd: ../xbcd: No such file or directory
+/home/oracle/abcd/efhg2
+$ cd -P ../../xxz; pwd
+../../xyz
+/home/oracle/xyz
+$ cd ../../xyz/..//abdc; pwd
+bash: cd: ../../xyz/..//abdc: No such file or directory
+/home/oracle/xyz
+$
+@ 39,2

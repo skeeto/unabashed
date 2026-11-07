@@ -1,0 +1,14 @@
+# Completion reads a relative directory as cd would, against $PWD: ../
+# under a symbolic link is the link's parent, unless set -P
+size 16 60
+rc PS1='$ '
+rc mkdir -p real/sub top; : > real/rfile; : > topfile; ln -s real/sub link; cd link
+keys ls ../\t\t
+snap
+keys \C-a\C-kls ../to\t
+snap
+keys \C-a\C-kls ../rf\t
+snap
+keys \C-a\C-kset -P\r
+keys ls ../rf\t
+snap

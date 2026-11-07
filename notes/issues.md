@@ -146,8 +146,6 @@ Moved from M6 (m6.md, step 10):
   its disposition is the default, and its trap action runs later than
   bash's (with the trap fidelity work).
 - Hosts are read from HOSTFILE or /etc/hosts without `$include`.
-- cdspell and dirspell are not done, and the completion stat hook does
-  not canonicalize against `$PWD` (with cd's other options).
 - A history file that is a symbolic link is written through in place
   (the core cannot read links), so its target keeps its mode; readline
   writes beside the target and renames over it (mode 0600). The owner

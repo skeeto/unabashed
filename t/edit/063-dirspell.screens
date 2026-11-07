@@ -1,0 +1,31 @@
+== snap 1
+$ ls bacd/fi
+@ 0,12 bell 1
+== snap 2
+$ shopt -s dirspell direxpand
+$ ls /home/oracle/abcd/file
+@ 1,27 bell 2
+== snap 3
+$ shopt -s dirspell direxpand
+$ ls /home/oracle/abcd/file
+@ 1,27 bell 3
+== snap 4
+$ shopt -s dirspell direxpand
+$ ls /home/oracle/abcd/efgh/
+@ 1,28 bell 3
+== snap 5
+$ shopt -s dirspell direxpand
+$ ls xzy/
+@ 1,9 bell 4
+== snap 6
+$ shopt -s dirspell direxpand
+$ ls bacd/qq
+@ 1,12 bell 5
+== snap 7
+$ shopt -s dirspell direxpand
+$ cd /home/oracle/abcd/efgh/
+@ 1,28 bell 5
+== snap 8
+$ shopt -s dirspell direxpand
+$ cd /home/oracle/abcd/efgh/
+@ 1,28 bell 5

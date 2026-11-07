@@ -2072,6 +2072,9 @@ static i32 b_cd(Shell *sh, Str *args, iz nargs, Arena scratch)
     return cdas(sh, "cd", args, nargs, scratch);
 }
 
+static i32 cdtry(Shell *, Arena, Str, b32, b32, b32, i32 *);
+static Str spellpath(Shell *, Arena *, Str);
+
 // cd, its messages under name (pushd and popd run it as bash does)
 static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
 {
@@ -2121,7 +2124,38 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
     if (!dir.len) {
         return 0;
     }
-    Str typed = dir;
+    // As bash, a name that fails may be a variable holding one
+    // (cdable_vars), then misspelled (cdspell, interactive only); those
+    // print what they took
+    i32 err = 0;
+    i32 r   = cdtry(sh, scratch, dir, physical, 1, printdir, &err);
+    if (r<0 && sh->shopt[S_CDABLE_VARS] && validvarname(dir)) {
+        Got v = getvar(sh, &scratch, dir);
+        if (v.set && (r = cdtry(sh, scratch, v.value, physical, 0, 0, &err))>=0) {
+            bprint(sh, v.value);
+            bprint(sh, "\n");
+        }
+    }
+    if (r<0 && sh->shopt[S_CDSPELL] && sh->interactive) {
+        Str fix = spellpath(sh, &scratch, dir);
+        if (fix.data && (r = cdtry(sh, scratch, fix, physical, 0, 0, &err))>=0) {
+            bprint(sh, fix);
+            bprint(sh, "\n");
+        }
+    }
+    if (r < 0) {
+        builtinerror(sh, scratch, name, concat3(&scratch, dir, Str(": "), errtext(err)));
+        return 1;
+    }
+    return r;
+}
+
+// cd's change to dir, with CDPATH when usecdpath: -1 if dir is no
+// directory (*err), else 0, or 1 if setting the variables failed.
+// printdir prints the new directory, as a CDPATH match does too.
+static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
+                 b32 usecdpath, b32 printdir, i32 *err)
+{
     b32 msys  = sh->pathmode == PM_MSYS;
     if (msys) dir = msysdir(sh, &scratch, dir);
 
@@ -2135,7 +2169,7 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
     Str target = isabsolute(sh, dir) || native ? dir : joinpath(&scratch, base, dir);
 
     // CDPATH for relative names not starting with . or ..
-    Got cdpath = getvar(sh, &scratch, "CDPATH");
+    Got cdpath = usecdpath ? getvar(sh, &scratch, "CDPATH") : Got{};
     if (cdpath.set && !isabsolute(sh, dir) && dir[0]!='.') {
         for (Str rest = cdpath.value;;) {
             Cut c = cut(rest, listsep(sh));
@@ -2158,9 +2192,8 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
     Str logical = cdcanon(sh, &scratch, target);
     Stat st = pathstat(sh, scratch, physical ? target : logical, 1);
     if (st.err || st.type!=FT_DIR) {
-        i32 err = st.err ? st.err : E_NOTDIR;
-        builtinerror(sh, scratch, name, concat3(&scratch, typed, Str(": "), errtext(err)));
-        return 1;
+        *err = st.err ? st.err : E_NOTDIR;
+        return -1;
     }
     b32 ok = setcwd(sh, scratch, physical ? cdcanon(sh, &scratch, target) : logical, old);
     if (printdir) {
@@ -2168,6 +2201,68 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
         bprint(sh, "\n");
     }
     return !ok;
+}
+
+// How far a directory entry's name is from what was typed, as cdspell
+// judges it: 0 the same, 1 two neighbours swapped, 2 one character
+// changed, missing or extra, else 3.
+static i32 spelldist(Str name, Str typed)
+{
+    iz i = 0;
+    for (; i<name.len && i<typed.len && name[i]==typed[i]; i++) {}
+    if (i==name.len && i==typed.len) return 0;
+    Str n = cuthead(name, i);
+    Str t = cuthead(typed, i);
+    if (n.len>=2 && t.len>=2 && n[0]==t[1] && n[1]==t[0] &&
+            cuthead(n, 2)==cuthead(t, 2)) {
+        return 1;
+    }
+    if (n.len && t.len && cuthead(n, 1)==cuthead(t, 1)) return 2;
+    if (n.len && cuthead(n, 1)==t) return 2;  // typed lacks one
+    if (t.len && n==cuthead(t, 1)) return 2;  // typed has one more
+    return 3;
+}
+
+// A path with each component replaced by the closest name in its
+// directory (spelldist below 3, a later entry winning a tie, as in
+// bash's readdir loop), keeping the slashes; null if one has none.
+static Str spellpath(Shell *sh, Arena *a, Str path)
+{
+    Str out = {};
+    out.data = (u8 *)"";
+    for (iz i = 0; i < path.len;) {
+        iz e = i;
+        for (; e<path.len && path[e]=='/'; e++) {}
+        out = concat(a, out, span(path.data+i, path.data+e));
+        if (e == path.len) break;
+        for (i = e; e<path.len && path[e]!='/'; e++) {}
+        Str comp = span(path.data+i, path.data+e);
+        Str dir  = out.len ? out : Str(".");
+        if (dir[0] == '~') dir = tildefilename(sh, a, dir);
+        i32     derr = 0;
+        Dirent *list = pathlist(sh, a, dir, &derr);
+        if (derr) return {};
+        b32 dot = 0, dotdot = 0;
+        for (Dirent *d = list; d; d = d->next) {
+            dot    |= d->name == ".";
+            dotdot |= d->name == "..";
+        }
+        if (!dotdot) list = addentry(a, list, "..", FT_DIR);  // as readdir
+        if (!dot)    list = addentry(a, list, ".",  FT_DIR);
+        Str best = {};
+        i32 dist = 3;
+        for (Dirent *d = list; d && dist; d = d->next) {
+            i32 x = spelldist(d->name, comp);
+            if (x <= dist && x != 3) {
+                best = d->name;
+                dist = x;
+            }
+        }
+        if (!best.data) return {};
+        out = concat(a, out, best);
+        i = e;
+    }
+    return out;
 }
 
 

@@ -1,0 +1,29 @@
+# cdspell: in an interactive shell cd corrects each component of a
+# directory name with two characters swapped, one wrong, one missing or
+# one too many, prints the name it took and goes on; off, or with no
+# close enough name, cd fails as usual
+size 40 70
+rc PS1='$ '
+rc mkdir -p abcd/efgh abcd/efhg2 xyz .hid; cd abcd
+keys cd ../bacd; pwd\r
+keys shopt -s cdspell\r
+keys cd ../bacd; pwd\r
+keys cd efhg; pwd\r
+keys cd ../../xzy; pwd\r
+keys cd ../abxd/efgh; pwd\r
+keys cd ../../xy; pwd\r
+keys cd ../xyzz; pwd\r
+keys cd ../.hdi; pwd\r
+keys cd ../ab; pwd\r
+keys cd ../abcdef; pwd\r
+keys cd ../qqq; echo $?; pwd\r
+snap
+keys cd /usr/lcoal; pwd\r
+keys cd ~/abd; pwd\r
+keys CDPATH=/home/oracle cd xzy; pwd\r
+keys cd ~/abcd/egfh/; pwd\r
+keys cd ~/abcd/efgh2; pwd\r
+keys cd ../xbcd; pwd\r
+keys cd -P ../../xxz; pwd\r
+keys cd ../../xyz/..//abdc; pwd\r
+snap
