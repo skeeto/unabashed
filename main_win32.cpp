@@ -2761,6 +2761,12 @@ static Stat handlestat(uz h)
     return r;
 }
 
+// Reparse points are not read: callers treat a link as a plain file.
+static Str os_readlink(Os *, Arena *, Str)
+{
+    return {};
+}
+
 static Stat os_stat(Os *, Arena scratch, Str path, b32 follow)
 {
     Stat r = {};

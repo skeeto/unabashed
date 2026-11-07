@@ -1647,23 +1647,37 @@ static i32 histread(Shell *sh, Str file, i64 from, Arena scratch)
     return 0;
 }
 
-// Replace a history file's contents, as readline does: written to
-// FILE-PID.tmp beside it, then renamed over it, so the file is new (mode
-// 0600). A symbolic link, which readline follows to write beside its
-// target, is written through in place (the core cannot read links). An
-// error, or 0.
-static i32 histreplace(Shell *sh, Str file, Str data, Arena scratch)
+// Replace a history file's contents, as readline does. An existing
+// regular file is written to FILE-PID.tmp beside it, then renamed over
+// it, so the file is new (mode 0600); a symbolic link's target, read
+// once and taken from the working directory as readline does, stands
+// for FILE in both. Anything else (missing, a device, a link the
+// platform cannot read) is written in place. When cut, the file is
+// known to be regular. An error, or 0.
+static i32 histreplace(Shell *sh, Str file, Str data, Arena scratch,
+                       b32 cut = 0)
 {
     Str  path = absolute(sh, &scratch, file);
-    Stat ls   = os_stat(sh->os, scratch, path, 0);
+    Stat st   = os_stat(sh->os, scratch, path, 1);
+    Str  dest = path;
     Str  tmp  = path;
-    if (ls.err || ls.type!=FT_LINK) {
-        Buf t(&scratch, path.len+24);
-        print(&t, path);
-        print(&t, "-");
-        print(&t, (i64)sh->pid);
-        print(&t, ".tmp");
-        tmp = finish(&t);
+    if (cut || (!st.err && st.type==FT_FILE)) {
+        Str target = os_readlink(sh->os, &scratch, path);
+        if (target.len) {
+            dest = absolute(sh, &scratch, target);
+        } else if (target.data || os_stat(sh->os, scratch, path, 0).type!=FT_LINK) {
+            dest = path;
+        } else {
+            dest = {};  // an unreadable link: through it, in place
+        }
+        if (dest.data) {
+            Buf t(&scratch, dest.len+24);
+            print(&t, dest);
+            print(&t, "-");
+            print(&t, (i64)sh->pid);
+            print(&t, ".tmp");
+            tmp = finish(&t);
+        }
     }
     Opened o = os_open(sh->os, scratch, tmp, OF_WRITE|OF_CREATE|OF_TRUNC, 0600);
     if (o.err) return o.err;
@@ -1671,7 +1685,7 @@ static i32 histreplace(Shell *sh, Str file, Str data, Arena scratch)
     os_close(sh->os, o.h);
     i32 err = ok ? 0 : E_IO;
     if (tmp.data != path.data) {
-        if (!err) err = os_rename(sh->os, scratch, tmp, path);
+        if (!err) err = os_rename(sh->os, scratch, tmp, dest);
         if (err) os_unlink(sh->os, scratch, tmp);
     }
     return err;
@@ -1734,7 +1748,7 @@ static void histtruncate(Shell *sh, Str file, i64 n, Arena scratch)
         if (i <= 0) return;  // no more lines than that
         keep = cuthead(buf, i);
     }
-    histreplace(sh, file, keep, scratch);
+    histreplace(sh, file, keep, scratch, 1);
 }
 
 // HISTFILESIZE: a number of 0 or more cuts the file at once.

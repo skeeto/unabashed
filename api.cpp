@@ -326,6 +326,9 @@ static iz      os_peek(Os *, Handle, u8 *, iz);
 // Reposition; whence is 0 (set), 1 (current) or 2 (end). -1 on error.
 static i64     os_seek(Os *, Handle, i64, i32 whence);
 static Stat    os_stat(Os *, Arena scratch, Str path, b32 follow);
+// A symbolic link's target, as written in the link: null data when path
+// is no link, or where links cannot be read.
+static Str     os_readlink(Os *, Arena *, Str path);
 static Stat    os_fstat(Os *, Handle);
 // A terminal, as isatty(3): a console on Windows (not a mintty pipe)
 static b32     os_isatty(Os *, Handle);

@@ -145,10 +145,6 @@ Moved from M6 (m6.md, step 10):
 - A WINCH trap: the editor only catches SIGWINCH itself (POSIX) when
   its disposition is the default, and its trap action runs later than
   bash's (with the trap fidelity work).
-- A history file that is a symbolic link is written through in place
-  (the core cannot read links), so its target keeps its mode; readline
-  writes beside the target and renames over it (mode 0600). The owner
-  is not restored after a rename, as readline does as root.
 
 
 ## M8 (performance)
@@ -548,3 +544,8 @@ Moved from M5a: limits of the test tiers, not of the shell.
   ours says line 2 each time. An artifact of bash's parser state. And
   a `${x@P}` whose unterminated `$(` holds a `${` gets a second
   message about the brace from bash's re-parse; we give one.
+- **Accepted: a history file's owner is not restored after it is
+  replaced** (M7 step 9): readline chowns the new file back to the old
+  owner, which matters only to root sharing a history file (sudo). And
+  on Windows a symbolic link is written through in place: the Win32
+  layer reads no reparse points.

@@ -322,6 +322,18 @@ static Stat tostat(struct stat *s)
     return r;
 }
 
+static Str os_readlink(Os *, Arena *a, Str path)
+{
+    char *p = cpath(a, path);
+    for (iz cap = 256; cap < 1<<20; cap *= 2) {
+        char *buf = (char *)allocbytes(a, cap);
+        iz    n   = readlink(p, buf, (uz)cap);
+        if (n < 0) return {};
+        if (n < cap) return {(u8 *)buf, n};
+    }
+    return {};
+}
+
 static Stat os_stat(Os *, Arena scratch, Str path, b32 follow)
 {
     struct stat s;
