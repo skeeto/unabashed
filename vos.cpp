@@ -1279,7 +1279,13 @@ static void edcheck(Editor *ed, Shell *sh, i32 how)
         y->edforeign = 0;
         return;
     case EDCHECK_MARGIN:
-        y->edoff     = 0;
+        // Drawn again from the margin (after a listing or a message),
+        // as though on blank rows: unless something is left on them
+        // (a line given up while the cursor was above its end)
+        y->edoff = 0;
+        for (i32 i = t->row*t->cols; i < t->rows*t->cols; i++) {
+            y->edoff |= t->cells[i].c > 0;
+        }
         y->edattr    = t->attr != 0;
         y->edlost    = 0;
         y->edforeign = 0;

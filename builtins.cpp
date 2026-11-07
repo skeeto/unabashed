@@ -3462,11 +3462,11 @@ static i32 b_umask(Shell *sh, Str *args, iz nargs, Arena scratch)
     Str s = args[i];
     i32 m = 0;
     for (iz k = 0; k < s.len; k++) {
-        if (s[k]<'0' || s[k]>'7') {
+        if (s[k]>='0' && s[k]<='7') m = m*8 + (s[k] - '0');
+        if (s[k]<'0' || s[k]>'7' || m>07777) {
             builtinerror(sh, scratch, "umask", concat(&scratch, s, ": octal number out of range"));
             return 1;
         }
-        m = m*8 + (s[k] - '0');
     }
     sh->umask = m & 0777;
     return 0;
