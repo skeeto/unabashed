@@ -101,6 +101,10 @@ for name; do
         continue
     fi
     runone "$name" /usr/local/bin/bash /home/oracle/.bash
+    # the pid in "cannot set terminal process group (N)" differs per run
+    for f in /home/oracle/.ours /home/oracle/.bash; do
+        sed -i "s/process group ([0-9]*)/process group (N)/" $f
+    done
     if cmp -s /home/oracle/.ours /home/oracle/.bash; then
         nbash=$((nbash + 1))
         printf "%-20s BASH\n" "$name"

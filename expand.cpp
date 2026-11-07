@@ -2293,18 +2293,35 @@ static b32 ifswhite(u8 c)
     return c==' ' || (c>='\t' && c<='\r');
 }
 
-static b32 isdelim(XField *f, Str ifs, iz i)
+// The length of the character at s[i]: in a UTF-8 locale a valid
+// sequence, else (and for an invalid byte) one byte.
+static iz charlen(Str s, iz i, b32 utf8)
+{
+    if (!utf8 || s[i]<0x80) return 1;
+    iz j = i;
+    utf8strict(s, &j);
+    return j - i;
+}
+
+// Does the character at i split? IFS is taken a character at a time,
+// as bash in a multibyte locale: € in IFS splits on the whole of it,
+// and a lone byte of IFS never inside a valid character.
+static b32 isdelim(XField *f, Str ifs, iz i, b32 utf8)
 {
     if ((f->flags[i] & (XF_SPLIT|XF_QUOTED|XF_KEEP)) != XF_SPLIT) return 0;
-    for (iz k = 0; k < ifs.len; k++) {
-        if (ifs[k] == f->data[i]) return 1;
+    iz  n = charlen(f->data, i, utf8);
+    Str c = {f->data.data+i, n};
+    for (iz k = 0; k < ifs.len;) {
+        iz m = charlen(ifs, k, utf8);
+        if (Str{ifs.data+k, m} == c) return 1;
+        k += m;
     }
     return 0;
 }
 
-static b32 iswhitedelim(XField *f, Str ifs, iz i)
+static b32 iswhitedelim(XField *f, Str ifs, iz i, b32 utf8)
 {
-    return isdelim(f, ifs, i) && ifswhite(f->data[i]);
+    return isdelim(f, ifs, i, utf8) && ifswhite(f->data[i]);
 }
 
 static b32 splitbyte(XField *f, iz i)
@@ -2342,27 +2359,28 @@ static XField dropsplitcr(Arena *a, XField f)
 
 static void splitfield(X *x, XField f, Str ifs, Slice<XField> *out)
 {
-    Arena *a = x->a;
+    Arena *a    = x->a;
+    b32    utf8 = x->sh->utf8;
     iz n      = f.data.len;
     iz before = out->len;
     iz i      = 0;
-    while (i<n && iswhitedelim(&f, ifs, i)) i++;
+    while (i<n && iswhitedelim(&f, ifs, i, utf8)) i++;
     while (i < n) {
         iz start = i;
-        while (i<n && !isdelim(&f, ifs, i)) i++;
+        while (i<n && !isdelim(&f, ifs, i, utf8)) i += charlen(f.data, i, utf8);
         XField g = {};
         g.data   = span(f.data.data+start, f.data.data+i);
         g.flags  = span(f.flags.data+start, f.flags.data+i);
         g.quoted = 1;
         *out = push(a, *out, g);
         if (i < n) {
-            if (iswhitedelim(&f, ifs, i)) {
-                while (i<n && iswhitedelim(&f, ifs, i)) i++;
-                if (i<n && isdelim(&f, ifs, i)) i++;
+            if (iswhitedelim(&f, ifs, i, utf8)) {
+                while (i<n && iswhitedelim(&f, ifs, i, utf8)) i++;
+                if (i<n && isdelim(&f, ifs, i, utf8)) i += charlen(f.data, i, utf8);
             } else {
-                i++;
+                i += charlen(f.data, i, utf8);
             }
-            while (i<n && iswhitedelim(&f, ifs, i)) i++;
+            while (i<n && iswhitedelim(&f, ifs, i, utf8)) i++;
         }
     }
     if (out->len==before && f.quoted) {

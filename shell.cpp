@@ -665,6 +665,10 @@ struct Shell {
     b32      noreport;     // in command and process substitutions: no reports
     b32      intrread;     // in the read builtin: trap actions run at once
     b32      nolocwarn;    // binding a program's temporary environment
+    b32      lcall;        // LC_ALL assigned, not empty: categories quiet
+    Str     *undonames;    // a program's temporary environment, undone
+    iz       nundo;        // ... once it is spawned (runprogram)
+    Str     *undoargv;     // ... for this argv only
     b32      intredit;     // in the editor's read: a signal ends it (-4)
     i32      chldtraps;    // CHLD trap actions owed, one per child reaped
     b32      inchld;       // running one of them

@@ -31,26 +31,14 @@ Closed: every item was fixed or moved (m6.md, step 10).
 
 ## M7 (job control and fidelity)
 
-- **XP, in the sandbox only: a killed background job's status is
-  often 0**: `sleep 3 & kill $!; wait $!` (also `"$U" -c "sleep 3" &`)
-  ends the job at once but `wait` gives 0 for most iterations after the
-  first, where Windows 11, and XP outside tools/sandbox, give 143 every
-  time. Seen with binaries from before M5b too, so not the image or
-  SIGEXIT; makes t/win32/016's "TERM 143" line flaky on XP. Likely the same
-  cause: 010's SIGPIPE check gave `0 0` for `141 0` about 1 run in 6
-  on XP in the sandbox (M5b step 10).
-  Moved from M5b: seen only on XP and only under tools/sandbox, with
-  binaries from before M5b too; status reporting is job control.
-  Not seen on Windows 11 in the sandbox (i686, XP I/O mode, 24 runs
-  of 016 and 010, M7 step 8); left for step 10's XP check, the
-  laptop being unreachable then.
-- **XP: t/win32/014-spawn failed once in 13 runs** (M5b step 10, with
-  UNABASHED_XPIO=1); the diff was lost and twelve reruns passed. Look
-  for it with the other XP flakes, which may share a cause.
+None: the XP flakes were fixed or not seen again at step 10 (m7.md).
 
 
 ## M8 (performance)
 
+- **Programmable completion**: `complete`, `compgen` beyond the name
+  lists, `compopt` (plan.md's M8 row); the suite's complete test is
+  FAIL until then (t/oracle-posix.txt).
 - **`bash -i` whose input is not a terminal still reads with readline**:
   it interprets the editing keys (C-b, C-r, arrows) and writes
   readline's redisplay to stderr, terminal escapes and all (TERM=dumb:
@@ -397,6 +385,8 @@ Moved from M5a: limits of the test tiers, not of the shell.
 - **Accepted: `exec prog < <(...)` on Windows and the vos** runs
   the program as a child while the procsub lives, so its pid is not
   `$$`; POSIX forks the shell first and keeps it (m5b.md, step 5).
+- help and `--help` text is our own (plan.md: original help text), so
+  the suite's builtins test stays FAIL on its help lines.
 - dollars oracle: bash drops a lone DEL from `${*:1}` with IFS='';
   not copied (a bash bug).
 - printf7.sub line 88 and other `.right` lines that disagree with real

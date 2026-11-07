@@ -222,6 +222,7 @@ static b32 localeok(Str v)
 static void localewarn(Shell *sh, Str name)
 {
     if (sh->pathmode!=PM_POSIX || sh->nolocwarn) return;
+    if (name!="LC_ALL" && sh->lcall) return;  // setlocale not called
     byte  mem[512];
     Arena a = {mem, mem+sizeof(mem)};
     Got   g = getvar(sh, &a, name);
@@ -287,6 +288,11 @@ static void varchanged(Shell *sh, Str name)
         localewarn(sh, name);
         numericchanged(sh);
     } else if (name == "LC_ALL" || name == "LC_CTYPE" || name == "LANG") {
+        {
+            // As bash's lc_all (LANG at startup brings it in)
+            Arena none = {};
+            sh->lcall = getvar(sh, &none, "LC_ALL").value.len > 0;
+        }
         if (name != "LANG") localewarn(sh, name);
         numericchanged(sh);
         Arena none = {};

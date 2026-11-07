@@ -1740,6 +1740,17 @@ static Str *bridgeargs(Shell *sh, Arena *a, Str *argv, iz argc, Bridges *br)
 // error that kept it from starting. Shell objects on its descriptors
 // become OS pipes: text and in-memory pipes are fed by pump tasks, and
 // a capture is read here until end of file.
+// A program's temporary environment goes once it is spawned, as bash's
+// parent drops it right after the fork: its setlocale warnings come
+// before the program's output (see runsimple1).
+static void undotemps(Shell *sh, Str *argv)
+{
+    if (sh->nundo && sh->undoargv==argv) {
+        for (iz i = sh->nundo-1; i >= 0; i--) poptemp(sh, sh->undonames[i]);
+        sh->nundo = 0;
+    }
+}
+
 static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
                       Slice<Str> env)
 {
@@ -1959,6 +1970,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     for (i32 i = 0; i < nclose; i++) {
         os_close(sh->os, closeafter[i]);
     }
+    if (!sh->spawnto) undotemps(sh, argv);
     if (sh->spawnto) {
         // A pipeline stage started directly: its waiter is runpipeline
         assert(!npumps && !capfile);
@@ -2224,6 +2236,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         }
         if (!path.data && !getvar(sh, &a, "PATH").set) {
             // bash tries the bare name, in the working directory
+            undotemps(sh, argv);
             shellerror(sh, a, concat(&a, name, ": No such file or directory"));
             return 127;
         } else if (!path.data) {
@@ -2233,6 +2246,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
                 ansicquote(&b, name, sh->utf8);
                 shown = finish(&b);
             }
+            undotemps(sh, argv);
             shellerror(sh, a, concat(&a, shown, ": command not found"));
             return 127;
         }
@@ -3056,10 +3070,22 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         sh->childsig = 0;
         sh->spawnto = direct;
         sh->attail  = n==sh->tailnode && sh->taillevel==sh->subshell+1;
+        Str *names = alloc<Str>(&scratch, nassign);
+        for (iz i = 0; i < nassign; i++) names[i] = as[i].name;
+        sh->undonames = names;
+        sh->nundo     = nassign;
+        sh->undoargv  = argv.data;
         sh->status = runexternal(sh, scratch, argv.data, argv.len, env);
         sh->attail  = 0;
         if (!direct) chldreaped(sh, 1);
-        for (iz i = nassign-1; i >= 0; i--) poptemp(sh, as[i].name);
+        if (sh->nundo) {
+            // Not spawned here: a stage that ends in the program, as
+            // bash's child that execs, never restores (and so is quiet)
+            sh->nolocwarn = !!direct;
+            for (iz i = nassign-1; i >= 0; i--) poptemp(sh, as[i].name);
+            sh->nolocwarn = 0;
+            sh->nundo     = 0;
+        }
         reportchild(sh, scratch, n);
     }
     unwind(sh, mark);

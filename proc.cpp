@@ -450,6 +450,9 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->intrread = 0;
     c->intredit = 0;
     c->nolocwarn = 0;
+    c->nundo     = 0;
+    c->undonames = 0;
+    c->undoargv  = 0;
     c->chldtraps = 0;
     c->inchld   = 0;
     c->jobs     = copyjobs(st, sh->jobs);  // to list, not to wait for

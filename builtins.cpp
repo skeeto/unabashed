@@ -1814,7 +1814,10 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
         for (iz k = 1; k < a.len; k++) {
             u8 c = a[k];
             if (c == 'o') {
-                if (i+1 >= nargs) {
+                // With no name after it (none, empty, or an option) it
+                // lists, and what follows is parsed as options
+                Str next = i+1<nargs ? args[i+1] : Str{};
+                if (!next.len || next[0]=='-' || next[0]=='+') {
                     listsetoptions(sh, !on);
                     continue;
                 }
@@ -2745,6 +2748,20 @@ static b32 inputready(Shell *sh, File *f)
     return 0;
 }
 
+// The length of the IFS character at s[i], else 0: a character at a
+// time in a UTF-8 locale, as field splitting (isdelim).
+static iz ifschar(Str ifs, Str s, iz i, b32 utf8)
+{
+    iz  n = charlen(s, i, utf8);
+    Str c = {s.data+i, n};
+    for (iz k = 0; k < ifs.len;) {
+        iz m = charlen(ifs, k, utf8);
+        if (Str{ifs.data+k, m} == c) return n;
+        k += m;
+    }
+    return 0;
+}
+
 static b32 ifsmember(Str ifs, u8 c)
 {
     for (iz i = 0; i < ifs.len; i++) {
@@ -3142,6 +3159,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     b32 ifsset;
     Str ifs = clone(&scratch, ifsvalue(sh, &ifsset));  // read may assign IFS
     if (exact) ifs = {};  // -N does not split
+    b32 mb = sh->utf8;   // IFS a character at a time (ifschar)
     if (arrname.data) {
         // Every field into the array's elements
         if (!validvarname(arrname)) {
@@ -3153,11 +3171,14 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         while (pos<s.len && !e[pos] && ifswhite(s[pos]) && ifsmember(ifs, s[pos])) pos++;
         while (pos < s.len) {
             iz start = pos;
-            while (pos<s.len && (e[pos] || !ifsmember(ifs, s[pos]))) pos++;
+            while (pos<s.len && (e[pos] || !ifschar(ifs, s, pos, mb))) {
+                pos += e[pos] ? 1 : charlen(s, pos, mb);
+            }
             fields = push(&scratch, fields, span(s.data+start, s.data+pos));
             while (pos<s.len && !e[pos] && ifswhite(s[pos]) && ifsmember(ifs, s[pos])) pos++;
-            if (pos<s.len && !e[pos] && !ifswhite(s[pos]) && ifsmember(ifs, s[pos])) {
-                pos++;
+            iz d = pos<s.len && !e[pos] && !ifswhite(s[pos]) ? ifschar(ifs, s, pos, mb) : 0;
+            if (d) {
+                pos += d;
                 while (pos<s.len && !e[pos] && ifswhite(s[pos]) && ifsmember(ifs, s[pos])) pos++;
             }
         }
@@ -3203,9 +3224,9 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             // One more field ending the line, less its delimiter...
             iz end = pos;
             while (end < s.len) {
-                b32 inifs = !e[end] && isifs[s[end]];
+                b32 inifs = !e[end] && ifschar(ifs, s, end, mb);
                 if (inifs) break;
-                end++;
+                end += e[end] ? 1 : charlen(s, end, mb);
             }
             iz next = end;
             while (next<s.len && !e[next] && ifswhite(s[next])) {
@@ -3214,8 +3235,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                 next++;
             }
             if (next < s.len && !e[next] && !ifswhite(s[next])) {
-                b32 inifs = isifs[s[next]];
-                if (inifs) next++;
+                next += ifschar(ifs, s, next, mb);
             }
             while (next<s.len && !e[next] && ifswhite(s[next])) {
                 b32 inifs = isifs[s[next]];
@@ -3239,9 +3259,9 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         } else {
             iz start = pos;
             while (pos < s.len) {
-                b32 inifs = !e[pos] && isifs[s[pos]];
+                b32 inifs = !e[pos] && ifschar(ifs, s, pos, mb);
                 if (inifs) break;
-                pos++;
+                pos += e[pos] ? 1 : charlen(s, pos, mb);
             }
             val = span(s.data+start, s.data+pos);
             // consume one delimiter with surrounding IFS whitespace
@@ -3250,9 +3270,8 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                 if (!inifs) break;
                 pos++;
             }
-            if (pos < s.len && !e[pos]) {
-                b32 inifs = isifs[s[pos]];
-                if (inifs && !ifswhite(s[pos])) pos++;
+            if (pos < s.len && !e[pos] && !ifswhite(s[pos])) {
+                pos += ifschar(ifs, s, pos, mb);
             }
         }
         if (!assignto(sh, scratch, args[i+v], val)) return v==nvars-1 ? 1 : 2;

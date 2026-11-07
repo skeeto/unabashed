@@ -317,6 +317,9 @@ struct Lexer {
     Str      line;       // current line, with its newline (shell_input_line)
     iz       idx;        // position in line
     b32      lineeof;    // the current "line" marks end of input
+    b32      bseof;      // the last line ended in a doubled backslash
+    b32      eofbs;      // ... and then the end came: bash counted a
+                         // line looking past it (end-of-file errors)
     i32      ungot;      // pushed-back character after the line
     Pushed  *pushed;
     i32      lineno;
@@ -601,6 +604,8 @@ static void nextline(Lexer *L, b32 remove)
     L->lineno++;
     L->idx  = 0;
     if (srcend(L)) {
+        L->eofbs = L->bseof;
+        L->bseof = 0;
         L->line    = {};
         L->lineeof = 1;
         return;
@@ -642,7 +647,8 @@ static void nextline(Lexer *L, b32 remove)
         }
         b32 bs = 0;
         for (iz i = 0; i < s.len; i++) bs = !bs && s[i]=='\\';
-        s.data[s.len++] = !c.ok && bs && remove ? '\\' : '\n';
+        L->bseof = !c.ok && bs && remove;
+        s.data[s.len++] = L->bseof ? '\\' : '\n';
         L->line = s;
         return;
     }
@@ -2668,9 +2674,9 @@ static void synerror(Lexer *L)
         }
         print(&b, "command on line ");
         print(&b, (i64)L->nest[L->ntop].lineno);
-        message(L, L->lineno, finish(&b));
+        message(L, L->lineno+L->eofbs, finish(&b));
     } else {
-        message(L, L->lineno, L->eofreached ? Str("syntax error: unexpected end of file")
+        message(L, L->lineno+(L->eofreached && L->eofbs), L->eofreached ? Str("syntax error: unexpected end of file")
                                             : Str("syntax error"));
     }
 }
