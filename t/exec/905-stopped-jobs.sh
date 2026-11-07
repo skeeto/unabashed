@@ -4,7 +4,7 @@
 # stops do not, and a function goes on. jobs shows Stopped, and jobs -l
 # the signal's description. A stopped job becomes current. fg continues
 # and waits for it, bg continues it, kill %N continues it to take TERM,
-# wait warns, disown warns. Every case kills what it leaves stopped.
+# wait warns, disown warns. Every case kills what it leaves stopped. wait -f waits through stops.
 bash -c 'set -m; bash -c "kill -STOP \$\$"; echo st=$?; jobs; jobs -l | sed "s/ *[0-9][0-9]* Stopped/ PID Stopped/"; echo "[$!]"; fg; echo fgst=$?' 2>&1
 bash -c 'set -m; sleep 1 >/dev/null 2>&1 & kill -STOP $!; sleep 0.1; jobs; disown %1; echo st=$?; kill -9 $!' 2>&1 | sed "s/group [0-9]*/group N/"
 bash -c 'set -m; sleep 1 >/dev/null 2>&1 & kill -STOP $!; sleep 0.1; disown -h %1; echo st=$?; disown -a; kill -9 $!' 2>&1 | sed "s/group [0-9]*/group N/"
@@ -39,3 +39,6 @@ bash -c 'set -m; bash -c "kill -STOP \$\$"; %1; echo st=$?; bash -c "kill -STOP 
 bash -c 'set -m; bash -c "kill -STOP \$\$; kill -STOP \$\$; exit 5"; echo st=$?; fg; echo st=$?; jobs; fg; echo st=$?' 2>&1
 bash -c 'set -m; sleep 1 >/dev/null 2>&1 & kill -STOP $!; sleep 0.1; jobs -s; echo -; jobs -r; echo -; kill -CONT %1; sleep 0.1; jobs -s; echo -; jobs -r; kill -9 %1' 2>&1
 bash -c 'set -m; sleep 1 >/dev/null 2>&1 & kill -STOP $!; sleep 0.1; kill %1; sleep 0.1; jobs; jobs' 2>&1 | sed 's/^\[1\]./[1]?/'
+bash -c 'set -m; sleep 0.5 >/dev/null 2>&1 & p=$!; kill -STOP $p; sleep 0.1; (sleep 0.3; kill -CONT $p) & wait -f %1; echo st=$?; jobs' 2>&1
+bash -c 'set -m; sleep 0.5 >/dev/null 2>&1 & p=$!; (sleep 0.2; kill -STOP $p; sleep 0.3; kill -CONT $p) & wait -f $p; echo st=$?; jobs' 2>&1
+bash -c 'sleep 0.5 >/dev/null 2>&1 & p=$!; (sleep 0.2; kill -STOP $p; sleep 0.3; kill -CONT $p) >/dev/null 2>&1 & wait -f %1; echo st=$?; jobs' 2>&1

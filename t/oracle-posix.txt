@@ -49,7 +49,7 @@ intl FAIL
 invert PASS
 invocation PASS
 iquote PASS
-jobs FAIL
+jobs PASS
 lastpipe PASS
 mapfile PASS
 more-exp PASS

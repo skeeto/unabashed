@@ -639,9 +639,10 @@ static Job *findjob(Shell *sh, Arena scratch, Str who, Str spec, b32 *ambiguous)
     return found;
 }
 
-// Wait until a job's waiter finishes, or its program stops. False if
-// a signal interrupted the wait (intr: as the wait builtin).
-static b32 joinorstop(Shell *sh, Job *j, b32 intr)
+// Wait until a job's waiter finishes, or its program stops (unless
+// force, as wait -f). False if a signal interrupted the wait (intr: as
+// the wait builtin).
+static b32 joinorstop(Shell *sh, Job *j, b32 intr, b32 force = 0)
 {
     Sched *s    = sh->sched;
     Task  *self = s->cur;
@@ -650,7 +651,7 @@ static b32 joinorstop(Shell *sh, Job *j, b32 intr)
     for (;;) {
         waiterchange(s, t);
         jobchange(sh, j);
-        if (t->state==TS_DONE || j->stopped) break;
+        if (t->state==TS_DONE || (j->stopped && !force)) break;
         t->joiner = self;
         block(s, W_JOIN);
         if (intr && self->intr) {
@@ -682,13 +683,14 @@ static Job *jobbypid(Shell *sh, i64 pid)
     return 0;
 }
 
-// Wait for one of this level's jobs. False if a trapped signal
-// interrupted the wait, with *status 128 plus its number.
-static b32 waitjob(Shell *sh, Job *j, i32 *status)
+// Wait for one of this level's jobs, until it ends or (unless force)
+// stops. False if a trapped signal interrupted the wait, with *status
+// 128 plus its number.
+static b32 waitjob(Shell *sh, Job *j, i32 *status, b32 force = 0)
 {
     if (j->task && iswaiter(j->task)) {
         // It may stop meanwhile, under job control
-        if (!joinorstop(sh, j, 1)) {
+        if (!joinorstop(sh, j, 1, force)) {
             sh->sched->cur->intr = 0;
             u64 pend = sh->sig->pending;
             *status = pend ? 128 + __builtin_ctzll(pend) + 1 : 128;
@@ -1424,9 +1426,10 @@ static void waitstopped(Shell *sh, Arena scratch, Job *j)
 
 static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
-    b32 any = 0;
-    Str var = {};
-    iz  i   = 1;
+    b32 any   = 0;
+    b32 force = 0;
+    Str var   = {};
+    iz  i     = 1;
     for (; i<nargs && args[i].len>1 && args[i][0]=='-'; i++) {
         Str a = args[i];
         if (a == "--") { i++; break; }
@@ -1435,7 +1438,7 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (c == 'n') {
                 any = 1;
             } else if (c == 'f') {
-                // without job control, as plain wait
+                force = sh->jobctl;  // through stops (without, as plain)
             } else if (c == 'p') {
                 if (k+1 < a.len) {
                     var = cuthead(a, k+1);
@@ -1523,7 +1526,7 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
             Job *j = jobbypid(sh, pid);
             if (j && !ownjob(sh, j)) j = 0;
             if (j) {
-                if (!waitjob(sh, j, &status)) return status;
+                if (!waitjob(sh, j, &status, force)) return status;
                 if (j->stopped) {
                     lastpid = pid;
                     continue;
@@ -1570,7 +1573,7 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
                 Str msg = concat3(&scratch, "warning: wait_for_job: job ", fmti64(&scratch, j->id), " is stopped");
                 shellerror(sh, scratch, msg);
             }
-            if (!waitjob(sh, j, &status)) return status;
+            if (!waitjob(sh, j, &status, force)) return status;
             lastpid = j->pid;
             if (j->stopped) continue;
             reportkilled(sh, scratch, j);

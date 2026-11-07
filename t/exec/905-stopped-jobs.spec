@@ -1,4 +1,4 @@
-== stdout 3281
+== stdout 3605
 st=147
 [1]+  Stopped                    bash -c "kill -STOP \$\$"
 [1]+ PID Stopped (signal)           bash -c "kill -STOP \$\$"
@@ -98,10 +98,17 @@ st=5
 -
 [1]+  Running                    sleep 1 > /dev/null 2>&1 &
 [1]?  Terminated                 sleep 1 > /dev/null 2>&1
+bash: line 1: warning: wait_for_job: job 1 is stopped
+st=0
+[2]   Done                       ( sleep 0.3; kill -CONT $p )
+st=0
+[2]   Done                       ( sleep 0.2; kill -STOP $p; sleep 0.3; kill -CONT $p )
+st=0
+[2]   Done                       ( sleep 0.2; kill -STOP $p; sleep 0.3; kill -CONT $p ) > /dev/null 2>&1
 
 == stderr 0
 
-== merged 3281
+== merged 3605
 st=147
 [1]+  Stopped                    bash -c "kill -STOP \$\$"
 [1]+ PID Stopped (signal)           bash -c "kill -STOP \$\$"
@@ -201,5 +208,12 @@ st=5
 -
 [1]+  Running                    sleep 1 > /dev/null 2>&1 &
 [1]?  Terminated                 sleep 1 > /dev/null 2>&1
+bash: line 1: warning: wait_for_job: job 1 is stopped
+st=0
+[2]   Done                       ( sleep 0.3; kill -CONT $p )
+st=0
+[2]   Done                       ( sleep 0.2; kill -STOP $p; sleep 0.3; kill -CONT $p )
+st=0
+[2]   Done                       ( sleep 0.2; kill -STOP $p; sleep 0.3; kill -CONT $p ) > /dev/null 2>&1
 
 == status 0
