@@ -183,6 +183,27 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 
 // Startup
 
+// Native mode turns PATH's colons into semicolons as busybox-w32 does
+// when it is assigned: all but one right after a letter that starts an
+// element, a drive's. In place, in a buffer this level owns.
+static void nativepath(Shell *sh)
+{
+    Value *v = lookup(sh, "PATH");
+    if (!v || !v->str.len || (byte *)v->str.data<sh->store->mark) return;
+    Str s     = v->str;
+    b32 start = 1;
+    for (iz i = 0; i < s.len; i++) {
+        u8 c = s[i];
+        if (start && ((c|0x20)>='a' && (c|0x20)<='z') && i+1<s.len && s[i+1]==':') {
+            i++;
+            start = 0;
+            continue;
+        }
+        if (c == ':') s.data[i] = c = ';';
+        start = c == ';';
+    }
+}
+
 static void varchanged(Shell *sh, Str name)
 {
     if (name=="HISTSIZE" || name=="HISTCONTROL" || name=="histchars" ||
@@ -235,6 +256,7 @@ static void varchanged(Shell *sh, Str name)
         sh->hostsread = 0;
     } else if (name == "PATH") {
         sh->cmdhash = 0;  // bash forgets remembered paths
+        if (sh->pathmode == PM_NATIVE) nativepath(sh);
     } else if (name == "OPTIND") {
         // Assigning or unsetting OPTIND restarts getopts at a word start
         if (!sh->ingetopts) sh->optchar = 1;
@@ -1559,7 +1581,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                 } else if (c == 's') {
                     sh->sflag = 1;
                 } else if (c == 'i') {
-                    sh->interactive = 1;
+                    sh->interactive = on;  // the last of -i and +i
                 } else if (c == 'o') {
                     Str *name = next<info->nargs ? &info->args[next++] : 0;
                     startoption(sh, scratch, c, on, name);

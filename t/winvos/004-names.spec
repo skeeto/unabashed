@@ -9,7 +9,7 @@ char
 con
 devnull
 Foo.TXT
-C:/work/dir
+C:/work/Dir
 Dir Foo.TXT
 Foo.TXT
 
@@ -26,7 +26,7 @@ char
 con
 devnull
 Foo.TXT
-C:/work/dir
+C:/work/Dir
 Dir Foo.TXT
 Foo.TXT
 

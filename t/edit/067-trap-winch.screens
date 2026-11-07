@@ -1,0 +1,40 @@
+== snap 1
+$ echo abcwinch 30
+
+@ 1,0
+== snap 2
+$ echo abcwinch 30
+
+abc
+$
+@ 3,2
+== snap 3
+$ echo abcwinch 30
+
+abc
+$ : $( (sleep 0.5; kill -USR1
+$$) >/dev/null & )
+$ echo def
+@ 5,10
+== snap 4
+$ echo abcwinch 30
+
+abc
+$ : $( (sleep 0.5; kill -USR1
+$$) >/dev/null & )
+$ echo def
+usr1
+def
+$
+@ 8,2
+== snap 5
+$ echo abcwinch 30
+
+abc
+$ : $( (sleep 0.5; kill -USR1
+$$) >/dev/null & )
+$ echo def
+usr1
+def
+$
+@ 8,2

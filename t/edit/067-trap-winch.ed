@@ -1,0 +1,18 @@
+# A WINCH trap runs as the editor takes the new size, its output where
+# the cursor is and the line not drawn again; other traps wait for the
+# line, running before its command
+size 10 40
+rc PS1='$ '
+rc trap 'echo winch $COLUMNS' WINCH; trap 'echo usr1' USR1
+keys echo abc
+resize 10 30
+snap
+keys \r
+snap
+keys : $( (sleep 0.5; kill -USR1 $$) >/dev/null & )\r
+pause 100
+keys echo def
+pause 1500
+snap
+keys \r
+snap

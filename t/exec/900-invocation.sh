@@ -51,3 +51,7 @@ bash --pretty-print -c 'echo runs'
 
 # BASH_ARGV0 from the environment is $0
 BASH_ARGV0=zz bash -c 'echo $0 $BASH_ARGV0'
+
+# The last of -i and +i wins
+bash +i -c 'echo "+i $-"'
+bash -i +i -c 'echo "-i +i $-"'

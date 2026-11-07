@@ -4390,6 +4390,9 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             if (sh->jobs && !outer) notifyjobs(sh, *L->a);
             if (fill && sh->interactive) showps0(sh);
             if (reader) sh->cmdnumber++;
+            // Traps for signals that came while the line was read, as
+            // before every command in bash
+            if (fill && sh->interactive) checksigs(sh, *L->a);
             runcommand(sh, r.cmd, *L->a, reader);
         }
         // Syncing options the command may have changed

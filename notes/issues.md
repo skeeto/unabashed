@@ -67,7 +67,7 @@ the Git Bash corpus reaches; M7 is where fidelity is finished):
   of an `eval` string inside an unfinished command counts one line
   fewer than bash in the end-of-file error (exportfunc); `--debugger`
   looks only for `/usr/local/share/bashdb/bashdb-main.inc`, bash's
-  default prefix; `-i` sets interactive even as `+i`.
+  default prefix.
 - **MSYS2 programs get no `/dev/fd/N` bridge** (step 8): they are
   passed `/dev/fd/N` unchanged, which they cannot open, so `cat <(x)`
   with Git's cat fails. They take `\\.\pipe\NAME` (not
@@ -110,9 +110,6 @@ the Git Bash corpus reaches; M7 is where fidelity is finished):
   last (no cmdline, cwd, environ, exe, maps, stat, status, winpid...),
   and /proc/self/fd lists nothing. `/dev/zero`, `/dev/random` and the
   other sinks only accept writes; reads fail. (m5a.md, steps 5, 10a)
-- **Native mode skips two busybox-w32 fix-ups**: assigning PATH does
-  not turn `:` into `;`, and cd does not fix a path's case to what is
-  on disk (PWD keeps the case typed). (m5a.md, step 5)
 - **Identity is not re-rendered by msyspath**: toggling it re-renders
   PATH and PWD only; BASH, OSTYPE, MACHTYPE and HOME keep the startup
   persona's forms. pwd's usage text in the Windows modes still says
@@ -142,9 +139,6 @@ Moved from M6 (m6.md, step 10):
   readline's, which the editor's screen-not-bytes redisplay does not
   give; it belongs with invocation. run-history's history4 and
   history7 wait on it.
-- A WINCH trap: the editor only catches SIGWINCH itself (POSIX) when
-  its disposition is the default, and its trap action runs later than
-  bash's (with the trap fidelity work).
 
 
 ## M8 (performance)
@@ -549,3 +543,12 @@ Moved from M5a: limits of the test tiers, not of the shell.
   owner, which matters only to root sharing a history file (sudo). And
   on Windows a symbolic link is written through in place: the Win32
   layer reads no reparse points.
+- **Accepted: traps for TERM, HUP, QUIT, ALRM and the stop signals
+  while a line is edited** (M7 step 9): readline catches these itself
+  and hands them to bash at once, which runs the trap mid-line (and, as
+  probed, exits on TERM even with a trap); ours keeps them for the line
+  to be done, as every other trap. WINCH and INT are bash's.
+- **Accepted: native cd and a UNC path's case** (M7 step 9): busybox-w32
+  gives a share's name its listed case and carries a server's case over
+  from the last directory; ours keeps both as typed (shares are not
+  listed).

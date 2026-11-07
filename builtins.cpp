@@ -1832,14 +1832,15 @@ static void setpathmode(Shell *sh, Arena scratch, PathMode mode)
     if (!sh->win32 || mode==sh->pathmode) return;
     PathCtx c    = pathctx(sh, &scratch, {});
     Got     path = getvar(sh, &scratch, "PATH");
+    Str     ncwd = spawncwd(sh, &scratch);
+    // The new mode first: native PATH assignment rewrites colons
+    sh->pathmode = mode;
     if (path.set) {
         Str p = mode==PM_MSYS ? toposixlist(&c, &scratch, path.value)
                               : towinlist(&c, &scratch, path.value, 0);
         setvar(sh, scratch, "PATH", p.data ? p : Str(""), SV_FORCE);
     }
-    Str ncwd = spawncwd(sh, &scratch);
-    Str wd   = mode==PM_MSYS ? toposix(&c, &scratch, ncwd) : ncwd;
-    sh->pathmode = mode;
+    Str wd = mode==PM_MSYS ? toposix(&c, &scratch, ncwd) : ncwd;
     sh->cwd = sclone(sh->store, ncwd);
     sh->wd  = sclone(sh->store, wd);
     setvar(sh, scratch, "PWD", wd, SV_FORCE);
@@ -2153,6 +2154,45 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
 // cd's change to dir, with CDPATH when usecdpath: -1 if dir is no
 // directory (*err), else 0, or 1 if setting the variables failed.
 // printdir prints the new directory, as a CDPATH match does too.
+// A native path in the case its directories hold, as busybox-w32's cd
+// takes it: the drive letter upper case, each later component as
+// listed (a share's server and name kept as typed).
+static Str diskcase(Shell *sh, Arena *a, Str path)
+{
+    Str out = clone(a, path);
+    iz  i   = 0;
+    if (out.len>=2 && out[1]==':') {
+        if (out[0]>='a' && out[0]<='z') out.data[0] = (u8)(out[0] - 0x20);
+        i = 2;
+    } else if (startswith(out, "//")) {
+        for (i32 k = 0; k < 2; k++) {
+            for (; i<out.len && out[i]=='/'; i++) {}
+            for (; i<out.len && out[i]!='/'; i++) {}
+        }
+    }
+    while (i < out.len) {
+        for (; i<out.len && out[i]=='/'; i++) {}
+        iz e = i;
+        for (; e<out.len && out[e]!='/'; e++) {}
+        if (e == i) break;
+        Str comp = span(out.data+i, out.data+e);
+        Str dir  = takehead(out, i);
+        if (comp!="." && comp!="..") {
+            Arena   t    = *a;
+            i32     derr = 0;
+            Dirent *list = pathlist(sh, &t, dir, &derr);
+            for (Dirent *d = list; d; d = d->next) {
+                if (d->name.len==comp.len && equalfold(d->name, comp)) {
+                    copybytes(comp.data, d->name.data, comp.len);
+                    break;
+                }
+            }
+        }
+        i = e;
+    }
+    return out;
+}
+
 static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
                  b32 usecdpath, b32 printdir, i32 *err)
 {
@@ -2195,7 +2235,9 @@ static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
         *err = st.err ? st.err : E_NOTDIR;
         return -1;
     }
-    b32 ok = setcwd(sh, scratch, physical ? cdcanon(sh, &scratch, target) : logical, old);
+    Str dest = physical ? cdcanon(sh, &scratch, target) : logical;
+    if (native) dest = diskcase(sh, &scratch, dest);
+    b32 ok = setcwd(sh, scratch, dest, old);
     if (printdir) {
         bprint(sh, sh->wd);
         bprint(sh, "\n");

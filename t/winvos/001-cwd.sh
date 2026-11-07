@@ -2,7 +2,8 @@
 # Hand-checked baseline, not recorded from an oracle (M5a steps 4, 5).
 # The working directory and cd with drive paths in every spelling. In
 # native mode (busybox-w32's rules) PWD is the canonical native path,
-# /c/Windows is C:/c/Windows on the current drive, and case is kept.
+# /c/Windows is C:/c/Windows on the current drive, and each directory
+# takes its case from the disk (M7 step 9).
 pwd
 echo "$PWD"
 cd /c/Windows && pwd

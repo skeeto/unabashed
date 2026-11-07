@@ -1020,6 +1020,18 @@ static void edresize(Editor *ed, Shell *sh)
     edrefresh(ed, sh);
 }
 
+// A WINCH trap runs as soon as the size is taken, as readline calls the
+// shell's handler from its own: its output lands at the cursor, and the
+// line is not drawn again. Other traps wait for the line to be done.
+static void edwinch(Editor *ed, Shell *sh)
+{
+    u64 bit = sigbit(28);
+    if (!(sh->sig->pending & bit) || !trapset(sh, 28)) return;
+    sh->sig->pending &= ~bit;
+    edflush(ed, sh);
+    runtrap(sh, 28);
+}
+
 
 // Editing functions
 
@@ -2869,6 +2881,7 @@ static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
         self->introk   = self->anysig = sh->intredit = 0;
         if (n != -4) break;
         edresize(ed, sh);
+        edwinch(ed, sh);
     }
     self->deadline = 0;
     if (self->timedout) {
