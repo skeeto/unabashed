@@ -61,7 +61,9 @@ struct Code {
     b32   dead;      // replaced or unset in its own store's table
     iz    size;      // of the block, for sfree
     Node *body;
-    Str   file;      // where it was defined, for BASH_SOURCE
+    Str   file;      // where it was defined, for messages
+    Str   src;       // the same as BASH_SOURCE names it, empty for $0
+    i32   line;      // where the definition starts, for declare -F
 };
 
 struct Func {
@@ -832,7 +834,8 @@ static Array *dynarray(Shell *sh, Arena *a, Value *v)
     // FUNCNAME exists only inside functions, then with the sourced
     // files among them ("source")
     nsrc = n || d!=DYN_FUNCNAME ? nsrc : 0;
-    b32 main = !sh->cflag && !sh->interactive && (n || d!=DYN_FUNCNAME);
+    b32 script = !sh->cflag && !sh->sflag && !sh->interactive;
+    b32 main   = script && (n || d!=DYN_FUNCNAME);
     Array *r = alloc<Array>(a);
     r->cap = n + nsrc + main;
     r->e   = alloc<Elem>(a, r->cap);
@@ -849,7 +852,7 @@ static Array *dynarray(Shell *sh, Arena *a, Value *v)
         } else {
             r->e[r->len].val = d==DYN_FUNCNAME   ? f->name
                              : d==DYN_BASH_LINENO ? fmti64(a, f->line)
-                             : f->file.len        ? f->file
+                             : f->src.len         ? f->src
                              :                      sh->name;
             f = f->up;
         }
@@ -1357,7 +1360,13 @@ static Code *newcode(Shell *sh, Arena scratch, Node *body)
     // alloc refuses the final object of a full arena, so leave room for
     // one more of the largest type
     iz size = scratch.beg - start + (iz)sizeof(Node) + (iz)sizeof(Redir);
-    size += sh->srcname.len;
+    // As bash 5.3 names its origin: a sourced file, "environment" for
+    // an import, "main" when interactive, else $0 (empty)
+    Str src = sh->srcname.len ? sh->srcname
+            : sh->defsrc.len  ? sh->defsrc
+            : sh->interactive ? Str("main")
+            :                   Str{};
+    size += sh->srcname.len + src.len;
 
     Arena block = {};
     block.beg = salloc(sh->store, size);
@@ -1367,6 +1376,8 @@ static Code *newcode(Shell *sh, Arena scratch, Node *body)
     c->size  = size;
     c->body = copynode(&block, body);
     c->file = clone(&block, sh->srcname);
+    c->src  = clone(&block, src);
+    c->line = sh->defsrc.len ? 0 : body->line;  // imports: 0, as bash
     return c;
 }
 

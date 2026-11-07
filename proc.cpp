@@ -116,6 +116,8 @@ static Code *copycode(Store *st, Code *c)
     r->size  = c->size;
     r->body  = copynode(&block, c->body);
     r->file  = clone(&block, c->file);
+    r->src   = clone(&block, c->src);
+    r->line  = c->line;
     return r;
 }
 
@@ -212,6 +214,7 @@ static Frame *copyframes(Shell *c, Arena *a, Frame *f, b32 image)
         r->up   = 0;
         r->name = clone(a, f->name);
         r->file = clone(a, f->file);
+        r->src  = clone(a, f->src);
         r->args = copyargs(a, f->args);
         if (f->caplocals) {
             r->locals = (Var **)salloc(st, f->caplocals*(iz)sizeof(Var *));

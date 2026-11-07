@@ -281,7 +281,9 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
         g->redirs = n->redirs;
         body = g;
     }
+    sh->defsrc = "environment";
     definefunc(sh, scratch, name, body);
+    sh->defsrc = {};
     Func *f = findfunc(sh, name);
     if (f) f->attrs |= V_EXPORT;
 }

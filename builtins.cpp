@@ -840,6 +840,13 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             }
             if (funcnames) {
                 bprint(sh, args[i]);
+                if (sh->shopt[S_EXTDEBUG]) {
+                    // where it was defined, as bash's extdebug shows it
+                    bprint(sh, " ");
+                    bprint(sh, fmti64(&scratch, f->code->line));
+                    bprint(sh, " ");
+                    bprint(sh, f->code->src.len ? f->code->src : sh->name);
+                }
                 bprint(sh, "\n");
             } else if (!print && ((on|off) & fattrs)) {
                 uz attrs = (f->attrs | (on & fattrs)) & ~(uz)(off & fattrs);

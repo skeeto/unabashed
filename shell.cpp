@@ -286,7 +286,8 @@ struct Frame {       // a function call
     Str    name;
     Node  *def;      // the function, for FUNCNAME and LINENO
     i32    line;     // where it was called
-    Str    file;     // where the function was defined, for BASH_SOURCE
+    Str    file;     // where the function was defined, for messages
+    Str    src;      // the same for BASH_SOURCE (Code.src)
     Args   args;     // its arguments, for BASH_ARGV and BASH_ARGC
     b32    argpushed;  // there (extdebug was on at the call)
     Var  **locals;   // variables localized at this level
@@ -484,6 +485,7 @@ struct Shell {
     Str      shellname;    // argv[0], for \s in prompts
     Str      iname;        // input name in syntax errors: -c or a file
     Str      srcname;      // BASH_SOURCE[0]: file of the running code
+    Str      defsrc;       // a function's origin while importing one
 
     // Execution state
     Frame   *frame;

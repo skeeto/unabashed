@@ -2172,6 +2172,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     f.name = argv[0];
     f.line = sh->line;
     f.file = fn->code->file;
+    f.src  = fn->code->src;
     f.args.v    = argv + 1;
     f.args.n    = argc - 1;
     f.argpushed = sh->shopt[S_EXTDEBUG];
@@ -2261,6 +2262,7 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
         f.def  = sh->frame->def;
         f.line = sh->frame->line;
         f.file = sh->frame->file;
+        f.src  = sh->frame->src;
     }
     f.up = sh->frame;
     sh->frame = &f;
