@@ -1,8 +1,9 @@
 #!/bin/sh
 # Usage: bench/run SHELL... : time each benchmark under each shell,
-# after checking that every shell prints the same output.
+# after checking that every shell prints the same output. BENCH picks
+# the benchmarks (default: all of b1 to b13).
 cd "$(dirname "$0")"
-for b in b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13; do
+for b in ${BENCH:-b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13}; do
     ref=
     for sh in "$@"; do
         out=$("$sh" $b.sh 2>&1 | cksum)
@@ -11,6 +12,7 @@ for b in b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13; do
         start=$(date +%s.%N)
         "$sh" $b.sh >/dev/null 2>&1
         end=$(date +%s.%N)
-        printf '%-4s %-28s %6.2fs\n' $b "$sh" "$(echo "$end - $start" | bc)"
+        awk -v b=$b -v s="$sh" -v t0=$start -v t1=$end \
+            'BEGIN { printf "%-4s %-28s %6.2fs\n", b, s, t1 - t0 }'
     done
 done
