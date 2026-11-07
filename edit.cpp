@@ -2950,13 +2950,14 @@ static EdSeq edreadseq(Editor *ed, Shell *sh)
             return r;
         }
         KeyNode *k = keychild(n, (u8)next);
-        if (!k && n->fn) {
+        if (!k && n->fn && n->fn!=EF_DO_LOWERCASE_VERSION) {
             // The prefix's own binding, shadowed by longer ones, and
             // the key runs after it
             edpush(ed, next);
             break;
         } else if (!k) {
-            // An unbound sequence: the bell, the rest dropped
+            // An unbound sequence: the bell, the rest dropped (also
+            // under M-O, the arrow keys' prefix, as readline)
             n = 0;
             break;
         }

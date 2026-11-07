@@ -1,0 +1,30 @@
+== snap 1
+$ abcd
+@ 0,6 bell 1
+== snap 2
+$ ab~cd
+@ 0,7 bell 2
+== snap 3
+$ ab9zcd
+@ 0,8 bell 3
+== snap 4
+$ abcd
+@ 0,6 bell 4
+== snap 5
+$ abcd
+@ 0,6 bell 5
+== snap 6
+$ abcd
+@ 0,6 bell 6
+== snap 7
+$ abcd
+@ 0,6 bell 7
+== snap 8
+$ abxycd
+@ 0,8 bell 7
+== snap 9
+$ abcd
+@ 0,6 bell 8
+== snap 10
+$ abcd
+@ 0,6 bell 8

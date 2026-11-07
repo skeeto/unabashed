@@ -38,8 +38,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
   is not restored after a rename, as readline does as root. (M7)
 - `bash -i` whose input is not a terminal still reads with readline
   and echoes each line it reads; ours reads plainly. (step 2)
-- Unbound key sequences: readline's handling (bell, which bytes are
-  dropped or inserted) not yet checked against recordings. (step 2)
 - Invalid UTF-8 in the line is drawn as U+FFFD, a column per byte,
   which is what a terminal shows for the raw bytes readline writes;
   a byte that breaks a sequence in self-insert becomes a key of its

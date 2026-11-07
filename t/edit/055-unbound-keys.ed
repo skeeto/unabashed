@@ -1,0 +1,30 @@
+# Unbound key sequences: a prefix followed by a key bound under it to
+# nothing rings the bell, and what is dropped or inserted
+size 10 40
+rc PS1='$ '
+keys ab\C-xqcd
+snap
+keys \C-a\C-k
+keys ab\e[15~cd
+snap
+keys \C-a\C-k
+keys ab\e[99zcd
+snap
+keys \C-a\C-k
+keys ab\e[1;5Xcd
+snap
+keys \C-a\C-k
+keys ab\eOZcd
+snap
+keys \C-a\C-k
+keys ab\C-x\C-tcd
+snap
+keys \C-a\C-k
+keys ab\eOxcd
+snap
+keys \C-a\C-k
+keys ab\e[200~xy\e[201~cd
+snap
+keys \C-a\C-k
+keys ab\C-x\ecd
+snap
