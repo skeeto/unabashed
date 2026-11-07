@@ -47,102 +47,19 @@ Closed: every item was fixed or moved (m6.md, step 10).
 - **XP: t/win32/014-spawn failed once in 13 runs** (M5b step 10, with
   UNABASHED_XPIO=1); the diff was lost and twelve reruns passed. Look
   for it with the other XP flakes, which may share a cause.
-Moved from M5a (fidelity gaps that neither the w64devkit trial nor
-the Git Bash corpus reaches; M7 is where fidelity is finished):
-
-- **Time zone gaps** (step 9): no Windows-to-IANA mapping (Cygwin's
-  tzmap, for an MSYS2 install that has zoneinfo); glibc's cache of an
-  unchanged TZ value and bash's stale export environment right after
-  `export TZ=x` are not emulated (the recordings avoid both); native
-  mode's `%Z` for a TZ busybox-w32/msvcrt would read differently (a
-  zone name, a long Windows name) is unverified. (m5a.md, step 9)
-- **Startup gaps** (step 9): a syntax error in a native-mode profile is
-  not fatal and is reported bash's way (busybox exits 2); native mode
-  accepts `--noprofile`/`--norc` and has `logout` (busybox has
-  neither); bash's bashrc for ssh/rshd-started shells
-  (SSH_CLIENT) is not done; the `-i` job-control complaints test
-  stdin and stderr for a terminal, not a controlling terminal.
-  (m5a.md, step 9)
-- **Invocation leftovers** (step 9): a trailing backslash at the end
-  of an `eval` string inside an unfinished command counts one line
-  fewer than bash in the end-of-file error (exportfunc); `--debugger`
-  looks only for `/usr/local/share/bashdb/bashdb-main.inc`, bash's
-  default prefix.
-- **MSYS2 programs get no `/dev/fd/N` bridge** (step 8): they are
-  passed `/dev/fd/N` unchanged, which they cannot open, so `cat <(x)`
-  with Git's cat fails. They take `\\.\pipe\NAME` (not
-  `//./pipe/NAME`), but open it three times (look, use, look again),
-  read an unbuffered instance as empty, fail to open one for writing
-  (`tee >(x)`: EINVAL), take it for a file head seeks back in, and with
-  buffered instances diff and an empty procsub hung at times. Nor do
-  they get descriptors above 2: a Cygwin child ignores an MSVCRT
-  lpReserved2 blob (checked: busybox to Git's bash, fd 4 is "Bad file
-  descriptor"); Git Bash passes them in the cygheap. (m5a.md, step 8)
-- **Bridge gaps** (step 8): busybox diff reads a bridged pipe as empty
-  (it copies a pipe to a temporary file; the unbuffered instance
-  apparently looks empty to it), recorded as such in t/win32/015; a
-  program reading one path twice gets the stream split; a program
-  that keeps a looking handle open while another waits on data
-  stalls; direct pipeline stages (spawnto) get no bridge; at most 16
-  bridges per command; a grandchild still using a reading bridge's
-  path when its program exits is cut off. (m5a.md, step 8)
-- **splitcygwin gaps** (the msys re-split): it assumes Cygwin's
-  globbing is on (with `MSYS`/`CYGWIN=noglob` Cygwin keeps the quotes);
-  the program name, a non-ASCII byte before `:` as a drive word, and
-  tilde with an existing HOME were not recorded. msysargv's message and
-  status on the 11th response file are unverified. (m5a.md, steps 2, 5)
-- **Spawning gaps** (m5a.md, step 7): the missing-DLL search ignores
-  KnownDLLs, side-by-side manifests and the loader's other rules; the
-  same Cygwin message is printed in native mode (busybox-w32 would print
-  "Error 0xc0000135" style text, unverified); ELOOP's text for a fifth
-  nested `#!` is Linux's, unverified against busybox-w32; Git Bash's
-  E2BIG limits for MSYS2 children (the cygheap, not the command line)
-  are not modelled. Exec's XP/7 job path (breakaway) passes on
-  the XP laptop (t/win32/014 with sandbox -B, and outside the sandbox);
-  Windows 7 is untested.
-- **/proc has names but little content** (step 10a): /proc lists
-  Cygwin's fixed entries and the shell's own pids (Git Bash: every
-  process of its install, by Cygwin pid), and stat knows their types,
-  but no fixed file can be read (EACCES; cpuinfo, meminfo, mounts,
-  stat, uptime, version... have contents in Git Bash) and the
-  directories net, registry*, sys, sysvipc list nothing; /proc/self
-  lists only exename, fd and winexename and serves only the first and
-  last (no cmdline, cwd, environ, exe, maps, stat, status, winpid...),
-  and /proc/self/fd lists nothing. `/dev/zero`, `/dev/random` and the
-  other sinks only accept writes; reads fail. (m5a.md, steps 5, 10a)
-- **Identity is not re-rendered by msyspath**: toggling it re-renders
-  PATH and PWD only; BASH, OSTYPE, MACHTYPE and HOME keep the startup
-  persona's forms. pwd's usage text in the Windows modes still says
-  `[-LP]` (Git Bash's is unverified). (m5a.md, step 5)
-- **cygpath gaps** (m5a.md, step 6): -W and -S come from SYSTEMROOT
-  (or WINDIR), not GetWindowsDirectory, so their case is the
-  variable's (Cygwin prints `C:\WINDOWS\system32` with -w and the
-  on-disk case with -u; t/msys/063 folds case); -l and -s are no-ops
-  (no 8.3 names); -a is ignored with -p; -d, -t, -r, -U, -C, -D, -H,
-  -O, -P, -F and -A are unknown options; the messages and usage text
-  are ours. An empty name stops the run (recorded for the last name
-  and for -f only).
-- **`/dev/consN`, `/dev/ptyN`, `/dev/ttySN`** are untested against Git
-  Bash.
-- **An inherited backslashed PWD**: when PWD names the current
-  directory as `C:\x\y`, Git Bash keeps it and pwd prints `C:\x/y`
-  (only the first separator stays a backslash); ours prints `C:/x/y`.
-  Seen while checking Claude Code (m5a.md, exit criteria).
-
-
-Moved from M6 (m6.md, step 10):
-
-- `bash -i` whose input is not a terminal still reads with readline:
-  it interprets the editing keys (C-b, C-r, arrows) and writes
-  readline's redisplay to stderr, terminal escapes and all (TERM=dumb:
-  backspaces), each line echoed. Ours reads plainly. The bytes are
-  readline's, which the editor's screen-not-bytes redisplay does not
-  give; it belongs with invocation. run-history's history4 and
-  history7 wait on it.
 
 
 ## M8 (performance)
 
+- **`bash -i` whose input is not a terminal still reads with readline**:
+  it interprets the editing keys (C-b, C-r, arrows) and writes
+  readline's redisplay to stderr, terminal escapes and all (TERM=dumb:
+  backspaces), each line echoed. Ours reads plainly. The bytes are
+  readline's, which the editor's screen-not-bytes redisplay does not
+  give. run-history's history4 and
+  history7 wait on it.
+  Moved from M7 (step 9): it needs readline's own redisplay bytes, an
+  editor-2 piece beside vi mode and bind.
 - regex.cpp's back-reference span records (`RxEntry`, kept once each
   per start) are not bounded by the memo's 256 MiB: with two groups a
   search records a span for most pairs of position and length, which
@@ -232,6 +149,33 @@ Moved from M6 (m6.md, step 10), with bind and the rest of editor 2:
   inserted and shown as \NNN, yet \xe6 ran M-f, which readline's C
   defaults (convert-meta on) do not explain together; the .ed env
   lines may leave LANG set twice (with input-meta and friends).
+
+
+## M9 (w64devkit)
+
+Moved from M7 (step 9): pipes for programs outside the shell, which
+the release (busybox diff in w64devkit, Git's MSYS2 programs beside
+it) is where they meet real use; each needs Cygwin's or a
+program's pipe handling studied, not shell fidelity.
+
+- **MSYS2 programs get no `/dev/fd/N` bridge** (step 8): they are
+  passed `/dev/fd/N` unchanged, which they cannot open, so `cat <(x)`
+  with Git's cat fails. They take `\\.\pipe\NAME` (not
+  `//./pipe/NAME`), but open it three times (look, use, look again),
+  read an unbuffered instance as empty, fail to open one for writing
+  (`tee >(x)`: EINVAL), take it for a file head seeks back in, and with
+  buffered instances diff and an empty procsub hung at times. Nor do
+  they get descriptors above 2: a Cygwin child ignores an MSVCRT
+  lpReserved2 blob (checked: busybox to Git's bash, fd 4 is "Bad file
+  descriptor"); Git Bash passes them in the cygheap. (m5a.md, step 8)
+- **Bridge gaps** (step 8): busybox diff reads a bridged pipe as empty
+  (it copies a pipe to a temporary file; the unbuffered instance
+  apparently looks empty to it), recorded as such in t/win32/015; a
+  program reading one path twice gets the stream split; a program
+  that keeps a looking handle open while another waits on data
+  stalls; direct pipeline stages (spawnto) get no bridge; at most 16
+  bridges per command; a grandchild still using a reading bridge's
+  path when its program exits is cut off. (m5a.md, step 8)
 
 
 ## Test infrastructure
@@ -552,3 +496,78 @@ Moved from M5a: limits of the test tiers, not of the shell.
   gives a share's name its listed case and carries a server's case over
   from the last directory; ours keeps both as typed (shares are not
   listed).
+- **Accepted: time zone gaps** (M7 step 9, from M5a): no Windows-to-IANA
+  mapping (Cygwin's tzmap, for an MSYS2 install that has zoneinfo);
+  glibc's cache of an unchanged TZ value and bash's stale export
+  environment right after `export TZ=x` are not emulated (the recordings
+  avoid both); native mode's `%Z` for a TZ busybox-w32/msvcrt would read
+  differently (a zone name, a long Windows name) is unverified. (m5a.md,
+  step 9) No Windows install the persona targets ships zoneinfo; the
+  glibc and export-timing quirks are artifacts the recordings avoid.
+- **Accepted: startup gaps** (M7 step 9, from M5a): a syntax error in a
+  native-mode profile is not fatal and is reported bash's way (busybox
+  exits 2); native mode accepts `--noprofile`/`--norc` and has `logout`
+  (busybox has neither); the `-i` job-control complaints test stdin and
+  stderr for a terminal, not a controlling terminal. (m5a.md, step 9)
+  The native persona keeps bash's messages and options by design (plan:
+  bash POSIX-mode semantics); bash's ssh bashrc is off in upstream's
+  config-top.h (SSH_SOURCE_BASHRC), as ours; the job-control complaint
+  differs only for a terminal that is not controlling.
+- **Accepted: `--debugger` and bashdb** (M7 step 9, from M5a):
+  `--debugger` looks only for `/usr/local/share/bashdb/bashdb-main.inc`,
+  bash's default prefix. bashdb is not shipped for Windows; the prefix
+  is upstream's default. (The eval line count is accepted above.)
+- **Accepted: splitcygwin gaps** (M7 step 9, from M5a): it assumes
+  Cygwin's globbing is on (with `MSYS`/`CYGWIN=noglob` Cygwin keeps the
+  quotes); the program name, a non-ASCII byte before `:` as a drive
+  word, and tilde with an existing HOME were not recorded. msysargv's
+  message and status on the 11th response file are unverified. (m5a.md,
+  steps 2, 5) Each needs a Cygwin setting or input no caller of the
+  shell gives (noglob, a non-ASCII drive word, an 11th response file).
+- **Accepted: spawning gaps** (M7 step 9, from M5a): the missing-DLL
+  search ignores KnownDLLs, side-by-side manifests and the loader's
+  other rules; the same Cygwin message is printed in native mode
+  (busybox-w32 would print "Error 0xc0000135" style text, unverified);
+  ELOOP's text for a fifth nested `#!` is Linux's, unverified against
+  busybox-w32; Git Bash's E2BIG limits for MSYS2 children (the cygheap,
+  not the command line) are not modelled. Exec's XP/7 job path
+  (breakaway) passes on the XP laptop (t/win32/014 with sandbox -B, and
+  outside the sandbox); Windows 7 is untested. The loader's full search,
+  busybox's error spelling and the cygheap's limits only change the text
+  of a failure that already fails.
+- **Accepted: /proc has names but little content** (M7 step 9, from
+  M5a): /proc lists Cygwin's fixed entries and the shell's own pids (Git
+  Bash: every process of its install, by Cygwin pid), and stat knows
+  their types, but no fixed file can be read (EACCES; cpuinfo, meminfo,
+  mounts, stat, uptime, version... have contents in Git Bash) and the
+  directories net, registry*, sys, sysvipc list nothing; /proc/self
+  lists only exename, fd and winexename and serves only the first and
+  last (no cmdline, cwd, environ, exe, maps, stat, status, winpid...),
+  and /proc/self/fd lists nothing. `/dev/zero`, `/dev/random` and the
+  other sinks only accept writes; reads fail. (m5a.md, steps 5, 10a)
+  Scripts on Windows do not read /proc (nproc and uname answer the usual
+  questions); the names keep `test -e` and globbing right.
+- **Accepted: identity is not re-rendered by msyspath** (M7 step 9, from
+  M5a): toggling it re-renders PATH and PWD only; BASH, OSTYPE, MACHTYPE
+  and HOME keep the startup persona's forms. pwd's usage text in the
+  Windows modes still says `[-LP]` (Git Bash's is unverified). (m5a.md,
+  step 5) The shopt is hidden and for testing; the startup persona
+  decides identity, as Git Bash and busybox-w32 each have one.
+- **Accepted: cygpath gaps** (M7 step 9, from M5a): -W and -S come from
+  SYSTEMROOT (or WINDIR), not GetWindowsDirectory, so their case is the
+  variable's (Cygwin prints `C:\WINDOWS\system32` with -w and the
+  on-disk case with -u; t/msys/063 folds case); -l and -s are no-ops (no
+  8.3 names); -a is ignored with -p; -d, -t, -r, -U, -C, -D, -H, -O, -P,
+  -F and -A are unknown options; the messages and usage text are ours.
+  An empty name stops the run (recorded for the last name and for -f
+  only). The options used by scripts (-u -w -m -p -a -W -S) are there;
+  the rest are Cygwin's, rarely seen outside Cygwin itself.
+- **Accepted: `/dev/consN`, `/dev/ptyN`, `/dev/ttySN` untested** (M7
+  step 9, from M5a): never compared with Git Bash. Cygwin's console and
+  serial names; nothing in the persona's use reaches them.
+- **Accepted: Git Bash's backslashed PWD** (M7 step 9, from M5a): when
+  PWD names the current directory as `C:\x\y`, Git Bash keeps it and pwd
+  prints `C:\x/y` (only the first separator stays a backslash); ours
+  prints `C:/x/y`. Seen while checking Claude Code (m5a.md, exit
+  criteria). Cygwin's half-converted `C:\x/y` is an artifact; ours
+  prints the path one way.
