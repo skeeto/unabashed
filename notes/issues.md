@@ -47,18 +47,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
 - **XP: t/win32/014-spawn failed once in 13 runs** (M5b step 10, with
   UNABASHED_XPIO=1); the diff was lost and twelve reruns passed. Look
   for it with the other XP flakes, which may share a cause.
-- regex.cpp differs from glibc on back-reference patterns without
-  repetition where `rxlongest`'s first pass records close nodes reached
-  through back-references glibc finds no span for, which then hide the
-  span of a later back-reference: `[^a]($|)\1($)\2` on a space (glibc
-  (0,1)(1,1)(1,1), ours no match), and `($|)($)($|)\1\2$\`$($)` on an
-  empty subject (glibc matches, ours not). Both differ on master too;
-  2 in 400k generated cases. (m4.md)
-- regex.cpp's back-reference span records (`RxEntry`, kept once each
-  per start) are not bounded by the memo's 256 MiB: with two groups a
-  search records a span for most pairs of position and length, which
-  costs time (`(a*)(a*)\1\2x` on 600 a's: 10.6 s on master, 15.0 s)
-  and memory. (m4.md)
 - With extquote off, a here-document's `${x#${$'x1'}}` is a bad
   substitution with our usual message; bash reports "bad substitution:
   no closing `}' in" followed by the whole body. (m7.md, step 6)
@@ -189,6 +177,11 @@ Moved from M6 (m6.md, step 10):
 
 ## M8 (performance)
 
+- regex.cpp's back-reference span records (`RxEntry`, kept once each
+  per start) are not bounded by the memo's 256 MiB: with two groups a
+  search records a span for most pairs of position and length, which
+  costs time (`(a*)(a*)\1\2x` on 600 a's: 10.6 s on master, 15.0 s)
+  and memory. (m4.md)
 - **Shell-code stages cannot stop** (m7.md, step 7d): under set -m a
   pipeline stage that is shell code, a `( )` or a function runs in the
   shell's process, so ^Z stops only the programs; a pipeline whose last
@@ -358,6 +351,15 @@ Moved from M5a: limits of the test tiers, not of the shell.
 
 ## Accepted deviations
 
+- **Accepted: rare back-reference mismatches.** regex.cpp differs
+  from glibc on back-reference patterns without repetition where `rxlongest`'s first pass records close nodes reached
+  through back-references glibc finds no span for, which then hide the
+  span of a later back-reference: `[^a]($|)\1($)\2` on a space (glibc
+  (0,1)(1,1)(1,1), ours no match), and `($|)($)($|)\1\2$\`$($)` on an
+  empty subject (glibc matches, ours not). Both differ on master too;
+  2 in 400k generated cases, all contrived (back-references to groups
+  that matched empty beside anchors); a fix would rework rxlongest's
+  two passes. (m4.md, M7 step 9)
 - **Accepted: slow regexes, as glibc's.** Some patterns run for
   minutes or more here and in glibc alike: `(.{,2}\>a*{1,})*` on `a`
   (the walk, no back-references), compiling
