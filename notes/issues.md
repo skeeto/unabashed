@@ -31,14 +31,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
 
 ## M7 (job control and fidelity)
 
-- **Shell-code stages cannot stop** (m7.md, step 7d): under set -m a
-  pipeline stage that is shell code, a `( )` or a function runs in the
-  shell's process, so ^Z stops only the programs; a pipeline whose last
-  stage is shell code then waits for it rather than stopping. Bash forks
-  these. Fix: run such a foreground job in a forked image child that
-  leads the group (the step 7 design), keeping PIPESTATUS.
-- **jobs -l shows a stopped pipeline as one line**: bash lists each
-  process with its own pid and state. Job holds one waiter.
 - **XP, in the sandbox only: a killed background job's status is
   often 0**: `sleep 3 & kill $!; wait $!` (also `"$U" -c "sleep 3" &`)
   ends the job at once but `wait` gives 0 for most iterations after the
@@ -233,6 +225,17 @@ Moved from M6 (m6.md, step 10):
 
 ## M8 (performance)
 
+- **Shell-code stages cannot stop** (m7.md, step 7d): under set -m a
+  pipeline stage that is shell code, a `( )` or a function runs in the
+  shell's process, so ^Z stops only the programs; a pipeline whose last
+  stage is shell code then waits for it rather than stopping. Bash forks
+  these. Fix: run such a foreground job in a forked image child that
+  leads the group (the step 7 design), keeping PIPESTATUS.
+  Moved from M7 (step 9): a foreground job in an image child is the
+  same machinery as `&`'s but with the terminal handed over and
+  PIPESTATUS sent back, a large change to job control late in M7;
+  pipelines of programs alone already stop, and so do ^Z'd programs
+  run from shell code.
 - **Win32: fg's Ctrl-C ends only the job's own process**: a foreign
   program is ended with TerminateProcess, so what it started runs on
   (w64devkit's alias stubs leave busybox running), as `kill -INT` does
@@ -391,6 +394,11 @@ Moved from M5a: limits of the test tiers, not of the shell.
 
 ## Accepted deviations
 
+- **Accepted: jobs -l shows a pipeline as one line**, the job's pid
+  and state, where bash lists each process with its own pid (and the
+  pipeline's text split at each `|`): a background pipeline is one
+  process of ours (the image child), whose stages the parent never
+  sees, and $! is that process. (M7, step 9)
 - **Accepted: job states that race in bash**: the vos and our Windows
   layer see a signalled job's end at once, where bash shows what it
   has reaped so far: `kill %1; wait %1` just before `;` or the prompt
