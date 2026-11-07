@@ -339,14 +339,19 @@ static Slice<Str> compfiles(Editor *ed, Shell *sh, Comp *c, Str w, i32 keep)
     return m;
 }
 
-static Str compexe(Shell *sh, Str n)
+// completion_strip_exe, as Cygwin's bash: a command match's .exe goes,
+// unless a file of the name without it exists beside it. path is the
+// match as the file system knows it.
+static Str compexe(Shell *sh, Arena a, Str path, Str n)
 {
-    if (sh->shopt[S_COMPLETION_STRIP_EXE] && n.len>4) {
-        Str t = cuthead(n, n.len-4);
-        if (complower(t[1])=='e' && complower(t[2])=='x' && complower(t[3])=='e' && t[0]=='.') {
-            n.len -= 4;
-        }
+    if (!sh->shopt[S_COMPLETION_STRIP_EXE] || n.len<=4 || path.len<=4) return n;
+    Str t = cuthead(n, n.len-4);
+    if (t[0]!='.' || complower(t[1])!='e' || complower(t[2])!='x' || complower(t[3])!='e') {
+        return n;
     }
+    Str bare = takehead(path, path.len-4);
+    // The name exactly, without msys's implied .exe
+    if (os_stat(sh->os, a, absolute(sh, &a, bare), 0).err) n.len -= 4;
     return n;
 }
 
@@ -366,9 +371,16 @@ static Slice<Str> compcommands(Editor *ed, Shell *sh, Comp *c, Str w)
                 m[i] = concat(a, pre, cuthead(m[i], tpre.len));
             }
             c->udir = concat(a, pre, cuthead(c->udir, tpre.len));
+            for (iz i = 0; i < m.len; i++) {
+                m[i] = compexe(sh, *a, joinpath(a, c->odir, cuthead(m[i], c->udir.len)), m[i]);
+            }
             return m;
         }
-        return compfiles(ed, sh, c, w, 2);
+        Slice<Str> m = compfiles(ed, sh, c, w, 2);
+        for (iz i = 0; i < m.len; i++) {
+            m[i] = compexe(sh, *a, joinpath(a, c->odir, cuthead(m[i], c->udir.len)), m[i]);
+        }
+        return m;
     }
     c->files   = 1;
     c->cmdstat = 1;
@@ -409,7 +421,7 @@ static Slice<Str> compcommands(Editor *ed, Shell *sh, Comp *c, Str w)
             if (!compeq(ed, e->name, w, w.len)) continue;
             Stat st = pathstat(sh, *a, joinpath(a, dir, e->name), 1);
             if (st.err || st.type==FT_DIR || !canexec(sh, st)) continue;
-            m = compadd(c, m, compexe(sh, e->name));
+            m = compadd(c, m, compexe(sh, *a, joinpath(a, dir, e->name), e->name));
         }
     }
     return m;

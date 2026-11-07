@@ -80,8 +80,6 @@ Closed: every item was fixed or moved (m5b.md, step 10).
 
 Moved from M5a: needs the completion engine.
 
-- completion_strip_exe strips `.exe` from PATH command matches (checked
-  on a Windows console), but not from file name matches. (step 10)
 - User name completion (`~user`, M-~) finds nothing: no user database
   is read; bash reads the password file. Hosts are read from
   HOSTFILE or /etc/hosts without `$include`. (step 10)
