@@ -39,13 +39,6 @@ Closed: every item was fixed or moved (m6.md, step 10).
   leads the group (the step 7 design), keeping PIPESTATUS.
 - **jobs -l shows a stopped pipeline as one line**: bash lists each
   process with its own pid and state. Job holds one waiter.
-- **A job killed by TERM after a stop**: bash shows its mark as "+" or
-  " " depending on timing; ours always "+" (905 hides the mark).
-- **wait -f on a job killed while stopped**: bash returns 147 (the
-  stop's status) after `kill -STOP` then `kill -9`; ours 137.
-- **A job killed just before `;` or the prompt**: the vos sees its end
-  at once, so `kill %1; wait %1` finds no job (127) where bash, which
-  has usually not reaped it yet, gives 143. Timing only.
 - **XP, in the sandbox only: a killed background job's status is
   often 0**: `sleep 3 & kill $!; wait $!` (also `"$U" -c "sleep 3" &`)
   ends the job at once but `wait` gives 0 for most iterations after the
@@ -398,6 +391,14 @@ Moved from M5a: limits of the test tiers, not of the shell.
 
 ## Accepted deviations
 
+- **Accepted: job states that race in bash**: the vos and our Windows
+  layer see a signalled job's end at once, where bash shows what it
+  has reaped so far: `kill %1; wait %1` just before `;` or the prompt
+  finds no job (127) where bash usually gives 143; a job killed by TERM
+  after a stop gets the mark "+" where bash shows "+" or " "; after
+  `kill -STOP` and `kill -9`, `wait` gives 137 where bash sometimes
+  gives the stop's 147 (`wait -f` gives 137 in both). (M7, step 9;
+  905 hides the mark.)
 - **Accepted: Win32 console Ctrl-C limits**: a Ctrl-C from
   GenerateConsoleCtrlEvent does not end a console read in progress (a
   typed one does); Ctrl-C during CreateProcess counts against the
