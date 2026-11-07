@@ -914,7 +914,7 @@ static b32 fillline(void *ctx, Lexer *L)
     iz     start = b->len;
     b32 seekable = f && f->kind==F_OS && os_seek(sh->os, f->h, 0, 1)>=0;
     if (sh->interactive && L->newunit) {
-        if (sh->jobs) notifyprompt(sh, *scratchat(sh, sh->capdepth+1));
+        if (sh->jobs) notifyprompt(sh, *scratchat(sh, sh->capdepth+1), 0);
         promptcommand(sh);
     }
     if (sh->interactive && (sh->opt[O_EMACS] || sh->opt[O_VI])) {
@@ -1612,12 +1612,15 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             b32 tty = os_isatty(os, info->std[0]) || os_isatty(os, info->std[2]);
             if (!st.busybox && !tty && !sh->opt[O_NOEXEC]) {
                 // As bash finding no terminal for job control (a
-                // terminal on either stream stands in for /dev/tty)
+                // terminal on either stream stands in for /dev/tty):
+                // the group it went back to, unless it led its own
                 Str name = progbase(sh->shellname);
+                i64 pgrp = info->pgid && info->pgid!=info->pid ? info->pgid : -1;
                 Buf b(&scratch, 128);
                 print(&b, name);
-                print(&b, ": cannot set terminal process group (-1): "
-                          "Inappropriate ioctl for device\n");
+                print(&b, ": cannot set terminal process group (");
+                print(&b, pgrp);
+                print(&b, "): Inappropriate ioctl for device\n");
                 print(&b, name);
                 print(&b, ": no job control in this shell\n");
                 fdwrite(sh, 2, finish(&b));

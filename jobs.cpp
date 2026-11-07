@@ -487,6 +487,21 @@ static void padpid(Buf *b, i64 pid)
     print(b, finish(&t));
 }
 
+// An interactive shell names each job it starts in the background,
+// "[N] PID" on standard error, as bash.
+static void announcejob(Shell *sh, Arena scratch, Job *j)
+{
+    if (!sh->interactive || sh->subshell) return;
+    Buf b(&scratch, 32);
+    print(&b, "[");
+    print(&b, (i64)j->id);
+    print(&b, "] ");
+    print(&b, j->pid);
+    putbyte(&b, '\n');
+    flushbout(sh);
+    fdwrite(sh, 2, finish(&b));
+}
+
 // One job as jobs lists it: form 0, or 'l' with its pid.
 static Str jobline(Shell *sh, Arena *perm, Job *j, i32 form)
 {
@@ -567,20 +582,40 @@ static void notifyjobs(Shell *sh, Arena scratch)
     cleanupjobs(sh);
 }
 
-// Before an interactive shell's primary prompt: each of this level's
-// jobs that ended or stopped since last shown, as jobs lists it, then
-// drop the ended ones.
-static void notifyprompt(Shell *sh, Arena scratch)
+// An interactive shell's notification, as bash's notify_and_cleanup:
+// each of this level's jobs (or only that one) that ended or stopped
+// since last shown, as jobs lists it, then drop the ended ones. Without
+// job control the ended ones are dropped unreported. Before each
+// primary prompt, after wait collects a job, and (with job control,
+// not in POSIX mode) after the first command of a `;` list.
+static void notifyprompt(Shell *sh, Arena scratch, Job *only)
 {
     polljobs(sh);
     for (Job *j = sh->jobs; j && ownjob(sh, j); j = j->next) {
-        if (j->notified || !(j->done || j->stopped)) continue;
+        if ((only && j!=only) || j->notified || !(j->done || j->stopped)) continue;
+        if (!sh->jobctl) {
+            j->notified = j->done;
+            continue;
+        }
         Arena a = scratch;
         flushbout(sh);
         fdwrite(sh, 2, jobline(sh, &a, j, 0));
         j->notified = 1;
     }
     cleanupjobs(sh);
+}
+
+// wait collected a job: an interactive shell reports it now (outside
+// POSIX mode, else at the prompt), a script only if a signal killed it,
+// and it is dropped.
+static void collected(Shell *sh, Arena scratch, Job *j)
+{
+    if (sh->interactive && !sh->subshell) {
+        if (!sh->opt[O_POSIX]) notifyprompt(sh, scratch, j);
+        return;
+    }
+    reportkilled(sh, scratch, j);
+    j->notified = 1;
 }
 
 // Find the job a job spec names, as bash's %N %+ %- %% %name %?text,
@@ -1024,6 +1059,7 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     fileunref(sh, in);
     Job *j = newjob(sh, scratch, n, t, pid, 0);
     if (grouped && t && iswaiter(t)) j->pgid = pid;
+    announcejob(sh, scratch, j);
     if (!t) {
         j->done   = 1;
         j->status = status & 255;
@@ -1238,6 +1274,7 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
     c->next  = sh->coprocs;
     sh->coprocs = c;
     Job *j = newjob(sh, scratch, n, task, pid, 0);
+    announcejob(sh, scratch, j);
     if (!task) {
         j->done   = 1;
         j->status = status & 255;
@@ -1396,8 +1433,7 @@ static i32 waitany(Shell *sh, Arena scratch, Str *ids, iz nids, Str var)
         if (found) {
             i32 st  = found->status & 255;
             i64 pid = found->pid;
-            reportkilled(sh, scratch, found);
-            deletejob(sh, found);
+            collected(sh, scratch, found);
             if (sh->opt[O_POSIX]) delbgstat(sh, pid);
             waitvar(sh, scratch, var, pid);
             cleanupjobs(sh);
@@ -1496,14 +1532,16 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
                 waitstopped(sh, scratch, live);
                 continue;
             }
-            reportkilled(sh, scratch, live);  // as bash, when it collects it
-            live->notified = 1;  // waited for: dropped, even $!'s
+            collected(sh, scratch, live);  // dropped, even $!'s
+        }
+        for (Job *j = sh->jobs; !sh->interactive && j && ownjob(sh, j); j = j->next) {
+            reportkilled(sh, scratch, j);  // also those that ended earlier
         }
         b32 found;
         waitpsub(sh, sh->lastbg, &found);
-        // Statuses are forgotten, but for the job $! names
+        // Statuses are forgotten, but for the job $! names in a script
         for (Job *j = sh->jobs; j && ownjob(sh, j); j = j->next) {
-            if (j->done && j->pid!=sh->lastbg) j->notified = 1;
+            if (j->done && (sh->interactive || j->pid!=sh->lastbg)) j->notified = 1;
         }
         cleanupjobs(sh);
         while (sh->bgstats) delbgstat(sh, sh->bgstats->pid);
@@ -1531,8 +1569,7 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
                     lastpid = pid;
                     continue;
                 }
-                reportkilled(sh, scratch, j);
-                j->notified = 1;
+                collected(sh, scratch, j);
                 if (sh->opt[O_POSIX]) {
                     cleanupjobs(sh);
                     delbgstat(sh, pid);
@@ -1576,8 +1613,7 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (!waitjob(sh, j, &status, force)) return status;
             lastpid = j->pid;
             if (j->stopped) continue;
-            reportkilled(sh, scratch, j);
-            j->notified = 1;
+            collected(sh, scratch, j);
             if (sh->opt[O_POSIX]) cleanupjobs(sh);
         } else {
             builtinerror(sh, scratch, "wait", concat3(&scratch, "`", a, "': not a pid or valid job spec"));
@@ -1715,6 +1751,7 @@ static Str jobtext(Shell *sh, Arena *a, Job *j, Str sep)
 }
 
 static i32 fgstop(Shell *, Arena, Job *);
+static void fgforward(Shell *, Job *);
 
 static i32 b_fg(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
@@ -1735,6 +1772,7 @@ static i32 b_fg(Shell *sh, Str *args, iz nargs, Arena scratch)
     bprint(sh, concat(&scratch, jobtext(sh, &scratch, j, "\t"), "\n"));
     flushbout(sh);
     // As a foreground command: trapped signals wait for its end
+    b32 term = 0;  // the terminal's INT reaches only the job
     if (j->task && iswaiter(j->task) && j->pgid) {
         // Its group holds the terminal, continued if stopped, until it
         // ends or stops again
@@ -1748,17 +1786,22 @@ static i32 b_fg(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (tty) os_tcpgrp(sh->os, sh->jctty, sh->shellpgid);
         if (j->stopped) return fgstop(sh, scratch, j);
         joindone(sh, j);
-        if (tty && (j->status & WSIGNALED) && (j->status & 255)==128+2) {
-            // As runprogram: the terminal's INT reached only the job
-            if (sh->loopdepth || (!trapset(sh, 2) && sh->interactive)) {
-                sh->sig->pending |= sigbit(2);
-            }
-        }
+        term = tty;
     } else if (j->task) {
+        if (sh->win32 && iswaiter(j->task)) {
+            fgforward(sh, j);
+            term = 1;
+        }
         jointask(sh->sched, j->task, &j->status);
         j->task = 0;
         j->done = 1;
         coprocended(sh, j->pid);
+    }
+    if (term && (j->status & WSIGNALED) && (j->status & 255)==128+2) {
+        // As runprogram: the terminal's INT reached only the job
+        if (sh->loopdepth || (!trapset(sh, 2) && sh->interactive)) {
+            sh->sig->pending |= sigbit(2);
+        }
     }
     i32 st  = j->status;
     i64 pid = j->pid;
@@ -1834,6 +1877,35 @@ static i32 b_suspend(Shell *sh, Str *args, iz nargs, Arena scratch)
     os_kill(sh->os, -sh->shellpgid, 19);
     if (sh->jctty != BADHANDLE) os_tcpgrp(sh->os, sh->jctty, sh->shellpgid);
     return 0;
+}
+
+// Windows has no process groups: the console's Ctrl-C and Ctrl-Break
+// reach this shell, not the job fg waits for, which was started
+// ignoring them. Until it ends, pass them on to it (os_kill: a shell
+// of this image takes the signal, another program ends as by Ctrl-C),
+// as bash's terminal sends them to its foreground job, and the shell
+// does not take them itself.
+static void fgforward(Shell *sh, Job *j)
+{
+    Sched   *s    = sh->sched;
+    Task    *self = s->cur;
+    Task    *t    = j->task;
+    Sigproc *p    = sh->sig;
+    u64      ctl  = sigbit(2) | sigbit(3);
+    self->introk = 1;
+    while (t->state != TS_DONE) {
+        t->joiner = self;
+        block(s, W_JOIN);
+        takeossigs(sh);
+        u64 got = p->pending & ctl;
+        p->pending &= ~got;
+        self->intr  = 0;
+        for (; got; got &= got-1) {
+            os_kill(sh->os, j->pid, __builtin_ctzll(got)+1);
+        }
+    }
+    t->joiner    = 0;
+    self->introk = 0;
 }
 
 // A foreground job stopped: it becomes the current job, and the

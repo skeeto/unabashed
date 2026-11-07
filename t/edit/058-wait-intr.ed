@@ -1,0 +1,21 @@
+# ^C interrupts an interactive wait (status 130) and the job runs on,
+# reported when it ends; ^C also ends a foreground program started
+# while a job runs, which is unaffected
+size 24 60
+rc PS1='$ '
+keys { sleep 2 & } 2>/dev/null\r
+pause 200
+keys wait\r
+pause 300
+keys \C-c
+pause 200
+keys echo w=$?; jobs\r
+pause 200
+keys sleep 5\r
+pause 300
+keys \C-c
+pause 200
+keys echo s=$?; jobs\r
+pause 2500
+keys :\r
+snap

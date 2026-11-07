@@ -1,0 +1,34 @@
+[1]   Running                    sleep 5 &
+[2]-  Running                    sleep 5 &
+[3]+  Running                    sleep 0.2 &
+[1]   Running                    sleep N &
+[2]-  Running                    sleep N &
+[3]+  Running                    sleep N.2 &
+N
+N
+N
+[1] N Running                    sleep N &
+[2]- N Running                    sleep N &
+[3]+ N Running                    sleep N.2 &
+[1]   Running                    sleep 5 &
+[2]-  Running                    sleep 5 &
+[3]+  Done                       sleep 0.2
+[1]-  Running                    sleep 5 &
+[2]+  Running                    sleep 5 &
+test.sh: line 11: kill: %3: no such job
+[1]-  Terminated                 sleep 5
+[2]+  Killed                     sleep 5
+hup 129
+test.sh: line N: N Hangup                     sleep N
+usr1 0
+test.sh: line N: N User defined signal N      sleep N
+int 0
+sleep 0.3
+fg 0
+test.sh: line 16: bg: job 1 already in background
+f 0
+[1]+  Running                    sleep 0.2 &
+n 0
+test.sh: line 18: bg: job 1 already in background
+end
+status 0

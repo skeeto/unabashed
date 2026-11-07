@@ -1,0 +1,32 @@
+== snap 1
+$ { sleep 2 & } 2>/dev/null
+$ wait
+^C
+$ echo w=$?; jobs
+w=130
+[1]+  Running                    sleep 2 &
+$ sleep 5
+^C
+$ echo s=$?; jobs
+s=130
+[1]+  Running                    sleep 2 &
+$ :
+[1]+  Done                       sleep 2
+$
+@ 13,2
+== snap 2
+$ { sleep 2 & } 2>/dev/null
+$ wait
+^C
+$ echo w=$?; jobs
+w=130
+[1]+  Running                    sleep 2 &
+$ sleep 5
+^C
+$ echo s=$?; jobs
+s=130
+[1]+  Running                    sleep 2 &
+$ :
+[1]+  Done                       sleep 2
+$
+@ 13,2

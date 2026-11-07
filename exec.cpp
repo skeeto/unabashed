@@ -40,6 +40,7 @@ static i32      fgstopped(Shell *, Arena, Handle proc, i64 pid, i32 sig);
 static void     runasync(Shell *, Node *, Arena);
 static void     runcoproc(Shell *, Node *, Arena);
 static void     notifyjobs(Shell *, Arena);
+static void     notifyprompt(Shell *, Arena, Job *only);
 static void     polljobs(Shell *);
 static void     cleanupjobs(Shell *);
 static void     orphanjobs(Shell *);
@@ -67,6 +68,15 @@ static u64 ignoredsigs(Shell *sh)
         if (trapignored(sh, sig)) m |= (u64)1 << (sig-1);
     }
     return m;
+}
+
+// Between the commands of a `;` list, an interactive shell with job
+// control reports the jobs that changed, as bash (not in POSIX mode).
+static void listnotify(Shell *sh, Arena scratch)
+{
+    if (sh->jobs && sh->jobctl && sh->interactive && !sh->subshell && !sh->opt[O_POSIX]) {
+        notifyprompt(sh, scratch, 0);
+    }
 }
 
 // The command a subshell running n would exec as its last instead of
@@ -3739,6 +3749,7 @@ static void executenode(Shell *sh, Node *n, Arena scratch)
                 continue;
             default:
                 execute(sh, n->a, scratch);
+                listnotify(sh, scratch);
                 reachtail(sh, n->b);
                 n = n->b;
                 continue;
@@ -3802,6 +3813,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
             break;
         default:
             execute(sh, n->a, scratch);
+            listnotify(sh, scratch);
             reachtail(sh, n->b);
             execute(sh, n->b, scratch);
         }

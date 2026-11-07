@@ -504,6 +504,9 @@ static i32 taskjoin(Sched *s, Task *t)
         t->joiner = s->cur;
         block(s, W_JOIN);
     }
+    // A signal that failed this join meanwhile stays pending for the
+    // level, not to fail some later interruptible wait
+    s->cur->intr = 0;
     i32 status = t->status;
     Task **pool = t->stack>SMALLSTACK ? &s->freebig : &s->freesmall;
     t->state = 0;

@@ -45,6 +45,17 @@ Closed: every item was fixed or moved (m6.md, step 10).
   stop's status) after `kill -STOP` then `kill -9`; ours 137.
 - **readonly -A name** with no value: bash leaves the variable a plain
   readonly scalar (`declare -r`), ours makes it associative.
+- **Win32: fg's Ctrl-C ends only the job's own process**: a foreign
+  program is ended with TerminateProcess, so what it started runs on
+  (w64devkit's alias stubs leave busybox running), as `kill -INT` does
+  on Windows. A job of this shell's image takes the signal, but it
+  started with INT ignored, so its `trap ... INT` cannot be set and
+  bash's job (in a group of its own, INT not ignored) would run the
+  trap. Fix with a job object per background program (Windows 8 and
+  later) and an image flag saying INT is not really ignored.
+- **A job killed just before `;` or the prompt**: the vos sees its end
+  at once, so `kill %1; wait %1` finds no job (127) where bash, which
+  has usually not reaped it yet, gives 143. Timing only.
 - **Win32 Ctrl-C a starting program can still miss** (m3b.md, "Programs
   that miss a Ctrl-C"): unnoticed are one over 100 ms old and still
   not attached; the real program of a wrapper that starts it more than

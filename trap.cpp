@@ -523,13 +523,13 @@ static void sigsend(Shell *sh, Sigproc *p, i32 sig)
             p->pending &= ~sigbit(sig);
             return;
         }
-        // It will die: fail whatever it waits for, except a task
-        if (p->task && p->task!=sh->sched->cur) taskinterrupt(sh->sched, p->task, 1);
+        // It will die: fail whatever it waits for, except a task (a
+        // blocked one is still the current task while the scheduler
+        // takes the signal, a running one is never interrupted)
+        if (p->task) taskinterrupt(sh->sched, p->task, 1);
         return;
     }
-    if (p->task && p->task!=sh->sched->cur) {
-        taskinterrupt(sh->sched, p->task, 0);  // a read or wait builtin
-    }
+    if (p->task) taskinterrupt(sh->sched, p->task, 0);  // a read or wait builtin
 }
 
 static Sigproc *findsigproc(Sched *s, i64 pid)

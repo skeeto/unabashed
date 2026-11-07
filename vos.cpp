@@ -925,8 +925,9 @@ static void vttysignal(Os *os, Vos *v, i32 sig)
         if (p->state!=VP_RUN && p->state!=VP_BLOCK) continue;
         if (p->pgid != fg) continue;
         if (p->shell) {
+            // its blocked wait fails, even the typing shell's own next
             p->grpsig |= (u64)1 << (sig-1);
-            p->intr = p != v->procs+v->cur;
+            p->intr = 1;
         } else if (p == v->procs+v->cur) {
             self = p;  // last: it may stop or end here
         } else {

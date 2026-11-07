@@ -292,23 +292,17 @@ static Str starsep(Shell *sh)
 static Str flagstring(Arena *a, Shell *sh)
 {
     Buf b(a, 16);
-    for (i32 i = 0; i < O_COUNT; i++) {
-        if (sh->opt[i] && setoptions[i].letter && setoptions[i].letter!='B'
-                && setoptions[i].letter!='h' && setoptions[i].letter!='H') {
-            // the listing order of $- is bash's flag table order below
-        }
-    }
-    // bash orders $- by its flag table: a b e f h k m n p t u v x B C H
-    static u8 order[] = "abefhkmnprtuvxBCEHPT";
+    // bash orders $- by its flag table, then c and s
+    static u8 order[] = "abefhikmnprtuvxBCEHPT";
     for (iz k = 0; order[k]; k++) {
         if (order[k]=='r' && sh->restricted) putbyte(&b, 'r');
+        if (order[k]=='i' && sh->interactive) putbyte(&b, 'i');
         for (i32 i = 0; i < O_COUNT; i++) {
             if (setoptions[i].letter==order[k] && sh->opt[i]) {
                 putbyte(&b, order[k]);
             }
         }
     }
-    if (sh->interactive) putbyte(&b, 'i');
     if (sh->cflag) putbyte(&b, 'c');
     if (sh->sflag) putbyte(&b, 's');
     return finish(&b);
