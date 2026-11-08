@@ -495,6 +495,7 @@ struct Shell {
 
     // Store roots, copied by value into subshells
     Var     *vars;
+    Var     *ifs;          // IFS's entry in vars once found (never removed)
     Func    *funcs;
     Alias   *aliases;
     uz       aliasseq;     // aliases defined so far

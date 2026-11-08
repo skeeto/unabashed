@@ -299,8 +299,13 @@ static Str backquotebody(Arena *a, Str s, b32 dquote)
 
 static Str ifsvalue(Shell *sh, b32 *set)
 {
-    Arena none = {};
-    Got g = getvar(sh, &none, "IFS");
+    // Unset leaves a variable's entry in place, so IFS's is looked up
+    // once per table
+    Arena  none = {};
+    Var   *e    = sh->ifs ? sh->ifs : (sh->ifs = findvar(sh, "IFS"));
+    Value *v    = e ? e->top : 0;
+    Got    g    = v && (v->attrs&V_NAMEREF) ? getvar(sh, &none, "IFS")
+                :                             getvalue(sh, &none, v);
     *set = g.set;
     return g.set ? g.value : Str(" \t\n");
 }

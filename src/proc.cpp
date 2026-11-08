@@ -381,6 +381,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     for (i32 i = 0; i < NPOOL; i++) c->pool[i] = 0;
 
     c->vars    = copyvars(st, sh->vars);
+    c->ifs     = 0;
     c->funcs   = copyfuncs(st, sh->funcs, image);
     c->aliases = copyaliases(st, sh->aliases);
     c->comps   = compscopy(st, sh->comps);
