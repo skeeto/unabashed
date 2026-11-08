@@ -3820,6 +3820,45 @@ static Cond *copycond(Arena *a, Cond *c)
     return r;
 }
 
+// An upper bound on the bytes copynode takes for n and what it holds,
+// each object counted with its worst alignment padding
+static iz wordbytes(Word *w)  // as copyword: w alone
+{
+    return w ? (iz)(sizeof(Word) + alignof(Word)) + w->text.len : 0;
+}
+
+static iz wordsbytes(Word *w)  // as copywords: the list
+{
+    iz r = 0;
+    for (; w; w = w->next) r += wordbytes(w);
+    return r;
+}
+
+static iz condbytes(Cond *c)
+{
+    if (!c) return 0;
+    return (iz)(sizeof(Cond) + alignof(Cond)) + wordbytes(c->op) +
+           condbytes(c->left) + condbytes(c->right);
+}
+
+static iz nodebytes(Node *n)
+{
+    if (!n) return 0;
+    iz r = (iz)(sizeof(Node) + alignof(Node));
+    r += nodebytes(n->a) + nodebytes(n->b) + nodebytes(n->c);
+    r += wordsbytes(n->words) + wordbytes(n->name) + wordsbytes(n->arith);
+    r += condbytes(n->cond);
+    for (Redir *d = n->redirs; d; d = d->next) {
+        r += (iz)(sizeof(Redir) + alignof(Redir));
+        r += wordbytes(d->srcvar) + wordbytes(d->word) + d->body.len + d->eof.len;
+    }
+    for (Case *c = n->cases; c; c = c->next) {
+        r += (iz)(sizeof(Case) + alignof(Case));
+        r += wordsbytes(c->patterns) + nodebytes(c->body);
+    }
+    return r;
+}
+
 static Node *copynode(Arena *a, Node *n)
 {
     if (!n) return 0;

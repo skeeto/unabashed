@@ -1507,17 +1507,14 @@ static void releasecode(Shell *sh, Func *f)
     }
 }
 
-// Copy a body into a block of exactly the size needed: measure with a
-// trial copy in scratch at the same alignment, then copy for real.
-static Code *newcode(Shell *sh, Arena scratch, Node *body)
+// Copy a body into a block of the size it needs, as nodebytes bounds it
+// (counting is cheaper than the trial copy this once made).
+static Code *newcode(Shell *sh, Arena, Node *body)
 {
-    scratch.beg += -(uz)scratch.beg & 15;
-    byte *start = scratch.beg;
-    alloc<Code>(&scratch);
-    copynode(&scratch, body);
     // alloc refuses the final object of a full arena, so leave room for
     // one more of the largest type
-    iz size = scratch.beg - start + (iz)sizeof(Node) + (iz)sizeof(Redir);
+    iz size = (iz)(sizeof(Code) + alignof(Code)) + nodebytes(body) +
+              (iz)sizeof(Node) + (iz)sizeof(Redir);
     // As bash 5.3 names its origin: a sourced file, "environment" for
     // an import, "main" when interactive, else $0 (empty)
     Str src = sh->srcname.len ? sh->srcname
