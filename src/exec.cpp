@@ -2778,7 +2778,10 @@ static void bindlastarg(Shell *sh, Arena scratch, Str last)
     b32    own = sh->lastarg.data && (byte *)sh->lastarg.data>=st->mark;
     if (!own || last.len>sh->lastargcap) {
         if (own) sfree(st, sh->lastarg.data, sh->lastargcap);
-        iz cap = last.len>2*sh->lastargcap ? last.len : 2*sh->lastargcap;
+        // Doubling grows this level's own buffer: a fresh one in a
+        // nested level is sized by need, or it doubles with depth
+        iz grow = own ? 2*sh->lastargcap : 0;
+        iz cap  = last.len>grow ? last.len : grow;
         cap = cap<32 ? 32 : cap;
         sh->lastarg.data = (u8 *)salloc(st, cap);
         sh->lastargcap   = cap;
