@@ -317,6 +317,14 @@ static NamedPipe os_namedpipe(Os *os, Arena *, Str, i32)
     return r;
 }
 
+static NamedTemp os_namedtemp(Os *, Arena *, Str)
+{
+    NamedTemp r = {};
+    r.h   = BADHANDLE;
+    r.err = E_NOSYS;
+    return r;
+}
+
 static iz os_pipecap(Os *os)
 {
     flushw(os);

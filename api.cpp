@@ -102,6 +102,12 @@ struct NamedPipe {
     i32    err;
 };
 
+struct NamedTemp {
+    Handle h;
+    Str    path;  // canonical native path
+    i32    err;
+};
+
 struct Stat {
     i32 err;
     i32 type;    // FT_*
@@ -308,6 +314,11 @@ static Opened  os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode);
 // A new empty file, open for reading and writing, with no name: it is
 // deleted once its last handle closes (large here-documents).
 static Opened  os_tempfile(Os *, Arena scratch);
+// Windows: a new empty file under a fresh name in directory dir, open
+// for reading and writing, which other programs may open while it is
+// held; it is deleted once the handle closes (with os_dup's copies).
+// E_NOSYS elsewhere.
+static NamedTemp os_namedtemp(Os *, Arena *, Str dir);
 static void    os_close(Os *, Handle);
 // Remove a file (not a directory) by absolute path: an error, or 0.
 static i32     os_unlink(Os *, Arena scratch, Str path);

@@ -40,29 +40,7 @@ None left: step 10 fixed the rest or accepted it (below).
 
 ## M9 (w64devkit)
 
-Moved from M7 (step 9): pipes for programs outside the shell, which
-the release (busybox diff in w64devkit, Git's MSYS2 programs beside
-it) is where they meet real use; each needs Cygwin's or a
-program's pipe handling studied, not shell fidelity.
-
-- **MSYS2 programs get no `/dev/fd/N` bridge** (step 8): they are
-  passed `/dev/fd/N` unchanged, which they cannot open, so `cat <(x)`
-  with Git's cat fails. They take `\\.\pipe\NAME` (not
-  `//./pipe/NAME`), but open it three times (look, use, look again),
-  read an unbuffered instance as empty, fail to open one for writing
-  (`tee >(x)`: EINVAL), take it for a file head seeks back in, and with
-  buffered instances diff and an empty procsub hung at times. Nor do
-  they get descriptors above 2: a Cygwin child ignores an MSVCRT
-  lpReserved2 blob (checked: busybox to Git's bash, fd 4 is "Bad file
-  descriptor"); Git Bash passes them in the cygheap. (m5a.md, step 8)
-- **Bridge gaps** (step 8): busybox diff reads a bridged pipe as empty
-  (it copies a pipe to a temporary file; the unbuffered instance
-  apparently looks empty to it), recorded as such in t/win32/015; a
-  program reading one path twice gets the stream split; a program
-  that keeps a looking handle open while another waits on data
-  stalls; direct pipeline stages (spawnto) get no bridge; at most 16
-  bridges per command; a grandchild still using a reading bridge's
-  path when its program exits is cut off. (m5a.md, step 8)
+(none: step 5 fixed or accepted the bridge items, below)
 
 
 ## Test infrastructure
@@ -521,3 +499,21 @@ Moved from M5a: limits of the test tiers, not of the shell.
   prints `C:/x/y`. Seen while checking Claude Code (m5a.md, exit
   criteria). Cygwin's half-converted `C:\x/y` is an artifact; ours
   prints the path one way.
+- **Accepted: an MSYS2 program's procsub is a file.** An MSYS2 or
+  Cygwin program given `/dev/fd/N` gets the path of a temporary file
+  (M9 step 5): for `<(cmd)`, cmd runs to its end before the program
+  starts, so the two do not overlap, and past 1 GiB (an endless `yes`)
+  the shell gives up and passes `/dev/fd/N` unchanged; for `>(cmd)`,
+  cmd gets the output once the program has exited. The program sees
+  the file's name (diff's header, wc's) where Git Bash shows
+  /dev/fd/63. Git Bash passes descriptors in Cygwin's cygheap, which
+  no other parent can; the named-pipe bridges that native programs get
+  hung or failed with MSYS2 programs (m5a.md, step 8). For the same
+  reason descriptors above 2 never reach an MSYS2 program.
+- **Accepted: bridge limits.** A native program reading one bridged
+  path twice gets the stream split between the opens, as with a pipe's
+  /dev/fd/N on Linux; a program that keeps a looking open handle while
+  another open waits for data stalls; at most 16 bridges per command
+  (more stay /dev/fd/N); a grandchild still reading a bridge's path
+  after its program has exited is cut off, as the procsub's descriptor
+  closes with the command. (m5a.md step 8, M9 step 5)

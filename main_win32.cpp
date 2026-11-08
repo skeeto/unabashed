@@ -2749,6 +2749,42 @@ static Opened os_tempfile(Os *os, Arena)
     return r;
 }
 
+static NamedTemp os_namedtemp(Os *os, Arena *a, Str dir)
+{
+    flushw(os);
+    NamedTemp r = {};
+    r.h = BADHANDLE;
+    static u32 counter;
+    for (i32 try_ = 0; try_ < 100; try_++) {
+        u64 tag = ((u64)GetCurrentProcessId()<<32) ^ ++counter ^ (u64)os_now(os);
+        tag *= 0x9e3779b97f4a7c15u;
+        Buf b(a, dir.len+32);
+        print(&b, dir);
+        print(&b, "/sh-fd-");
+        for (i32 i = 0; i < 16; i++) {
+            putbyte(&b, (u8)"0123456789abcdef"[(tag >> (60 - 4*i)) & 15]);
+        }
+        Str   path = finish(&b);
+        Arena tmp  = *a;
+        Str16 w    = widepath(&tmp, path);
+        uz h = CreateFileW(w.data, GENERIC_READ|GENERIC_WRITE, FILE_SHARE_ALL, 0,
+                           CREATE_NEW,
+                           FILE_ATTRIBUTE_TEMPORARY|FILE_FLAG_DELETE_ON_CLOSE, 0);
+        if (h != INVALID_HANDLE_VALUE) {
+            r.h    = (Handle)h;
+            r.path = path;
+            return r;
+        }
+        i32 code = GetLastError();
+        if (code != 80 && code != 183) {  // ERROR_FILE_EXISTS, ERROR_ALREADY_EXISTS
+            r.err = errnum(code);
+            return r;
+        }
+    }
+    r.err = E_EXIST;
+    return r;
+}
+
 static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
     flushw(os);

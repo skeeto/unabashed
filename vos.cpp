@@ -80,6 +80,7 @@ struct VFile {      // open file description
     VNode *node;
     VPipe *pipe;
     i64    pos;
+    b32    delclose;  // os_namedtemp's: the node leaves its directory
 };
 
 enum { VOS_HANDLES = 1024 };
@@ -1573,11 +1574,14 @@ static Opened os_tempfile(Os *os, Arena)
     return r;
 }
 
+static void vdetach(VNode *);
+
 static void os_close(Os *os, Handle h)
 {
     Vos   *v = osvos(os);
     VFile *f = vfile(v, h);
     if (!f || --f->refs) return;
+    if (f->delclose && f->node->parent) vdetach(f->node);
     if (f->kind == VK_PIPEREAD)  f->pipe->readers--;
     if (f->kind == VK_PIPEWRITE) f->pipe->writers--;
     VPipe *p = f->pipe;
@@ -2682,6 +2686,37 @@ static NamedPipe os_namedpipe(Os *os, Arena *a, Str name, i32 how)
     n->connected = 0;
     v->nnpipes  += i == v->nnpipes;
     r.h = out ? p.w : p.r;
+    return r;
+}
+
+// As Win32's, under a deterministic name: the creator's pid and a
+// sequence number. Detached from its directory when the handle closes,
+// as delete-on-close: what others have open stays readable.
+static NamedTemp os_namedtemp(Os *os, Arena *a, Str dir)
+{
+    Vos      *v = osvos(os);
+    NamedTemp r = {};
+    r.h = BADHANDLE;
+    if (!v->win) {
+        r.err = E_NOSYS;
+        return r;
+    }
+    v->npipeseq++;
+    Buf b(a, dir.len+40);
+    print(&b, dir);
+    print(&b, "/sh-fd-");
+    print(&b, v->procs[v->cur].pid);
+    putbyte(&b, '-');
+    print(&b, (i64)v->npipeseq);
+    Str    path = finish(&b);
+    Opened o    = os_open(os, *a, path, OF_READ|OF_WRITE|OF_CREATE|OF_EXCL, 0600);
+    if (o.err) {
+        r.err = o.err;
+        return r;
+    }
+    v->files[o.h].delclose = 1;
+    r.h    = o.h;
+    r.path = path;
     return r;
 }
 

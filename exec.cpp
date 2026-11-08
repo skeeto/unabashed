@@ -1642,18 +1642,80 @@ static b32 materialize(Shell *sh, Arena a, File *f)
 // descriptor. Its clients come in turn, since a program may open the
 // path once only to look (a stat) before it opens it to use; the pump
 // ends with the program (endbridge). Our own shell needs none: it opens
-// /dev/fd/N itself, the descriptor passed in lpReserved2. Nor does an
-// MSYS2 program get one: it takes \.\pipe\NAME (not //./pipe/NAME) but
-// opens it three times, finds an unbuffered pipe empty, cannot open one
-// to write, and at times hangs (notes/m5a.md, step 8).
+// /dev/fd/N itself, the descriptor passed in lpReserved2.
+//
+// An MSYS2 program gets a temporary file instead (files): it takes
+// \.\pipe\NAME (not //./pipe/NAME) but opens it three times, finds an
+// unbuffered pipe empty, cannot open one to write, and at times hangs
+// (notes/m5a.md, step 8). A file it reads holds everything the
+// descriptor reads, to its end, before the program starts; one it
+// writes starts empty and goes to the descriptor once the program has
+// exited (endtemp). Either is deleted when the shell closes it, after
+// the program.
 
-enum { MAXBRIDGES = 16 };
+enum { MAXBRIDGES = 16, MAXTEMPFILE = 1<<30 };
 
 struct Bridges {
-    Task *t[MAXBRIDGES];
-    i32   fd[MAXBRIDGES];  // the descriptor each bridges
-    i32   n;
+    Task  *t[MAXBRIDGES];   // a pipe's pump, or null for a file
+    Handle h[MAXBRIDGES];   // a temporary file
+    i32    fd[MAXBRIDGES];  // the descriptor each bridges
+    b32    files;           // temporary files, for an MSYS2 program
+    i32    n;
 };
+
+// A temporary file in place of descriptor fd: its native path, or a
+// null string. Filled from the descriptor if the program reads it, up
+// to MAXTEMPFILE (an endless procsub, such as yes, gives up there).
+static Str starttemp(Shell *sh, Arena *a, i32 fd, Bridges *br)
+{
+    File *f = sh->fds->fd[fd];
+    if (!sh->paths || !sh->paths->temp.len) return {};
+    NamedTemp t = os_namedtemp(sh->os, a, sh->paths->temp);
+    if (t.err) return {};
+    if (f->flags & OF_READ) {
+        Arena tmp   = *a;
+        iz    cap   = 1<<16;
+        u8   *buf   = allocbytes(&tmp, cap);
+        iz    total = 0;
+        for (;;) {
+            iz n = fileread(sh, f, buf, cap);
+            if (n <= 0) break;
+            total += n;
+            if (total>MAXTEMPFILE || !os_write(sh->os, t.h, buf, n)) {
+                os_close(sh->os, t.h);
+                return {};
+            }
+        }
+        os_seek(sh->os, t.h, 0, 0);
+    }
+    br->t[br->n]    = 0;
+    br->h[br->n]    = t.h;
+    br->fd[br->n++] = fd;
+    return t.path;
+}
+
+// After the program: what it wrote into a temporary file for a
+// descriptor goes to that descriptor (if feed), and the file goes.
+static void endtemp(Shell *sh, Arena a, Bridges *br, i32 i, b32 feed)
+{
+    Sched *s = sh->sched;
+    File  *f = sh->fds->fd[br->fd[i]];
+    if (feed && f && !(f->flags&OF_READ) && os_seek(sh->os, br->h[i], 0, 0)==0) {
+        iz  cap = 1<<16;
+        u8 *buf = allocbytes(&a, cap);
+        for (i32 err = 0; !err;) {
+            iz n = os_read(sh->os, br->h[i], buf, cap);
+            if (n <= 0) break;
+            switch (f->kind) {
+            case F_OS:      err = taskwrite(s, f->h, buf, n);    break;
+            case F_PIPE:    err = pipewrite(s, f->pipe, buf, n); break;
+            case F_CAPTURE: print(f->cap, {buf, n});             break;
+            default:        err = E_BADF;
+            }
+        }
+    }
+    os_close(sh->os, br->h[i]);
+}
 
 // Bridge descriptor fd: the path for the program, or a null string if
 // it cannot be bridged.
@@ -1662,6 +1724,7 @@ static Str startbridge(Shell *sh, Arena *a, i32 fd, Bridges *br)
     Sched *s = sh->sched;
     File  *f = fd<FDMAX ? sh->fds->fd[fd] : 0;
     if (!f || br->n==MAXBRIDGES) return {};
+    if (br->files) return starttemp(sh, a, fd, br);
     b32    out  = f->flags & OF_READ;  // the program reads
     Handle peer = BADHANDLE;
     Pipe  *pipe = 0;
@@ -1712,6 +1775,25 @@ static Str startbridge(Shell *sh, Arena *a, i32 fd, Bridges *br)
     return slashify(a, np.name, '\\');
 }
 
+// The /dev/fd/N an argument names (whole, or after its last "="), or -1.
+static i32 argdevfd(Str arg)
+{
+    iz at = arg.len;
+    for (; at>0 && arg[at-1]!='='; at--) {}
+    Str tail = cuthead(arg, at);
+    return startswith(tail, "/dev/fd/") ? devfdnum(tail) : -1;
+}
+
+// Would any argument be bridged?
+static b32 needsbridge(Shell *sh, Str *argv, iz argc)
+{
+    for (iz i = 1; i < argc; i++) {
+        i32 fd = argdevfd(argv[i]);
+        if (fd>=3 && fd<FDMAX && sh->fds->fd[fd]) return 1;
+    }
+    return 0;
+}
+
 // argv with its /dev/fd/N arguments bridged, or argv itself if none.
 static Str *bridgeargs(Shell *sh, Arena *a, Str *argv, iz argc, Bridges *br)
 {
@@ -1723,8 +1805,7 @@ static Str *bridgeargs(Shell *sh, Arena *a, Str *argv, iz argc, Bridges *br)
         Str arg = argv[i];
         iz  at  = arg.len;
         for (; at>0 && arg[at-1]!='='; at--) {}
-        Str tail = cuthead(arg, at);
-        i32 fd   = startswith(tail, "/dev/fd/") ? devfdnum(tail) : -1;
+        i32 fd = argdevfd(arg);
         if (fd<3 || fd>=FDMAX) continue;
         Str path = {};
         for (i32 k = 0; k < n; k++) {
@@ -1772,12 +1853,25 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     if (sh->win32) {
         // What starts, and how: decided here, before descriptors move
         tg = wintarget(sh, &a, path, argv, argc, env);
-        if (!tg.err && !tg.self && !tg.cygwin && !sh->spawnto) {
+        if (!tg.err && !tg.self && sh->spawnto && needsbridge(sh, argv, argc)) {
+            // A direct pipeline stage's descriptors are not the
+            // shell's to bridge: it runs as a stage of shell code
+            sh->spawnto->retry = 1;
+            return 0;
+        }
+        if (!tg.err && !tg.self && !sh->spawnto) {
+            br.files = tg.cygwin;
             argv = bridgeargs(sh, &a, argv, argc, &br);
             if (br.n) tg = wintarget(sh, &a, path, argv, argc, env);
         }
         if (tg.err) {
-            for (i32 i = 0; i < br.n; i++) endbridge(s, br.t[i]);
+            for (i32 i = 0; i < br.n; i++) {
+                if (br.t[i]) {
+                    endbridge(s, br.t[i]);
+                } else {
+                    endtemp(sh, a, &br, i, 0);
+                }
+            }
         }
         if (tg.interp.data) {
             Buf b(&a, 256);
@@ -1966,6 +2060,10 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
                 s->orphans    = pumps[i];
             }
             for (i32 i = 0; i < br.n; i++) {
+                if (!br.t[i]) {
+                    endtemp(sh, a, &br, i, 0);  // what the program has stays
+                    continue;
+                }
                 // The program runs on, but one that has not opened its
                 // pipe yet is not waited for
                 if (!((Pump *)br.t[i]->arg)->connected) cancelbridge(s, br.t[i]);
@@ -2066,7 +2164,11 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     // writes next
     if (npumps || br.n) sh->esc = e.up;
     for (i32 i = 0; i < br.n; i++) {
-        endbridge(s, br.t[i]);
+        if (br.t[i]) {
+            endbridge(s, br.t[i]);
+        } else {
+            endtemp(sh, a, &br, i, 1);
+        }
     }
     for (i32 i = 0; i < npumps; i++) {
         joinpump(s, pumps[i]);
