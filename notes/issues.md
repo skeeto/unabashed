@@ -58,6 +58,21 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
   5.01), so it is untested on XP x64.
 - The shell's own console output shows bytes that are not UTF-8 as the
   Latin-1 character of the same value; the editor shows U+FFFD.
+- A `#!/bin/sh` or `#!/bin/bash` script runs in a copy of the shell
+  whose argv[0] is the executable's path (spawn.cpp, wintarget), so its
+  persona, identity variables and startup rules follow that file name,
+  not the parent's: from `lash` the copy is a login shell and reads the
+  profiles again. A neutral name per mode would fix it, but it also
+  decides the copy's quoting and POSIX mode, so it needs its own step.
+- An fstab `cygdrive` line's `posix=0` does not make drive paths match
+  ignoring case, as Cygwin's does.
+- Mount points under a directory that does not exist are not listed by
+  pathname expansion of their parent.
+- Native mode keeps a trailing CR on inputrc lines.
+- `BASH` drops only a lowercase `.exe` (unabashed.cpp, initvars), where
+  the msys first-word conversion drops one in any case.
+- In msys mode a first word without `/` or `\`, such as `bash.exe`,
+  keeps its `.exe` in `$0` (Git Bash's behaviour unchecked).
 
 
 ## Test infrastructure
