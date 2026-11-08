@@ -2690,6 +2690,66 @@ static Str fieldstr(XField f)
     return f.data;
 }
 
+// The name in a word that is exactly $name, ${name}, "$name" or
+// "${name}", with a valid identifier (not a special or positional).
+struct SimpleParam {
+    Str name;
+    b32 quoted;
+    b32 ok;
+};
+
+static SimpleParam simpleparam(Str s)
+{
+    SimpleParam r = {};
+    if (s.len>=3 && s[0]=='"' && s[s.len-1]=='"') {
+        r.quoted = 1;
+        s = takehead(cuthead(s, 1), s.len-2);
+    }
+    if (s.len<2 || s[0]!='$') return r;
+    s = cuthead(s, 1);
+    if (s[0] == '{') {
+        if (s.len<3 || s[s.len-1]!='}') return r;
+        s = takehead(cuthead(s, 1), s.len-2);
+    }
+    if (!validident(s)) return r;
+    r.name = s;
+    r.ok   = 1;
+    return r;
+}
+
+// Expand a simple parameter word without the general machinery, when
+// the result is plainly at most one field: quoted, or unquoted with no
+// byte that splitting or globbing would act on. Returns 0 to decline.
+static b32 simpleexpand(Shell *sh, Arena *a, Str text, Slice<Str> *out)
+{
+    SimpleParam p = simpleparam(text);
+    if (!p.ok) return 0;
+    Value *v = rawlookup(sh, p.name);
+    if (v && (v->attrs & V_NAMEREF)) return 0;
+    Got g = getvalue(sh, a, v);
+    if (!g.set) {
+        if (sh->opt[O_NOUNSET]) return 0;  // full path reports it
+        if (p.quoted) *out = push(a, *out, Str(""));
+        return 1;
+    }
+    if (!p.quoted) {
+        if (!g.value.len) return 1;  // unquoted empty: removed
+        b32 ifsset;
+        Str ifs = ifsvalue(sh, &ifsset);
+        u8  stop[256] = {};
+        for (iz i = 0; i < ifs.len; i++) stop[ifs[i]] = 1;
+        stop['*'] = stop['?'] = stop['['] = stop['('] = 1;
+        stop['\\'] = stop['\r'] = stop[0] = 1;
+        for (iz i = 0; i < g.value.len; i++) {
+            if (stop[g.value[i]]) return 0;
+        }
+    }
+    // Copy: a later statement may release the variable's buffer while
+    // the fields live on (a for loop's word list)
+    *out = push(a, *out, clone(a, g.value));
+    return 1;
+}
+
 // A word that looks like an assignment gets tilde expansion after its
 // first = and each :, outside posix mode.
 static i32 wordctx(Shell *sh, Word *w)
@@ -2719,6 +2779,7 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
             out = push(a, out, w->text);
             continue;
         }
+        if (simpleexpand(sh, a, w->text, &out)) continue;
         Slice<Str> texts = {};
         if (braces && !(w->flags & W_NOBRACE) && hasbrace(w->text)) {
             texts = braceexpand(a, w->text);
