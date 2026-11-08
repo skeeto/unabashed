@@ -2773,6 +2773,48 @@ static b32 simpleexpand(Shell *sh, Arena *a, Str text, Slice<Str> *out)
     return 1;
 }
 
+// A word of literal text and quotes, holding no expansion or escape, as
+// "test" or 'a b'c: one field, its text without the quotes. Unquoted
+// text is as literalword allows. Returns 0 to decline.
+static b32 quotedliteral(Arena *a, Str s, Str *out)
+{
+    b32 quotes = 0;
+    for (iz i = 0; i < s.len; i++) {
+        u8 c = s[i];
+        if (c == '\'') {
+            for (i++; i<s.len && s[i]!='\''; i++) {}
+            if (i == s.len) return 0;
+            quotes = 1;
+            continue;
+        } else if (c == '"') {
+            for (i++; i<s.len && s[i]!='"'; i++) {
+                if (s[i]=='$' || s[i]=='`' || s[i]=='\\') return 0;
+            }
+            if (i == s.len) return 0;
+            quotes = 1;
+            continue;
+        }
+        switch (c) {
+        case '$': case '`': case '\\': case '~':
+        case '*': case '?': case '[': case '{': case '}': case '(':
+        case ')': case '\r':
+            return 0;
+        }
+    }
+    if (!quotes) return 0;
+    Buf b(a, s.len);
+    for (iz i = 0; i < s.len; i++) {
+        u8 c = s[i];
+        if (c=='\'' || c=='"') {
+            for (i++; s[i] != c; i++) putbyte(&b, s[i]);
+        } else {
+            putbyte(&b, c);
+        }
+    }
+    *out = finish(&b);
+    return 1;
+}
+
 // A word that looks like an assignment gets tilde expansion after its
 // first = and each :, outside posix mode.
 static i32 wordctx(Shell *sh, Word *w)
@@ -2800,6 +2842,11 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
     for (Word *w = words; w; w = w->next) {
         if (literalword(w->text)) {
             out = push(a, out, w->text);
+            continue;
+        }
+        Str lit;
+        if (!(flags & XW_SUBQ) && quotedliteral(a, w->text, &lit)) {
+            out = push(a, out, lit);
             continue;
         }
         if (simpleexpand(sh, a, w->text, &out)) continue;
