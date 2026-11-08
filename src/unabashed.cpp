@@ -875,7 +875,9 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     if (g.set && isabsolute(sh, g.value) && sh->pathmode!=PM_NATIVE) {
         Stat x = os_stat(sh->os, scratch, absolute(sh, a, g.value), 1);
         Stat y = os_stat(sh->os, scratch, cwd, 1);
-        if (!x.err && !y.err && x.ino==y.ino && x.dev==y.dev) pwd = g.value;
+        if (!x.err && !y.err && x.ino==y.ino && x.dev==y.dev) {
+            pwd = clone(a, g.value);  // setvar frees PWD's old buffer
+        }
     }
     setvar(sh, scratch, "PWD", pwd);
     setattrs(sh, "PWD", V_EXPORT, 0);
