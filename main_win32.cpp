@@ -3726,7 +3726,7 @@ static i32 os_kill(Os *os, i64 pid, i32 sig)
             // another program: end it and its kin
             u32 code = sig==2 ? 0xc000013au : SIGEXIT|(u32)(128+sig);
             if (TerminateJobObject(job, code)) {
-                i32     i = os->nkilled % countof(os->killed);
+                i32     i = os->nkilled % (i32)countof(os->killed);
                 Killed *k = os->killed + i;
                 k->pid  = (i32)pid;
                 k->code = code;
@@ -3754,7 +3754,7 @@ static i32 os_kill(Os *os, i64 pid, i32 sig)
         u32 code = sig==2 ? 0xc000013au : SIGEXIT|(u32)(128+sig);
         ok = TerminateProcess(h, code);
         if (ok) {  // see procexit
-            i32     i = os->nkilled % countof(os->killed);
+            i32     i = os->nkilled % (i32)countof(os->killed);
             Killed *k = os->killed + i;
             k->pid  = (i32)pid;
             k->code = code;
