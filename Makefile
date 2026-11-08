@@ -16,7 +16,7 @@ WARN    = -Wall -Wextra -Wconversion -Wno-sign-conversion \
           -Wno-unused-parameter -Wno-unused-function
 DEBUG   = -g3 -fsanitize=undefined -fsanitize-trap
 RELEASE = -O2 -s
-WIN32   = -nostartfiles -static-libgcc -Wl,--stack,0x1000000
+WIN32   = -nostartfiles -static-libgcc
 SOURCES = $(wildcard src/*.cpp)
 
 default:

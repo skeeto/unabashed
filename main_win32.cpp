@@ -1,5 +1,5 @@
 // Win32 platform layer: no CRT, no headers, runs on Windows XP and later
-// $ g++ -std=c++20 -O2 -s -nostartfiles -static-libgcc -Wl,--stack,0x1000000
+// $ g++ -std=c++20 -O2 -s -nostartfiles -static-libgcc
 //       -o unabashed.exe main_win32.cpp
 // The i686 build also takes -Wl,--large-address-aware (4 GiB on x64
 // Windows) and subsystem version 5.01 for XP: see the Makefile.
@@ -4089,26 +4089,10 @@ static i64 os_now(Os *os)
     return unixns(t);
 }
 
-// The main thread's stack reservation, from this image's PE header,
-// so that deep shell recursion fails as cleanly as on Linux.
-extern "C" byte __ImageBase[];
-
-static iz stackreserve()
-{
-    i32 lfanew = 0;
-    __builtin_memcpy(&lfanew, __ImageBase+0x3c, 4);
-    byte *opt   = __ImageBase + lfanew + 24;
-    c16   magic = 0;
-    __builtin_memcpy(&magic, opt, 2);
-    u64 r64 = 0;
-    u32 r32 = 0;
-    if (magic == 0x20b) {
-        __builtin_memcpy(&r64, opt+72, 8);
-        return (iz)r64;
-    }
-    __builtin_memcpy(&r32, opt+72, 4);
-    return (iz)r32;
-}
+// The shell runs on a fiber of this reservation, not on the main
+// thread's stack, so that deep shell recursion fails as cleanly as on
+// Linux whatever the PE header says, as vprocs' fibers do.
+enum { SHELLSTACK = (iz)16<<20 };
 
 static byte *fiberstack(Os *, iz) { return 0; }    // unused on Win32
 static void  fiberunstack(Os *, byte *, iz) {}
@@ -4191,6 +4175,23 @@ static b32 ctrlcignored()
     #else
     return 0;
     #endif
+}
+
+// Runs the shell on its own fiber (see SHELLSTACK). A shell killed by
+// SIGINT exits as Ctrl-C ends a native program, which Cygwin's
+// processes also take for death by SIGINT; by another signal, with
+// SIGEXIT.
+static void shellmain(Os *os, void *arg)
+{
+    i32 status = sh_main(os, (OsInfo *)arg);
+    flushw(os);
+    u32 code   = (u32)(status & 255);
+    if (status == (WSIGNALED|(128+2))) {
+        code = 0xc000013a;
+    } else if (status & WSIGNALED) {
+        code |= SIGEXIT;
+    }
+    ExitProcess(code);
 }
 
 extern "C" __attribute((force_align_arg_pointer))
@@ -4379,18 +4380,7 @@ void mainCRTStartup()
     info.ninherit = in.len;
 
     if (ctrlcignored()) info.sigign |= (u64)1 << (2-1);
-    info.stack = stackreserve();
-
-    // A shell killed by SIGINT exits as Ctrl-C ends a native program,
-    // which Cygwin's processes also take for death by SIGINT; by
-    // another signal, with SIGEXIT
-    i32 status = sh_main(&os, &info);
-    flushw(&os);
-    u32 code   = (u32)(status & 255);
-    if (status == (WSIGNALED|(128+2))) {
-        code = 0xc000013a;
-    } else if (status & WSIGNALED) {
-        code |= SIGEXIT;
-    }
-    ExitProcess(code);
+    info.stack = SHELLSTACK;
+    os_switch(&os, os_fiber(&os, &a, SHELLSTACK, shellmain, &info));
+    __builtin_unreachable();  // shellmain exits the process
 }
