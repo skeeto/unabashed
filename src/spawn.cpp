@@ -512,6 +512,7 @@ struct Target {
 // status, with msys mode's .exe suffix rule.
 struct Located {
     Str  native;
+    Str  ext;     // extension the lookup appended, if any
     Stat st;
     i32  err;
 };
@@ -531,6 +532,7 @@ static Located locate(Shell *sh, Arena *a, Str path)
         Stat x   = os_stat(sh->os, *a, exe, 1);
         if (!x.err && x.type==FT_FILE) {
             l.native = exe;
+            l.ext    = Str(".exe");
             l.st     = x;
         }
     }
@@ -541,6 +543,7 @@ static Located locate(Shell *sh, Arena *a, Str path)
             Stat x    = os_stat(sh->os, *a, cand, 1);
             if (!x.err && x.type==FT_FILE) {
                 l.native = cand;
+                l.ext    = winexts[e];
                 l.st     = x;
                 break;
             }
@@ -863,7 +866,8 @@ static Target wintarget(Shell *sh, Arena *a, Str path, Str *argv, iz argc, Slice
             next = push(a, next, b.interp);
             if (b.arg.len) next = push(a, next, b.arg);
         }
-        next = push(a, next, file);
+        // A script found by appending an extension is named with it
+        next = push(a, next, l.ext.len ? concat(a, file, l.ext) : file);
         for (iz i = 1; i < v.len; i++) next = push(a, next, v[i]);
         v = next;
 
