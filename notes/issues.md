@@ -81,9 +81,6 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
   mode drop it at import).
 - `TMOUT` is only read's default timeout: an interactive shell does not
   exit after TMOUT idle seconds at the prompt, as bash's does.
-- A path below `/dev/fd/N` fails with "No such file or directory"
-  (paths.cpp, devicename leaves `more` unset for DV_FDDIR), where every
-  other device gives "Not a directory".
 - A shell that dies of SIGINT exits 0xC000013A, so a parent that keeps
   only the low byte sees 58, not 130 (Git Bash maps the code to 130).
 

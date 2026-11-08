@@ -561,8 +561,10 @@ static Device devicename(Str p)
     if (r.kind==DV_FDDIR && c.ok && c.tail.len) {
         Str t = c.tail;
         if (t[t.len-1] == '/') t.len--;
+        Cut f = cut(t, '/');  // /dev/fd/1/x: not a directory
         r.kind = DV_FD;
-        r.num  = pathnum(t);
+        r.num  = pathnum(f.head);
+        r.more = f.ok;
     } else if (r.kind != DV_FDDIR) {
         r.more = c.ok;
     }
