@@ -73,6 +73,19 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
   the msys first-word conversion drops one in any case.
 - In msys mode a first word without `/` or `\`, such as `bash.exe`,
   keeps its `.exe` in `$0` (Git Bash's behaviour unchecked).
+- The kit's etc/profile exports `PATH_SEPARATOR=';'` for configure in
+  native mode; a `bash` started from that login shell inherits it, and
+  configure then walks an msys PATH as one element. unabashed.1 says to
+  unset it; the profile cannot fix inheritance, so this is the kit's
+  decision (export it only when `OSTYPE` is not cygwin, or have msys
+  mode drop it at import).
+- `TMOUT` is only read's default timeout: an interactive shell does not
+  exit after TMOUT idle seconds at the prompt, as bash's does.
+- A path below `/dev/fd/N` fails with "No such file or directory"
+  (paths.cpp, devicename leaves `more` unset for DV_FDDIR), where every
+  other device gives "Not a directory".
+- A shell that dies of SIGINT exits 0xC000013A, so a parent that keeps
+  only the low byte sees 58, not 130 (Git Bash maps the code to 130).
 
 
 ## Test infrastructure
