@@ -818,11 +818,53 @@ static b32 runscode(Str t)
     return 0;
 }
 
+// Might expanding this word text run code hidden in a value? Arithmetic
+// (expansions, subscripts, substring offsets and lengths) evaluates
+// variables' values as expressions, whose subscripts may hold comsubs
+// (i='a[$(cmd)]'; ${a[i]}), as may the target of an indirection or of
+// a nameref. A false positive costs only speed.
+static b32 hiddencode(Shell *sh, Str t)
+{
+    for (iz i = 0; i+1 < t.len; i++) {
+        if (t[i] == '\\') {
+            i++;
+            continue;
+        }
+        if (t[i] != '$') continue;
+        b32 braced = t[i+1] == '{';
+        iz  b      = i + 1 + braced;
+        if (t[i+1]=='(' || t[i+1]=='[') return 1;  // $(( and $[
+        if (braced && b<t.len && (t[b]=='!' || t[b]=='#')) {
+            if (t[b] == '!') return 1;
+            b++;
+        }
+        iz e = b;
+        while (e<t.len && identchar(t[e])) e++;
+        if (e > b) {
+            Value *v = rawlookup(sh, span(t.data+b, t.data+e));
+            if (v && (v->attrs & V_NAMEREF)) return 1;
+        }
+        if (!braced) continue;
+        if (e<t.len && t[e]=='[') {
+            for (e++; e<t.len && t[e]!=']'; e++) {
+                if (!digit(t[e]) && t[e]!='@' && t[e]!='*') return 1;
+            }
+            e++;
+        }
+        if (e+1<t.len && t[e]==':' && t[e+1]!='-' && t[e+1]!='=' &&
+                t[e+1]!='?' && t[e+1]!='+') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // May a stage start directly, with no vproc? A likely external with
-// no redirections, whose words probably run no shell code when
-// expanded, and no descriptor that would need a pump. The words expand
-// before the stages to the right start, so code that waits on them
-// would hang (runpipeline drops the pipe ends of those on the left).
+// no redirections, whose words run no shell code when expanded (seen
+// or hidden in a value), and no descriptor that would need a pump. The
+// words expand before the stages to the right start, so code that
+// waits on them would hang (runpipeline drops the pipe ends of those on
+// the left).
 // So would command_not_found_handle writing more than a pipe holds,
 // should the program not be found after all (PATH=/x prog, or one the
 // words assign), so a defined handler rules this out.
@@ -831,7 +873,7 @@ static b32 directstage(Shell *sh, Arena scratch, Node *n, b32 first)
     if (!likelyexternal(sh, n) || n->redirs) return 0;
     if (findfunc(sh, "command_not_found_handle")) return 0;
     for (Word *w = n->words; w; w = w->next) {
-        if (runscode(w->text)) return 0;
+        if (runscode(w->text) || hiddencode(sh, w->text)) return 0;
     }
     Fdtab *t = sh->fds;
     for (i32 fd = first ? 0 : 2; fd < t->top; fd++) {

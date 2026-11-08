@@ -81,17 +81,6 @@ None: the XP flakes were fixed or not seen again at step 10 (m7.md).
   shared reader of a lent pipe would hit it. (m5a.md, step 8)
   Moved from M5b: no test of real background processes hit it; it
   belongs with the read-ahead work on shared pipes.
-- Launcher fibers: an external pipeline stage whose words contain
-  `$(...)`, a procsub, a funsub or `@P` runs as a full vproc. (m3a.md)
-  The other external stages before the last expand synchronously
-  before the stages to their right start, so a comsub `runscode`
-  cannot see (`i='a[$(cmd)]'; x | prog ${a[i]} | y`, from the
-  variable's value) hangs if it waits on a later stage, as through a
-  FIFO the later stage writes; bash runs it concurrently. A launcher
-  fiber per such stage fixes this too, and would let a stage with
-  `command_not_found_handle` defined start directly again (now a
-  vproc, so the handler cannot fill the stage's pipe before its
-  reader starts). (m3a.md, fuzz triage, review)
 - No compile cache for `=~` (bash has none either).
 
 - **010-writes flakes on Windows** (t/win32): `f x | "$U" -c 'read l'`
@@ -171,6 +160,11 @@ program's pipe handling studied, not shell fidelity.
 
 ## Test infrastructure
 
+- The vos's FIFOs are plain files: opening one does not wait for the
+  other end, and reading one with no data is the end of file, so a
+  test whose point is a reader waiting on a writer (t/exec/938) passes
+  on the vos whatever the shell does; RECORD_CHECK on the Linux build
+  is what checks it. (m8.md, step 4)
 - t/unit/fakes_test.cpp no longer builds: vos.cpp uses paths.cpp
   (equalfold, hasdrive, winnorm, ...) and pe.cpp's PeInfo since M5a
   steps 4-7, and the test does not include them. (m5a.md, step 9)
