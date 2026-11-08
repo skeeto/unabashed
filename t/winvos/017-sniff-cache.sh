@@ -3,7 +3,8 @@
 # The execute bit and kind of a file come from its contents through a
 # cache keyed by path, mtime and size: a rewrite of the same size
 # shows through once the mtime moves, and subshells share the cache.
-# Without #! the file still runs, as bash runs it (ENOEXEC fallback).
+# Without #! (and without an extension) it is not executable and is
+# refused, as busybox-w32 refuses it.
 printf '#!/bin/sh\necho one\n' >t
 [ -x t ] && echo "x"
 ./t

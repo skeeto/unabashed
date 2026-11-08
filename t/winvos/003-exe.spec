@@ -1,4 +1,4 @@
-== stdout 264
+== stdout 255
 plain -
 tool.EXE x
 run.bat x
@@ -16,12 +16,12 @@ argv[1] = <b>
 cmdline = <mine c>
 argv[0] = <mine>
 argv[1] = <c>
-script d
 shebang e
 
-== stderr 0
+== stderr 42
+bash: line 26: ./noext: Permission denied
 
-== merged 264
+== merged 297
 plain -
 tool.EXE x
 run.bat x
@@ -39,7 +39,7 @@ argv[1] = <b>
 cmdline = <mine c>
 argv[0] = <mine>
 argv[1] = <c>
-script d
+bash: line 26: ./noext: Permission denied
 shebang e
 
 == status 0

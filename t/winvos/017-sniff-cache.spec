@@ -1,20 +1,20 @@
-== stdout 47
+== stdout 45
 x
 one
 -
-two
-status 0
+status 126
 six
 cmdline = <.\t seven>
 
-== stderr 0
+== stderr 38
+bash: line 14: ./t: Permission denied
 
-== merged 47
+== merged 83
 x
 one
 -
-two
-status 0
+bash: line 14: ./t: Permission denied
+status 126
 six
 cmdline = <.\t seven>
 

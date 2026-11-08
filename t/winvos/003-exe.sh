@@ -6,6 +6,7 @@
 # executable, and a name without one is found with .exe added, also
 # as ./mine (busybox-w32's add_win32_extension), argv[0] getting
 # backslashes as spawnveq gives them (checked against busybox sh).
+# A text file without #! or extension is refused (busybox sh too).
 : >plain
 : >tool.EXE
 : >run.bat

@@ -2424,6 +2424,13 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
     if (err == E_INTERP) {
         return 126;  // reported
     }
+    if (err==E_NOEXEC && sh->pathmode==PM_NATIVE &&
+        !canexec(sh, pathstat(sh, a, path, 1))) {
+        // Windows ran what native mode does not count as executable (a
+        // text file without #! or extension): as busybox-w32, refused
+        // rather than run as shell code (msys mode runs it, as Git Bash)
+        err = E_ACCES;
+    }
     if (err==E_NOEXEC && direct && isshellscript(sh, a, path)) {
         direct->retry = 1;  // run as shell code, concurrently
         return 0;
