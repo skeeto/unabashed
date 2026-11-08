@@ -564,8 +564,8 @@ Moved from M5a: limits of the test tiers, not of the shell.
   through one open accumulate in every case, where a Git Bash child has
   its own buffer (its text lost to the parent's next write); a
   program's output is set as it closes it, not per write. A clipboard
-  another program holds is Permission denied after about 300 ms of
-  retries, where Git Bash silently reads nothing or drops the write.
+  another program holds is Permission denied after a few hundred ms of
+  retries (0.3 s on Windows 11, 0.17 s on XP), where Git Bash silently reads nothing or drops the write.
   Text is capped at 64 MiB (2 MiB in the 32-bit build), past which
   writes fail with ENOMEM. (notes/research/msys2.md)
 - **Accepted: identity is not re-rendered by msyspath** (M7 step 9, from

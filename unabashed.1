@@ -1562,7 +1562,7 @@ An open with no write, such as
 .BR :\~>/dev/clipboard ,
 leaves the clipboard alone.
 While another program keeps the clipboard open, the shell retries for
-about 300 milliseconds and then fails with
+a few hundred milliseconds at most and then fails with
 .BR "Permission denied" .
 Only the shell's own redirections reach it, so write
 .BR "cat </dev/clipboard" ,
