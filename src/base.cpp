@@ -117,7 +117,15 @@ struct Str {
 
     bool operator==(Str s)
     {
-        return len==s.len && (!len || !__builtin_memcmp(data, s.data, (uz)len));
+        if (len != s.len) {
+            return 0;
+        } else if (len > 16) {
+            return !__builtin_memcmp(data, s.data, (uz)len);
+        }
+        for (iz i = 0; i < len; i++) {  // names: cheaper than a call
+            if (data[i] != s.data[i]) return 0;
+        }
+        return 1;
     }
 };
 
