@@ -924,6 +924,7 @@ static File *openwin(Shell *sh, Arena *a, Str name, i32 flags)
     } else if (r.kind==PK_DEV && r.sub=="clipboard" && !(flags&OF_WRITE)) {
         // A snapshot of its text as it is now, CRLF kept, empty (not an
         // error) when it holds none
+        clipsettle(sh->sched);
         ClipText c = os_clipget(sh->os, a);
         err = c.err;
         if (!err) {
@@ -932,6 +933,11 @@ static File *openwin(Shell *sh, Arena *a, Str name, i32 flags)
             f->ownmem = 1;
             return f;
         }
+    } else if (r.kind==PK_DEV && r.sub=="clipboard") {
+        // Written: what goes through this open accumulates (Clip)
+        File *f = newfile(sh, F_CLIP, flags);
+        f->clip = newclip(sh->sched);
+        return f;
     } else if (r.kind == PK_DEV) {
         // zero, full, random and urandom read from a pump; written, all
         // are sinks but full
@@ -1547,7 +1553,9 @@ static Stat fdstat(Shell *sh, i64 fd)
         s = os_fstat(sh->os, f->h);
     } else {
         // What a program would find there (materialize)
-        s.type  = f->kind==F_MEM ? memfiletype(sh, f) : FT_PIPE;
+        s.type  = f->kind==F_MEM  ? memfiletype(sh, f)
+                : f->kind==F_CLIP ? FT_CHAR
+                :                   FT_PIPE;
         s.mode  = s.type==FT_FILE ? 0400 : s.type==FT_CHAR ? 0666 : 0600;
         s.size  = s.type==FT_FILE ? f->mem.len : 0;
         s.nlink = 1;
@@ -1770,18 +1778,25 @@ static void endtemp(Shell *sh, Arena a, Bridges *br, i32 i, b32 feed)
     Sched *s = sh->sched;
     File  *f = sh->fds->fd[br->fd[i]];
     if (feed && f && !(f->flags&OF_READ) && os_seek(sh->os, br->h[i], 0, 0)==0) {
-        iz  cap = 1<<16;
-        u8 *buf = allocbytes(&a, cap);
-        for (i32 err = 0; !err;) {
+        iz  cap   = 1<<16;
+        u8 *buf   = allocbytes(&a, cap);
+        b32 wrote = 0;
+        i32 err   = 0;
+        while (!err) {
             iz n = os_read(sh->os, br->h[i], buf, cap);
             if (n <= 0) break;
+            wrote = 1;
             switch (f->kind) {
             case F_OS:      err = taskwrite(s, f->h, buf, n);    break;
             case F_PIPE:    err = pipewrite(s, f->pipe, buf, n); break;
             case F_CAPTURE: print(f->cap, {buf, n});             break;
+            case F_CLIP:
+                err = clipappend(s, f->clip, {buf, n}) ? 0 : E_NOMEM;
+                break;
             default:        err = E_BADF;
             }
         }
+        if (f->kind==F_CLIP && wrote && !err) clipsync(s, f->clip);
     }
     os_close(sh->os, br->h[i]);
 }
@@ -2032,6 +2047,16 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
             closeafter[nclose++] = sf.h;
             pumps[npumps++] = spawnpump(s, pp);
         } break;
+        case F_CLIP: {
+            // Appended by a pump, which sets the clipboard at the end,
+            // joined after
+            if (npumps == countof(pumps)) continue;
+            ClipWriter w = clipwriter(s, f->clip);
+            if (w.h == BADHANDLE) continue;
+            sf.h = w.h;
+            closeafter[nclose++] = w.h;
+            pumps[npumps++] = w.t;
+        } break;
         }
         fds[nfds++] = sf;
     }
@@ -2144,6 +2169,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
             escape(sh, e.why);
         }
     }
+    clipsettle(s);
     Spawned r = os_spawn(sh->os, a, &sp);
     if (stops) closegate(sh);  // the group is whole: its stages may run
     for (i32 i = 0; i < nclose; i++) {
@@ -2245,6 +2271,15 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     for (i32 i = 0; i < npumps; i++) {
         joinpump(s, pumps[i]);
     }
+    for (i32 fd = 0; npumps && fd<sh->fds->top; fd++) {
+        File *f = sh->fds->fd[fd];
+        if (f && f->kind==F_CLIP && f->clip->err) {
+            // Where the program's own write would have failed
+            Str msg = concat(&a, "/dev/clipboard: ", errtext(f->clip->err));
+            f->clip->err = 0;
+            shellerror(sh, a, msg);
+        }
+    }
     if (sh->jobs || sh->coprocs) {
         // as bash after each foreground job: drop the jobs already
         // reported, and a coprocess that ended
@@ -2318,6 +2353,7 @@ static Str readwholefile(Shell *sh, Arena *a, Str path, i32 *err)
         return finish(&b);
     }
     if (isclipboard(sh, *a, path)) {
+        clipsettle(sh->sched);
         ClipText c = os_clipget(sh->os, a);
         *err = c.err;
         return c.text;
@@ -3222,7 +3258,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             b32 failed = (b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed;
             if (failed && !sh->nowriteerr) {
                 i32 e   = sh->writeerr;
-                Str why = errtext(e==E_PIPE || e==E_NOSPC ? e : E_BADF);
+                b32 keep = e==E_PIPE || e==E_NOSPC || e==E_ACCES || e==E_NOMEM;
+                Str why  = errtext(keep ? e : E_BADF);
                 builtinerror(sh, scratch, name, concat(&scratch, "write error: ", why));
                 sh->status = 1;
             }

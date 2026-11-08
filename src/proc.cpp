@@ -282,7 +282,8 @@ static PathCtx *copypaths(Arena *a, PathCtx *p)
 }
 
 // A File of vproc c for the same object as f: a duplicate handle, the
-// same capture buffer, a copy of the text, or another end of the pipe.
+// same capture buffer or clipboard file, a copy of the text, or another
+// end of the pipe.
 static File *copyfile(Shell *c, File *f)
 {
     File *r = newfile(c, f->kind, f->flags);
@@ -306,6 +307,10 @@ static File *copyfile(Shell *c, File *f)
         } else {
             f->pipe->writers++;
         }
+        break;
+    case F_CLIP:
+        r->clip = f->clip;
+        r->clip->refs++;
         break;
     }
     return r;

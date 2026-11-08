@@ -50,8 +50,6 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
   and it reports `syntax error near unexpected token` and goes on.
 - Native mode rewrites colons to semicolons only in PATH; busybox-w32
   also rewrites CDPATH and MANPATH.
-- Msys mode discards writes to `/dev/clipboard`; Git Bash sets the
-  Windows clipboard.
 - A native child of an msys shell whose PATH is missing or empty gets
   `PATH=<root>\usr` (MSYS2's rule), a directory w64devkit lacks.
 - The x86_64 build sets no PE subsystem version (the i686 build sets
@@ -556,11 +554,20 @@ Moved from M5a: limits of the test tiers, not of the shell.
   directories net, registry*, sys, sysvipc list nothing; /proc/self
   lists only exename, fd and winexename and serves only the first and
   last (no cmdline, cwd, environ, exe, maps, stat, status, winpid...),
-  and /proc/self/fd lists nothing. `/dev/clipboard` and the other
-  sinks only accept writes, and discard them (Git Bash sets the
-  clipboard); reads fail. (m5a.md, steps 5, 10a)
+  and /proc/self/fd lists nothing. (m5a.md, steps 5, 10a)
   Scripts on Windows do not read /proc (nproc and uname answer the usual
   questions); the names keep `test -e` and globbing right.
+- **Accepted: /dev/clipboard is text only**: it holds the Windows
+  clipboard's CF_UNICODETEXT, where Git Bash adds Cygwin's private
+  format, so text after a NUL and invalid UTF-8 (as WTF-8) do not
+  round-trip through it as they do between Cygwin programs. Writes
+  through one open accumulate in every case, where a Git Bash child has
+  its own buffer (its text lost to the parent's next write); a
+  program's output is set as it closes it, not per write. A clipboard
+  another program holds is Permission denied after about 300 ms of
+  retries, where Git Bash silently reads nothing or drops the write.
+  Text is capped at 64 MiB (2 MiB in the 32-bit build), past which
+  writes fail with ENOMEM. (notes/research/msys2.md)
 - **Accepted: identity is not re-rendered by msyspath** (M7 step 9, from
   M5a): toggling it re-renders PATH and PWD only; BASH, OSTYPE, MACHTYPE
   and HOME keep the startup persona's forms. pwd's synopsis follows

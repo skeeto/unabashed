@@ -87,6 +87,7 @@ enum : iz {
 
 struct Vproc;
 struct Pump;
+struct Clip;
 struct Shell;
 
 // ChaCha8 as the stream behind /dev/random and /dev/urandom: one per
@@ -130,6 +131,8 @@ struct Sched {
     Task   *freesmall;
     Pipe   *freepipes;
     Pump   *freepumps;
+    Clip   *freeclips;
+    iz      nclippumps;  // pumps for clipboard files still running
     Vproc  *freevprocs;  // pooled vproc memory (proc.cpp)
     iz      reserve;     // address space for each arena of a vproc
     u64     entropy;     // the process's random base for RANDOM and
@@ -945,6 +948,8 @@ struct Pump {
     Buf    *buf;     // PUMP_TOBUF: where to append what h delivers, or discard
     i64     owner;   // PUMP_TOBUF: BASHPID of the vproc writing it, or 0
     Wtrace *wtrace;  // PUMP_TOBUF: the capture's, for tracewrite
+    Clip   *clip;    // PUMP_TOBUF: a clipboard file to append to instead,
+                     // setting the clipboard at the end (a reference)
     Handle  peer;    // PUMP_SERVE, PUMP_TAKE: owned, or BADHANDLE
     // PUMP_SERVE, PUMP_TAKE: h is the oldest instance of the named pipe
     // still listening, spare the next ones (owned, or BADHANDLE)
@@ -959,6 +964,64 @@ struct Pump {
     i32     gen;        // PUMP_GEN: GEN_*
     u8     *gendata;    // PUMP_GEN: GENBUF bytes, once used so, kept
 };
+
+// The Windows clipboard opened for writing (/dev/clipboard): the text
+// written through the open accumulates, and each write sets the
+// clipboard to all of it, as Cygwin does. Shared by its Files, across
+// vprocs, and by the pumps of programs writing it; pooled.
+struct Clip {
+    Clip  *next;    // free list
+    Arena  a;       // its own, where b grows in place
+    Arena  fresh;   // a as new, to start over from in the pool
+    Buf    b;
+    i32    refs;
+    i32    err;     // a pump's failure to set it, not yet reported
+    Wtrace wtrace;  // chaos: its last writer
+};
+
+enum : iz { CLIPMAX = (iz)1<<26 };  // text bytes, at most
+
+static Clip *newclip(Sched *s)
+{
+    Clip *c = s->freeclips;
+    if (c) {
+        s->freeclips = c->next;
+    } else {
+        c = alloc<Clip>(&s->a);
+        c->fresh = newarena(s->os, s->reserve);
+    }
+    Arena fresh = c->fresh;
+    *c = {};
+    c->fresh = c->a = fresh;
+    c->b     = Buf(&c->a);
+    c->refs  = 1;
+    return c;
+}
+
+static void clipunref(Sched *s, Clip *c)
+{
+    if (--c->refs) return;
+    c->next = s->freeclips;
+    s->freeclips = c;
+}
+
+// Append to a clipboard file's text: false past its limit, which
+// leaves room in its arena for the text to double and then convert.
+static b32 clipappend(Sched *s, Clip *c, Str data)
+{
+    iz max = s->reserve/8<CLIPMAX ? s->reserve/8 : CLIPMAX;
+    if (data.len > max-c->b.len) return 0;
+    tracewrite(s, &c->wtrace);
+    print(&c->b, data);
+    return 1;
+}
+
+// Set the clipboard to all the text written so far: 0 or an error.
+static i32 clipsync(Sched *s, Clip *c)
+{
+    Arena scratch = c->a;  // beyond the text
+    return os_clipset(s->os, scratch, {c->b.data, c->b.len});
+}
 
 // A Pump that outlives the arena of whoever starts it, pooled.
 static Pump *newpump(Sched *s)
@@ -1045,16 +1108,29 @@ static void pumpmain(Task *t)
     case PUMP_TEXT:
         taskwrite(s, p->h, p->text.data, p->text.len);
         break;
-    case PUMP_TOBUF:
+    case PUMP_TOBUF: {
+        i32 err   = 0;
+        b32 wrote = 0;
         for (;;) {
             iz n = taskread(s, p->h, buf, PUMPBUF);
             if (n <= 0) break;
-            if (p->buf) {
+            if (p->clip) {
+                wrote = 1;
+                if (!err && !clipappend(s, p->clip, {buf, n})) err = E_NOMEM;
+            } else if (p->buf) {
                 tracewrite(s, p->wtrace);
                 print(p->buf, {buf, n});
             }
         }
-        break;
+        if (p->clip) {
+            // As the program would have set it with its last write
+            if (wrote && !err) err = clipsync(s, p->clip);
+            if (err) p->clip->err = err;
+            clipunref(s, p->clip);
+            p->clip = 0;
+            s->nclippumps--;
+        }
+    } break;
     case PUMP_SERVE: {
         // Clients in turn, each served what the last left: one leaving
         // before it read (perhaps one that only looked, as a stat
@@ -1122,6 +1198,53 @@ static Task *spawnpump(Sched *s, Pump *p)
         }
     }
     return taskspawn(s, pumpmain, p, SMALLSTACK);
+}
+
+// An OS pipe for a program writing a clipboard file: its pump appends
+// what arrives and sets the clipboard once the program closes it. The
+// write handle, which the caller owns, and the pump, or BADHANDLE.
+struct ClipWriter {
+    Handle h;
+    Task  *t;
+};
+
+static ClipWriter clipwriter(Sched *s, Clip *c)
+{
+    ClipWriter r = {};
+    r.h = BADHANDLE;
+    OsPipe p = os_pipe(s->os);
+    if (p.err) return r;
+    Pump *pp = newpump(s);
+    pp->kind = PUMP_TOBUF;
+    pp->h    = p.r;
+    pp->clip = c;
+    c->refs++;
+    s->nclippumps++;
+    r.h = p.w;
+    r.t = spawnpump(s, pp);
+    return r;
+}
+
+// Let orphaned pumps for clipboard files (a background program's) run
+// while they can without waiting: what such a program wrote before it
+// ended reaches the clipboard before the shell next writes or reads it,
+// or starts a program, as capturedrain does for a capture.
+static void clipsettle(Sched *s)
+{
+    while (s->nclippumps) {
+        while (s->npending) {
+            Io *io = os_wait(s->os, WAIT_POLL);
+            if (!io) break;
+            s->npending--;
+            wake(s, (Task *)io->ctx);
+        }
+        b32 ready = 0;
+        for (Task *t = s->orphans; t; t = t->sib) {
+            ready |= t->state==TS_READY && t->fn==pumpmain && ((Pump *)t->arg)->clip;
+        }
+        if (!ready) return;
+        yield(s);
+    }
 }
 
 // Give a pipe an OS form for a program to read: an OS pipe fed by a

@@ -223,7 +223,7 @@ static void storeleave(Store *st, Watermark *w)
 
 // Open files and the descriptor table
 
-enum : i32 { F_OS, F_CAPTURE, F_MEM, F_PIPE };
+enum : i32 { F_OS, F_CAPTURE, F_MEM, F_PIPE, F_CLIP };
 
 // An open file description, shared by descriptors. Files belong to one
 // vproc's store: another vproc gets its own File for the same object
@@ -239,6 +239,7 @@ struct File {
     Buf   *cap;      // F_CAPTURE: command substitution output
     Str    mem;      // F_MEM: here-document or pipeline text
     Pipe  *pipe;     // F_PIPE: the read end with OF_READ, else the write end
+    Clip  *clip;     // F_CLIP: /dev/clipboard opened for writing
     iz     pos;
     b32    ownmem;   // mem is store memory to free with the file
     b32    full;     // F_OS: /dev/full, whose writes fail with ENOSPC
@@ -868,6 +869,12 @@ static b32 fdwrite(Shell *sh, i32 fd, Str s)
     case F_PIPE:
         err = pipewrite(sh->sched, f->pipe, s.data, s.len);
         break;
+    case F_CLIP:
+        if (!s.len) return 1;
+        clipsettle(sh->sched);
+        err = clipappend(sh->sched, f->clip, s) ? clipsync(sh->sched, f->clip)
+                                                : E_NOMEM;
+        break;
     }
     if (err == E_PIPE) {
         sigpipe(sh);
@@ -1054,6 +1061,8 @@ static void fileunref(Shell *sh, File *f)
         os_close(sh->os, f->h);
     } else if (f->kind == F_PIPE) {
         pipeclose(sh->sched, f->pipe, !(f->flags & OF_READ));
+    } else if (f->kind == F_CLIP) {
+        clipunref(sh->sched, f->clip);
     }
     if (f->ownmem) {
         sfreestr(sh->store, f->mem);

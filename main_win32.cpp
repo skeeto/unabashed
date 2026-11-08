@@ -4133,7 +4133,8 @@ static u64 os_entropy(Os *os)
 
 // Open the clipboard, loading user32 first if need be: 0, E_NOSYS
 // without it, or E_ACCES while another program keeps it open (about
-// 150 ms of retries, as the holder usually lets go at once).
+// 300 ms of retries with the timer's granularity, as the holder
+// usually lets go at once).
 static i32 clipopen(Os *os)
 {
     if (!os->cliptried) {

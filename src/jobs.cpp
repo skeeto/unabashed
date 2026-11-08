@@ -902,6 +902,15 @@ static BgFds bgfds(Shell *sh, Arena *a, File *in, File *out)
             pt->sib    = s->orphans;
             s->orphans = pt;
         } break;
+        case F_CLIP: {
+            // Set as the process closes it, by an orphan pump
+            ClipWriter w = clipwriter(s, f->clip);
+            if (w.h == BADHANDLE) continue;
+            sf.h = w.h;
+            r.close[r.nclose++] = sf.h;
+            w.t->sib   = s->orphans;
+            s->orphans = w.t;
+        } break;
         }
         r.fds[r.nfds++] = sf;
     }
