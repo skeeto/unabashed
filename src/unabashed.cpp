@@ -1856,6 +1856,11 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             // A script file
             i32  err;
             Str  src = readwholefile(sh, &scratch, file, &err);
+            if (err) {
+                // Windows may refuse to open a directory (.) at all
+                Stat d = pathstat(sh, scratch, file, 1);
+                err = !d.err && d.type==FT_DIR ? 0 : err;
+            }
             Got  path = getvar(sh, &scratch, "PATH");
             if (err==E_NOENT && path.set && !haspath(sh, file)) {
                 // As bash: a script found along PATH, whose found name
