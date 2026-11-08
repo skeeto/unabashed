@@ -48,7 +48,7 @@ argv32.exe: tools/argv.cpp
 	$(CXX32) -std=c++20 -municode $(WARN) $(RELEASE) -o $@ tools/argv.cpp
 
 unabashed: main_posix.cpp $(SOURCES)
-	$(CXX) $(FLAGS) $(WARN) $(RELEASE) -o $@ main_posix.cpp
+	$(CXX) $(FLAGS) $(WARN) $(RELEASE) -nostdlib++ -o $@ main_posix.cpp
 
 debug: main_posix.cpp $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -o $@ main_posix.cpp
