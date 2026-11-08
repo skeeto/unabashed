@@ -30,7 +30,12 @@ one
 two
 a	c
 b	d
-diff status 0
+--- \\.\pipe\@P
++++ \\.\pipe\@P
+@@ -1 +1 @@
+-a
++b
+diff status 1
 loop 1
 loop 2
 loop 3

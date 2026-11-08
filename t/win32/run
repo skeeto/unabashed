@@ -1,7 +1,9 @@
 #!/bin/sh
 # t/win32/run: the Windows integration tests. Curated scripts only, on
 # the real file system and processes, each confined by tools/sandbox
-# to a directory of its own under WORKDIR (keep it out of the repo).
+# to a directory of its own under WORKDIR (keep it out of the repo,
+# and out of %TEMP%: the shell as bash has /tmp there, as Git Bash does,
+# and Cygwin's mount order then names paths under it /tmp/...).
 #
 # usage: t/win32/run [-s SHELL] [-x] [-k] WORKDIR [TEST.sh...]
 #   -s SHELL  the shell under test (default: unabashed.exe beside this

@@ -2897,6 +2897,11 @@ static NamedPipe os_namedpipe(Os *os, Arena *a, Str name, i32 how)
             for (i32 i = 0; i < 16; i++) {
                 putbyte(&b, (u8)"0123456789abcdef"[(tag >> (60 - 4*i)) & 15]);
             }
+            // busybox-w32's stat reads a file's first KiB to decide its
+            // execute bit, which would take a bridge's data before the
+            // program opens it to read (busybox diff saw an empty
+            // procsub), except for a name ending in .dll
+            print(&b, ".dll");
             fresh = finish(&b);
         }
         Str use = name.data ? name : fresh;

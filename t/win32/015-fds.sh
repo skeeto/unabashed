@@ -16,7 +16,7 @@ norm() {
         'cmdline = <"@D\'*) l=${l/'<"@D\'/'<@D\'}; l=${l/'.exe" '/'.exe '} ;;
         esac
         printf '%s\n' "$l"
-    done | "$BB" sed 's/unabashed-[0-9]*-[0-9a-f]*/@P/g'
+    done | "$BB" sed 's/unabashed-[0-9]*-[0-9a-f]*\.dll/@P/g'
 }
 cp "$BIN/argv.exe" "$BIN/argv32.exe" .
 cp "$U" sh.exe
@@ -51,10 +51,10 @@ cat f4
 echo "== procsubs to native programs"
 "$BB" cat <(echo one) <(printf 'two\n')
 "$BB" paste <(printf 'a\nb\n') <(printf 'c\nd\n')
-# busybox diff copies a pipe to a temporary file, but finds the
-# unbuffered pipe empty: wrong, an open issue (notes/issues.md)
-TMP=$(pwd -W) "$BB" diff <(printf 'a\n') <(printf 'b\n') 2>&1
-echo "diff status $?"
+# busybox diff stats both paths first, and busybox's stat reads a
+# file's head unless its name ends in .dll, as the bridges' names do
+TMP=$(pwd -W) "$BB" diff <(printf 'a\n') <(printf 'b\n') 2>&1 | norm
+echo "diff status ${PIPESTATUS[0]}"
 "$BB" cat <(for i in 1 2 3; do echo "loop $i"; done)
 "$BB" wc -l <("$BB" seq 100000) | norm
 "$BB" cat - <(echo second) <<<first
