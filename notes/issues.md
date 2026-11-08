@@ -40,7 +40,24 @@ None left: step 10 fixed the rest or accepted it (below).
 
 ## M9 (w64devkit)
 
-(none: step 5 fixed or accepted the bridge items, below)
+Found while writing unabashed.1 (2026-11-08), not yet fixed:
+
+- `times` and the `time` keyword report no CPU time in any build: user
+  and system are always 0 (exec.cpp, "CPU times are not tracked yet"),
+  where plan.md meant job-object accounting on Windows.
+- Nesting deep enough to overflow the parser's stack (thousands of
+  `( `) ends the shell with status 139; bash's bison stack fills first,
+  and it reports `syntax error near unexpected token` and goes on.
+- Native mode rewrites colons to semicolons only in PATH; busybox-w32
+  also rewrites CDPATH and MANPATH.
+- Msys mode discards writes to `/dev/clipboard`; Git Bash sets the
+  Windows clipboard.
+- A native child of an msys shell whose PATH is missing or empty gets
+  `PATH=<root>\usr` (MSYS2's rule), a directory w64devkit lacks.
+- The x86_64 build sets no PE subsystem version (the i686 build sets
+  5.01), so it is untested on XP x64.
+- The shell's own console output shows bytes that are not UTF-8 as the
+  Latin-1 character of the same value; the editor shows U+FFFD.
 
 
 ## Test infrastructure
@@ -140,6 +157,18 @@ Moved from M5a: limits of the test tiers, not of the shell.
 
 ## Accepted deviations
 
+- **Accepted: no BOM handling, as bash.** A UTF-8 byte order mark is
+  part of the first word of a script, sourced file or -c text, and
+  hides a `#!` line from the shell's own sniffer; Git Bash 5.3.15 does
+  the same. (2026-11-08)
+- **Accepted: mapfile keeps CRs** in every Windows mode, igncr or not,
+  as Git Bash 5.3.15 does; read drops them under igncr (msys) and before
+  a newline (native, as busybox's read). (2026-11-08)
+- **Accepted: native sh is not in POSIX mode by name** (the open
+  decision of m9.md step 3, kept): sh, ash and lash behave as
+  busybox-w32's sh; `--posix` or `set -o posix` turns POSIX mode on.
+  (2026-11-08)
+
 - **Accepted: emulated /dev/zero and kin are pipes.** In the Windows
   modes, /dev/zero, /dev/full, /dev/random and /dev/urandom opened for
   reading are an OS pipe fed by a pump (genfile; the random ones from
@@ -150,7 +179,10 @@ Moved from M5a: limits of the test tiers, not of the shell.
   background job reading one keeps its image child shell alive to feed
   it, as the job would read forever under bash; and named as an argument
   to a native program, msys mode passes MSYS2's /Device/Null and native
-  mode the name as typed (busybox's applets emulate it). (2026-11-08)
+  mode the name as typed (busybox's applets emulate it). Native mode
+  has only /dev/zero and /dev/urandom of these, as busybox-w32: there
+  /dev/full and /dev/random are files on the current drive.
+  (2026-11-08)
 - **Accepted: RANDOM is PCG64, not Park-Miller.** RANDOM and SRANDOM
   come from PCG64 streams (vars.cpp), so a seed (`RANDOM=n`) gives a
   different sequence than bash's, though the same one on every
@@ -499,14 +531,16 @@ Moved from M5a: limits of the test tiers, not of the shell.
   directories net, registry*, sys, sysvipc list nothing; /proc/self
   lists only exename, fd and winexename and serves only the first and
   last (no cmdline, cwd, environ, exe, maps, stat, status, winpid...),
-  and /proc/self/fd lists nothing. `/dev/zero`, `/dev/random` and the
-  other sinks only accept writes; reads fail. (m5a.md, steps 5, 10a)
+  and /proc/self/fd lists nothing. `/dev/clipboard` and the other
+  sinks only accept writes, and discard them (Git Bash sets the
+  clipboard); reads fail. (m5a.md, steps 5, 10a)
   Scripts on Windows do not read /proc (nproc and uname answer the usual
   questions); the names keep `test -e` and globbing right.
 - **Accepted: identity is not re-rendered by msyspath** (M7 step 9, from
   M5a): toggling it re-renders PATH and PWD only; BASH, OSTYPE, MACHTYPE
-  and HOME keep the startup persona's forms. pwd's usage text in the
-  Windows modes still says `[-LP]` (Git Bash's is unverified). (m5a.md,
+  and HOME keep the startup persona's forms. pwd's synopsis follows
+  the mode, as help shows it: `[-LPW]` in msys mode (Git Bash's),
+  `[-LP]` in native mode, which accepts -W and ignores it. (m5a.md,
   step 5) The shopt is hidden and for testing; the startup persona
   decides identity, as Git Bash and busybox-w32 each have one.
 - **Accepted: cygpath gaps** (M7 step 9, from M5a): -W and -S come from

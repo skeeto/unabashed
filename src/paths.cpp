@@ -1459,7 +1459,8 @@ static b32 envless(Str *a, Str *b)  // also sorts the shell's exports
 // excluded, all of them under MSYS_NO_PATHCONV), TZ dropped unless a
 // plain POSIX zone, nameless entries dropped, !X: restored to =X:,
 // sorted byte-wise, and PATH=<root>\usr appended if PATH is missing
-// or empty. The platform adds MSYSTEM, SYSTEMROOT and WINDIR if absent.
+// or empty. The platform adds SYSTEMROOT and WINDIR if absent (not
+// MSYSTEM: spawn.cpp, nativechildenv).
 static Slice<Str> msysenv(PathCtx *ctx, Arena *a, Slice<Str> env)
 {
     static Str lists[] = {"PATH", "ORIGINAL_PATH", "LD_LIBRARY_PATH"};
