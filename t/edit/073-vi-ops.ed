@@ -1,0 +1,64 @@
+# vi operators: d c y with motions, doubled (dd cc yy), with counts
+# before and after (2d3w), cw as ce, d to a failed search, y then p,
+# and . repeating deletes, changes, inserts and r
+size 12 70
+rc PS1='$ '
+rc set -o vi
+keys : one two three four five six seven eight nine ten
+keys \e0w
+snap
+keys dw
+snap
+keys .
+snap
+keys 2d3w
+snap
+keys u
+snap
+keys cwNEW\e
+pause 600
+snap
+keys w.
+snap
+keys w2.
+snap
+keys 0wyeP
+snap
+keys de
+snap
+keys $d0
+snap
+keys :aa bb cc dd\e
+pause 600
+snap
+keys 0dfc
+snap
+keys u0dtc
+snap
+keys u0dfz
+snap
+keys 0c$changed\e
+pause 600
+snap
+keys yyP
+snap
+keys dd
+snap
+keys :a b c d e f\e
+pause 600
+keys 0w2rx
+snap
+keys w.
+snap
+keys 0ixy\e
+pause 600
+snap
+keys w.
+snap
+keys w3.
+snap
+keys ccall new\e
+pause 600
+snap
+keys w.
+snap

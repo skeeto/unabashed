@@ -1,0 +1,78 @@
+== snap 1
+$ : one two three four five six seven eight nine ten
+@ 0,4
+== snap 2
+$ : two three four five six seven eight nine ten
+@ 0,4
+== snap 3
+$ : three four five six seven eight nine ten
+@ 0,4
+== snap 4
+$ : nine ten
+@ 0,4
+== snap 5
+$ : three four five six seven eight nine ten
+@ 0,36
+== snap 6
+$ : three four five six seven eight NEW ten
+@ 0,38
+== snap 7
+$ : three four five six seven eight NEW NEW
+@ 0,42
+== snap 8
+$ : three four five six seven eight NEW NENEW
+@ 0,44 bell 1
+== snap 9
+$ : threethree four five six seven eight NEW NENEW
+@ 0,8 bell 1
+== snap 10
+$ : thre four five six seven eight NEW NENEW
+@ 0,8 bell 1
+== snap 11
+$ W
+@ 0,2 bell 1
+== snap 12
+$ Wa bb cc dd
+@ 0,12 bell 2
+== snap 13
+$ c dd
+@ 0,2 bell 2
+== snap 14
+$ cc dd
+@ 0,2 bell 2
+== snap 15
+$ Wa bb cc dd
+@ 0,2 bell 4
+== snap 16
+$ changed
+@ 0,8 bell 4
+== snap 17
+$ changechangedd
+@ 0,14 bell 4
+== snap 18
+$
+@ 0,2 bell 4
+== snap 19
+$  xxc d e f
+@ 0,4 bell 5
+== snap 20
+$  xxc xxe f
+@ 0,8 bell 5
+== snap 21
+$ xy xxc xxe f
+@ 0,3 bell 5
+== snap 22
+$ xy xyxxc xxe f
+@ 0,6 bell 5
+== snap 23
+$ xy xyxxc xyxyxyxxe f
+@ 0,16 bell 5
+== snap 24
+$ all new
+@ 0,8 bell 5
+== snap 25
+$ all new
+@ 0,8 bell 6
+== snap 26
+$ all new
+@ 0,8 bell 6

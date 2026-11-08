@@ -1156,7 +1156,9 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     i32 lastsig = escaped ? 0 : sh->childsig;
     pids[last]  = sh->childpid;
     sh->childsig = 0;
-    if (grouped && sh->jctty!=BADHANDLE && (grp || s->stopproc!=BADHANDLE)) {
+    if (grouped && sh->jctty!=BADHANDLE) {
+        // Even when only the last stage is a program, leading a group of
+        // its own that took the terminal
         os_tcpgrp(sh->os, sh->jctty, sh->shellpgid);
     }
     if (s->stopproc != BADHANDLE) {

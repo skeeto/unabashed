@@ -1,0 +1,39 @@
+# vi R: overstrike, backspace putting back what was replaced, past the
+# end, ESC, and . repeating it; marks (m and `), the kill ring's yank
+# and pop (p then M-y) and _ yanking the last argument
+size 10 70
+rc PS1='$ '
+rc set -o vi
+keys echo abcdefgh one two
+keys \e0w
+snap
+keys RXYZ
+snap
+keys \x7f
+snap
+keys W\e
+pause 600
+snap
+keys w.
+snap
+keys $RLONGER
+snap
+keys \e
+pause 600
+snap
+keys 0ma$mb`a
+snap
+keys `b
+snap
+keys ``
+snap
+keys \r
+keys : last arg here\r
+keys : x\e
+pause 600
+keys _
+snap
+keys \e
+pause 600
+keys 0w2_
+snap

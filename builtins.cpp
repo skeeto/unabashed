@@ -1734,6 +1734,8 @@ static void setposix(Shell *sh, b32 on)
     sh->opt[O_POSIX] = on;  // even if the variable is readonly
 }
 
+static void edmodechanged(Shell *);  // edit.cpp
+
 static i32 setoptionbyname(Shell *sh, Str name, b32 on)
 {
     for (i32 k = 0; k < O_COUNT; k++) {
@@ -1746,6 +1748,7 @@ static i32 setoptionbyname(Shell *sh, Str name, b32 on)
             histoption(sh, k, on);
             if (k==O_EMACS && on) sh->opt[O_VI] = 0;
             if (k==O_VI && on) sh->opt[O_EMACS] = 0;
+            if ((k==O_EMACS || k==O_VI) && on) edmodechanged(sh);
             if (k == O_IGNOREEOF) {
                 // as bash, the option and IGNOREEOF follow one another
                 byte  mem[256];

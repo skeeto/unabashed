@@ -1,0 +1,139 @@
+== snap 1
+(cmd)$ : héllo wörld 1-2
+@ 0,23
+== snap 2
+(cmd)$ : HÉLLO WÖrld 1-2
+@ 0,17
+== snap 3
+(cmd)$ : HÉLLO WÖrld 1-2
+@ 0,21
+== snap 4
+(ins)$ : HÉLLO WÖrld 1-2added
+@ 0,29
+== snap 5
+(ins)$ ls cdir/alpha
+@ 0,20
+== snap 6
+(cmd)$ ls cdir/alpha
+alpha1  alpha2
+(cmd)$ ls cdir/alpha
+@ 2,19
+== snap 7
+(cmd)$ ls cdir/alpha
+alpha1  alpha2
+(ins)$ ls cdir/alpha^A
+@ 2,22
+== snap 8
+(cmd)$ ls cdir/alpha
+alpha1  alpha2
+(cmd)$ : (a (b) c) end(a (b) c
+@ 2,29
+== snap 9
+(cmd)$ ls cdir/alpha
+alpha1  alpha2
+(cmd)$ : (a (b) c(a (b) c(a (b) c(a (b) c) end(a (b) c
+@ 2,32
+== snap 10
+(cmd)$ ls cdir/alpha
+alpha1  alpha2
+(cmd)$ : (a (b) ca (b) c(a (b) c(a (b) c(a (b) c) end(a (b) c
+@ 2,16
+== snap 11
+(cmd)$ ls cdir/alpha
+alpha1  alpha2
+(cmd)$
+(ins)$ set -o emacs
+@$
+@ 4,3
+== snap 12
+(cmd)$ ls cdir/alpha
+alpha1  alpha2
+(cmd)$
+(ins)$ set -o emacs
+@$ set -o | grep -E '^(vi|emacs)'
+emacs           on
+vi              off
+@$
+@ 7,3
+== snap 13
+(cmd)$ ls cdir/alpha
+alpha1  alpha2
+(cmd)$
+(ins)$ set -o emacs
+@$ set -o | grep -E '^(vi|emacs)'
+emacs           on
+vi              off
+@$ bind 'set editing-mode vi'
+(ins)$ set -o | grep -E '^(vi|emacs)'
+emacs           off
+vi              on
+(ins)$
+@ 11,7
+== snap 14
+(cmd)$ ls cdir/alpha
+alpha1  alpha2
+(cmd)$
+(ins)$ set -o emacs
+@$ set -o | grep -E '^(vi|emacs)'
+emacs           on
+vi              off
+@$ bind 'set editing-mode vi'
+(ins)$ set -o | grep -E '^(vi|emacs)'
+emacs           off
+vi              on
+(ins)$ bind 'set vi-ins-mode-string >>'
+>>$ bind 'set vi-cmd-mode-string ::'
+>>$ : x
+@ 13,7
+== snap 15
+(cmd)$ ls cdir/alpha
+alpha1  alpha2
+(cmd)$
+(ins)$ set -o emacs
+@$ set -o | grep -E '^(vi|emacs)'
+emacs           on
+vi              off
+@$ bind 'set editing-mode vi'
+(ins)$ set -o | grep -E '^(vi|emacs)'
+emacs           off
+vi              on
+(ins)$ bind 'set vi-ins-mode-string >>'
+>>$ bind 'set vi-cmd-mode-string ::'
+::$ : x
+@ 13,6
+== snap 16
+(ins)$ set -o emacs
+@$ set -o | grep -E '^(vi|emacs)'
+emacs           on
+vi              off
+@$ bind 'set editing-mode vi'
+(ins)$ set -o | grep -E '^(vi|emacs)'
+emacs           off
+vi              on
+(ins)$ bind 'set vi-ins-mode-string >>'
+>>$ bind 'set vi-cmd-mode-string ::'
+::$ : x
+>>$ set +o vi
+$ set -o | grep -E '^(vi|emacs)'
+emacs           off
+vi              off
+$
+@ 15,2
+== snap 17
+(ins)$ set -o emacs
+@$ set -o | grep -E '^(vi|emacs)'
+emacs           on
+vi              off
+@$ bind 'set editing-mode vi'
+(ins)$ set -o | grep -E '^(vi|emacs)'
+emacs           off
+vi              on
+(ins)$ bind 'set vi-ins-mode-string >>'
+>>$ bind 'set vi-cmd-mode-string ::'
+::$ : x
+>>$ set +o vi
+$ set -o | grep -E '^(vi|emacs)'
+emacs           off
+vi              off
+$
+@ 15,2

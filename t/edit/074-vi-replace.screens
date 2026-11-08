@@ -1,0 +1,48 @@
+== snap 1
+$ echo abcdefgh one two
+@ 0,7
+== snap 2
+$ echo XYZdefgh one two
+@ 0,10
+== snap 3
+$ echo XYcdefgh one two
+@ 0,9
+== snap 4
+$ echo XYWdefgh one two
+@ 0,9
+== snap 5
+$ echo XYWdefgh XYW two
+@ 0,18
+== snap 6
+$ echo XYWdefgh XYW twLONGER
+@ 0,28
+== snap 7
+$ echo XYWdefgh XYW twLONGER
+@ 0,27
+== snap 8
+$ echo XYWdefgh XYW twLONGER
+@ 0,2
+== snap 9
+$ echo XYWdefgh XYW twLONGER
+@ 0,27
+== snap 10
+$ echo XYWdefgh XYW twLONGER
+@ 0,2
+== snap 11
+$ echo XYWdefgh XYW twLONGER
+XYWdefgh XYW twLONGER
+$ : last arg here
+$ : x here
+@ 3,10
+== snap 12
+$ echo XYWdefgh XYW twLONGER
+XYWdefgh XYW twLONGER
+$ : last arg here
+$ : x last here
+@ 3,10
+== snap 13
+$ echo XYWdefgh XYW twLONGER
+XYWdefgh XYW twLONGER
+$ : last arg here
+$ : x last here
+@ 3,10

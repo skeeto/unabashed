@@ -1,0 +1,143 @@
+== snap 1
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : fourth foo bar
+@ 4,2
+== snap 2
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : second entry foo
+@ 4,2
+== snap 3
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : third entry bar
+@ 4,2
+== snap 4
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : second entry foo
+@ 4,2
+== snap 5
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : third entry bar
+@ 4,2
+== snap 6
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : first entry
+@ 4,2
+== snap 7
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : first entry
+@ 4,2 bell 1
+== snap 8
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : first entry
+@ 4,2 bell 2
+== snap 9
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : first entry
+@ 4,2 bell 3
+== snap 10
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : first entry
+@ 4,2 bell 4
+== snap 11
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : second entry foo
+@ 4,2 bell 4
+== snap 12
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : second entry foo
+@ 4,2 bell 5
+== snap 13
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : second entry foo
+@ 4,2 bell 6
+== snap 14
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : third entry bar
+@ 4,2 bell 6
+== snap 15
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ : third entry bar
+@ 4,2 bell 7
+== snap 16
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+(arg: 3) : third entry bar
+@ 4,9 bell 7
+== snap 17
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ bar
+@ 4,2 bell 7
+== snap 18
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ #bar
+$
+@ 5,2 bell 7
+== snap 19
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ #bar
+$ #bar
+@ 5,2 bell 7
+== snap 20
+$ : first entry
+$ : second entry foo
+$ : third entry bar
+$ : fourth foo bar
+$ #bar
+$ #bar
+@ 5,2 bell 7

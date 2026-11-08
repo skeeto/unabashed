@@ -1,0 +1,68 @@
+# vi editing: x X with counts, r, ~, i a I A, p P after a kill,
+# s S C D, u and U, insert-mode C-w (punctuation as a boundary) and
+# backspace, and accept-line from command mode
+size 10 70
+rc PS1='$ '
+rc set -o vi
+keys echo alpha beta gamma
+keys \e0
+snap
+keys wx
+snap
+keys 3x
+snap
+keys X
+snap
+keys 2X
+snap
+keys rZ
+snap
+keys 3rq
+snap
+keys 0~~~
+snap
+keys 5~
+snap
+keys iIN\e
+pause 600
+snap
+keys aAP\e
+pause 600
+snap
+keys IBEG\e
+pause 600
+snap
+keys AEND\e
+pause 600
+snap
+keys 0dw
+snap
+keys $p
+snap
+keys 0P
+snap
+keys u
+snap
+keys u
+snap
+keys U
+snap
+keys wsS\e
+pause 600
+snap
+keys wD
+snap
+keys bCnew text\e
+pause 600
+snap
+keys Sreplaced\e
+pause 600
+snap
+keys A one/two.three\C-w
+snap
+keys \C-w\b\b
+snap
+keys \e
+pause 600
+keys \r
+snap

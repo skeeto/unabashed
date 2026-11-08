@@ -1,0 +1,66 @@
+# vi command mode motions: words and bigwords (w b e W B E), 0 ^ $ |,
+# h l and space, character searches (f F t T ; ,), % on brackets, and
+# counts; ESC leaves insert mode a character back
+size 8 70
+rc PS1='$ '
+rc set -o vi
+keys \s\secho one,two  three_x (four [five]) six.seven
+keys \e
+pause 600
+snap
+keys 0
+snap
+keys ^
+snap
+keys w
+snap
+keys w
+snap
+keys w
+snap
+keys W
+snap
+keys e
+snap
+keys E
+snap
+keys b
+snap
+keys B
+snap
+keys 3w
+snap
+keys 2b
+snap
+keys $
+snap
+keys 12|
+snap
+keys fo
+snap
+keys ;
+snap
+keys ,
+snap
+keys Tt
+snap
+keys 2l
+snap
+keys \s
+snap
+keys %
+snap
+keys %
+snap
+keys 0f[%
+snap
+keys 3h
+snap
+keys te
+snap
+keys ;
+snap
+keys 2Fe
+snap
+keys 99l
+snap

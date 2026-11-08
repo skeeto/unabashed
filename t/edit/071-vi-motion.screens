@@ -1,0 +1,90 @@
+== snap 1
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,48
+== snap 2
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,2
+== snap 3
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,4
+== snap 4
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,9
+== snap 5
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,12
+== snap 6
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,13
+== snap 7
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,18
+== snap 8
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,24
+== snap 9
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,30
+== snap 10
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,27
+== snap 11
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,26
+== snap 12
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,33
+== snap 13
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,27
+== snap 14
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,48
+== snap 15
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,13
+== snap 16
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,15
+== snap 17
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,28
+== snap 18
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,15
+== snap 19
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,14
+== snap 20
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,16
+== snap 21
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,17
+== snap 22
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,38
+== snap 23
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,26
+== snap 24
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,37
+== snap 25
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,34
+== snap 26
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,35
+== snap 27
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,35
+== snap 28
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,21
+== snap 29
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,48
+== snap 30
+$   echo one,two  three_x (four [five]) six.seven
+@ 0,48

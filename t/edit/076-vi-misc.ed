@@ -1,0 +1,73 @@
+# vi odds and ends: show-mode-in-prompt with the default strings and
+# custom ones, set -o emacs and back, editing-mode from bind, @ running
+# the alias _x, ~ on non-letters and UTF-8, motions over UTF-8, vi's
+# completion (\ = *), C-v in insert mode, y% and p P with counts, and
+# M-y (vi-yank-pop) after p
+size 16 70
+rc PS1='$ '
+rc set -o vi
+rc bind 'set show-mode-in-prompt on'
+rc alias _q='Aadded'
+rc cd ~ && mkdir -p cdir && touch cdir/alpha1 cdir/alpha2 cdir/beta
+rc bind -m vi-command '"\ey": vi-yank-pop'
+keys : héllo wörld 1-2
+keys \e
+pause 600
+snap
+keys 0w~~~~~~~~
+snap
+keys b2e
+snap
+keys @q
+snap
+keys \e
+pause 600
+keys 0d$
+keys ils cdir/al
+keys \e
+pause 600
+keys \
+snap
+keys \e
+pause 600
+keys =
+snap
+keys \e
+pause 600
+keys A\C-v\C-a
+snap
+keys \e
+pause 600
+keys 0d$i: (a (b) c) end
+keys \e
+pause 600
+keys 0f(y%$p
+snap
+keys 0w3P
+snap
+keys \e
+pause 600
+keys 0wdwP\ey
+snap
+keys \e
+pause 600
+keys 0d$
+keys \r
+keys set -o emacs\r
+snap
+keys set -o | grep -E '^(vi|emacs)'\r
+snap
+keys bind 'set editing-mode vi'\r
+keys set -o | grep -E '^(vi|emacs)'\r
+snap
+keys bind 'set vi-ins-mode-string >>'\r
+keys bind 'set vi-cmd-mode-string ::'\r
+keys : x
+snap
+keys \e
+pause 600
+snap
+keys \r
+keys set +o vi\r
+keys set -o | grep -E '^(vi|emacs)'\r
+snap

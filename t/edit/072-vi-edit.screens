@@ -1,0 +1,85 @@
+== snap 1
+$ echo alpha beta gamma
+@ 0,2
+== snap 2
+$ echo lpha beta gamma
+@ 0,7
+== snap 3
+$ echo a beta gamma
+@ 0,7
+== snap 4
+$ echoa beta gamma
+@ 0,6
+== snap 5
+$ eca beta gamma
+@ 0,4
+== snap 6
+$ ecZ beta gamma
+@ 0,4
+== snap 7
+$ ecqqqeta gamma
+@ 0,6
+== snap 8
+$ ECQqqeta gamma
+@ 0,5
+== snap 9
+$ ECQQQETA gamma
+@ 0,10
+== snap 10
+$ ECQQQETAIN gamma
+@ 0,11
+== snap 11
+$ ECQQQETAINAP gamma
+@ 0,13
+== snap 12
+$ BEGECQQQETAINAP gamma
+@ 0,4
+== snap 13
+$ BEGECQQQETAINAP gammaEND
+@ 0,25
+== snap 14
+$ gammaEND
+@ 0,2
+== snap 15
+$ gammaENDBEGECQQQETAINAP
+@ 0,25
+== snap 16
+$ BEGECQQQETAINAP gammaENDBEGECQQQETAINAP
+@ 0,17
+== snap 17
+$ gammaENDBEGECQQQETAINAP
+@ 0,2
+== snap 18
+$ gammaEND
+@ 0,9
+== snap 19
+$ echo alpha beta gamma
+@ 0,2
+== snap 20
+$ echo Slpha beta gamma
+@ 0,7
+== snap 21
+$ echo Slpha
+@ 0,12
+== snap 22
+$ echo new text
+@ 0,14
+== snap 23
+$ replaced
+@ 0,9
+== snap 24
+$ replaced one/two.
+@ 0,19
+== snap 25
+$ replaced one/t
+@ 0,16
+== snap 26
+$ replaced one/t
+bash: replaced: command not found
+$
+@ 2,2
+== snap 27
+$ replaced one/t
+bash: replaced: command not found
+$
+@ 2,2

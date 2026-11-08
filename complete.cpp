@@ -1322,8 +1322,8 @@ static void edcomplete1(Editor *ed, Shell *sh, u8 mode, i32 gen)
         if (c.lcd.len) compreplace(ed, sh, &c, c.lcd, c.m.len>1);
         if (c.m.len == 1) {
             compappend(ed, sh, &c, c.m[0]);
-        } else {
-            edbell(ed);
+        } else if (!c.m.len || !ed->vars.vimode) {
+            edbell(ed);  // vi mode is quiet on more than one match
         }
         break;
     case CM_AMBIG:

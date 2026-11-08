@@ -1,0 +1,54 @@
+# vi history: k j - + with point at the start, G with and without a
+# count, / and ? as glob searches (n N again, a failed search, ^
+# anchoring), # insert-comment, and the (arg: N) prompt while a count
+# is typed for a motion
+size 14 70
+rc PS1='$ '
+rc set -o vi
+rc HISTSIZE=100
+keys : first entry\r
+keys : second entry foo\r
+keys : third entry bar\r
+keys : fourth foo bar\r
+keys \e
+pause 600
+keys k
+snap
+keys kk
+snap
+keys j
+snap
+keys -
+snap
+keys +
+snap
+keys G
+snap
+keys 2G
+snap
+keys 99G
+snap
+keys /sec*foo\r
+snap
+keys n
+snap
+keys N
+snap
+keys /zzz\r
+snap
+keys /^: th\r
+snap
+keys ?\r
+snap
+keys n
+snap
+keys 0d3
+snap
+keys w
+snap
+keys #
+snap
+keys \e
+pause 600
+keys k
+snap

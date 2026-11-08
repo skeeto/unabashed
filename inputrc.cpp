@@ -556,12 +556,15 @@ static void rlset(Editor *ed, Shell *sh, RlRead *r, Str s, Arena a)
         if (value.len>=2 && rlequal(takehead(value, 2), "vi")) {
             ed->vars.vimode = 1;
             ed->vars.keymap = KM_VIINS;
+            viinsmode(ed, 'i');
         } else if (value.len>=5 && rlequal(takehead(value, 5), "emacs")) {
             ed->vars.vimode = 0;
             ed->vars.keymap = KM_EMACS;
+            ed->vicmd = ed->vireplmode = 0;
         } else {
             ok = 0;
         }
+        if (ok) edoptsync(ed, sh);
         break;
     case RV_KEYMAP: {
         i32 km = rlkeymapnamed(value);
@@ -745,19 +748,23 @@ static void rlttychars(Editor *ed)
         {ed->tty.lnext,  EF_QUOTED_INSERT},
         {ed->tty.werase, EF_UNIX_WORD_RUBOUT},
     };
+    if (ed->vars.vimode) m[3].fn = EF_VI_UNIX_WORD_RUBOUT;
     // The last line's characters become self-insert, then this line's
     // are bound, touching only keys bound to functions
     for (i32 pass = 0; pass < 2; pass++) {
+        b32      vi  = pass ? ed->vars.vimode : ed->ttyvi;
+        KeyNode *map = vi ? &ed->viins : &ed->root;
         for (iz i = 0; i < countof(m); i++) {
             u8 c = pass ? m[i].c : ed->ttysaved[i];
             if (!c) continue;
-            KeyNode *k = keychild(&ed->root, c);
+            KeyNode *k = keychild(map, c);
             if (k && (k->kids || k->fn==EF_MACRO)) continue;
-            k = keyget(&ed->perm, &ed->root, c);
+            k = keyget(&ed->perm, map, c);
             k->fn = pass ? m[i].fn : EF_SELF_INSERT;
         }
     }
     for (iz i = 0; i < countof(m); i++) ed->ttysaved[i] = m[i].c;
+    ed->ttyvi = ed->vars.vimode;
 }
 
 

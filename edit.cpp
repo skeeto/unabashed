@@ -189,6 +189,12 @@ enum : i32 {
     EF_VI_YANK_ARG,
     EF_VI_YANK_POP,
     EF_VI_YANK_TO,
+    EF_VI_OVERSTRIKE_KILL_LINE,  // vi replace mode's own, unnamed
+    EF_VI_OVERSTRIKE_KILL_WORD,
+    EF_VI_OVERSTRIKE_YANK,
+    EF_VI_OVERSTRIKE_PASTE,
+    EF_POSIX_EDIT_MACROS,  // bash's vi @: the alias _c as keys
+    EF_NULL_FUNCTION,  // does nothing: a bound prefix that only waits
     EF_MACRO,  // a key bound to text (inputrc)
     EF_SHELLCMD,  // bind -x: a shell command, the text in macro
     EF_COUNT,
@@ -371,7 +377,8 @@ static Str edfuncs[EF_COUNT] = {
     "vi-yank-arg",
     "vi-yank-pop",
     "vi-yank-to",
-    "",
+    "", "", "", "", "",
+    "", "",
     "",
 };
 
@@ -675,6 +682,31 @@ struct Editor {
     Comp    *menu;
     i32      menuidx;
     b32      menudone;
+    // vi mode, as readline's vi_mode.c
+    i32      ulevel;    // undo groups open, as readline's group level
+    b32      vicmd;     // in command mode (the vi-command keymap)
+    b32      vireplmode;  // R: replacing, in vireplmap
+    KeyNode *vireplmap;   // made at the first R, as readline's
+    b32      vicmdonce; // command mode was entered on this line
+    b32      viredoing; // . is running the last command again
+    b32      vidoing;   // c, s, S, R: the insert after them is saved
+    b32      vifail;    // the last character search failed
+    u8       vilastcmd; // the last text-changing command, for .
+    i32      vilastcount;
+    u8       vilastmotion;
+    u8       vilastins; // the key that last entered insert mode
+    i32      vireplcount;  // characters replaced since R
+    i32      vicsdir;   // character search: FTO and the like
+    i32      vicsorig;
+    u8       vicschar[4];
+    i32      vicslen;
+    u8       virepl[4]; // r's last replacement
+    i32      vireplen;
+    Str      vibuf;     // the text last inserted, for .
+    iz       vibufcap;
+    iz       vimarks[26];
+    Str      lineprompt;  // the line's own prompt (show-mode-in-prompt)
+    b32      ttyvi;     // the tty's characters were bound in vi-insert
 };
 
 static void edbindings(Editor *ed)
@@ -918,6 +950,7 @@ static void edbindings(Editor *ed)
         {"y", EF_VI_YANK_TO},
         {"|", EF_VI_COLUMN},
         {"~", EF_VI_CHANGE_CASE},
+        {"@", EF_POSIX_EDIT_MACROS},
     };
 
     for (i32 c = 0x20; c < 0x100; c++) {
@@ -934,6 +967,8 @@ static void edbindings(Editor *ed)
     for (iz i = 0; i < countof(vicommand); i++) {
         keybind(a, &ed->vimove, vicommand[i].seq, vicommand[i].fn);
     }
+    // ESC in command mode waits for a sequence, then quietly does nothing
+    keyget(a, &ed->vimove, 0x1b)->fn = EF_NULL_FUNCTION;
 }
 
 // Keys a terminal sends, which readline binds from its description
@@ -999,6 +1034,11 @@ static Editor *editor(Shell *sh)
         ed->vars.vicmdstr     = "(cmd)";
         ed->vars.viinsstr     = "(ins)";
         ed->getnext    = -1;
+        ed->vars.vimode  = sh->opt[O_VI];
+        ed->vars.keymap  = sh->opt[O_VI] ? KM_VIINS : KM_EMACS;
+        ed->vilastcmd    = 'i';
+        ed->vilastcount  = 1;
+        ed->vilastins    = 'i';
         edbindings(ed);
         sh->editor = ed;
     }
@@ -1384,6 +1424,13 @@ static void redisplay(Editor *ed, Shell *sh)
         rend = m<point ? point : m;
     }
     Str prompt = ed->prompt;
+    if (ed->vars.showmode && prompt.data==ed->lineprompt.data) {
+        // The mode before the line's own prompt (not a search's)
+        Str mode = !ed->vars.vimode ? ed->vars.emacsstr
+                 : ed->vicmd || ed->vireplmode ? ed->vars.vicmdstr
+                 : ed->vars.viinsstr;
+        prompt = concat(a, mode, prompt);
+    }
     ed->starred = ed->vars.markmodified && ed->hpos<sh->hist.len && ed->undo;
     if (ed->starred) prompt = concat(a, "*", prompt);
     Layout nl = layout(a, prompt, line, point, ed->hscroll ? 1<<30 : ed->width,
@@ -1546,12 +1593,14 @@ static iz edwordmove(Editor *ed, iz i, i32 count)  // negative: back
 static iz edcharmove(Editor *ed, iz p, i32 count)
 {
     if (count > 0) {
-        if (p == ed->line.len) {
+        b32 vi = ed->vars.vimode;
+        if (p==ed->line.len && !vi) {
             edbell(ed);
             return p;
         }
         iz q = p;
         for (i32 i = 0; i<count && q<ed->line.len; i++) q = ednext(ed, q);
+        if (vi && ed->vicmd && q>=ed->line.len) q = edprev(ed, ed->line.len);
         if (q == p) edbell(ed);
         return q;
     }
@@ -1577,7 +1626,9 @@ static EdUndo *edrecord(Editor *ed, i32 kind, iz beg, iz end)
 
 static void edgroup(Editor *ed, i32 kind)  // U_BEGIN or U_END
 {
-    if (!ed->undoing) edrecord(ed, kind, 0, 0);
+    if (ed->undoing) return;
+    edrecord(ed, kind, 0, 0);
+    ed->ulevel += kind==U_BEGIN ? 1 : -1;
 }
 
 // Insert at point, past it. As readline's, a single byte inserted where
@@ -1694,7 +1745,7 @@ static void edkill(Editor *ed, iz from, iz to)
         k = n;
     }
 
-    if (ed->lastkill && ed->nkills) {
+    if (ed->lastkill && ed->nkills && !ed->vars.vimode) {
         Str *s = &ed->kills[ed->killidx];
         *s = from<to ? concat(k, *s, text) : concat(k, text, *s);
     } else {
@@ -1740,6 +1791,10 @@ static void edload(Editor *ed, Shell *sh, iz i)
     ed->undo  = e->undo;
     ed->point = ed->line.len;
     ed->mark  = 0;
+    if (ed->vars.vimode) {
+        ed->point = 0;
+        ed->mark  = ed->line.len;
+    }
 }
 
 static void edsaveline(Editor *ed)
@@ -1779,6 +1834,7 @@ static void edhistset(Editor *ed)
 {
     iz p = ed->vars.histpoint && ed->hpoint>=0 ? ed->hpoint : ed->line.len;
     ed->point = p<ed->line.len ? p : ed->line.len;
+    if (ed->vars.vimode && (ed->vicmd || ed->vireplmode)) ed->point = 0;
 }
 
 static void edprevhist(Editor *ed, Shell *sh, i64 count)
@@ -1837,7 +1893,10 @@ static void edleave(Editor *ed, Shell *sh, b32 intr)
 // The words of the entry skip entries back from the last, for
 // yank-last-arg and yank-nth-arg: n counts from 0, '$' the last, and a
 // negative from the end. False and the bell when there is none.
-static b32 edyankarg(Editor *ed, Shell *sh, i64 n, i64 skip)
+static void vistartins(Editor *, u8, i32);
+static iz   viadvance(Editor *, iz);
+
+static b32 edyankarg(Editor *ed, Shell *sh, i64 n, i64 skip, u8 key)
 {
     Hist *h  = &sh->hist;
     iz    at = ed->hpos - 1 - (iz)skip;
@@ -1859,6 +1918,11 @@ static b32 edyankarg(Editor *ed, Shell *sh, i64 n, i64 skip)
     Str arg = clone(&ed->hmem, w.word[n]);
     edgroup(ed, U_BEGIN);
     ed->mark = ed->point;
+    if (ed->vars.vimode && ed->vicmd && !ed->vireplmode) {
+        ed->point = viadvance(ed, ed->point);
+        vistartins(ed, key, ed->count<0 ? -1 : 1);
+        edinsert(ed, " ");
+    }
     edinsert(ed, arg);
     edgroup(ed, U_END);
     return 1;
@@ -2385,11 +2449,31 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
 // Search the history from entry pos in direction dir for one holding s
 // (at its start if s starts with ^): its index, -1 if none, and where in
 // it the match is (backward: the last in the line).
-static iz edfindhist(Shell *sh, Str s, iz pos, i32 dir, iz *at, b32 fold)
+static iz edfindhist(Shell *sh, Str s, iz pos, i32 dir, iz *at, b32 fold,
+                     b32 pat = 0)
 {
     Hist *h  = &sh->hist;
     b32   anchor = s.len && s[0]=='^';
     if (anchor) s = cuthead(s, 1);
+    if (pat) {
+        // vi's searches, as readline's: a glob matching the whole line,
+        // with a star added at the end, and at the start unless anchored
+        if (!s.len) return -1;
+        b32 esc = s[s.len-1] == '\\';
+        for (iz i = s.len-1; esc && i>0 && s[i-1]=='\\'; i--) esc = !esc;
+        if (esc) return -1;  // fnmatch rejects a trailing backslash
+        Arena a = *scratchat(sh, sh->capdepth+1);
+        Str   p = !anchor && s[0]!='*' ? concat(&a, "*", s) : clone(&a, s);
+        if (p[p.len-1] != '*') p = concat(&a, p, "*");
+        i32 flags = sh->utf8 ? PM_UTF8 : 0;
+        for (; pos>=0 && pos<h->len; pos += dir) {
+            if (patmatch(p, h->ents[pos]->line, flags, a)) {
+                *at = 0;
+                return pos;
+            }
+        }
+        return -1;
+    }
     for (; pos>=0 && pos<h->len; pos += dir) {
         Str line = h->ents[pos]->line;
         if (anchor) {
@@ -2509,12 +2593,13 @@ static b32 edreadstr(Editor *ed, Shell *sh, Str pchar, Str *out, b32 names = 0)
 }
 
 // The non-incremental searches; again: with the last string, from
-// where it was last found.
-static void ednoninc(Editor *ed, Shell *sh, i32 dir, b32 again = 0)
+// where it was last found. pat: vi's glob searches.
+static void ednoninc(Editor *ed, Shell *sh, i32 dir, b32 again = 0,
+                     Str pchar = ":", b32 pat = 0)
 {
     iz  savepos = ed->hpos;
     Str typed   = {};
-    if (!again && !edreadstr(ed, sh, ":", &typed)) return;
+    if (!again && !edreadstr(ed, sh, pchar, &typed)) return;
 
     iz from = savepos;
     if (!typed.len) {
@@ -2527,14 +2612,16 @@ static void ednoninc(Editor *ed, Shell *sh, i32 dir, b32 again = 0)
         ed->noninc = clone(&ed->perm, typed);
     }
     iz at  = 0;
-    iz got = edfindhist(sh, ed->noninc, from+dir, dir, &at, ed->vars.searchcase);
+    iz got = edfindhist(sh, ed->noninc, from+dir, dir, &at, ed->vars.searchcase, pat);
     if (got < 0) {
         edbell(ed);
+        if (again) ed->point = 0;  // as readline's, left for its caller
         return;
     }
     ed->nonincpos = got;
     edgohist(ed, sh, got);
-    if (!ed->hscroll && at<ed->line.len) {
+    if (ed->vars.vimode) ed->undo = 0;  // U goes back no further
+    if (!pat && !ed->hscroll && at<ed->line.len) {
         ed->point = at;
         ed->mark  = at + ed->noninc.len;
         edactivate(ed);
@@ -2882,8 +2969,17 @@ static void edspellword(Editor *ed, Shell *sh, i32 count)
 // drops; with the terminal restored, fc edits the line in $VISUAL or
 // $EDITOR and runs what comes back; then a new empty line follows
 // under the same prompt.
-static void ededitexec(Editor *ed, Shell *sh)
+static void vidoneins(Editor *);
+static void viacceptline(Editor *);
+static void viinsmode(Editor *, u8);
+static void edoptsync(Editor *, Shell *);
+static b32  compglobchars(Str);  // complete.cpp
+
+static void ededitexec(Editor *ed, Shell *sh, b32 vi = 0, u8 key = 0)
 {
+    if (ed->vars.vimode) viacceptline(ed);
+    i32 count  = ed->count;
+    b32 argset = ed->argset;
     // The cursor past the line, as accept-line leaves it
     Layout *l = &ed->shown;
     if (ed->hscroll) {
@@ -2895,8 +2991,10 @@ static void ededitexec(Editor *ed, Shell *sh)
     b32 bracket = !ed->hscroll && !ed->tty.legacy && ed->vars.bracketpaste;
     if (bracket) edput(ed, "\x1b[?2004l\r");
     edflush(ed, sh);
-    reallyadd(sh, clone(&ed->linemem, edtext(ed)));
-    reallyadd(sh, "");
+    if (!argset) {
+        reallyadd(sh, clone(&ed->linemem, edtext(ed)));
+        reallyadd(sh, "");
+    }
     os_tty(sh->os, ed->in, ed->out, TTY_RESTORE);
 
     i32   depth  = ++sh->capdepth;
@@ -2904,7 +3002,18 @@ static void ededitexec(Editor *ed, Shell *sh)
     i32   line   = sh->line;
     b32   lexeof = sh->lexeof;
     sh->evaldepth++;
-    runsource(sh, "fc -e \"${VISUAL:-${EDITOR:-emacs}}\"", "C-xC-e", a);
+    Str cmd = !vi ? Str("fc -e \"${VISUAL:-${EDITOR:-emacs}}\"")
+            : sh->opt[O_POSIX] ? Str("fc -e vi")
+            : Str("fc -e \"${VISUAL:-${EDITOR:-vi}}\"");
+    if (argset) {
+        // An argument names the history entry instead
+        Buf b(&a, cmd.len+24);
+        print(&b, cmd);
+        print(&b, " ");
+        print(&b, (i64)count);
+        cmd = finish(&b);
+    }
+    runsource(sh, cmd, vi ? Str("v") : Str("C-xC-e"), a);
     sh->evaldepth--;
     sh->capdepth = depth - 1;
     sh->line     = line;
@@ -2924,6 +3033,7 @@ static void ededitexec(Editor *ed, Shell *sh)
     ed->undo     = 0;
     ed->hpos     = sh->hist.len;
     ed->hsaved   = 0;
+    if (vi) viinsmode(ed, key);
     edredraw(ed, sh);
 }
 
@@ -3050,6 +3160,20 @@ static void edabort(Editor *ed)
     edresetarg(ed);
 }
 
+// Readline's _rl_overwrite_char: ch in place of the character at
+// point, count times, undone as one.
+static void edoverchar(Editor *ed, Str ch, i32 count)
+{
+    edgroup(ed, U_BEGIN);
+    for (i32 i = 0; i < count; i++) {
+        edinsert(ed, ch);
+        if (ed->point < ed->line.len) {
+            eddelete(ed, ed->point, ednext(ed, ed->point));
+        }
+    }
+    edgroup(ed, U_END);
+}
+
 // Insert key count times, with the rest of a UTF-8 sequence it starts.
 static void edselfinsert(Editor *ed, Shell *sh, u8 key, i32 count)
 {
@@ -3068,20 +3192,939 @@ static void edselfinsert(Editor *ed, Shell *sh, u8 key, i32 count)
     if (count <= 0) return;
     Str ch = {buf, len};
     if (ed->overwrite) {
-        edgroup(ed, U_BEGIN);
-        for (i32 i = 0; i < count; i++) {
-            edinsert(ed, ch);
-            if (ed->point < ed->line.len) {
-                eddelete(ed, ed->point, ednext(ed, ed->point));
-            }
-        }
-        edgroup(ed, U_END);
+        edoverchar(ed, ch, count);
     } else if (count == 1) {
         edinsert(ed, ch);
     } else {
         Buf b(&ed->hmem, len*count);
         for (i32 i = 0; i < count; i++) print(&b, ch);
         edinsert(ed, finish(&b));
+    }
+}
+
+// vi mode, as readline's vi_mode.c
+
+enum : i32 { VIM_DELETE, VIM_CHANGE, VIM_YANK };
+enum : i32 { CS_BFIND = -2, CS_BTO = -1, CS_FTO = 1, CS_FFIND = 2 };
+
+static b32 vitextmod(u8 c)  // a command . can repeat
+{
+    return c && edin("_*\\AaIiCcDdPpYyRrSsXx~", c);
+}
+
+static b32 vimotionkey(u8 c)  // a motion for d, c and y
+{
+    return c && edin(" hl^$0ftFT;,%wbeWBE|`", c);
+}
+
+static b32 viblank(u8 c) { return c==' ' || c=='\t'; }
+static b32 viupper(u8 c) { return c>='A' && c<='Z'; }
+
+static b32 viident(u8 c)  // readline's _rl_isident, by bytes
+{
+    return (c>='0' && c<='9') || ((c|0x20)>='a' && (c|0x20)<='z') || c=='_';
+}
+
+static b32 vipunct(u8 c)  // ispunct, ASCII only as in a UTF-8 locale
+{
+    return (c>0x20 && c<0x30) || (c>0x39 && c<0x41) ||
+           (c>0x5a && c<0x61) || (c>0x7a && c<0x7f);
+}
+
+// The byte at i, NUL past the end, as readline reads its buffer
+static u8 vich(Editor *ed, iz i)
+{
+    return i>=0 && i<ed->line.len ? ed->line.data[i] : 0;
+}
+
+// The keymap keys are looked up in now
+static KeyNode *edmap(Editor *ed)
+{
+    if (!ed->vars.vimode) return &ed->root;
+    if (ed->vireplmode)   return ed->vireplmap;
+    return ed->vicmd ? &ed->vimove : &ed->viins;
+}
+
+// set -o vi and set -o emacs follow the editing mode, as bash's report
+// readline's, while line editing is on
+static void edoptsync(Editor *ed, Shell *sh)
+{
+    if (!sh->opt[O_EMACS] && !sh->opt[O_VI]) return;
+    sh->opt[O_VI]    = !!ed->vars.vimode;
+    sh->opt[O_EMACS] = !ed->vars.vimode;
+}
+
+// After set -o vi or set -o emacs
+static void edmodechanged(Shell *sh)
+{
+    Editor *ed = sh->editor;
+    if (!ed) return;
+    if (sh->opt[O_VI]) {
+        ed->vars.vimode = 1;
+        ed->vars.keymap = KM_VIINS;
+        ed->vicmd = ed->vireplmode = 0;
+    } else if (sh->opt[O_EMACS]) {
+        ed->vars.vimode = 0;
+        ed->vars.keymap = KM_EMACS;
+        ed->vicmd = ed->vireplmode = 0;
+    }
+}
+
+static iz viadvance(Editor *ed, iz p)  // _rl_vi_advance_point
+{
+    return p<ed->line.len ? ednext(ed, p) : p;
+}
+
+static iz viback(Editor *ed, iz p)  // _rl_vi_backup_point
+{
+    return p>0 ? edprev(ed, p) : p;
+}
+
+// UTF-8 steps that count zero-width characters, as MB_FIND_ANY
+static iz vinextany(Editor *ed, iz i)
+{
+    if (i >= ed->line.len) return ed->line.len;
+    for (i++; i<ed->line.len && (ed->line.data[i]&0xc0)==0x80; i++) {}
+    return i;
+}
+
+static iz viprevany(Editor *ed, iz i)
+{
+    if (i <= 0) return 0;
+    for (i--; i>0 && (ed->line.data[i]&0xc0)==0x80; i--) {}
+    return i;
+}
+
+static void viinsmode(Editor *ed, u8 key)  // rl_vi_insertion_mode
+{
+    ed->vicmd = ed->vireplmode = 0;
+    ed->vars.keymap = KM_VIINS;
+    ed->vilastins   = key;
+}
+
+static void visetlast(Editor *ed, u8 key, i32 count)
+{
+    ed->vilastcmd   = key;
+    ed->vilastcount = count;
+}
+
+static void viresetlast(Editor *ed)
+{
+    ed->vilastcmd    = 'i';
+    ed->vilastcount  = 1;
+    ed->vilastmotion = 0;
+}
+
+static void vistartins(Editor *ed, u8 key, i32 count)
+{
+    visetlast(ed, key, count);
+    edgroup(ed, U_BEGIN);  // so inserts don't join what came before
+    viinsmode(ed, key);
+}
+
+static void visetbuf(Editor *ed, Str t)
+{
+    if (t.len > ed->vibufcap) {
+        iz cap = ed->vibufcap*2>t.len ? ed->vibufcap*2 : t.len+64;
+        ed->vibuf.data = alloc<u8>(&ed->perm, cap);
+        ed->vibufcap   = cap;
+    }
+    if (t.len) copybytes(ed->vibuf.data, t.data, t.len);
+    ed->vibuf.len = t.len;
+}
+
+// The text of an insert record, as readline saves it for .
+static void visaveins(Editor *ed, EdUndo *u)
+{
+    if (!u || u->kind!=U_INSERT) {
+        ed->vibuf.len = 0;
+        return;
+    }
+    iz beg = u->beg<ed->line.len ? u->beg : ed->line.len;
+    iz end = u->end<ed->line.len ? u->end : ed->line.len;
+    visetbuf(ed, {ed->line.data+beg, end>beg ? end-beg : 0});
+}
+
+// R's replacement, by the count of characters replaced, as bytes
+static void visavereplace(Editor *ed)
+{
+    EdUndo *u = ed->undo;
+    if (!u || u->kind!=U_END || ed->vireplcount<=0) {
+        ed->vibuf.len = 0;
+        return;
+    }
+    iz end   = ed->point;
+    iz start = end - ed->vireplcount + 1;
+    iz len   = ed->vireplcount + 1;
+    if (start < 0) {
+        len   = end + 1;
+        start = 0;
+    }
+    iz n = len - 1;
+    if (start+n > ed->line.len) n = ed->line.len - start;
+    visetbuf(ed, {ed->line.data+start, n>0 ? n : 0});
+}
+
+// Leaving insert mode: the groups closed, the text kept for .
+static void vidoneins(Editor *ed)
+{
+    if (ed->vidoing) {
+        edgroup(ed, U_END);
+        ed->vidoing = 0;
+        if (ed->vilastins == 'R') {
+            visavereplace(ed);
+        } else {
+            visaveins(ed, ed->undo ? ed->undo->next : 0);
+        }
+        if (ed->ulevel > 0) edgroup(ed, U_END);
+    } else if (ed->undo && edin("iaIA", ed->vilastins)) {
+        visaveins(ed, ed->undo);
+    } else if (ed->vilastins == 'C') {
+        edgroup(ed, U_END);
+    }
+    while (ed->ulevel > 0) edgroup(ed, U_END);
+}
+
+// The line accepted, as readline's newline in vi mode
+static void viacceptline(Editor *ed)
+{
+    vidoneins(ed);
+    if (!vitextmod(ed->vilastcmd)) viresetlast(ed);
+}
+
+static void vimovement(Editor *ed)  // rl_vi_movement_mode
+{
+    if (ed->point > 0) ed->point = edcharmove(ed, ed->point, -1);
+    ed->vicmd       = 1;
+    ed->vireplmode  = 0;
+    ed->vars.keymap = KM_VIMOVE;
+    vidoneins(ed);
+    // As POSIX has U: nothing before the first command mode is undone
+    if (!ed->vicmdonce) ed->undo = 0;
+    ed->vicmdonce = 1;
+}
+
+// A key, or -1 at the end of input, or on an interrupt, which ends
+// the line
+static i32 vireadkey(Editor *ed, Shell *sh)
+{
+    i32 c = edkey(ed, sh, -1);
+    if (c==-2 || c==ed->tty.intr) {
+        ed->done   = 1;
+        ed->result = ED_INTR;
+        return -1;
+    }
+    return c<0 ? -1 : c;
+}
+
+// A character's bytes, as readline's _rl_read_mbchar: its length or -1
+static i32 vireadchar(Editor *ed, Shell *sh, u8 *buf)
+{
+    i32 c = vireadkey(ed, sh);
+    if (c < 0) return -1;
+    buf[0] = (u8)c;
+    i32 n   = c>=0xf0 ? 4 : c>=0xe0 ? 3 : c>=0xc0 ? 2 : 1;
+    i32 len = 1;
+    while (len < n) {
+        i32 k = edkey(ed, sh, -1);
+        if (k < 0) break;
+        if ((k&0xc0) != 0x80) {
+            edpush(ed, k);
+            break;
+        }
+        buf[len++] = (u8)k;
+    }
+    return len;
+}
+
+// Word motions, as readline's vi_mode.c has them
+static void vifWord(Editor *ed, i32 count)
+{
+    iz p = ed->point, end = ed->line.len;
+    while (count-- > 0 && p<end-1) {
+        while (!viblank(vich(ed, p)) && p<end) p = viadvance(ed, p);
+        while (viblank(vich(ed, p)) && p<end) p = viadvance(ed, p);
+    }
+    ed->point = p;
+}
+
+static void vibWord(Editor *ed, i32 count)
+{
+    iz p = ed->point;
+    while (count-- > 0 && p>0) {
+        if (!viblank(vich(ed, p)) && viblank(vich(ed, p-1))) p--;
+        while (p>0 && viblank(vich(ed, p))) p = viback(ed, p);
+        if (p > 0) {
+            do p = viback(ed, p); while (p>0 && !viblank(vich(ed, p)));
+            if (p > 0) p++;  // onto the blank's next
+        }
+    }
+    ed->point = p;
+}
+
+static void vieWord(Editor *ed, i32 count)
+{
+    iz p = ed->point, end = ed->line.len;
+    while (count-- > 0 && p<end-1) {
+        if (!viblank(vich(ed, p))) p = viadvance(ed, p);
+        while (p<end && viblank(vich(ed, p))) p = viadvance(ed, p);
+        if (p && p<end) {
+            iz o = p;
+            while (p<end && viblank(vich(ed, p))) {
+                o = p;
+                p = viadvance(ed, p);
+            }
+            while (p<end && !viblank(vich(ed, p))) {
+                o = p;
+                p = viadvance(ed, p);
+            }
+            p = o;
+        }
+    }
+    ed->point = p;
+}
+
+static void vifword(Editor *ed, i32 count)
+{
+    iz p = ed->point, end = ed->line.len;
+    while (count-- > 0 && p<end-1) {
+        if (viident(vich(ed, p))) {
+            while (viident(vich(ed, p)) && p<end) p = viadvance(ed, p);
+        } else {
+            while (!viident(vich(ed, p)) && !viblank(vich(ed, p)) && p<end) {
+                p = viadvance(ed, p);
+            }
+        }
+        while (viblank(vich(ed, p)) && p<end) p = viadvance(ed, p);
+    }
+    ed->point = p;
+}
+
+static void vibword(Editor *ed, i32 count)
+{
+    iz p = ed->point;
+    while (count-- > 0 && p>0) {
+        if (!viblank(vich(ed, p)) && viblank(vich(ed, p-1))) {
+            if (--p == 0) break;
+        }
+        // Between a word and punctuation, back already
+        b32 cur = viident(vich(ed, p));
+        iz  o   = p;
+        p = viback(ed, p);
+        b32 prev = viident(vich(ed, p));
+        if (cur == prev) p = o;
+        while (p>0 && viblank(vich(ed, p))) p = viback(ed, p);
+        if (p > 0) {
+            o = p;
+            if (viident(vich(ed, p))) {
+                do {
+                    o = p;
+                    p = viback(ed, p);
+                } while (p>0 && viident(vich(ed, p)));
+            } else {
+                do {
+                    o = p;
+                    p = viback(ed, p);
+                } while (p>0 && !viident(vich(ed, p)) && !viblank(vich(ed, p)));
+            }
+            if (p > 0) p = o;
+        }
+    }
+    ed->point = p;
+}
+
+static void vieword(Editor *ed, i32 count)
+{
+    iz p = ed->point, end = ed->line.len;
+    while (count-- > 0 && p<end-1) {
+        if (!viblank(vich(ed, p))) p = viadvance(ed, p);
+        while (p<end && viblank(vich(ed, p))) p = viadvance(ed, p);
+        iz o = p;
+        if (p < end) {
+            if (viident(vich(ed, p))) {
+                do {
+                    o = p;
+                    p = viadvance(ed, p);
+                } while (p<end && viident(vich(ed, p)));
+            } else {
+                do {
+                    o = p;
+                    p = viadvance(ed, p);
+                } while (p<end && !viident(vich(ed, p)) && !viblank(vich(ed, p)));
+            }
+        }
+        p = o;
+    }
+    ed->point = p;
+}
+
+static i32 vibrack(u8 c)
+{
+    switch (c) {
+    case '(': return  1;
+    case ')': return -1;
+    case '[': return  2;
+    case ']': return -2;
+    case '{': return  3;
+    case '}': return -3;
+    }
+    return 0;
+}
+
+// %: the bracket matching the one at point, or the first after it
+static void vimatch(Editor *ed)
+{
+    iz  pos   = ed->point;
+    i32 brack = vibrack(vich(ed, pos));
+    if (!brack) {
+        for (;;) {
+            brack = vibrack(vich(ed, ed->point));
+            if (brack) break;
+            iz pre = ed->point;
+            ed->point = edcharmove(ed, ed->point, 1);
+            if (pre == ed->point) break;
+        }
+        if (brack <= 0) {  // a closing one found ahead fails too
+            ed->point = pos;
+            edbell(ed);
+            return;
+        }
+    }
+    pos = ed->point;
+    for (i32 depth = 1; depth;) {
+        pos += brack<0 ? -1 : 1;
+        if (pos<0 || pos>=ed->line.len) {
+            edbell(ed);
+            return;
+        }
+        i32 b = vibrack(ed->line.data[pos]);
+        if (b == -brack) {
+            depth--;
+        } else if (b == brack) {
+            depth++;
+        }
+    }
+    ed->point = pos;
+}
+
+// Readline's _rl_char_search_internal: true when it failed
+static b32 vicsearch(Editor *ed, i32 count, i32 dir, Str ch)
+{
+    if (!dir) return 1;
+    iz pos = ed->point;
+    while (count) {
+        if ((dir<0 && pos<=0) || (dir>0 && pos>=ed->line.len)) {
+            edbell(ed);
+            return 1;
+        }
+        pos = dir>0 ? vinextany(ed, pos) : viprevany(ed, pos);
+        for (;;) {
+            if (pos+ch.len<=ed->line.len && Str{ed->line.data+pos, ch.len}==ch) {
+                count--;
+                if (dir < 0) {
+                    ed->point = dir==CS_BTO ? vinextany(ed, pos) : pos;
+                } else {
+                    ed->point = dir==CS_FTO ? viprevany(ed, pos) : pos;
+                }
+                break;
+            }
+            iz pre = pos;
+            pos = dir<0 ? viprevany(ed, pos) : vinextany(ed, pos);
+            if (pos == pre) break;
+        }
+    }
+    return 0;
+}
+
+// f F t T ; , : true when it failed
+static b32 vicharsearch(Editor *ed, Shell *sh, i32 count, u8 key)
+{
+    if (key==';' || key==',') {
+        if (!ed->vicsorig || !ed->vicslen) return 1;
+        ed->vicsdir = key==';' ? ed->vicsorig : -ed->vicsorig;
+    } else {
+        switch (key) {
+        case 't': ed->vicsorig = ed->vicsdir = CS_FTO;   break;
+        case 'T': ed->vicsorig = ed->vicsdir = CS_BTO;   break;
+        case 'f': ed->vicsorig = ed->vicsdir = CS_FFIND; break;
+        case 'F': ed->vicsorig = ed->vicsdir = CS_BFIND; break;
+        }
+        if (!ed->viredoing) {
+            i32 n = vireadchar(ed, sh, ed->vicschar);
+            if (n <= 0) return 1;
+            ed->vicslen = n;
+        }
+    }
+    return vicsearch(ed, count, ed->vicsdir, {ed->vicschar, ed->vicslen});
+}
+
+// x: count characters killed from point
+static void videlete(Editor *ed, i32 count);
+
+static void virubout(Editor *ed, i32 count)  // X
+{
+    if (count < 0) {
+        videlete(ed, -count);
+        return;
+    }
+    if (!ed->point) {
+        edbell(ed);
+        return;
+    }
+    iz o = ed->point;
+    if (count > 1) {
+        ed->point = edcharmove(ed, ed->point, -count);
+    } else {
+        ed->point = edprev(ed, ed->point);
+    }
+    edkill(ed, ed->point, o);
+}
+
+static void videlete(Editor *ed, i32 count)
+{
+    if (count < 0) {
+        virubout(ed, -count);
+        return;
+    }
+    if (!ed->line.len) {
+        edbell(ed);
+        return;
+    }
+    iz end = ed->point;
+    for (i32 i = 0; i < count && end<ed->line.len; i++) end = ednext(ed, end);
+    edkill(ed, ed->point, end);
+    if (ed->point>0 && ed->point==ed->line.len) {
+        ed->point = edcharmove(ed, ed->point, -1);
+    }
+}
+
+// The cursor stays on the line's last character in command mode
+static void vicheck(Editor *ed)
+{
+    if (ed->point && ed->point==ed->line.len) ed->point = edprev(ed, ed->point);
+}
+
+static void viput(Editor *ed, u8 key, i32 count)  // p and P
+{
+    if (!viupper(key) && ed->point+1<=ed->line.len) {
+        // yank-pop of a put at column 0 leaves the point at -1
+        ed->point = ed->point<0 ? 0 : ednext(ed, ed->point);
+    }
+    while (count-- > 0) edyank(ed);
+    ed->point = edcharmove(ed, ed->point, -1);
+}
+
+static void viunixword(Editor *ed, i32 count)  // vi's C-w
+{
+    if (!ed->point) {
+        edbell(ed);
+        return;
+    }
+    iz o = ed->point, q = o;
+    if (count <= 0) count = 1;
+    #define vibound(c) (viblank(c) || vipunct(c))
+    while (count--) {
+        if (q>0 && !vich(ed, q) && viblank(vich(ed, q-1))) {
+            while (--q>0 && viblank(vich(ed, q))) {}
+        }
+        if (q>0 && !vibound(vich(ed, q)) && vibound(vich(ed, q-1))) q--;
+        if (q>0 && vibound(vich(ed, q))) {
+            while (q && vibound(vich(ed, q-1))) q--;
+        } else if (q>0 && !vibound(vich(ed, q))) {
+            while (q>0 && !vibound(vich(ed, q-1))) q = viback(ed, q);
+        }
+    }
+    #undef vibound
+    ed->point = q;
+    edkill(ed, o, q);
+}
+
+// An operator's motion, its keys and where it began, as readline's
+// _rl_vimotion_cxt
+struct ViMove {
+    i32 op;      // VIM_*
+    u8  key;     // the operator's key
+    u8  motion;
+    iz  start;
+    iz  end;     // the line's length
+};
+
+static void vikey(Editor *, Shell *, u8);
+
+// d, c or y over point to mark, as readline's vi_*_dispatch
+static void viop(Editor *ed, ViMove *m)
+{
+    iz  len  = ed->line.len;
+    Str keep = m->op==VIM_DELETE ? Str(" l|h^0bBFT`")
+             : m->op==VIM_CHANGE ? Str(" l|hwW^0bBFT`")
+             : Str(" l|h^0%bBFT`");
+    if (m->motion && !edin(keep, m->motion) && ed->point>=m->start && ed->mark<len) {
+        ed->mark = vinextany(ed, ed->mark);
+    }
+    switch (m->op) {
+    case VIM_DELETE:
+        edkill(ed, ed->point, ed->mark);
+        break;
+    case VIM_CHANGE:
+        if ((m->motion|0x20)=='w' && ed->point<m->start) ed->point = m->start;
+        if (ed->viredoing) {
+            if (ed->vibuf.len) edgroup(ed, U_BEGIN);
+            eddelete(ed, ed->point, ed->mark);
+            if (ed->vibuf.len) {
+                edinsert(ed, ed->vibuf);
+                edgroup(ed, U_END);
+            }
+        } else {
+            edgroup(ed, U_BEGIN);  // so u undoes the change
+            edkill(ed, ed->point, ed->mark);
+            if (!viupper(m->key)) ed->vidoing = 1;  // C keeps no text
+            vistartins(ed, m->key, ed->count);
+        }
+        break;
+    case VIM_YANK:
+        edgroup(ed, U_BEGIN);
+        edkill(ed, ed->point, ed->mark);
+        edgroup(ed, U_END);
+        edundo1(ed);
+        ed->point = m->start;
+        if (ed->point > ed->line.len) ed->point = ed->line.len;
+        if (ed->mark > ed->line.len)  ed->mark  = ed->line.len;
+        break;
+    }
+}
+
+// The motion c, run with a blank on the end of the line so it works
+// there, then the operator: -1 when it went nowhere.
+static i32 vimotion(Editor *ed, Shell *sh, ViMove *m, u8 c)
+{
+    ed->vilastmotion = m->motion = c;
+    reserve(&ed->line, 1);
+    ed->line.data[ed->line.len++] = ' ';
+    iz o = ed->point;
+    ed->vifail = 0;
+    vikey(ed, sh, c);
+    b32 failed = ed->vifail && ed->point==o && edin("fFtT;,", c);
+    ed->line.len = m->end;
+    if (ed->point > ed->line.len) ed->point = ed->line.len;
+
+    if (ed->mark == ed->point) {
+        // c, d and y go ahead when a good motion didn't move
+        u8 k = m->key & ~0x20;
+        if ((k=='C' || k=='D' || k=='Y') && vimotionkey(c) && !failed) {
+            viop(ed, m);
+            return 0;
+        }
+        return -1;
+    }
+    // w leaves point on the next word: back onto the blank
+    if ((c|0x20)=='w' && ed->point<ed->line.len && ed->point>ed->mark &&
+        !viblank(vich(ed, ed->point))) {
+        ed->point--;
+    }
+    // cw and cW change to the end of the word, as ce
+    if (m->key=='c' && ed->point>=ed->mark && (c|0x20)=='w') {
+        while (ed->point>ed->mark && viblank(vich(ed, ed->point))) ed->point--;
+        if (ed->point == ed->mark) {
+            ed->point = viadvance(ed, ed->point);
+        } else if (ed->point>=0 && ed->point<ed->line.len-1 &&
+                   !viblank(vich(ed, ed->point))) {
+            ed->point = viadvance(ed, ed->point);
+        }
+    }
+    if (ed->mark < ed->point) {
+        iz t = ed->point;
+        ed->point = ed->mark;
+        ed->mark  = t;
+    }
+    viop(ed, m);
+    return 0;
+}
+
+// The motion read: a motion key, the operator again for the whole line,
+// or a count then a motion. 1 when it was none of those.
+static i32 viread(Editor *ed, Shell *sh, ViMove *m)
+{
+    i32 c = vireadkey(ed, sh);
+    if (c < 0) return -1;
+    if (vimotionkey((u8)c)) return vimotion(ed, sh, m, (u8)c);
+    if (c==m->key && edin("dyc", m->key)) {
+        ed->mark = ed->line.len;
+        ed->point = 0;
+        ed->vilastmotion = m->motion = (u8)c;
+        viop(ed, m);
+        return 0;
+    }
+    if (c<'1' || c>'9') return 1;
+
+    // A count for the motion, multiplying the operator's
+    i32 save = ed->count;
+    i64 n    = c - '0';
+    i32 sign = save<0 ? -1 : 1;
+    ed->argset = 1;
+    Str prompt = ed->prompt;
+    for (;;) {
+        if (n > 1000000) {
+            edbell(ed);
+            n = 1;
+            ed->argset = 0;
+            save = sign = 1;
+        }
+        Arena a = ed->linemem;
+        Buf   b(&a, 32);
+        print(&b, "(arg: ");
+        print(&b, n*sign);
+        print(&b, ") ");
+        ed->prompt = finish(&b);
+        redisplay(ed, sh);
+        ed->prompt = prompt;
+        c = vireadkey(ed, sh);
+        if (c < 0) return -1;
+        KeyNode *k = keychild(edmap(ed), (u8)c);
+        if (k && !k->kids && k->fn==EF_UNIVERSAL_ARGUMENT) {
+            n *= 4;
+        } else if (c>='0' && c<='9') {
+            n = n*10 + c - '0';
+        } else {
+            break;
+        }
+    }
+    redisplay(ed, sh);
+    ed->count = (i32)(n * (save<0 ? -save : save) * sign);
+    if (!vimotionkey((u8)c)) {
+        m->motion = 0;
+        return 1;
+    }
+    return vimotion(ed, sh, m, (u8)c);
+}
+
+// d, c, y and D, C, Y
+static void vioperator(Editor *ed, Shell *sh, i32 op, u8 key)
+{
+    u8 again = op==VIM_DELETE ? 'd' : op==VIM_CHANGE ? 'c' : 'y';
+    ViMove m = {};
+    m.op    = op;
+    m.key   = key;
+    m.start = ed->point;
+    m.end   = ed->line.len;
+    ed->mark = ed->point;
+    i32 r = 0;
+    if (viupper(key)) {
+        r = vimotion(ed, sh, &m, '$');
+    } else if (ed->viredoing && ed->vilastmotion!=again) {
+        r = vimotion(ed, sh, &m, ed->vilastmotion);
+    } else if (ed->viredoing) {
+        m.motion  = ed->vilastmotion;
+        ed->mark  = ed->line.len;
+        ed->point = 0;
+        viop(ed, &m);
+    } else {
+        r = viread(ed, sh, &m);
+    }
+    if (r<0 && !ed->done) edbell(ed);
+}
+
+// R: overstrike, in a keymap of its own made once from vi-insert's
+static void vireplace(Editor *ed, u8 key)
+{
+    ed->vireplcount = 0;
+    if (!ed->vireplmap) {
+        Arena   *a = &ed->perm;
+        KeyNode *m = alloc<KeyNode>(a);
+        for (i32 i = 0; i < 0x20; i++) {
+            KeyNode *k = keychild(&ed->viins, (u8)i);
+            if (!k || k->kids || !k->fn || k->fn==EF_MACRO || k->fn==EF_SHELLCMD) continue;
+            u8 b = (u8)i;
+            keybind(a, m, {&b, 1}, k->fn);
+        }
+        for (i32 i = 0x20; i < 0x100; i++) {
+            u8 b = (u8)i;
+            keybind(a, m, {&b, 1}, i==0x7f ? EF_VI_OVERSTRIKE_DELETE : EF_VI_OVERSTRIKE);
+        }
+        keybind(a, m, "\x1b", EF_VI_MOVEMENT_MODE);
+        keybind(a, m, "\r", EF_ACCEPT_LINE);
+        keybind(a, m, "\n", EF_ACCEPT_LINE);
+        struct { u8 c; i32 from, to; } over[] = {
+            {0x08, EF_BACKWARD_DELETE_CHAR, EF_VI_OVERSTRIKE_DELETE},
+            {0x15, EF_UNIX_LINE_DISCARD,    EF_VI_OVERSTRIKE_KILL_LINE},
+            {0x17, EF_VI_UNIX_WORD_RUBOUT,  EF_VI_OVERSTRIKE_KILL_WORD},
+            {0x19, EF_YANK,                 EF_VI_OVERSTRIKE_YANK},
+        };
+        for (iz i = 0; i < countof(over); i++) {
+            KeyNode *k = keychild(&ed->viins, over[i].c);
+            if (k && !k->kids && k->fn==over[i].from) {
+                keybind(a, m, {&over[i].c, 1}, over[i].to);
+            }
+        }
+        ed->vireplmap = m;
+    }
+    vistartins(ed, key, ed->count<0 ? -1 : 1);
+    ed->vilastins  = 'R';  // in case another key is bound to it
+    ed->vireplmode = 1;
+    if (ed->vars.bracketpaste) {
+        KeyNode *n = ed->vireplmap;
+        Str      p = "\x1b[200~";
+        for (iz i = 0; n && i < p.len; i++) n = keychild(n, p[i]);
+        if (!n || (!n->fn && !n->kids)) {
+            keybind(&ed->perm, ed->vireplmap, p, EF_VI_OVERSTRIKE_PASTE);
+        }
+    }
+}
+
+static void vioverstrike(Editor *ed, Str ch, i32 count)
+{
+    if (!ed->vidoing) {
+        ed->vidoing = 1;
+        edgroup(ed, U_BEGIN);
+    }
+    if (count > 0) {
+        edoverchar(ed, ch, count);
+        ed->vireplcount += count;
+    }
+}
+
+// Run key as it is bound in the current keymap, as readline's
+// _rl_dispatch: a motion for an operator, or . repeating a command
+static void vikey(Editor *ed, Shell *sh, u8 key)
+{
+    KeyNode *map = edmap(ed);
+    KeyNode *k   = keychild(map, key);
+    i32      fn  = k ? k->fn : EF_NONE;
+    if (fn == EF_MACRO) {
+        edplay(ed, k->macro);
+        return;
+    }
+    if (fn == EF_SHELLCMD) fn = EF_NONE;
+    edrun(ed, sh, fn, key);
+    ed->lastfn = fn;
+    if (ed->vicmd && !ed->vireplmode && map==&ed->vimove && vitextmod(key)) {
+        visetlast(ed, key, ed->count);
+    }
+}
+
+// . : the last command again
+static void viredo(Editor *ed, Shell *sh, i32 count)
+{
+    if (!ed->argset) ed->count = ed->vilastcount;
+    ed->viredoing = 1;
+    u8  last = ed->vilastcmd;
+    b32 text = ed->vibuf.len > 0;
+    if (text && edin("iIaA", last)) {
+        if (last == 'I') ed->point = 0;
+        if (last == 'a') ed->point = viadvance(ed, ed->point);
+        if (last == 'A') ed->point = ed->line.len;
+        edgroup(ed, U_BEGIN);
+        for (i32 i = 0; i < count; i++) edinsert(ed, ed->vibuf);
+        edgroup(ed, U_END);
+        if (ed->point > 0) ed->point = edprev(ed, ed->point);
+    } else if (text && last=='R') {
+        iz n = ed->vibuf.len;
+        edgroup(ed, U_BEGIN);
+        for (i32 i = 0; i < count; i++) {
+            edgroup(ed, U_BEGIN);
+            iz at = ed->point;
+            eddelete(ed, at, at+n);
+            ed->point = at;
+            edinsert(ed, ed->vibuf);
+            edgroup(ed, U_END);
+        }
+        edgroup(ed, U_END);
+        if (ed->point > 0) ed->point = edprev(ed, ed->point);
+    } else if (last=='.' && ed->vicmd) {
+        edbell(ed);
+    } else {
+        vikey(ed, sh, last);
+    }
+    ed->viredoing = 0;
+}
+
+// ~ : the case of count characters swapped, point past them
+static void vichangecase(Editor *ed, Shell *sh, i32 count)
+{
+    if (ed->point >= ed->line.len) return;
+    while (count-- && ed->point<ed->line.len) {
+        iz  j  = ed->point;
+        i32 cp = utf8decode(edtext(ed), &j);
+        i32 to = -1;
+        if (sh->utf8 || cp<0x80) {
+            if (cplower(cp) != cp) {
+                to = cplower(cp);
+            } else if (cpupper(cp) != cp) {
+                to = cpupper(cp);
+            }
+        }
+        if (to <= 0) {
+            ed->point = edcharmove(ed, ed->point, 1);
+            continue;
+        }
+        u8 buf[4];
+        iz n = utf8encode(buf, to);
+        iz q = ed->point;
+        edgroup(ed, U_BEGIN);
+        videlete(ed, 1);
+        if (ed->point < q) ed->point = viadvance(ed, ed->point);
+        edinsert(ed, {buf, n});
+        edgroup(ed, U_END);
+        vicheck(ed);
+    }
+}
+
+// r: count characters replaced by one read
+static void vichangechar(Editor *ed, Shell *sh, i32 count)
+{
+    if (!ed->viredoing) {
+        u8  buf[4];
+        i32 n = vireadchar(ed, sh, buf);
+        if (n < 0) return;
+        copybytes(ed->virepl, buf, n);
+        ed->vireplen = n;
+    }
+    if (!ed->vireplen) return;
+    u8 c = ed->virepl[0];
+    if (c==0x1b || c==0x03) return;
+    Str ch = {ed->virepl, ed->vireplen};
+    edgroup(ed, U_BEGIN);
+    while (count-- && ed->point<ed->line.len) {
+        iz p = ed->point;
+        videlete(ed, 1);
+        if (ed->point < p) ed->point = viadvance(ed, ed->point);
+        edinsert(ed, ch);
+    }
+    ed->point = edcharmove(ed, ed->point, -1);  // on the last one changed
+    edgroup(ed, U_END);
+}
+
+// vi-complete and bash-vi-complete (\ * =)
+static void vicomplete(Editor *ed, Shell *sh, i32 fn, u8 key)
+{
+    iz p = ed->point;
+    if (p<ed->line.len && !viblank(vich(ed, p))) {
+        if (!viblank(vich(ed, p+1))) vieWord(ed, 1);
+        ed->point = viadvance(ed, ed->point);
+    }
+    i32 f = EF_COMPLETE;
+    if (fn == EF_BASH_VI_COMPLETE) {
+        // A word with no glob characters gets a star, as with an argument
+        if (ed->point > 0) {
+            iz q = ed->point;
+            vibWord(ed, 1);
+            iz r = ed->point;
+            ed->point = q;
+            if (!compglobchars(span(ed->line.data+r, ed->line.data+q))) ed->argset = 1;
+        }
+        switch (key) {
+        case '*':  f = EF_GLOB_EXPAND_WORD;     break;
+        case '=':  f = EF_GLOB_LIST_EXPANSIONS; break;
+        case '\\': f = EF_GLOB_COMPLETE_WORD;   break;
+        }
+    } else {
+        switch (key) {
+        case '*': f = EF_INSERT_COMPLETIONS;   break;
+        case '=': f = EF_POSSIBLE_COMPLETIONS; break;
+        }
+    }
+    edcomplete(ed, sh, f, ed->argset ? ed->count : 1);
+    if (key=='*' || key=='\\') {
+        vistartins(ed, key, fn==EF_BASH_VI_COMPLETE ? 1 : ed->count<0 ? -1 : 1);
     }
 }
 
@@ -3135,7 +4178,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         while (!ed->nchars) {
             i32 c = edkey(ed, sh, 0);
             if (c < 0) break;
-            KeyNode *k = keychild(&ed->root, (u8)c);
+            KeyNode *k = keychild(edmap(ed), (u8)c);
             if (!k || k->kids || k->fn!=EF_SELF_INSERT || c==ed->delim ||
                 c==ed->tty.intr || (c=='\r' && ed->delim>=0)) {
                 edpush(ed, c);  // dispatched next
@@ -3364,10 +4407,10 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
             ed->ylskip += ed->yldir;
             if (ed->ylskip < 0) ed->ylskip = 0;
         }
-        ed->ylundo = edyankarg(ed, sh, ed->ylarg ? ed->ylcount : '$', ed->ylskip);
+        ed->ylundo = edyankarg(ed, sh, ed->ylarg ? ed->ylcount : '$', ed->ylskip, key);
         break;
     case EF_YANK_NTH_ARG:
-        edyankarg(ed, sh, count, 0);
+        edyankarg(ed, sh, count, 0, key);
         break;
     case EF_UNDO:
         for (i32 n = count; n > 0; n--) {
@@ -3382,6 +4425,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
             edbell(ed);
         } else {
             while (ed->undo) edundo1(ed);
+            if (ed->vars.vimode) ed->point = ed->mark = 0;
         }
         break;
     case EF_SET_MARK: {
@@ -3594,7 +4638,268 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
     case EF_EMACS_EDITING_MODE:
         ed->vars.vimode = 0;
         ed->vars.keymap = KM_EMACS;
+        ed->vicmd = ed->vireplmode = ed->overwrite = 0;
+        edoptsync(ed, sh);
         break;
+    case EF_VI_EDITING_MODE:
+        ed->vars.vimode = 1;
+        ed->overwrite   = 0;
+        viinsmode(ed, key);
+        edoptsync(ed, sh);
+        break;
+    case EF_VI_MOVEMENT_MODE:
+        vimovement(ed);
+        break;
+    case EF_VI_INSERTION_MODE:
+        vistartins(ed, key, count<0 ? -1 : 1);
+        break;
+    case EF_VI_INSERT_BEG:
+        ed->point = 0;
+        vistartins(ed, key, count<0 ? -1 : 1);
+        break;
+    case EF_VI_APPEND_MODE:
+        ed->point = viadvance(ed, p);
+        vistartins(ed, key, count<0 ? -1 : 1);
+        break;
+    case EF_VI_APPEND_EOL:
+        ed->point = len;
+        vistartins(ed, key, count<0 ? -1 : 1);
+        break;
+    case EF_VI_EOF_MAYBE:
+        ed->done   = 1;
+        ed->result = ED_LINE;
+        break;
+    case EF_VI_UNDO:
+        edrun(ed, sh, EF_UNDO, key);
+        break;
+    case EF_VI_REDO:
+        viredo(ed, sh, count);
+        break;
+    case EF_VI_DELETE_TO:
+        vioperator(ed, sh, VIM_DELETE, key);
+        break;
+    case EF_VI_CHANGE_TO:
+        vioperator(ed, sh, VIM_CHANGE, key);
+        break;
+    case EF_VI_YANK_TO:
+        vioperator(ed, sh, VIM_YANK, key);
+        break;
+    case EF_VI_SUBST:
+        if (!ed->viredoing) edpush(ed, key=='S' ? 'c' : 'l');
+        vioperator(ed, sh, VIM_CHANGE, 'c');
+        break;
+    case EF_VI_DELETE:
+        videlete(ed, count);
+        break;
+    case EF_VI_RUBOUT:
+        virubout(ed, count);
+        break;
+    case EF_VI_PUT:
+        viput(ed, key, count);
+        break;
+    case EF_VI_YANK_POP: {
+        if ((ed->lastfn!=EF_VI_YANK_POP && ed->lastfn!=EF_VI_PUT) || !ed->nkills) {
+            edabort(ed);
+            break;
+        }
+        Str k = ed->kills[ed->killidx];
+        iz  n = p - k.len + 1;
+        if (n<0 || n+k.len>len || !(Str{ed->line.data+n, k.len}==k)) {
+            edabort(ed);
+            break;
+        }
+        eddelete(ed, n, n+k.len);
+        ed->point   = p - k.len;
+        ed->killidx = ed->killidx ? ed->killidx-1 : ed->nkills-1;
+        viput(ed, 'p', 1);
+    } break;
+    case EF_VI_CHANGE_CASE:
+        vichangecase(ed, sh, count);
+        break;
+    case EF_VI_CHANGE_CHAR:
+        vichangechar(ed, sh, count);
+        break;
+    case EF_VI_REPLACE:
+        vireplace(ed, key);
+        break;
+    case EF_VI_OVERSTRIKE: {
+        // The rest of a UTF-8 character it starts
+        u8  buf[4] = {key};
+        i32 n   = key>=0xf0 ? 4 : key>=0xe0 ? 3 : key>=0xc0 ? 2 : 1;
+        i32 got = 1;
+        while (got < n) {
+            i32 c = edkey(ed, sh, -1);
+            if (c < 0) break;
+            if ((c&0xc0) != 0x80) {
+                edpush(ed, c);
+                break;
+            }
+            buf[got++] = (u8)c;
+        }
+        vioverstrike(ed, {buf, got}, count);
+    } break;
+    case EF_VI_OVERSTRIKE_DELETE:
+        for (i32 i = 0; i < count; i++) {
+            if (!ed->vireplcount) {
+                edbell(ed);
+                break;
+            }
+            iz at = ed->point;
+            if (edundo1(ed)) ed->vireplcount--;
+            if (ed->point == at) ed->point = edcharmove(ed, ed->point, -1);
+        }
+        if (!ed->vireplcount && ed->vidoing) {
+            edgroup(ed, U_END);
+            edundo1(ed);
+            ed->vidoing = 0;
+        }
+        break;
+    case EF_VI_OVERSTRIKE_KILL_LINE:
+        edrun(ed, sh, EF_UNIX_LINE_DISCARD, key);
+        ed->vireplcount -= (i32)(len - ed->line.len);
+        break;
+    case EF_VI_OVERSTRIKE_KILL_WORD:
+        viunixword(ed, count);
+        ed->vireplcount -= (i32)(len - ed->line.len);
+        break;
+    case EF_VI_OVERSTRIKE_YANK:
+        edyank(ed);
+        ed->vireplcount += (i32)(ed->line.len - len);
+        break;
+    case EF_VI_OVERSTRIKE_PASTE: {
+        Str t = edpaste(ed, sh, &ed->hmem);
+        for (iz i = 0; i < t.len;) {
+            iz j = i;
+            for (j++; j<t.len && (t[j]&0xc0)==0x80; j++) {}
+            vioverstrike(ed, {t.data+i, j-i}, 1);
+            i = j;
+        }
+    } break;
+    case EF_VI_UNIX_WORD_RUBOUT:
+        viunixword(ed, count);
+        break;
+    case EF_VI_COLUMN:
+        if (count > len) {
+            ed->point = len;
+        } else {
+            iz q = 0;
+            for (i32 i = 1; i<count && q<len; i++) q = ednext(ed, q);
+            if (ed->vicmd && q>=len) q = edprev(ed, len);
+            ed->point = q;
+        }
+        break;
+    case EF_VI_FIRST_PRINT:
+    case EF_VI_BACK_TO_INDENT: {
+        iz q = 0;
+        for (; q<len && viblank(ed->line.data[q]); q++) {}
+        ed->point = q;
+    } break;
+    case EF_VI_MATCH:
+        vimatch(ed);
+        break;
+    case EF_VI_CHAR_SEARCH:
+        ed->vifail = vicharsearch(ed, sh, count, key);
+        break;
+    case EF_VI_NEXT_WORD:
+    case EF_VI_PREV_WORD: {
+        b32 fwd = (fn==EF_VI_NEXT_WORD) != (count<0);
+        i32 n   = count<0 ? -count : count;
+        if (fwd ? p>=len-1 : !p) {
+            edbell(ed);
+        } else if (fwd) {
+            if (viupper(key)) vifWord(ed, n); else vifword(ed, n);
+        } else {
+            if (viupper(key)) vibWord(ed, n); else vibword(ed, n);
+        }
+    } break;
+    case EF_VI_END_WORD:
+        if (count < 0) {
+            edbell(ed);
+        } else if (viupper(key)) {
+            vieWord(ed, count);
+        } else {
+            vieword(ed, count);
+        }
+        break;
+    // Named alone, the capital forms win: readline looks names up
+    // ignoring case, and finds vi-bWord before vi-bword
+    case EF_VI_FORWARD_WORD:    vifword(ed, count); break;
+    case EF_VI_FWORD:
+    case EF_VI_FWORD_CAP:
+    case EF_VI_FORWARD_BIGWORD: vifWord(ed, count); break;
+    case EF_VI_BACKWARD_WORD:   vibword(ed, count); break;
+    case EF_VI_BWORD:
+    case EF_VI_BWORD_CAP:
+    case EF_VI_BACKWARD_BIGWORD: vibWord(ed, count); break;
+    case EF_VI_EWORD:
+    case EF_VI_EWORD_CAP:
+    case EF_VI_END_BIGWORD:     vieWord(ed, count); break;
+    case EF_VI_SET_MARK: {
+        i32 c = vireadkey(ed, sh);
+        if (c<'a' || c>'z') {
+            if (!ed->done) edbell(ed);
+            break;
+        }
+        ed->vimarks[c-'a'] = p;
+    } break;
+    case EF_VI_GOTO_MARK: {
+        i32 c = vireadkey(ed, sh);
+        iz  to;
+        if (c == '`') {
+            to = ed->mark;
+        } else if (c<'a' || c>'z' || ed->vimarks[c-'a']<0) {
+            if (!ed->done) edbell(ed);
+            break;
+        } else {
+            to = ed->vimarks[c-'a'];
+        }
+        ed->point = to<0 ? 0 : to>len ? len : to;
+        if (ed->mark > len) ed->mark = len;
+        if (ed->mark < 0)   ed->mark = 0;
+    } break;
+    case EF_VI_SEARCH:
+        if (key == '?') {
+            ednoninc(ed, sh, 1, 0, "?", ed->vicmd);
+        } else if (key == '/') {
+            ednoninc(ed, sh, -1, 0, "/", ed->vicmd);
+        } else {
+            edbell(ed);
+        }
+        break;
+    case EF_VI_SEARCH_AGAIN:
+        if (key == 'n') {
+            if (!ed->noninc.data) edbell(ed); else ednoninc(ed, sh, -1, 1, {}, ed->vicmd);
+        } else if (key == 'N') {
+            if (!ed->noninc.data) edbell(ed); else ednoninc(ed, sh, 1, 1, {}, ed->vicmd);
+        }
+        break;
+    case EF_VI_YANK_ARG:
+        if (ed->argset) {
+            edyankarg(ed, sh, count-1, 0, key);
+        } else {
+            edyankarg(ed, sh, '$', 0, key);
+        }
+        break;
+    case EF_VI_COMPLETE:
+    case EF_BASH_VI_COMPLETE:
+        vicomplete(ed, sh, fn, key);
+        break;
+    case EF_VI_TILDE_EXPAND:
+        edtildeexpand(ed, sh);
+        vistartins(ed, key, count<0 ? -1 : 1);
+        break;
+    case EF_VI_EDIT_AND_EXECUTE_COMMAND:
+        ededitexec(ed, sh, 1, key);
+        return;
+    case EF_NULL_FUNCTION:
+        return;
+    case EF_POSIX_EDIT_MACROS: {
+        i32 c = vireadkey(ed, sh);
+        if (c <= 0) break;
+        u8     name[] = {'_', (u8)c};
+        Alias *al     = findalias(sh->aliases, {name, 2});
+        if (al && al->value.len) edplay(ed, al->value);
+    } break;
     case EF_TTY_STATUS:
         edbell(ed);  // readline's without TIOCSTAT, as on Linux
         break;
@@ -3605,12 +4910,17 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         ednoninc(ed, sh, 1, 1);
         break;
     case EF_FETCH_HISTORY:
+    case EF_VI_FETCH_HISTORY:
         if (ed->argset) {
             // The entry numbered as history lists it; negative from the end
             i64 nhist  = sh->hist.base + ed->hpos;
             i64 wanted = count>=0 ? nhist-count : -(i64)count;
             if (wanted<=0 || wanted>=nhist) {
-                edprevhist(ed, sh, ed->hpos+1);
+                if (ed->vars.vimode) {
+                    edbell(ed);
+                } else {
+                    edprevhist(ed, sh, ed->hpos+1);
+                }
             } else {
                 edprevhist(ed, sh, (i32)wanted);
             }
@@ -3759,11 +5069,12 @@ static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
 // A key sequence read and looked up: its function and last key, or a
 // status (ED_EOF at the end of input, ED_INTR on an interrupt).
 struct EdSeq {
-    Str macro;   // EF_MACRO
-    i32 fn;
-    u8  key;
-    u8  first;   // its first key
-    i32 status;  // -1 for a sequence
+    Str      macro;   // EF_MACRO
+    KeyNode *in;      // the keymap the last key was found in
+    i32      fn;
+    u8       key;
+    u8       first;   // its first key
+    i32      status;  // -1 for a sequence
 };
 
 static EdSeq edreadseq(Editor *ed, Shell *sh)
@@ -3789,7 +5100,8 @@ static EdSeq edreadseq(Editor *ed, Shell *sh)
         r.key = '\r';
         return r;
     }
-    KeyNode *parent = &ed->root;
+    KeyNode *top    = edmap(ed);
+    KeyNode *parent = top;
     KeyNode *n      = keychild(parent, (u8)c);
     u8 last = (u8)c;
     i64 wait = ed->keytimeout>0 ? ed->keytimeout : -1;
@@ -3823,7 +5135,7 @@ static EdSeq edreadseq(Editor *ed, Shell *sh)
             }
             edpush(ed, next);
             for (i32 j = depth-1; j > i; j--) edpush(ed, keys[j]);
-            parent = i ? path[i-1] : &ed->root;
+            parent = i ? path[i-1] : top;
             n      = path[i];
             last   = keys[i];
             break;
@@ -3841,6 +5153,7 @@ static EdSeq edreadseq(Editor *ed, Shell *sh)
     r.fn    = n ? n->fn : EF_NONE;
     r.macro = n ? n->macro : Str{};
     r.key   = last;
+    r.in    = parent;
     if (r.fn==EF_DO_LOWERCASE_VERSION && last>='A' && last<='Z') {
         KeyNode *k = keychild(parent, last+0x20);
         r.fn    = k ? k->fn : EF_NONE;
@@ -3890,6 +5203,14 @@ static b32 eddispatch(Editor *ed, Shell *sh)
     case EF_DIGIT_ARGUMENT:
         edarg(ed, sh, s.key);
         break;
+    case EF_VI_ARG_DIGIT:
+        if (s.key=='0' && ed->count==1 && !ed->argset) {
+            ed->point  = 0;
+            ed->lastfn = s.fn;
+        } else {
+            edarg(ed, sh, s.key);
+        }
+        break;
     case EF_MACRO: {
         // Its keys come next, before the rest of any running macro
         Str rest = cuthead(ed->macro, ed->macropos);
@@ -3910,6 +5231,10 @@ static b32 eddispatch(Editor *ed, Shell *sh)
         edrun(ed, sh, s.fn, s.key);
         ed->lastkill = ed->killed;
         ed->lastfn   = s.fn==EF_OLD_MENU_COMPLETE ? EF_MENU_COMPLETE : s.fn;
+        if (ed->vars.vimode && ed->vicmd && !ed->vireplmode &&
+            s.in==&ed->vimove && vitextmod(s.key)) {
+            visetlast(ed, s.key, ed->count);
+        }
     }
     return 1;
 }
@@ -3945,7 +5270,7 @@ static void edarg(Editor *ed, Shell *sh, i32 key)
                 edresetarg(ed);
                 return;
             }
-            KeyNode *k = keychild(&ed->root, (u8)c);
+            KeyNode *k = keychild(edmap(ed), (u8)c);
             if (k && !k->kids && k->fn==EF_UNIVERSAL_ARGUMENT) {
                 if (!sawdigits) {
                     ed->count *= 4;
@@ -4124,6 +5449,13 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     ed->undo    = 0;
     ed->active  = ed->keepactive = 0;
     ed->hpos    = sh->hist.len;
+    ed->ulevel  = 0;
+    if (ed->vars.vimode) {
+        // Each line starts in insert mode, the marks unset
+        for (i32 i = 0; i < 26; i++) ed->vimarks[i] = -1;
+        ed->vicmdonce = ed->vidoing = 0;
+        viinsmode(ed, 'i');
+    }
     edresetarg(ed);
     // EdUndo lists last while history entries keep them
     b32 kept = 0;
@@ -4138,6 +5470,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         if (head[i]!=1 && head[i]!=2) putbyte(&ed->out_, head[i]);
     }
     ed->prompt = cuthead(prompt, nl);
+    ed->lineprompt = ed->prompt;
     ed->phead  = head;
     ed->shellline = opts->shell;
     ed->ps1       = opts->ps1;
@@ -4169,6 +5502,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     for (;;) {
         edresetarg(ed);
         b32 ok = eddispatch(ed, sh);
+        if (ed->vars.vimode && ed->vicmd && !ed->vireplmode) vicheck(ed);
         if (ed->keepactive) {
             ed->keepactive = 0;
         } else {
@@ -4191,6 +5525,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         if (ed->done) break;
     }
 
+    if (ed->vars.vimode && ed->result==ED_LINE) viacceptline(ed);
     edleave(ed, sh, ed->result==ED_INTR);
 
     // Leave the cursor past the line
