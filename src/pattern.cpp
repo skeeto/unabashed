@@ -2230,7 +2230,92 @@ static PatSpan probespan(Str pat, Str s, i32 mode, i32 flags, b32 wide, Arena sc
     return r;
 }
 
-static PatSpan findspan(Str pat, Str s, i32 mode, i32 flags, Arena scratch)
+// A pattern of literal text with at most a star at either end, as most
+// patterns in ${x#p} and ${x/p/r} are. Stars suit only the prefix and
+// suffix modes, where each answer is an occurrence of the text.
+struct LitPat {
+    Str lit;
+    b32 lead;  // a star before the text
+    b32 tail;  // a star after it
+    b32 ok;
+};
+
+static LitPat litpat(Str pat, i32 mode, i32 flags)
+{
+    LitPat r = {};
+    if (!pat.len || (flags&(PM_NOCASE|PM_PATHNAME|PM_PERIOD|PM_DOTDOT))) {
+        return r;
+    }
+    r.lead = pat[0] == '*';
+    r.lit  = cuthead(pat, r.lead);
+    r.tail = r.lit.len && r.lit[r.lit.len-1]=='*';
+    r.lit  = cuttail(r.lit, r.tail);
+    b32 stars = mode==PF_SHORTPREFIX || mode==PF_LONGPREFIX ||
+                mode==PF_SHORTSUFFIX || mode==PF_LONGSUFFIX;
+    r.ok = (stars || (!r.lead && !r.tail)) && literalpat(r.lit, flags);
+    return r;
+}
+
+// May bytes be compared for characters: not a UTF-8 locale, all ASCII,
+// or all valid UTF-8, where text occurs only on character boundaries?
+static b32 bytewise(Str pat, Str s, i32 flags)
+{
+    if (!(flags&PM_UTF8) || (allascii(pat) && allascii(s))) {
+        return 1;
+    }
+    return glibcvalid(pat) && glibcvalid(s);
+}
+
+// Find a LitPat by comparing bytes.
+static PatSpan litspan(LitPat p, Str s, i32 mode)
+{
+    PatSpan r   = {};
+    Str     lit = p.lit;
+    iz      at  = -1;
+    switch (mode) {
+    case PF_SHORTPREFIX:
+    case PF_LONGPREFIX:
+        if (!p.lead) {
+            at = startswith(s, lit) ? 0 : -1;
+        } else {
+            at = mode==PF_SHORTPREFIX || p.tail ? find(s, lit) : rfind(s, lit);
+        }
+        if (at < 0) return r;
+        r.end = mode==PF_LONGPREFIX && p.tail ? s.len : at+lit.len;
+        break;
+    case PF_SHORTSUFFIX:
+    case PF_LONGSUFFIX:
+        if (!p.tail) {
+            at = endswith(s, lit) ? s.len-lit.len : -1;
+        } else {
+            at = mode==PF_SHORTSUFFIX || p.lead ? rfind(s, lit) : find(s, lit);
+        }
+        if (at < 0) return r;
+        r.beg = mode==PF_LONGSUFFIX && p.lead ? 0 : at;
+        r.end = s.len;
+        break;
+    case PF_FIRST:
+        at = find(s, lit);
+        if (at < 0) return r;
+        r.beg = at;
+        r.end = at + lit.len;
+        break;
+    case PF_ANCHORSTART:
+        if (!startswith(s, lit)) return r;
+        r.end = lit.len;
+        break;
+    case PF_ANCHOREND:
+        if (!endswith(s, lit)) return r;
+        r.beg = s.len - lit.len;
+        r.end = s.len;
+        break;
+    }
+    r.ok = 1;
+    return r;
+}
+
+// Find a match by evaluating the compiled pattern.
+static PatSpan evalspan(Str pat, Str s, i32 mode, i32 flags, Arena scratch)
 {
     PatSpan r = {};
     if (!pat.len) {
@@ -2337,6 +2422,15 @@ static PatSpan findspan(Str pat, Str s, i32 mode, i32 flags, Arena scratch)
     return r;
 }
 
+static PatSpan findspan(Str pat, Str s, i32 mode, i32 flags, Arena scratch)
+{
+    LitPat p = litpat(pat, mode, flags);
+    if (p.ok && bytewise(pat, s, flags)) {
+        return litspan(p, s, mode);
+    }
+    return evalspan(pat, s, mode, flags, scratch);
+}
+
 // Find a match in s for x#p, x##p, x%p, x%%p, x/p/r (PF_FIRST from offset
 // 'from': the leftmost start, longest match there), x/#p/r and x/%p/r.
 // For x//p/r, bash searches again from the end of each match (one
@@ -2366,6 +2460,7 @@ struct PatSearch {
     i32    flags;
     b32    slow;    // patfind on each remainder
     b32    none;    // nothing can match
+    b32    plain;   // literal text, found by comparing bytes
     PatSeq q;
     iz     len;     // truelen, or -1
     PatCtx x;
@@ -2384,6 +2479,10 @@ static PatSearch patsearch(Str pat, Str s, i32 flags, Arena *a)
     if (!pat.len || (multi && !wide) || !s.len ||
             (flags&(PM_PATHNAME|PM_PERIOD|PM_DOTDOT))) {
         p.slow = 1;
+        return p;
+    }
+    p.plain = litpat(pat, PF_FIRST, flags).ok;
+    if (p.plain) {
         return p;
     }
     p.q = patcompile(&k, pat, flags, wide, a);
@@ -2444,6 +2543,13 @@ static PatSpan searchnext(PatSearch *p, iz from, Arena scratch)
         return r;
     } else if (p->slow) {
         return patfind(p->pat, p->s, from, PF_FIRST, p->flags, scratch);
+    } else if (p->plain) {
+        iz at = find(cuthead(p->s, from), p->pat);
+        if (at < 0) return r;
+        r.beg = from + at;
+        r.end = r.beg + p->pat.len;
+        r.ok  = 1;
+        return r;
     }
     iz n = p->s.len;
     if (p->len >= 0) {

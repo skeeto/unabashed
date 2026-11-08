@@ -343,6 +343,66 @@ static void selffind(Arena perm)
     }
 }
 
+// The n-th string of units, by length and then by digits.
+static Str nthunits(Arena *a, Str *units, i32 nunits, i32 n)
+{
+    i32 len = 0;
+    for (i32 count = 1; n >= count; count *= nunits) {
+        n -= count;
+        len++;
+    }
+    Buf b(a, 16);
+    for (i32 i = 0; i < len; i++, n /= nunits) {
+        print(&b, units[n % nunits]);
+    }
+    return finish(&b);
+}
+
+// Literal text with a star at either end, searched by comparing bytes,
+// must agree with evaluating the pattern: every such pattern of up to
+// three units against every string of up to four, valid UTF-8 or not.
+static void selflit(Arena perm)
+{
+    static Str pu[] = {"a", "\xc3\xa9", "\xc3"};
+    static Str su[] = {"a", "b", "\xc3\xa9", "\xc3"};
+    static i32 fl[] = {0, PM_UTF8, PM_UTF8|PM_EXTGLOB};
+    i32 npat = 1 + 3 + 9 + 27;
+    i32 nstr = 1 + 4 + 16 + 64 + 256;
+    i32 fast = 0;
+    for (i32 pn = 0; pn < 4*npat; pn++) {
+        Arena a   = perm;
+        Str   lit = nthunits(&a, pu, countof(pu), pn/4);
+        Buf   pb(&a, 16);
+        if (pn & 1) print(&pb, "*");
+        print(&pb, lit);
+        if (pn & 2) print(&pb, "*");
+        Str pat = finish(&pb);
+        for (i32 sn = 0; sn < nstr; sn++) {
+            Arena t = a;
+            Str   s = nthunits(&t, su, countof(su), sn);
+            for (iz f = 0; f < countof(fl); f++) {
+                for (i32 mode = 0; mode <= PF_ANCHOREND; mode++) {
+                    PatSpan x = findspan(pat, s, mode, fl[f], t);
+                    PatSpan y = evalspan(pat, s, mode, fl[f], t);
+                    b32 same = x.ok==y.ok && (!x.ok || (x.beg==y.beg && x.end==y.end));
+                    check(same, "literal search vs evaluation", pat, s);
+                    fast += litpat(pat, mode, fl[f]).ok && bytewise(pat, s, fl[f]);
+                }
+                PatSearch ps = patsearch(pat, s, fl[f], &t);
+                for (iz from = 0; from <= s.len; from++) {
+                    if (from<s.len && (s[from]&0xc0)==0x80) continue;
+                    PatSpan x = searchnext(&ps, from, t);
+                    PatSpan y = evalspan(pat, cuthead(s, from), PF_FIRST, fl[f], t);
+                    b32 same = x.ok==y.ok &&
+                               (!x.ok || (x.beg==from+y.beg && x.end==from+y.end));
+                    check(same, "literal patsearch vs evaluation", pat, s);
+                }
+            }
+        }
+    }
+    check(fast > 300000, "literal search coverage", "", "");
+}
+
 // unquoteglob follows bash's dequoting of pathnames.
 static void selfunquote(Arena perm)
 {
@@ -504,6 +564,7 @@ int main(int argc, char **argv)
     rungolden(argc>1 ? argv[1] : "t/unit/pattern.golden", perm);
     selfplain(perm);
     selffind(perm);
+    selflit(perm);
     selfunquote(perm);
     selfspeed(perm);
     selfhostile(perm);

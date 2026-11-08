@@ -1034,15 +1034,6 @@ static Str hentry(Shell *sh, iz i)
     return sh->hist.ents[i]->line;
 }
 
-// The rightmost occurrence of pat in s, or -1.
-static iz hrfind(Str s, Str pat)
-{
-    for (iz i = s.len-pat.len; i >= 0; i--) {
-        if (!pat.len || takehead(cuthead(s, i), pat.len) == pat) return i;
-    }
-    return -1;
-}
-
 // One delimited part of :s/old/new/, ending past its delimiter (or at the
 // end of the line). In new, & and \& stay for later.
 static Str hsubpart(Arena *a, Str s, iz *j, u8 delim, b32 rhs)
@@ -1347,7 +1338,7 @@ static Str hevent(Shell *sh, Arena *a, HExp *x, iz bang, iz *pj, b32 dq, iz *mat
             h->search = hset(sh, h->search, pat);
         }
         for (iz e = x->hlen-1; e >= 0; e--) {
-            iz at = hrfind(hentry(sh, e), pat);
+            iz at = rfind(hentry(sh, e), pat);
             if (at >= 0) {
                 *matchat = at;
                 return hentry(sh, e);

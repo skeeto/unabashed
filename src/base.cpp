@@ -188,15 +188,27 @@ static Cut cut(Str s, u8 c)
     return r;
 }
 
-static iz find(Str s, Str needle)  // -1 if not found
+static iz find(Str s, Str needle)  // the first occurrence, -1 if none
 {
     if (!needle.len) {
         return 0;
     }
-    u8 *last = s.data + s.len - needle.len;
-    for (u8 *p = s.data; p <= last; p++) {
-        if (*p==needle.data[0] && !__builtin_memcmp(p, needle.data, (uz)needle.len)) {
-            return p - s.data;
+    for (iz i = 0; i <= s.len-needle.len; i++) {
+        if (s[i]==needle[0] && takehead(cuthead(s, i), needle.len)==needle) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static iz rfind(Str s, Str needle)  // the last occurrence, -1 if none
+{
+    if (!needle.len) {
+        return s.len;
+    }
+    for (iz i = s.len-needle.len; i >= 0; i--) {
+        if (s[i]==needle[0] && takehead(cuthead(s, i), needle.len)==needle) {
+            return i;
         }
     }
     return -1;
