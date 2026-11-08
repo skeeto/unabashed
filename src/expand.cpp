@@ -186,12 +186,30 @@ static void comsubeof(Shell *sh, Arena scratch, Str rest, b32 hd = 1,
     escape(sh, ESC_DISCARD);
 }
 
+// Index just past the ${...} at s[i] if it holds nothing that quotes,
+// escapes or nests, as most do: then it ends at the first }, where
+// lexing it would end too. Otherwise -1.
+static iz skipplainbrace(Str s, iz i)
+{
+    if (i+2>=s.len || s[i+1]!='{' || funsubchar(s[i+2])) return -1;
+    for (iz j = i+2; j < s.len; j++) {
+        u8 c = s[j];
+        if (c == '}') return j + 1;
+        if (c<' ' || c=='\\' || c=='\'' || c=='"' || c=='`' || c=='$' ||
+                c=='<' || c=='>') {
+            return -1;
+        }
+    }
+    return -1;
+}
+
 static iz skipdollar(Shell *sh, Arena *a, Str s, iz i, b32 dquote = 0, b32 *ended = 0)
 {
-    Lexer *L = newlexer(a, {});
-    L->extglob = sh->shopt[S_EXTGLOB];
-    L->posix   = sh->opt[O_POSIX];
-    L->extquote = sh->shopt[S_EXTQUOTE];
+    iz plain = skipplainbrace(s, i);
+    if (plain >= 0) {
+        if (ended) *ended = 1;
+        return plain;
+    }
     if (i+2<s.len && s[i+1]=='(' && s[i+2]=='(') {
         // $((...)): the matching )) at depth zero
         i32 depth = 0;
@@ -213,6 +231,10 @@ static iz skipdollar(Shell *sh, Arena *a, Str s, iz i, b32 dquote = 0, b32 *ende
         }
         return s.len;
     }
+    Lexer *L = newlexer(a, {});
+    L->extglob = sh->shopt[S_EXTGLOB];
+    L->posix   = sh->opt[O_POSIX];
+    L->extquote = sh->shopt[S_EXTQUOTE];
     return skipexpansion(L, s, i, dquote, ended);
 }
 

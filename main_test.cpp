@@ -663,6 +663,40 @@ static void test_pathmodes(Test *t)
     expect(t, "msys glob err", r.err, "");
 }
 
+// skipplainbrace, where it decides, ends a ${...} where the lexer does:
+// every string of up to five characters over an alphabet of the ones
+// that matter to lexing, after "${".
+static void test_plainbrace(Test *t)
+{
+    Os *os = t->os;
+    heapreset(os);
+    Arena perm = newarena(os, (iz)1<<24);
+    static u8 alpha[] = "a{}(#:-| \n$'\\<\"`)";
+    iz    nalpha  = countof(alpha) - 1;
+    u8    buf[8]  = {'$', '{'};
+    i32   decided = 0;
+    i32   bad     = 0;
+    for (i32 len = 0; len <= 5; len++) {
+        iz total = 1;
+        for (i32 k = 0; k < len; k++) total *= nalpha;
+        for (iz n = 0; n < total; n++) {
+            iz m = n;
+            for (i32 k = 0; k < len; k++, m /= nalpha) buf[2+k] = alpha[m%nalpha];
+            Str s = {buf, 2+len};
+            iz  e = skipplainbrace(s, 0);
+            if (e < 0) continue;
+            decided++;
+            Arena  a = perm;
+            Lexer *L = newlexer(&a, {});
+            if (skipexpansion(L, s, 0, 0)!=e || skipexpansion(L, s, 0, 1)!=e) {
+                if (!bad++) fprintf(stderr, "plainbrace: [%.*s]\n", (int)s.len, s.data);
+            }
+        }
+    }
+    expectint(t, "plainbrace decides", decided > 10000, 1);
+    expectint(t, "plainbrace agrees", bad, 0);
+}
+
 static void test_arena(Test *t)
 {
     Os *os = t->os;
@@ -1881,6 +1915,7 @@ int main(int argc, char **argv)
     test_vwin(&t);
     test_jobctl(&t);
     test_pathmodes(&t);
+    test_plainbrace(&t);
 
     if (argc>3 && (!strcmp(argv[1], "--oracle") || !strcmp(argv[1], "--oracle-v"))) {
         // --oracle SUITEDIR NAME...: bash test suite runs on the vos
