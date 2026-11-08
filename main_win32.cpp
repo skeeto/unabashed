@@ -3624,13 +3624,19 @@ static i32 exitstatus(u32 code)
     return (i32)(code & 0xff);
 }
 
+// The shell runs on a fiber of this reservation, not on the main
+// thread's stack, so that deep shell recursion fails as cleanly as on
+// Linux whatever the PE header says, as vprocs' fibers do.
+enum { SHELLSTACK = (iz)16<<20 };
+
 // Signals: one of our shells gets it through its channel (but KILL,
 // and STOP, which it could not act on); any other process is ended
 // outright by it, as killed by it (see SIGEXIT).
+
 // Resource limits: Windows has none of POSIX's, so these are Cygwin's
 // (Git Bash's ulimit -a): a table only, which ulimit reads and sets.
 // Only the core size, stack, address space and open files take a new
-// value; the stack is this program's own reservation.
+// value; the stack is the shell's own, its fiber's reservation.
 static Rlimit *rltable(Os *os)
 {
     if (!os->rlinit) {
@@ -3645,11 +3651,7 @@ static Rlimit *rltable(Os *os)
         os->rl[RL_CPU]    = inf;
         os->rl[RL_NPROC]  = {256, 256, 0};
         os->rl[RL_AS]     = inf;
-        byte *pe  = (byte *)GetModuleHandleW(0);
-        i32   nt  = *(i32 *)(pe + 0x3c);
-        byte *opt = pe + nt + 24;
-        i64 stack = sizeof(void *)==8 ? *(i64 *)(opt + 72) : *(u32 *)(opt + 72);
-        os->rl[RL_STACK]  = {stack, RL_INFINITY, 0};
+        os->rl[RL_STACK]  = {SHELLSTACK, RL_INFINITY, 0};
     }
     return os->rl;
 }
@@ -4115,11 +4117,6 @@ static u64 os_entropy(Os *os)
     x  = (x ^ x>>27) * 0x94d049bb133111ebu;
     return x ^ x>>31;
 }
-
-// The shell runs on a fiber of this reservation, not on the main
-// thread's stack, so that deep shell recursion fails as cleanly as on
-// Linux whatever the PE header says, as vprocs' fibers do.
-enum { SHELLSTACK = (iz)16<<20 };
 
 static byte *fiberstack(Os *, iz) { return 0; }    // unused on Win32
 static void  fiberunstack(Os *, byte *, iz) {}
