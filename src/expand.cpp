@@ -2538,7 +2538,7 @@ static PathCtx pathctx(Shell *sh, Arena *a, Str path)
 {
     PathCtx c = *sh->paths;
     c.mode    = sh->pathmode;
-    c.cwd     = sh->cwd;
+    c.cwd     = sh->cwd.len ? sh->cwd : c.cwd;  // startup's, before sh->cwd
     c.bashpid = sh->bashpid;
     if (c.mode==PM_NATIVE && hasdrive(path) && (path.len==2 || !pathsep(path[2]))) {
         drivecwds(sh, a, c.drivecwd);
