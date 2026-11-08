@@ -16,9 +16,9 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include "base.cpp"
-#include "api.cpp"
-#include "fakes.cpp"
+#include "src/base.cpp"
+#include "src/api.cpp"
+#include "src/fakes.cpp"
 
 extern char **environ;
 

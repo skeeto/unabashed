@@ -19,8 +19,8 @@
 #include <time.h>
 #include <unistd.h>
 extern "C" int rename(char const *, char const *);  // stdio.h, whose macros collide
-#include "unabashed.cpp"
-#include "fibers.cpp"
+#include "src/unabashed.cpp"
+#include "src/fibers.cpp"
 
 extern char **environ;
 
@@ -779,7 +779,7 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         grpbits = 0;
         levelhead = 0;
         leveltail = 0;
-        static OsInfo info;
+        constinit static OsInfo info = {};  // in .bss, no guard
         Arena a = newarena(os, (iz)1<<24);
         Slice<InheritFd> in = inherited(&a);  // before the new self-pipe
         u64 entryign = os->entryign;

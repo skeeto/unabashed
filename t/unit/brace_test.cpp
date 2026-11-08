@@ -13,8 +13,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../../base.cpp"
-#include "../../brace.cpp"
+#include "../../src/base.cpp"
+#include "../../src/brace.cpp"
 
 [[noreturn]] static void os_oom()
 {

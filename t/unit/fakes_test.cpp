@@ -15,10 +15,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../../base.cpp"
-#include "../../api.cpp"
-#include "../../fakes.cpp"
-#include "../../vos.cpp"
+#include "../../src/base.cpp"
+#include "../../src/api.cpp"
+#include "../../src/fakes.cpp"
+#include "../../src/vos.cpp"
 
 struct Os {
     Vos vos;

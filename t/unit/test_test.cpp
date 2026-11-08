@@ -15,10 +15,10 @@
 #include <string.h>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"  // unused foundations
-#include "../../base.cpp"
-#include "../../api.cpp"
+#include "../../src/base.cpp"
+#include "../../src/api.cpp"
 #pragma GCC diagnostic pop
-#include "../../b_test.cpp"
+#include "../../src/b_test.cpp"
 
 [[noreturn]] static void os_oom()
 {

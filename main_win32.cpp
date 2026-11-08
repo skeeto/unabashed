@@ -13,7 +13,7 @@
 // inheritable duplicates of just the child's standard handles.
 //
 // This is free and unencumbered software released into the public domain.
-#include "unabashed.cpp"
+#include "src/unabashed.cpp"
 
 enum : i32 {
     CREATE_BREAKAWAY_FROM_JOB    = 0x01000000,
@@ -413,7 +413,7 @@ extern "C" i32 memcmp(void const *a, void const *b, uz len)
 }
 #endif
 
-#include "fibers.cpp"
+#include "src/fibers.cpp"
 
 // Asynchronous I/O (M3b, notes/m3b.md). Every handle the shell holds
 // to a pipe or a console is registered with a Wobj, the state of its
@@ -4196,7 +4196,7 @@ static b32 ctrlcignored()
 extern "C" __attribute((force_align_arg_pointer))
 void mainCRTStartup()
 {
-    static Os os;
+    constinit static Os os = {};  // in .bss, no guard
     OsInfo info = {};
     info.reserve = (iz)1 << (sizeof(void *)==8 ? 34 : 28);
 

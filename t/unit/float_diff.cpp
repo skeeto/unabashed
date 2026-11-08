@@ -19,8 +19,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../../base.cpp"
-#include "../../float.cpp"
+#include "../../src/base.cpp"
+#include "../../src/float.cpp"
 
 [[noreturn]] static void os_oom()
 {

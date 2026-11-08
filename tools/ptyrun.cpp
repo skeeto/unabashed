@@ -26,9 +26,9 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include "../base.cpp"
-#include "../unicode.cpp"
-#include "../vterm.cpp"
+#include "../src/base.cpp"
+#include "../src/unicode.cpp"
+#include "../src/vterm.cpp"
 
 [[noreturn]] static void os_oom()
 {

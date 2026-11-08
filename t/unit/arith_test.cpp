@@ -5,8 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../../base.cpp"
-#include "../../arith.cpp"
+#include "../../src/base.cpp"
+#include "../../src/arith.cpp"
 
 static void os_oom()
 {

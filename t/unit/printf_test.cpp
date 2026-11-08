@@ -14,10 +14,10 @@
 #include <string.h>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"  // base.cpp's spares
-#include "../../base.cpp"
+#include "../../src/base.cpp"
 #pragma GCC diagnostic pop
-#include "../../float.cpp"
-#include "../../b_printf.cpp"
+#include "../../src/float.cpp"
+#include "../../src/b_printf.cpp"
 
 [[noreturn]] static void os_oom()
 {

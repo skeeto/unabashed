@@ -17,11 +17,7 @@ WARN    = -Wall -Wextra -Wconversion -Wno-sign-conversion \
 DEBUG   = -g3 -fsanitize=undefined -fsanitize-trap
 RELEASE = -O2 -s
 WIN32   = -nostartfiles -static-libgcc -Wl,--stack,0x1000000
-SOURCES = base.cpp api.cpp unicode.cpp vterm.cpp unabashed.cpp edit.cpp complete.cpp pcomplete.cpp inputrc.cpp vtcon.cpp history.cpp parse.cpp print.cpp wide.cpp \
-          fibers.cpp check.cpp shell.cpp array.cpp vars.cpp expand.cpp glob.cpp exec.cpp \
-          builtins.cpp help.cpp arith.cpp pattern.cpp regex.cpp brace.cpp sched.cpp proc.cpp \
-          b_test.cpp float.cpp b_printf.cpp trap.cpp jobs.cpp vos.cpp fakes.cpp \
-          paths.cpp spawn.cpp
+SOURCES = $(wildcard src/*.cpp)
 
 default:
 	@echo "pick a target, e.g. make debug.exe or make tests" && false

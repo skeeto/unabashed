@@ -31,7 +31,8 @@ FROM debian:trixie-slim AS fakes
 RUN apt-get update \
  && apt-get install -y --no-install-recommends g++ libc6-dev \
  && rm -rf /var/lib/apt/lists/*
-COPY base.cpp api.cpp fakes.cpp main_fakes.cpp /src/fakes/
+COPY src/base.cpp src/api.cpp src/fakes.cpp /src/fakes/src/
+COPY main_fakes.cpp /src/fakes/
 WORKDIR /src/fakes
 RUN install -d /out/opt/fakes/bin \
  && g++ -std=c++20 -O2 -fno-exceptions -fno-rtti -s \

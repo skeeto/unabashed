@@ -18,17 +18,21 @@ the Makefile is only a convenience.
 
 ## Layout
 
-| File             | Purpose                                         |
-|------------------|-------------------------------------------------|
-| `base.cpp`       | types, arenas, strings, slices, maps            |
-| `unabashed.cpp`  | platform API table and the shell core           |
-| `wide.cpp`       | UTF-16/WTF-8, command lines, CRT fds, PE sniff  |
-| `fibers.cpp`     | fibers for the platform layers                  |
-| `main_win32.cpp` | Win32 layer                                     |
-| `main_posix.cpp` | POSIX layer                                     |
-| `main_test.cpp`  | virtual OS and unit tests                       |
-| `main_fuzz.cpp`  | AFL++ harness on the virtual OS                 |
-| `notes/`         | research, design reviews, and the plan          |
+| File                 | Purpose                                         |
+|----------------------|-------------------------------------------------|
+| `main_win32.cpp`     | Win32 layer                                     |
+| `main_posix.cpp`     | POSIX layer                                     |
+| `main_test.cpp`      | virtual OS and unit tests                       |
+| `main_fuzz.cpp`      | AFL++ harness on the virtual OS                 |
+| `main_fakes.cpp`     | the fake programs as one Linux binary (oracle)  |
+| `src/`               | everything the platform layers include:         |
+| `src/base.cpp`       | types, arenas, strings, slices, maps            |
+| `src/unabashed.cpp`  | platform API table and the shell core           |
+| `src/wide.cpp`       | UTF-16/WTF-8, command lines, CRT fds, PE sniff  |
+| `src/fibers.cpp`     | fibers for the platform layers                  |
+| `src/vos.cpp`        | the virtual OS, with `fakes.cpp` and `vterm.cpp` |
+| `t/`, `tools/`       | tests, and the tools that record and run them   |
+| `notes/`             | research, design reviews, and the plan          |
 
 Bash's source and test suite are used only as an external reference and
 oracle. None of it is copied here: `bash-5.3.tar.gz` is ignored by git.

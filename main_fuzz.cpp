@@ -67,11 +67,11 @@
 #include <string.h>
 #include <unistd.h>
 #define EDIT_CHECK 1
-#include "unabashed.cpp"
-#include "fibers.cpp"
-#include "check.cpp"
-#include "fakes.cpp"
-#include "vos.cpp"
+#include "src/unabashed.cpp"
+#include "src/fibers.cpp"
+#include "src/check.cpp"
+#include "src/fakes.cpp"
+#include "src/vos.cpp"
 
 #ifndef FUZZ_WIN
 #define FUZZ_WIN 0

@@ -17,11 +17,11 @@
 #include <io.h>
 #endif
 #define EDIT_CHECK 1
-#include "unabashed.cpp"
-#include "fibers.cpp"
-#include "check.cpp"
-#include "fakes.cpp"
-#include "vos.cpp"
+#include "src/unabashed.cpp"
+#include "src/fibers.cpp"
+#include "src/check.cpp"
+#include "src/fakes.cpp"
+#include "src/vos.cpp"
 
 // A nested shell's share of the heap, released when it exits if
 // nothing reserved since then outlives it.

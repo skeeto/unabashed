@@ -25,8 +25,8 @@
 #include <string.h>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"  // unused foundations
-#include "../../base.cpp"
-#include "../../wide.cpp"
+#include "../../src/base.cpp"
+#include "../../src/wide.cpp"
 #pragma GCC diagnostic pop
 
 [[noreturn]] static void os_oom()

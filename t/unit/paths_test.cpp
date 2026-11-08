@@ -17,9 +17,9 @@
 #include <string.h>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"  // base.cpp's spares
-#include "../../base.cpp"
+#include "../../src/base.cpp"
 #pragma GCC diagnostic pop
-#include "../../paths.cpp"
+#include "../../src/paths.cpp"
 
 [[noreturn]] static void os_oom()
 {

@@ -18,10 +18,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "../../base.cpp"
-#include "../../unicode.cpp"
-#include "../../pattern.cpp"
-#include "../../regex.cpp"
+#include "../../src/base.cpp"
+#include "../../src/unicode.cpp"
+#include "../../src/pattern.cpp"
+#include "../../src/regex.cpp"
 
 [[noreturn]] static void os_oom()
 {

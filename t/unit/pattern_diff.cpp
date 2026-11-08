@@ -53,9 +53,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../../base.cpp"
-#include "../../unicode.cpp"
-#include "../../pattern.cpp"
+#include "../../src/base.cpp"
+#include "../../src/unicode.cpp"
+#include "../../src/pattern.cpp"
 
 [[noreturn]] static void os_oom()
 {
