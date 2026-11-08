@@ -1728,8 +1728,23 @@ static b32 runpat(PatSeq q, PatComp *k, Str s, i32 flags, b32 wide, Arena scratc
     return !x.overflow && sethas(e, s.len);
 }
 
+// Does pat hold no wildcard, bracket, group or backslash, so that it
+// matches exactly its own text?
+static b32 literalpat(Str pat, i32 flags)
+{
+    for (iz i = 0; i < pat.len; i++) {
+        u8 c = pat[i];
+        if (c=='*' || c=='?' || c=='[' || c=='\\') return 0;
+        if (c=='(' && (flags & PM_EXTGLOB)) return 0;
+    }
+    return 1;
+}
+
 static b32 patmatch(Str pat, Str s, i32 flags, Arena scratch)
 {
+    if (!(flags & PM_NOCASE) && literalpat(pat, flags)) {
+        return pat == s;  // the common case word, compiled for nothing
+    }
     b32 wide = 0;
     if ((flags&PM_UTF8) && !(allascii(pat) && allascii(s))) {
         wide = glibcvalid(pat) && glibcvalid(s);
