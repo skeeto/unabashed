@@ -1,0 +1,31 @@
+== snap 1
+$ HÉLLO WÖRLD
+@ 0,4
+== snap 2
+[aé xyz|3|4|none]
+$ aé xyz
+@ 1,5
+== snap 3
+[aé xyz|3|4|none]
+[aé xyz|3|4|3]
+$ aé xyz
+@ 2,5
+== snap 4
+[aé xyz|3|4|none]
+[aé xyz|3|4|3]
+$ aé xyz
+@ 2,8
+== snap 5
+[aé xyz|3|4|none]
+[aé xyz|3|4|3]
+$ echo ${READLINE_LINE-unset} ${READLINE_POINT-unset}
+unset unset
+$
+@ 4,2
+== snap 6
+[aé xyz|3|4|none]
+[aé xyz|3|4|3]
+$ echo ${READLINE_LINE-unset} ${READLINE_POINT-unset}
+unset unset
+$
+@ 4,2

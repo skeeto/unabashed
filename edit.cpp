@@ -107,11 +107,93 @@ enum : i32 {
     EF_MENU_COMPLETE_BACKWARD,
     EF_DELETE_CHAR_OR_LIST,
     EF_RE_READ_INIT_FILE,
+    // Named for bind and inputrc, not all of them implemented yet
+    EF_ALIAS_EXPAND_LINE,
+    EF_ARROW_KEY_PREFIX,
+    EF_BACKWARD_BYTE,
+    EF_BASH_VI_COMPLETE,
+    EF_CALL_LAST_KBD_MACRO,
+    EF_DABBREV_EXPAND,
+    EF_DISPLAY_SHELL_VERSION,
+    EF_DUMP_FUNCTIONS,
+    EF_DUMP_MACROS,
+    EF_DUMP_VARIABLES,
+    EF_EMACS_EDITING_MODE,
+    EF_END_KBD_MACRO,
+    EF_EXECUTE_NAMED_COMMAND,
+    EF_EXPORT_COMPLETIONS,
+    EF_FETCH_HISTORY,
+    EF_FORWARD_BACKWARD_DELETE_CHAR,
+    EF_FORWARD_BYTE,
+    EF_HISTORY_AND_ALIAS_EXPAND_LINE,
+    EF_NEXT_SCREEN_LINE,
+    EF_NON_INCREMENTAL_FORWARD_SEARCH_HISTORY_AGAIN,
+    EF_NON_INCREMENTAL_REVERSE_SEARCH_HISTORY_AGAIN,
+    EF_OLD_MENU_COMPLETE,
+    EF_PREVIOUS_SCREEN_LINE,
+    EF_PRINT_LAST_KBD_MACRO,
+    EF_SKIP_CSI_SEQUENCE,
+    EF_SPELL_CORRECT_WORD,
+    EF_START_KBD_MACRO,
+    EF_TILDE_EXPAND,
+    EF_TTY_STATUS,
+    EF_VI_APPEND_EOL,
+    EF_VI_APPEND_MODE,
+    EF_VI_ARG_DIGIT,
+    EF_VI_BACK_TO_INDENT,
+    EF_VI_BACKWARD_BIGWORD,
+    EF_VI_BACKWARD_WORD,
+    EF_VI_BWORD,
+    EF_VI_BWORD_CAP,
+    EF_VI_CHANGE_CASE,
+    EF_VI_CHANGE_CHAR,
+    EF_VI_CHANGE_TO,
+    EF_VI_CHAR_SEARCH,
+    EF_VI_COLUMN,
+    EF_VI_COMPLETE,
+    EF_VI_DELETE,
+    EF_VI_DELETE_TO,
+    EF_VI_EDIT_AND_EXECUTE_COMMAND,
+    EF_VI_EDITING_MODE,
+    EF_VI_END_BIGWORD,
+    EF_VI_END_WORD,
+    EF_VI_EOF_MAYBE,
+    EF_VI_EWORD,
+    EF_VI_EWORD_CAP,
+    EF_VI_FETCH_HISTORY,
+    EF_VI_FIRST_PRINT,
+    EF_VI_FORWARD_BIGWORD,
+    EF_VI_FORWARD_WORD,
+    EF_VI_FWORD,
+    EF_VI_FWORD_CAP,
+    EF_VI_GOTO_MARK,
+    EF_VI_INSERT_BEG,
+    EF_VI_INSERTION_MODE,
+    EF_VI_MATCH,
+    EF_VI_MOVEMENT_MODE,
+    EF_VI_NEXT_WORD,
+    EF_VI_OVERSTRIKE,
+    EF_VI_OVERSTRIKE_DELETE,
+    EF_VI_PREV_WORD,
+    EF_VI_PUT,
+    EF_VI_REDO,
+    EF_VI_REPLACE,
+    EF_VI_RUBOUT,
+    EF_VI_SEARCH,
+    EF_VI_SEARCH_AGAIN,
+    EF_VI_SET_MARK,
+    EF_VI_SUBST,
+    EF_VI_TILDE_EXPAND,
+    EF_VI_UNDO,
+    EF_VI_UNIX_WORD_RUBOUT,
+    EF_VI_YANK_ARG,
+    EF_VI_YANK_POP,
+    EF_VI_YANK_TO,
     EF_MACRO,  // a key bound to text (inputrc)
+    EF_SHELLCMD,  // bind -x: a shell command, the text in macro
     EF_COUNT,
 };
 
-[[maybe_unused]]  // until inputrc (step 6)
 static Str edfuncs[EF_COUNT] = {
     "",
     "self-insert",
@@ -208,7 +290,149 @@ static Str edfuncs[EF_COUNT] = {
     "menu-complete-backward",
     "delete-char-or-list",
     "re-read-init-file",
+    "alias-expand-line",
+    "arrow-key-prefix",
+    "backward-byte",
+    "bash-vi-complete",
+    "call-last-kbd-macro",
+    "dabbrev-expand",
+    "display-shell-version",
+    "dump-functions",
+    "dump-macros",
+    "dump-variables",
+    "emacs-editing-mode",
+    "end-kbd-macro",
+    "execute-named-command",
+    "export-completions",
+    "fetch-history",
+    "forward-backward-delete-char",
+    "forward-byte",
+    "history-and-alias-expand-line",
+    "next-screen-line",
+    "non-incremental-forward-search-history-again",
+    "non-incremental-reverse-search-history-again",
+    "old-menu-complete",
+    "previous-screen-line",
+    "print-last-kbd-macro",
+    "skip-csi-sequence",
+    "spell-correct-word",
+    "start-kbd-macro",
+    "tilde-expand",
+    "tty-status",
+    "vi-append-eol",
+    "vi-append-mode",
+    "vi-arg-digit",
+    "vi-back-to-indent",
+    "vi-backward-bigword",
+    "vi-backward-word",
+    "vi-bword",
+    "vi-bWord",
+    "vi-change-case",
+    "vi-change-char",
+    "vi-change-to",
+    "vi-char-search",
+    "vi-column",
+    "vi-complete",
+    "vi-delete",
+    "vi-delete-to",
+    "vi-edit-and-execute-command",
+    "vi-editing-mode",
+    "vi-end-bigword",
+    "vi-end-word",
+    "vi-eof-maybe",
+    "vi-eword",
+    "vi-eWord",
+    "vi-fetch-history",
+    "vi-first-print",
+    "vi-forward-bigword",
+    "vi-forward-word",
+    "vi-fword",
+    "vi-fWord",
+    "vi-goto-mark",
+    "vi-insert-beg",
+    "vi-insertion-mode",
+    "vi-match",
+    "vi-movement-mode",
+    "vi-next-word",
+    "vi-overstrike",
+    "vi-overstrike-delete",
+    "vi-prev-word",
+    "vi-put",
+    "vi-redo",
+    "vi-replace",
+    "vi-rubout",
+    "vi-search",
+    "vi-search-again",
+    "vi-set-mark",
+    "vi-subst",
+    "vi-tilde-expand",
+    "vi-undo",
+    "vi-unix-word-rubout",
+    "vi-yank-arg",
+    "vi-yank-pop",
+    "vi-yank-to",
     "",
+    "",
+};
+
+// Every function name, in the order bind -l and bind -p list them
+static Str rlfunmap[] = {
+    "abort", "accept-line", "alias-expand-line", "arrow-key-prefix",
+    "backward-byte", "backward-char", "backward-delete-char",
+    "backward-kill-line", "backward-kill-word", "backward-word",
+    "bash-vi-complete", "beginning-of-history", "beginning-of-line",
+    "bracketed-paste-begin", "call-last-kbd-macro", "capitalize-word",
+    "character-search", "character-search-backward", "clear-display",
+    "clear-screen", "complete", "complete-command", "complete-filename",
+    "complete-hostname", "complete-into-braces", "complete-username",
+    "complete-variable", "copy-backward-word", "copy-forward-word",
+    "copy-region-as-kill", "dabbrev-expand", "delete-char",
+    "delete-char-or-list", "delete-horizontal-space", "digit-argument",
+    "display-shell-version", "do-lowercase-version", "downcase-word",
+    "dump-functions", "dump-macros", "dump-variables",
+    "dynamic-complete-history", "edit-and-execute-command",
+    "emacs-editing-mode", "end-kbd-macro", "end-of-history", "end-of-line",
+    "exchange-point-and-mark", "execute-named-command", "export-completions",
+    "fetch-history", "forward-backward-delete-char", "forward-byte",
+    "forward-char", "forward-search-history", "forward-word",
+    "glob-complete-word", "glob-expand-word", "glob-list-expansions",
+    "history-and-alias-expand-line", "history-expand-line",
+    "history-search-backward", "history-search-forward",
+    "history-substring-search-backward", "history-substring-search-forward",
+    "insert-comment", "insert-completions", "insert-last-argument",
+    "kill-line", "kill-region", "kill-whole-line", "kill-word", "magic-space",
+    "menu-complete", "menu-complete-backward", "next-history",
+    "next-screen-line", "non-incremental-forward-search-history",
+    "non-incremental-forward-search-history-again",
+    "non-incremental-reverse-search-history",
+    "non-incremental-reverse-search-history-again", "old-menu-complete",
+    "operate-and-get-next", "overwrite-mode", "possible-command-completions",
+    "possible-completions", "possible-filename-completions",
+    "possible-hostname-completions", "possible-username-completions",
+    "possible-variable-completions", "previous-history",
+    "previous-screen-line", "print-last-kbd-macro", "quoted-insert",
+    "redraw-current-line", "re-read-init-file", "reverse-search-history",
+    "revert-line", "self-insert", "set-mark", "shell-backward-kill-word",
+    "shell-backward-word", "shell-expand-line", "shell-forward-word",
+    "shell-kill-word", "shell-transpose-words", "skip-csi-sequence",
+    "spell-correct-word", "start-kbd-macro", "tab-insert", "tilde-expand",
+    "transpose-chars", "transpose-words", "tty-status", "undo",
+    "universal-argument", "unix-filename-rubout", "unix-line-discard",
+    "unix-word-rubout", "upcase-word", "vi-append-eol", "vi-append-mode",
+    "vi-arg-digit", "vi-back-to-indent", "vi-backward-bigword",
+    "vi-backward-word", "vi-bword", "vi-bWord", "vi-change-case",
+    "vi-change-char", "vi-change-to", "vi-char-search", "vi-column",
+    "vi-complete", "vi-delete", "vi-delete-to", "vi-edit-and-execute-command",
+    "vi-editing-mode", "vi-end-bigword", "vi-end-word", "vi-eof-maybe",
+    "vi-eword", "vi-eWord", "vi-fetch-history", "vi-first-print",
+    "vi-forward-bigword", "vi-forward-word", "vi-fword", "vi-fWord",
+    "vi-goto-mark", "vi-insert-beg", "vi-insertion-mode", "vi-match",
+    "vi-movement-mode", "vi-next-word", "vi-overstrike",
+    "vi-overstrike-delete", "vi-prev-word", "vi-put", "vi-redo", "vi-replace",
+    "vi-rubout", "vi-search", "vi-search-again", "vi-set-mark", "vi-subst",
+    "vi-tilde-expand", "vi-undo", "vi-unix-word-rubout", "vi-yank-arg",
+    "vi-yank-pop", "vi-yank-to", "yank", "yank-last-arg", "yank-nth-arg",
+    "yank-pop",
 };
 
 static iz readstdin(Shell *, File *, u8 *, iz);  // unabashed.cpp
@@ -219,7 +443,7 @@ static iz readstdin(Shell *, File *, u8 *, iz);  // unabashed.cpp
 struct KeyNode {
     KeyNode *kids;
     KeyNode *sib;
-    Str      macro; // EF_MACRO: the text
+    Str      macro; // EF_MACRO: the text; EF_SHELLCMD: the command
     i32      fn;    // EF_*, or EF_NONE
     u8       key;
 };
@@ -255,6 +479,9 @@ static void keybind(Arena *a, KeyNode *root, Str seq, i32 fn)
 // EdUndo records, as readline's: an insert, a delete with its text, and
 // the bounds of a group undone as one.
 enum : i32 { U_INSERT, U_DELETE, U_BEGIN, U_END };
+
+// Keymaps (inputrc.cpp)
+enum : i32 { KM_EMACS, KM_META, KM_CTLX, KM_VIMOVE, KM_VIINS };
 
 struct EdUndo {
     EdUndo *next;  // older
@@ -353,8 +580,13 @@ struct Editor {
     i32      unread;    // how many
     Str      macro;     // a macro's keys, read before the terminal's
     iz       macropos;
+    b32      kbddef;    // defining a keyboard macro
+    Buf      kbdrec;    // its keys so far
+    Str      kbdmacro;  // the last one defined
+    iz       seqstart;  // kbdrec's length where this command's keys began
     // The init file
     b32      inited;
+    b32      termkeys;  // edtermkeys done
     Str      rllast;    // the file last read, for C-x C-r
     b32      rlreading; // messages give the file and line
     b32      ifoff;     // in a false $if
@@ -422,7 +654,10 @@ struct Editor {
     Str      noninc;    // the last non-incremental search's string
     iz       nonincpos; // and the entry it found
     iz       hspos;     // history-search: the entry last found
-    Str      hsprefix;  // ^ and the line up to point
+    iz       hpoint;    // history-preserve-point: where point goes, or -1
+    b32      starred;   // mark-modified-lines: the star is shown
+    Str      hsprefix;  // ^ and the line up to point (or without ^)
+    iz       hsplen;    // the length of the line up to point
     Str      hsprev;    // the last line found
     i64      ylskip;    // yank-last-arg's walk back
     i32      yldir;
@@ -452,7 +687,7 @@ static void edbindings(Editor *ed)
     }
     for (u8 c = 'A'; c <= 'Z'; c++) {
         u8 meta[] = {0x1b, c};
-        keybind(a, r, {meta, 2}, EF_DO_LOWERCASE_VERSION);
+        if (c != 'O') keybind(a, r, {meta, 2}, EF_DO_LOWERCASE_VERSION);
         u8 ctlx[] = {0x18, c};
         keybind(a, r, {ctlx, 2}, EF_DO_LOWERCASE_VERSION);
     }
@@ -510,11 +745,7 @@ static void edbindings(Editor *ed)
         {"\x1bOH", EF_BEGINNING_OF_LINE}, {"\x1bOF", EF_END_OF_LINE},
         {"\x1b[1;5C", EF_FORWARD_WORD},   {"\x1b[1;5D", EF_BACKWARD_WORD},
         {"\x1b[1;3C", EF_FORWARD_WORD},   {"\x1b[1;3D", EF_BACKWARD_WORD},
-        {"\x1b[3;5~", EF_KILL_WORD},      {"\x1b[3~", EF_DELETE_CHAR},
-        {"\x1b[1~", EF_BEGINNING_OF_LINE},{"\x1b[4~", EF_END_OF_LINE},
-        {"\x1b[2~", EF_OVERWRITE_MODE},
-        {"\x1b[5~", EF_HISTORY_SEARCH_BACKWARD},
-        {"\x1b[6~", EF_HISTORY_SEARCH_FORWARD},
+        {"\x1b[3;5~", EF_KILL_WORD},
         {"\x1b[200~", EF_BRACKETED_PASTE_BEGIN},
         {"\x1b?", EF_POSSIBLE_COMPLETIONS},  {"\x1b=", EF_POSSIBLE_COMPLETIONS},
         {"\x1b*", EF_INSERT_COMPLETIONS},    {"\x1b/", EF_COMPLETE_FILENAME},
@@ -533,9 +764,199 @@ static void edbindings(Editor *ed)
         {"\x18" "g", EF_GLOB_LIST_EXPANSIONS},
         {"\x1b{", EF_COMPLETE_INTO_BRACES},
         {"\x18\x12", EF_RE_READ_INIT_FILE},
+        {"\x18" "e", EF_CALL_LAST_KBD_MACRO},
+        {"\x18(", EF_START_KBD_MACRO},   {"\x18)", EF_END_KBD_MACRO},
+        {"\x18\x16", EF_DISPLAY_SHELL_VERSION},
+        {"\x18" "s", EF_SPELL_CORRECT_WORD},
+        {"\x1b" "x", EF_EXECUTE_NAMED_COMMAND},
+        {"\x1b&", EF_TILDE_EXPAND},
     };
     for (iz i = 0; i < countof(map); i++) {
         keybind(a, r, map[i].seq, map[i].fn);  // literal lengths, NUL too
+    }
+
+    // vi, as readline has it with no terminal
+    struct { Str seq; i32 fn; } viinsert[] = {
+        {"\x04", EF_VI_EOF_MAYBE},
+        {"\x08", EF_BACKWARD_DELETE_CHAR},
+        {"\x09", EF_COMPLETE},
+        {"\x0a", EF_ACCEPT_LINE},
+        {"\x0d", EF_ACCEPT_LINE},
+        {"\x0e", EF_MENU_COMPLETE},
+        {"\x10", EF_MENU_COMPLETE_BACKWARD},
+        {"\x12", EF_REVERSE_SEARCH_HISTORY},
+        {"\x13", EF_FORWARD_SEARCH_HISTORY},
+        {"\x14", EF_TRANSPOSE_CHARS},
+        {"\x15", EF_UNIX_LINE_DISCARD},
+        {"\x16", EF_QUOTED_INSERT},
+        {"\x17", EF_VI_UNIX_WORD_RUBOUT},
+        {"\x19", EF_YANK},
+        {"\x1b", EF_VI_MOVEMENT_MODE},
+        {"\x1bOA", EF_PREVIOUS_HISTORY},
+        {"\x1bOB", EF_NEXT_HISTORY},
+        {"\x1bOC", EF_FORWARD_CHAR},
+        {"\x1bOD", EF_BACKWARD_CHAR},
+        {"\x1bOF", EF_END_OF_LINE},
+        {"\x1bOH", EF_BEGINNING_OF_LINE},
+        {"\x1b[1;3C", EF_FORWARD_WORD},
+        {"\x1b[1;3D", EF_BACKWARD_WORD},
+        {"\x1b[1;5C", EF_FORWARD_WORD},
+        {"\x1b[1;5D", EF_BACKWARD_WORD},
+        {"\x1b[200~", EF_BRACKETED_PASTE_BEGIN},
+        {"\x1b[3;5~", EF_KILL_WORD},
+        {"\x1b[A", EF_PREVIOUS_HISTORY},
+        {"\x1b[B", EF_NEXT_HISTORY},
+        {"\x1b[C", EF_FORWARD_CHAR},
+        {"\x1b[D", EF_BACKWARD_CHAR},
+        {"\x1b[F", EF_END_OF_LINE},
+        {"\x1b[H", EF_BEGINNING_OF_LINE},
+        {"\x1f", EF_VI_UNDO},
+        {"\x7f", EF_BACKWARD_DELETE_CHAR},
+    };
+    struct { Str seq; i32 fn; } vicommand[] = {
+        {"\x04", EF_VI_EOF_MAYBE},
+        {"\x07", EF_ABORT},
+        {"\x08", EF_BACKWARD_CHAR},
+        {"\x0a", EF_ACCEPT_LINE},
+        {"\x0b", EF_KILL_LINE},
+        {"\x0c", EF_CLEAR_SCREEN},
+        {"\x0d", EF_ACCEPT_LINE},
+        {"\x0e", EF_NEXT_HISTORY},
+        {"\x10", EF_PREVIOUS_HISTORY},
+        {"\x11", EF_QUOTED_INSERT},
+        {"\x12", EF_REVERSE_SEARCH_HISTORY},
+        {"\x13", EF_FORWARD_SEARCH_HISTORY},
+        {"\x14", EF_TRANSPOSE_CHARS},
+        {"\x15", EF_UNIX_LINE_DISCARD},
+        {"\x16", EF_QUOTED_INSERT},
+        {"\x17", EF_VI_UNIX_WORD_RUBOUT},
+        {"\x19", EF_YANK},
+        {"\x1bOA", EF_PREVIOUS_HISTORY},
+        {"\x1bOB", EF_NEXT_HISTORY},
+        {"\x1bOC", EF_FORWARD_CHAR},
+        {"\x1bOD", EF_BACKWARD_CHAR},
+        {"\x1bOF", EF_END_OF_LINE},
+        {"\x1bOH", EF_BEGINNING_OF_LINE},
+        {"\x1b[1;3C", EF_FORWARD_WORD},
+        {"\x1b[1;3D", EF_BACKWARD_WORD},
+        {"\x1b[1;5C", EF_FORWARD_WORD},
+        {"\x1b[1;5D", EF_BACKWARD_WORD},
+        {"\x1b[3;5~", EF_KILL_WORD},
+        {"\x1b[A", EF_PREVIOUS_HISTORY},
+        {"\x1b[B", EF_NEXT_HISTORY},
+        {"\x1b[C", EF_FORWARD_CHAR},
+        {"\x1b[D", EF_BACKWARD_CHAR},
+        {"\x1b[F", EF_END_OF_LINE},
+        {"\x1b[H", EF_BEGINNING_OF_LINE},
+        {"\x1f", EF_VI_UNDO},
+        {" ", EF_FORWARD_CHAR},
+        {"#", EF_INSERT_COMMENT},
+        {"$", EF_END_OF_LINE},
+        {"%", EF_VI_MATCH},
+        {"&", EF_VI_TILDE_EXPAND},
+        {"*", EF_BASH_VI_COMPLETE},
+        {"+", EF_NEXT_HISTORY},
+        {",", EF_VI_CHAR_SEARCH},
+        {"-", EF_PREVIOUS_HISTORY},
+        {".", EF_VI_REDO},
+        {"/", EF_VI_SEARCH},
+        {"0", EF_BEGINNING_OF_LINE},
+        {"1", EF_VI_ARG_DIGIT},
+        {"2", EF_VI_ARG_DIGIT},
+        {"3", EF_VI_ARG_DIGIT},
+        {"4", EF_VI_ARG_DIGIT},
+        {"5", EF_VI_ARG_DIGIT},
+        {"6", EF_VI_ARG_DIGIT},
+        {"7", EF_VI_ARG_DIGIT},
+        {"8", EF_VI_ARG_DIGIT},
+        {"9", EF_VI_ARG_DIGIT},
+        {";", EF_VI_CHAR_SEARCH},
+        {"=", EF_BASH_VI_COMPLETE},
+        {"?", EF_VI_SEARCH},
+        {"A", EF_VI_APPEND_EOL},
+        {"B", EF_VI_PREV_WORD},
+        {"C", EF_VI_CHANGE_TO},
+        {"D", EF_VI_DELETE_TO},
+        {"E", EF_VI_END_WORD},
+        {"F", EF_VI_CHAR_SEARCH},
+        {"G", EF_VI_FETCH_HISTORY},
+        {"I", EF_VI_INSERT_BEG},
+        {"N", EF_VI_SEARCH_AGAIN},
+        {"P", EF_VI_PUT},
+        {"R", EF_VI_REPLACE},
+        {"S", EF_VI_SUBST},
+        {"T", EF_VI_CHAR_SEARCH},
+        {"U", EF_REVERT_LINE},
+        {"W", EF_VI_NEXT_WORD},
+        {"X", EF_VI_RUBOUT},
+        {"Y", EF_VI_YANK_TO},
+        {"\\", EF_BASH_VI_COMPLETE},
+        {"^", EF_VI_FIRST_PRINT},
+        {"_", EF_VI_YANK_ARG},
+        {"`", EF_VI_GOTO_MARK},
+        {"a", EF_VI_APPEND_MODE},
+        {"b", EF_VI_PREV_WORD},
+        {"c", EF_VI_CHANGE_TO},
+        {"d", EF_VI_DELETE_TO},
+        {"e", EF_VI_END_WORD},
+        {"f", EF_VI_CHAR_SEARCH},
+        {"h", EF_BACKWARD_CHAR},
+        {"i", EF_VI_INSERTION_MODE},
+        {"j", EF_NEXT_HISTORY},
+        {"k", EF_PREVIOUS_HISTORY},
+        {"l", EF_FORWARD_CHAR},
+        {"m", EF_VI_SET_MARK},
+        {"n", EF_VI_SEARCH_AGAIN},
+        {"p", EF_VI_PUT},
+        {"r", EF_VI_CHANGE_CHAR},
+        {"s", EF_VI_SUBST},
+        {"t", EF_VI_CHAR_SEARCH},
+        {"u", EF_VI_UNDO},
+        {"v", EF_VI_EDIT_AND_EXECUTE_COMMAND},
+        {"w", EF_VI_NEXT_WORD},
+        {"x", EF_VI_DELETE},
+        {"y", EF_VI_YANK_TO},
+        {"|", EF_VI_COLUMN},
+        {"~", EF_VI_CHANGE_CASE},
+    };
+
+    for (i32 c = 0x20; c < 0x100; c++) {
+        u8 k = (u8)c;
+        if (c != 0x7f) keybind(a, &ed->viins, {&k, 1}, EF_SELF_INSERT);
+    }
+    u8 ctl[] = {1, 2, 3, 5, 6, 7, 11, 12, 15, 17, 24, 26, 28, 29, 30};
+    for (iz i = 0; i < countof(ctl); i++) {
+        keybind(a, &ed->viins, {ctl+i, 1}, EF_SELF_INSERT);
+    }
+    for (iz i = 0; i < countof(viinsert); i++) {
+        keybind(a, &ed->viins, viinsert[i].seq, viinsert[i].fn);
+    }
+    for (iz i = 0; i < countof(vicommand); i++) {
+        keybind(a, &ed->vimove, vicommand[i].seq, vicommand[i].fn);
+    }
+}
+
+// Keys a terminal sends, which readline binds from its description
+// where nothing else has
+static void edtermkeys(Editor *ed)
+{
+    struct { Str seq; i32 fn; } map[] = {
+        {"\x1b[3~", EF_DELETE_CHAR},       {"\x1b[2~", EF_OVERWRITE_MODE},
+        {"\x1b[1~", EF_BEGINNING_OF_LINE}, {"\x1b[4~", EF_END_OF_LINE},
+        {"\x1b[5~", EF_HISTORY_SEARCH_BACKWARD},
+        {"\x1b[6~", EF_HISTORY_SEARCH_FORWARD},
+    };
+    KeyNode *maps[] = {&ed->root, &ed->viins, &ed->vimove};
+    for (iz m = 0; m < countof(maps); m++) {
+        for (iz i = 0; i < countof(map); i++) {
+            if (m && i>=4) continue;  // the page keys: emacs only
+            KeyNode *n = maps[m];
+            for (iz k = 0; n && k < map[i].seq.len; k++) {
+                n = keychild(n, map[i].seq[k]);
+            }
+            if (n && (n->fn || n->kids)) continue;  // bound already
+            keybind(&ed->perm, maps[m], map[i].seq, map[i].fn);
+        }
     }
 }
 
@@ -555,6 +976,7 @@ static Editor *editor(Shell *sh)
         ed->kmem[0]    = newarena(sh->os, cap);
         ed->kmem[1]    = newarena(sh->os, cap);
         ed->keytimeout = 500;
+        ed->hpoint     = -1;
         ed->cmem       = newarena(sh->os, cap);
         ed->vars.queryitems   = 100;
         ed->vars.pagecompl    = 1;
@@ -961,7 +1383,10 @@ static void redisplay(Editor *ed, Shell *sh)
         rbeg = m<point ? m : point;
         rend = m<point ? point : m;
     }
-    Layout nl = layout(a, ed->prompt, line, point, ed->hscroll ? 1<<30 : ed->width,
+    Str prompt = ed->prompt;
+    ed->starred = ed->vars.markmodified && ed->hpos<sh->hist.len && ed->undo;
+    if (ed->starred) prompt = concat(a, "*", prompt);
+    Layout nl = layout(a, prompt, line, point, ed->hscroll ? 1<<30 : ed->width,
                        rbeg, rend);
     if (ed->hscroll) {
         hredisplay(ed, &nl);
@@ -1341,6 +1766,21 @@ static void edunsaveline(Editor *ed)
 
 static void ednexthist(Editor *, Shell *, i64);
 
+// Point for history-preserve-point: kept from before the first move
+// (or from the last line accepted), else at the end, as readline's
+static void edhistpoint(Editor *ed)
+{
+    if (ed->hpoint<0 && (ed->point || ed->line.len)) {
+        ed->hpoint = ed->point==ed->line.len ? -1 : ed->point;
+    }
+}
+
+static void edhistset(Editor *ed)
+{
+    iz p = ed->vars.histpoint && ed->hpoint>=0 ? ed->hpoint : ed->line.len;
+    ed->point = p<ed->line.len ? p : ed->line.len;
+}
+
 static void edprevhist(Editor *ed, Shell *sh, i64 count)
 {
     if (count < 0) return ednexthist(ed, sh, -count);
@@ -1355,7 +1795,9 @@ static void edprevhist(Editor *ed, Shell *sh, i64 count)
         edbell(ed);
         return;
     }
+    edhistpoint(ed);
     edload(ed, sh, to);
+    edhistset(ed);
 }
 
 static void ednexthist(Editor *ed, Shell *sh, i64 count)
@@ -1364,11 +1806,13 @@ static void ednexthist(Editor *ed, Shell *sh, i64 count)
     if (!count) return;
     Hist *h = &sh->hist;
     edkeepline(ed, sh);
+    edhistpoint(ed);
     if (count >= h->len-ed->hpos) {
         ed->hpos = h->len;
         edunsaveline(ed);
     } else {
         edload(ed, sh, ed->hpos+(iz)count);
+        edhistset(ed);
     }
 }
 
@@ -1978,17 +2422,44 @@ static void edgohist(Editor *ed, Shell *sh, iz to)
 
 // Readline's non-incremental search (M-p, M-n): the string is read on
 // the line, the prompt's last line with ':' after it.
-static void ednoninc(Editor *ed, Shell *sh, i32 dir)
+// M-x's TAB: the longest prefix the function names share with the
+// line, the bell when none starts with it.
+static void edcompletename(Editor *ed)
+{
+    Str typed = edtext(ed);
+    Str best  = {};
+    for (iz i = 0; i < countof(rlfunmap); i++) {
+        Str n = rlfunmap[i];
+        if (!startswith(n, typed)) continue;
+        if (!best.data) {
+            best = n;
+            continue;
+        }
+        iz k = 0;
+        for (; k<best.len && k<n.len && best[k]==n[k]; k++) {}
+        best.len = k;
+    }
+    if (!best.data) {
+        edbell(ed);
+    } else if (best.len > typed.len) {
+        ed->point = ed->line.len;
+        edinsert(ed, cuthead(best, typed.len));
+    }
+}
+
+// Read a string in place of the line, after the prompt and pchar, as
+// readline's readstr: false if given up (and on an interrupt, which
+// ends the line). names: TAB completes a function name, as for M-x.
+static b32 edreadstr(Editor *ed, Shell *sh, Str pchar, Str *out, b32 names = 0)
 {
     iz     savepoint = ed->point;
     iz     savemark  = ed->mark;
-    iz     savepos   = ed->hpos;
     Str    saved     = clone(&ed->linemem, edtext(ed));
     EdUndo *saveundo = ed->undo;
     Str    prompt    = ed->prompt;
     ed->line.len = ed->point = 0;
     ed->undo     = 0;
-    ed->prompt   = concat(&ed->linemem, prompt, ":");
+    ed->prompt   = concat(&ed->linemem, prompt, pchar);
 
     b32 ok = 0;
     for (;;) {
@@ -1998,10 +2469,14 @@ static void ednoninc(Editor *ed, Shell *sh, i32 dir)
             ed->prompt = prompt;
             ed->done   = 1;
             ed->result = ED_INTR;
-            return;
+            return 0;
         }
         if (c < 0) break;
-        if (c==0x17 || c==0x15) {
+        if (names && c=='\t') {
+            edcompletename(ed);
+        } else if (names && c==' ') {
+            edbell(ed);
+        } else if (c==0x17 || c==0x15) {
             ed->killed = 0;
             edrun(ed, sh, c==0x17 ? EF_UNIX_WORD_RUBOUT : EF_UNIX_LINE_DISCARD, (u8)c);
         } else if (c==0x11 || c==0x16) {
@@ -2023,14 +2498,23 @@ static void ednoninc(Editor *ed, Shell *sh, i32 dir)
             edinsert(ed, {&b, 1});
         }
     }
-    Str typed = clone(&ed->linemem, edtext(ed));
+    *out = clone(&ed->linemem, edtext(ed));
     ed->prompt   = prompt;
     ed->line.len = 0;
     print(&ed->line, saved);
     ed->undo  = saveundo;
     ed->point = savepoint;
     ed->mark  = savemark;
-    if (!ok) return;
+    return ok;
+}
+
+// The non-incremental searches; again: with the last string, from
+// where it was last found.
+static void ednoninc(Editor *ed, Shell *sh, i32 dir, b32 again = 0)
+{
+    iz  savepos = ed->hpos;
+    Str typed   = {};
+    if (!again && !edreadstr(ed, sh, ":", &typed)) return;
 
     iz from = savepos;
     if (!typed.len) {
@@ -2061,38 +2545,49 @@ static void ednoninc(Editor *ed, Shell *sh, i32 dir)
 }
 
 // history-search-backward and -forward: entries starting with the line
-// up to point.
+// up to point; history-substring-search-*: entries holding it.
 static void edhistsearch(Editor *ed, Shell *sh, i32 fn, i32 count)
 {
     if (!count) return;
-    if (ed->lastfn!=EF_HISTORY_SEARCH_BACKWARD && ed->lastfn!=EF_HISTORY_SEARCH_FORWARD) {
+    b32 sub  = fn==EF_HISTORY_SUBSTRING_SEARCH_BACKWARD ||
+               fn==EF_HISTORY_SUBSTRING_SEARCH_FORWARD;
+    b32 back = fn==EF_HISTORY_SEARCH_BACKWARD ||
+               fn==EF_HISTORY_SUBSTRING_SEARCH_BACKWARD;
+    i32 f0   = sub ? EF_HISTORY_SUBSTRING_SEARCH_BACKWARD : EF_HISTORY_SEARCH_BACKWARD;
+    i32 f1   = sub ? EF_HISTORY_SUBSTRING_SEARCH_FORWARD : EF_HISTORY_SEARCH_FORWARD;
+    if (ed->lastfn!=f0 && ed->lastfn!=f1) {
+        Str typed    = {ed->line.data, ed->point};
         ed->hspos    = ed->hpos;
-        ed->hsprefix = concat(&ed->linemem, "^", Str{ed->line.data, ed->point});
+        ed->hsprefix = sub ? clone(&ed->linemem, typed)
+                           : concat(&ed->linemem, "^", typed);
+        ed->hsplen   = typed.len;
         ed->hsprev   = {};
     }
-    if (ed->hsprefix.len == 1) {
-        if (fn == EF_HISTORY_SEARCH_BACKWARD) {
+    if (!ed->hsplen) {
+        if (back) {
             edprevhist(ed, sh, count);
         } else {
             ednexthist(ed, sh, count);
         }
         return;
     }
-    i32 dir = (fn==EF_HISTORY_SEARCH_BACKWARD) == (count>0) ? -1 : 1;
+    i32 dir = back == (count>0) ? -1 : 1;
     i32 n   = count<0 ? -count : count;
     b32 any = 0;
+    iz  col = -1;
     while (n) {
         iz at  = 0;
         iz got = edfindhist(sh, ed->hsprefix, ed->hspos+dir, dir, &at, ed->vars.searchcase);
         if (got < 0) break;
         ed->hspos = got;
+        col = at;
         any = 1;
         Str line = sh->hist.ents[got]->line;
         if (ed->hsprev.data && ed->hsprev==line) continue;
         ed->hsprev = clone(&ed->linemem, line);
         n--;
     }
-    iz plen = ed->hsprefix.len - 1;
+    iz plen = ed->hsplen;
     if (!any) {
         edbell(ed);
         ed->point = plen<ed->line.len ? plen : ed->line.len;
@@ -2100,6 +2595,7 @@ static void edhistsearch(Editor *ed, Shell *sh, i32 fn, i32 count)
         return;
     }
     edgohist(ed, sh, ed->hspos);
+    if (sub) plen = col>=0 ? col : ed->line.len;
     ed->point = plen<ed->line.len ? plen : ed->line.len;
     ed->mark  = ed->line.len;
 }
@@ -2292,6 +2788,95 @@ static void edshellexpand(Editor *ed, Shell *sh)
     }
 }
 
+// alias-expand-line and history-and-alias-expand-line, as bash's: the
+// line replaced whether or not it changed, and point placed as after
+// any expansion of the line
+static void edexpandaliases(Editor *ed, Shell *sh, b32 hist)
+{
+    Arena a = *scratchat(sh, sh->capdepth+1);
+    Str   r = edtext(ed);
+    if (hist && !edhistexpand(ed, sh, &a, &r)) return;
+    r = edaliases(sh, &a, r);
+    iz oldpoint = ed->point;
+    iz oldend   = ed->line.len;
+    edreplace(ed, r);
+    edexpandpoint(ed, oldpoint, oldend);
+}
+
+// Readline's tilde-expand: the word around point, if it starts with a
+// tilde, replaced with its expansion, point after it.
+static void edtildeexpand(Editor *ed, Shell *sh)
+{
+    Str s     = edtext(ed);
+    iz  start = ed->point - 1;
+    if (start>=0 && s[start]!='~') {
+        for (; start>=0 && s[start]!=' ' && s[start]!='\t'; start--) {}
+        start++;
+    } else if (start < 0) {
+        start = 0;
+    }
+    iz end = start;
+    do end++; while (end<s.len && s[end]!=' ' && s[end]!='\t');
+    if (end>=s.len || s[end]==' ' || s[end]=='\t') end--;
+    if (start>=s.len || s[start]!='~') return;
+    Arena a    = *scratchat(sh, sh->capdepth+1);
+    Str   word = clone(&a, span(s.data+start, s.data+end+1));
+    Str   home = tildefilename(sh, &a, word);
+    edrecord(ed, U_BEGIN, 0, 0);
+    eddelete(ed, start, end+1);
+    ed->point = start;
+    edinsert(ed, home);
+    edrecord(ed, U_END, 0, 0);
+}
+
+// Bash's spell-correct-word: directory spelling correction, as cd's,
+// of the shell word at or after point and the count-1 after it, or of
+// the -count words before it.
+static void edspellword(Editor *ed, Shell *sh, i32 count)
+{
+    b32 bell = 0;
+    Str s    = edtext(ed);
+    if (count < 0) {
+        i32 n = 0;
+        while (ed->point>0 && count++) {
+            iz p = ed->point;
+            ed->point = edshellback(ed, ed->point, 1);
+            if (!ed->point && edwdelim(s[0])) {
+                ed->point = p;
+                break;
+            }
+            n++;
+        }
+        count = n;
+    } else {
+        while (ed->point<s.len && edwdelim(s[ed->point])) ed->point++;
+    }
+    s = edtext(ed);
+    if (ed->point<s.len && !edwdelim(s[ed->point])) {
+        ed->point = edshellfwd(ed, ed->point, 1, &bell);
+    }
+    while (count) {
+        iz wbeg = edshellback(ed, ed->point, 1);
+        iz wend = edshellfwd(ed, wbeg, 1, &bell);
+        ed->point = wend;
+        if (wbeg >= wend) break;
+        Arena a     = *scratchat(sh, sh->capdepth+1);
+        Str   text  = clone(&a, span(ed->line.data+wbeg, ed->line.data+wend));
+        Str   fixed = spellpath(sh, &a, text);
+        if (fixed.data) {
+            edrecord(ed, U_BEGIN, 0, 0);
+            eddelete(ed, wbeg, wend);
+            ed->point = wbeg;
+            edinsert(ed, fixed);
+            ed->mark = wbeg;
+            edrecord(ed, U_END, 0, 0);
+        }
+        if (ed->point >= ed->line.len) break;
+        count--;
+        if (count) ed->point = edshellfwd(ed, ed->point, 1, &bell);
+    }
+}
+
 // edit-and-execute-command (C-x C-e), as bash's: the line goes into
 // history with an empty entry after it standing for fc's own, which fc
 // drops; with the terminal restored, fc edits the line in $VISUAL or
@@ -2343,7 +2928,127 @@ static void ededitexec(Editor *ed, Shell *sh)
 }
 
 
+// A byte offset into the line as characters, and back, for bind -x's
+// READLINE_POINT and READLINE_MARK
+static i64 edcharoff(Editor *ed, Shell *sh, iz pos)
+{
+    if (!sh->utf8) return pos;
+    i64 n = 0;
+    for (iz i = 0; i < pos; i++) n += (ed->line.data[i]&0xc0) != 0x80;
+    return n;
+}
+
+static iz edbyteoff(Editor *ed, Shell *sh, i64 n)
+{
+    Str s = edtext(ed);
+    if (n <= 0) return 0;
+    if (!sh->utf8) return n<s.len ? (iz)n : s.len;
+    iz i = 0;
+    for (; n>0 && i<s.len; n--) utf8decode(s, &i);
+    return i;
+}
+
+// bind -x: run cmd with the line in READLINE_LINE, READLINE_POINT and
+// READLINE_MARK, taking back what it leaves in them.
+static void edshellcmd(Editor *ed, Shell *sh, Str cmd)
+{
+    // Clear the line's rows, so the command's output takes their place
+    if (ed->hscroll) {
+        edput(ed, "\r\n");
+    } else {
+        edput(ed, "\r");
+        ed->ccol    = 0;
+        ed->pending = 0;
+        for (i32 row = ed->shown.nrows-1; row >= 0; row--) {
+            edmove(ed, row, 0);
+            edput(ed, "\x1b[K");
+        }
+    }
+    edflush(ed, sh);
+
+    i32   depth = ++sh->capdepth;
+    Arena a     = *scratchat(sh, depth);
+    Str   names[] = {"READLINE_LINE", "READLINE_POINT", "READLINE_MARK",
+                     "READLINE_ARGUMENT"};
+    setvar(sh, a, names[0], edtext(ed));
+    setvar(sh, a, names[1], fmti64(&a, edcharoff(ed, sh, ed->point)));
+    setvar(sh, a, names[2], fmti64(&a, edcharoff(ed, sh, ed->mark)));
+    i32 nvars = 3;
+    if (ed->argset || ed->count!=1) {
+        setvar(sh, a, names[3], fmti64(&a, ed->count));
+        nvars = 4;
+    }
+    for (i32 i = 0; i < nvars; i++) setattrs(sh, names[i], V_EXPORT, 0);
+
+    os_tty(sh->os, ed->in, ed->out, TTY_RESTORE);
+    i32 line   = sh->line;
+    b32 lexeof = sh->lexeof;
+    sh->evaldepth++;
+    runsource(sh, cmd, "bash_execute_unix_command", a);
+    sh->evaldepth--;
+    sh->line   = line;
+    sh->lexeof = lexeof;
+    os_tty(sh->os, ed->in, ed->out, TTY_RAW);
+
+    Got g = getvar(sh, &a, names[0]);
+    if (g.set) edreplace(ed, g.value);
+    i64 n = 0;
+    g = getvar(sh, &a, names[1]);
+    if (g.set && parsei64(g.value, &n)) ed->point = edbyteoff(ed, sh, n);
+    g = getvar(sh, &a, names[2]);
+    if (g.set && parsei64(g.value, &n)) ed->mark = edbyteoff(ed, sh, n);
+    for (i32 i = 0; i < 4; i++) unsetvar(sh, names[i], 1);
+    sh->capdepth = depth - 1;
+
+    edredraw(ed, sh);
+}
+
+
 static void edarg(Editor *, Shell *, i32 key);
+static void edresetarg(Editor *);
+
+static i32      rlnamedfn(Str);                                // inputrc.cpp
+static Str      bindfunctions(KeyNode *, b32, Arena *);        // inputrc.cpp
+static Str      bindmacros(KeyNode *, i32, b32, Arena *);      // inputrc.cpp
+static Str      bindvariables(Editor *, b32, Arena *);         // inputrc.cpp
+static KeyNode *rlkeymap(Editor *, i32);                       // inputrc.cpp
+static void     rlputkeys(Buf *, Str);                         // inputrc.cpp
+
+// Text shown under the line, the line then drawn again below it, as
+// readline's dump functions and display-shell-version
+static void edshowtext(Editor *ed, Shell *sh, Str text)
+{
+    Layout *l = &ed->shown;
+    if (!ed->hscroll) edmove(ed, l->nrows-1, l->rows[l->nrows-1].width);
+    edput(ed, "\r\n");
+    Buf b(&ed->linemem, text.len+16);
+    for (iz i = 0; i < text.len; i++) {
+        if (text[i] == '\n') putbyte(&b, '\r');
+        putbyte(&b, text[i]);
+    }
+    edput(ed, finish(&b));
+    edredraw(ed, sh);
+}
+
+// Keys to read next, ahead of the rest of any running macro
+static void edplay(Editor *ed, Str keys)
+{
+    Str rest = cuthead(ed->macro, ed->macropos);
+    ed->macro    = rest.len ? concat(&ed->perm, keys, rest) : clone(&ed->perm, keys);
+    ed->macropos = 0;
+}
+
+// As readline's abort: the bell, and any keyboard macro, running or
+// being defined, is gone
+static void edabort(Editor *ed)
+{
+    edbell(ed);
+    ed->macropos = ed->macro.len;
+    ed->kbddef   = 0;
+    ed->kbdmacro = {};
+    ed->active   = 0;
+    edresetarg(ed);
+}
 
 // Insert key count times, with the rest of a UTF-8 sequence it starts.
 static void edselfinsert(Editor *ed, Shell *sh, u8 key, i32 count)
@@ -2442,6 +3147,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
     case EF_ACCEPT_LINE:
         ed->done   = 1;
         ed->result = ED_LINE;
+        if (ed->vars.histpoint) ed->hpoint = p==len ? -1 : p;
         break;
     case EF_OPERATE_AND_GET_NEXT: {
         Hist *h = &sh->hist;
@@ -2756,7 +3462,161 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         edredraw(ed, sh);
         return;
     case EF_ABORT:
-        edbell(ed);
+        edabort(ed);
+        break;
+    case EF_START_KBD_MACRO:
+        if (ed->kbddef) {
+            edabort(ed);
+            break;
+        }
+        ed->kbddef = 1;
+        ed->kbdrec = Buf(&ed->perm, 64);
+        if (ed->argset && ed->kbdmacro.len) {
+            // Run again, and so kept, then added to
+            print(&ed->kbdrec, ed->kbdmacro);
+            edplay(ed, ed->kbdmacro);
+        }
+        break;
+    case EF_END_KBD_MACRO:
+        if (!ed->kbddef) {
+            edabort(ed);
+            break;
+        }
+        ed->kbddef   = 0;
+        ed->kbdmacro = clone(&ed->perm, Str{ed->kbdrec.data, ed->seqstart});
+        for (i32 i = 1; i < count; i++) edplay(ed, ed->kbdmacro);
+        break;
+    case EF_CALL_LAST_KBD_MACRO:
+        if (ed->kbddef) {
+            edbell(ed);  // not within itself
+            ed->kbdrec.len = ed->seqstart;
+        } else if (!ed->kbdmacro.data) {
+            edabort(ed);
+        } else {
+            for (i32 i = 0; i < count; i++) edplay(ed, ed->kbdmacro);
+        }
+        break;
+    case EF_PRINT_LAST_KBD_MACRO: {
+        if (!ed->kbdmacro.data) {
+            edbell(ed);
+            break;
+        }
+        Buf b(&ed->linemem, 64);
+        rlputkeys(&b, ed->kbdmacro);
+        putbyte(&b, '\n');
+        edshowtext(ed, sh, finish(&b));
+    } break;
+    case EF_DISPLAY_SHELL_VERSION: {
+        Arena a = *scratchat(sh, sh->capdepth+1);
+        edshowtext(ed, sh, concat(&a, helpversion(sh, &a), "\n"));
+    } break;
+    case EF_DUMP_FUNCTIONS:
+    case EF_DUMP_MACROS:
+    case EF_DUMP_VARIABLES: {
+        Arena    a   = *scratchat(sh, sh->capdepth+1);
+        KeyNode *map = rlkeymap(ed, ed->vars.keymap);
+        Str      t   = {};
+        switch (fn) {
+        case EF_DUMP_FUNCTIONS: t = bindfunctions(map, ed->argset, &a); break;
+        case EF_DUMP_MACROS:    t = bindmacros(map, EF_MACRO, ed->argset, &a); break;
+        case EF_DUMP_VARIABLES: t = bindvariables(ed, ed->argset, &a); break;
+        }
+        edshowtext(ed, sh, t);
+    } break;
+    case EF_EXECUTE_NAMED_COMMAND: {
+        Str name = {};
+        if (!edreadstr(ed, sh, "!", &name, 1) || !name.len) break;
+        i32 f = rlnamedfn(name);
+        if (f<=0 || f==EF_EXECUTE_NAMED_COMMAND) {
+            edbell(ed);
+        } else {
+            edrun(ed, sh, f, key);
+        }
+    } break;
+    case EF_BACKWARD_BYTE:
+    case EF_FORWARD_BYTE: {
+        i32 n = fn==EF_FORWARD_BYTE ? count : -count;
+        if (n < 0) {
+            if (p < -n) {
+                ed->point = 0;
+                edbell(ed);
+            } else {
+                ed->point = p + n;
+            }
+        } else if (p+n > len) {
+            ed->point = len;
+            edbell(ed);
+        } else {
+            ed->point = p + n;
+        }
+    } break;
+    case EF_FORWARD_BACKWARD_DELETE_CHAR:
+        edrun(ed, sh, p==len && len ? EF_BACKWARD_DELETE_CHAR : EF_DELETE_CHAR, key);
+        break;
+    case EF_NEXT_SCREEN_LINE:
+    case EF_PREVIOUS_SCREEN_LINE: {
+        i32 save  = ed->count;
+        i32 cols  = ed->tty.cols>0 ? ed->tty.cols : 80;
+        ed->count = ed->tty.xenl ? cols : cols+1;
+        edrun(ed, sh, fn==EF_NEXT_SCREEN_LINE ? EF_FORWARD_CHAR : EF_BACKWARD_CHAR, key);
+        ed->count = save;
+    } break;
+    case EF_SKIP_CSI_SEQUENCE: {
+        i32 c;
+        do c = edkey(ed, sh, -1); while (c>=0x20 && c<0x40);
+    } break;
+    case EF_ARROW_KEY_PREFIX: {
+        i32 c = edkey(ed, sh, -1);
+        if (c < 0) break;
+        switch (c & ~0x20) {
+        case 'A': edrun(ed, sh, EF_PREVIOUS_HISTORY, key); break;
+        case 'B': edrun(ed, sh, EF_NEXT_HISTORY, key);     break;
+        case 'C': edrun(ed, sh, EF_FORWARD_CHAR, key);     break;
+        case 'D': edrun(ed, sh, EF_BACKWARD_CHAR, key);    break;
+        default:  edbell(ed);
+        }
+    } break;
+    case EF_OLD_MENU_COMPLETE:
+        edcomplete(ed, sh, EF_MENU_COMPLETE, ed->argset ? ed->count : 1);
+        break;
+    case EF_ALIAS_EXPAND_LINE:
+        edexpandaliases(ed, sh, 0);
+        break;
+    case EF_HISTORY_AND_ALIAS_EXPAND_LINE:
+        edexpandaliases(ed, sh, 1);
+        break;
+    case EF_TILDE_EXPAND:
+        edtildeexpand(ed, sh);
+        break;
+    case EF_SPELL_CORRECT_WORD:
+        edspellword(ed, sh, count);
+        break;
+    case EF_EMACS_EDITING_MODE:
+        ed->vars.vimode = 0;
+        ed->vars.keymap = KM_EMACS;
+        break;
+    case EF_TTY_STATUS:
+        edbell(ed);  // readline's without TIOCSTAT, as on Linux
+        break;
+    case EF_NON_INCREMENTAL_REVERSE_SEARCH_HISTORY_AGAIN:
+        ednoninc(ed, sh, -1, 1);
+        break;
+    case EF_NON_INCREMENTAL_FORWARD_SEARCH_HISTORY_AGAIN:
+        ednoninc(ed, sh, 1, 1);
+        break;
+    case EF_FETCH_HISTORY:
+        if (ed->argset) {
+            // The entry numbered as history lists it; negative from the end
+            i64 nhist  = sh->hist.base + ed->hpos;
+            i64 wanted = count>=0 ? nhist-count : -(i64)count;
+            if (wanted<=0 || wanted>=nhist) {
+                edprevhist(ed, sh, ed->hpos+1);
+            } else {
+                edprevhist(ed, sh, (i32)wanted);
+            }
+        } else {
+            edprevhist(ed, sh, ed->hpos+1);
+        }
         break;
     case EF_TRANSPOSE_CHARS: {
         if (!count) break;
@@ -2824,6 +3684,8 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         break;
     case EF_HISTORY_SEARCH_BACKWARD:
     case EF_HISTORY_SEARCH_FORWARD:
+    case EF_HISTORY_SUBSTRING_SEARCH_BACKWARD:
+    case EF_HISTORY_SUBSTRING_SEARCH_FORWARD:
         edhistsearch(ed, sh, fn, count);
         break;
     case EF_HISTORY_EXPAND_LINE:
@@ -2890,6 +3752,7 @@ static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
         ed->timedout = 1;  // read -t: as at the end of input
         return -1;
     }
+    if (n==1 && ed->kbddef) putbyte(&ed->kbdrec, c);
     return n==1 ? c : n==-2 ? -2 : -1;
 }
 
@@ -2930,6 +3793,11 @@ static EdSeq edreadseq(Editor *ed, Shell *sh)
     KeyNode *n      = keychild(parent, (u8)c);
     u8 last = (u8)c;
     i64 wait = ed->keytimeout>0 ? ed->keytimeout : -1;
+    KeyNode *path[32];  // the nodes passed, and the keys into them
+    u8       keys[32];
+    i32      depth = 1;
+    path[0] = n;
+    keys[0] = (u8)c;
     while (n && n->kids) {
         i32 next = edkey(ed, sh, n->fn ? wait : -1);
         if (next == -3) break;  // the prefix's own binding
@@ -2942,17 +3810,30 @@ static EdSeq edreadseq(Editor *ed, Shell *sh)
             return r;
         }
         KeyNode *k = keychild(n, (u8)next);
-        if (!k && n->fn && n->fn!=EF_DO_LOWERCASE_VERSION) {
-            // The prefix's own binding, shadowed by longer ones, and
-            // the key runs after it
+        if (!k) {
+            // The deepest prefix with a binding of its own, shadowed by
+            // longer ones, runs, and the keys after it come again
+            i32 i = depth - 1;
+            for (; i>=0 && (!path[i]->fn || path[i]->fn==EF_DO_LOWERCASE_VERSION); i--) {}
+            if (i < 0) {
+                // An unbound sequence: the bell, the rest dropped (also
+                // under M-O, the arrow keys' prefix, as readline)
+                n = 0;
+                break;
+            }
             edpush(ed, next);
+            for (i32 j = depth-1; j > i; j--) edpush(ed, keys[j]);
+            parent = i ? path[i-1] : &ed->root;
+            n      = path[i];
+            last   = keys[i];
             break;
-        } else if (!k) {
-            // An unbound sequence: the bell, the rest dropped (also
-            // under M-O, the arrow keys' prefix, as readline)
+        }
+        if (depth == countof(path)) {
             n = 0;
             break;
         }
+        path[depth]   = k;
+        keys[depth++] = (u8)next;
         parent = n;
         n      = k;
         last   = (u8)next;
@@ -2988,6 +3869,7 @@ static void edresetarg(Editor *ed)
 // one. False at the end of input.
 static b32 eddispatch(Editor *ed, Shell *sh)
 {
+    ed->seqstart = ed->kbdrec.len;
     EdSeq s = edreadseq(ed, sh);
     if (s.status == ED_INTR) {
         ed->done   = 1;
@@ -3014,6 +3896,10 @@ static b32 eddispatch(Editor *ed, Shell *sh)
         ed->macro    = rest.len ? concat(&ed->perm, s.macro, rest) : s.macro;
         ed->macropos = 0;
     } break;
+    case EF_SHELLCMD:
+        edshellcmd(ed, sh, s.macro);
+        ed->lastfn = s.fn;
+        break;
     case EF_UNIVERSAL_ARGUMENT:
         ed->count *= 4;
         edarg(ed, sh, -1);
@@ -3023,7 +3909,7 @@ static b32 eddispatch(Editor *ed, Shell *sh)
         ed->killed = 0;
         edrun(ed, sh, s.fn, s.key);
         ed->lastkill = ed->killed;
-        ed->lastfn   = s.fn;
+        ed->lastfn   = s.fn==EF_OLD_MENU_COMPLETE ? EF_MENU_COMPLETE : s.fn;
     }
     return 1;
 }
@@ -3224,6 +4110,10 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         if (ed->hscroll) ed->vars.bracketpaste = ed->vars.activeregion = 0;
         rlstart(ed, sh);
     }
+    if (!ed->termkeys && !ed->hscroll) {
+        ed->termkeys = 1;
+        edtermkeys(ed);
+    }
     rlttychars(ed);
     print(&ed->line, opts->init);
     ed->point   = ed->line.len;
@@ -3316,8 +4206,14 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         edput(ed, "\r");
         crlf = 0;
     } else if (ed->hscroll) {
-        if (ed->result == ED_INTR) edput(ed, "^C");
+        if (ed->result==ED_INTR && ed->vars.echoctl) edput(ed, "^C");
     } else if (ed->result == ED_INTR) {
+        if (ed->starred) {
+            // Readline drops the line's undo list first, and its star
+            ed->vars.markmodified = 0;
+            redisplay(ed, sh);
+            ed->vars.markmodified = 1;
+        }
         // At the prompt with INT trapped, as bash: the line goes, and
         // the trap writes over it from the start of its row (fillline)
         b32 trapped = opts->shell && trapset(sh, 2) && interactivetop(sh);
@@ -3327,8 +4223,9 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
             redisplay(ed, sh);
         }
         // Echoed at the cursor, over the rest of the line, as by the
-        // terminal's own line discipline
-        edput(ed, "^C");
+        // terminal's own line discipline, unless echo-control-characters
+        // is off
+        if (ed->vars.echoctl) edput(ed, "^C");
         if (ed->crow < l->nrows-1) edmove(ed, l->nrows-1, 0);
         if (trapped) {
             edput(ed, "\r");

@@ -24,6 +24,7 @@ static Str usage(Str name)
         {"shopt",    "shopt [-pqsu] [-o] [optname ...]"},
         {"type",     "type [-afptP] name [name ...]"},
         {"command",  "command [-pVv] command [arg ...]"},
+        {"bind",     "bind [-lpsvPSVX] [-m keymap] [-f filename] [-q name] [-u name] [-r keyseq] [-x keyseq:shell-command] [keyseq:readline-function or readline-command]"},
         {"compgen",  "compgen [-V varname] [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]"},
         {"pwd",      "pwd [-LP]"},
         {"alias",    "alias [-p] [name[=value] ... ]"},
@@ -4744,6 +4745,7 @@ static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
 // The table
 
 static i32 b_trap(Shell *, Str *, iz, Arena);  // trap.cpp
+static i32 b_bind(Shell *, Str *, iz, Arena);  // inputrc.cpp
 static i32 b_history(Shell *, Str *, iz, Arena);  // history.cpp
 static i32 b_fc(Shell *, Str *, iz, Arena);       // history.cpp
 static i32 b_kill(Shell *, Str *, iz, Arena);
@@ -4764,6 +4766,7 @@ static Builtin builtins[] = {
     {"[",        b_test,     B_NOHELP},
     {"alias",    b_alias,    0},
     {"bg",       b_bg,       0},
+    {"bind",     b_bind,     0},
     {"break",    b_break,    B_SPECIAL},
     {"builtin",  b_builtin,  0},
     {"caller",   b_caller,   0},

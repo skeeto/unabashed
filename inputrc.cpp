@@ -14,12 +14,27 @@ struct RlVar {
     void *p;     // b32, i32 or Str
 };
 
-enum : i32 { KM_EMACS, KM_META, KM_CTLX, KM_VIMOVE, KM_VIINS };
-
 static Str rlkeymapnames[][2] = {
     {"emacs", "emacs-standard"}, {"emacs-meta", ""}, {"emacs-ctlx", ""},
     {"vi", "vi-move"}, {"vi-insert", ""},
 };
+
+static b32 rlequal(Str, Str);
+
+// A keymap by any of its names, or -1
+static i32 rlkeymapnamed(Str name)
+{
+    static struct { Str name; i32 km; } maps[] = {
+        {"emacs", KM_EMACS}, {"emacs-standard", KM_EMACS},
+        {"emacs-meta", KM_META}, {"emacs-ctlx", KM_CTLX},
+        {"vi", KM_VIMOVE}, {"vi-move", KM_VIMOVE},
+        {"vi-command", KM_VIMOVE}, {"vi-insert", KM_VIINS},
+    };
+    for (iz i = 0; i < countof(maps); i++) {
+        if (rlequal(maps[i].name, name)) return maps[i].km;
+    }
+    return -1;
+}
 
 // The table, with pointers into this editor
 static iz rlvars(Editor *ed, RlVar *t)
@@ -549,19 +564,9 @@ static void rlset(Editor *ed, Shell *sh, RlRead *r, Str s, Arena a)
         }
         break;
     case RV_KEYMAP: {
-        static struct { Str name; i32 km; } maps[] = {
-            {"emacs", KM_EMACS}, {"emacs-standard", KM_EMACS},
-            {"emacs-meta", KM_META}, {"emacs-ctlx", KM_CTLX},
-            {"vi", KM_VIMOVE}, {"vi-move", KM_VIMOVE},
-            {"vi-command", KM_VIMOVE}, {"vi-insert", KM_VIINS},
-        };
-        ok = 0;
-        for (iz i = 0; i < countof(maps); i++) {
-            if (rlequal(maps[i].name, value)) {
-                ed->vars.keymap = maps[i].km;
-                ok = 1;
-            }
-        }
+        i32 km = rlkeymapnamed(value);
+        ok = km >= 0;
+        if (ok) ed->vars.keymap = km;
     } break;
     }
     if (!ok) {
@@ -753,4 +758,396 @@ static void rlttychars(Editor *ed)
         }
     }
     for (iz i = 0; i < countof(m); i++) ed->ttysaved[i] = m[i].c;
+}
+
+
+// bind
+
+// A key sequence as readline shows it (bind -p, -s, -X, -q)
+static void rlputkeys(Buf *b, Str seq)
+{
+    for (iz i = 0; i < seq.len; i++) {
+        u8 c = seq[i];
+        if (c == 0x1b) {
+            print(b, "\\e");
+        } else if (c == 0x1c) {
+            print(b, "\\C-\\\\");
+        } else if (c < 0x20) {
+            print(b, "\\C-");
+            putbyte(b, (u8)(c==0 ? '@' : c<0x1b ? c+'a'-1 : c+0x40));
+        } else if (c == 0x7f) {
+            print(b, "\\C-?");
+        } else if (c=='"' || c=='\\') {
+            putbyte(b, '\\');
+            putbyte(b, c);
+        } else if (c >= 0x80) {
+            putbyte(b, '\\');
+            putbyte(b, (u8)('0' + (c>>6)));
+            putbyte(b, (u8)('0' + (c>>3 & 7)));
+            putbyte(b, (u8)('0' + (c & 7)));
+        } else {
+            putbyte(b, c);
+        }
+    }
+}
+
+// Key sequences, collected in key order: a key's own binding before
+// the sequences it prefixes
+struct RlSeqs {
+    Str *v;
+    iz   len;
+    iz   cap;
+};
+
+enum : i32 { RW_FN, RW_MACRO };
+
+static void rlcollect(Arena *a, KeyNode *n, Buf *prefix, i32 how, i32 fn, RlSeqs *out)
+{
+    KeyNode *kids[256] = {};
+    for (KeyNode *k = n->kids; k; k = k->sib) kids[k->key] = k;
+    for (i32 c = 0; c < 256; c++) {
+        KeyNode *k = kids[c];
+        if (!k) continue;
+        putbyte(prefix, (u8)c);
+        b32 want = k->fn==fn && (how==RW_FN || k->macro.len);
+        if (want) {
+            if (out->len == out->cap) {
+                iz   cap = out->cap ? out->cap*2 : 16;
+                Str *v   = alloc<Str>(a, cap);
+                for (iz i = 0; i < out->len; i++) v[i] = out->v[i];
+                out->v   = v;
+                out->cap = cap;
+            }
+            out->v[out->len++] = clone(a, Str{prefix->data, prefix->len});
+        }
+        if (k->kids) rlcollect(a, k, prefix, how, fn, out);
+        prefix->len--;
+    }
+}
+
+static RlSeqs rlinvokers(Arena *a, KeyNode *map, i32 how, i32 fn)
+{
+    RlSeqs r = {};
+    Buf    prefix(a, 16);
+    rlcollect(a, map, &prefix, how, fn, &r);
+    return r;
+}
+
+static KeyNode *rlnode(KeyNode *map, Str seq)
+{
+    KeyNode *n = map;
+    for (iz i = 0; n && i < seq.len; i++) n = keychild(n, seq[i]);
+    return n;
+}
+
+// A function by name, exactly, else ignoring case as readline does;
+// -1 if there is none
+static i32 rlnamedfn(Str name)
+{
+    if (name == "insert-last-argument") return EF_YANK_LAST_ARG;
+    for (i32 i = 1; i < EF_MACRO; i++) {
+        if (edfuncs[i] == name) return i;
+    }
+    i32 fn = rlfunction(name);
+    return fn ? fn : -1;
+}
+
+// The first five, quoted (bind -P, -q)
+static void rllistkeys(Buf *b, RlSeqs s)
+{
+    for (iz i = 0; i < s.len && i < 5; i++) {
+        if (i) print(b, ", ");
+        putbyte(b, '"');
+        rlputkeys(b, s.v[i]);
+        putbyte(b, '"');
+    }
+    if (s.len > 5) print(b, ", ...");
+}
+
+// bind -p and -P list in byte order, unlike bind -l
+static Str bindfunctions(KeyNode *map, b32 readable, Arena *a)
+{
+    iz   n     = countof(rlfunmap);
+    Str *names = alloc<Str>(a, n);
+    for (iz i = 0; i < n; i++) {
+        Str name = rlfunmap[i];
+        iz  j    = i;
+        for (; j>0 && compare(names[j-1], name)>0; j--) names[j] = names[j-1];
+        names[j] = name;
+    }
+    Buf b(a, 1<<12);
+    putbyte(&b, '\n');
+    for (iz i = 0; i < n; i++) {
+        Str    name = names[i];
+        RlSeqs s    = rlinvokers(a, map, RW_FN, rlnamedfn(name));
+        if (readable) {
+            if (!s.len) {
+                print(&b, "# ");
+                print(&b, name);
+                print(&b, " (not bound)\n");
+            }
+            for (iz k = 0; k < s.len; k++) {
+                putbyte(&b, '"');
+                rlputkeys(&b, s.v[k]);
+                print(&b, "\": ");
+                print(&b, name);
+                putbyte(&b, '\n');
+            }
+        } else if (!s.len) {
+            print(&b, name);
+            print(&b, " is not bound to any keys\n");
+        } else {
+            print(&b, name);
+            print(&b, " can be found on ");
+            rllistkeys(&b, s);
+            print(&b, s.len>5 ? Str("\n") : ".\n");
+        }
+    }
+    return finish(&b);
+}
+
+// Macros (EF_MACRO) or shell commands (EF_SHELLCMD)
+static Str bindmacros(KeyNode *map, i32 fn, b32 readable, Arena *a)
+{
+    RlSeqs s = rlinvokers(a, map, fn==EF_SHELLCMD ? RW_FN : RW_MACRO, fn);
+    Buf    b(a, 256);
+    for (iz i = 0; i < s.len; i++) {
+        KeyNode *k = rlnode(map, s.v[i]);
+        if (fn == EF_SHELLCMD) {
+            putbyte(&b, '"');
+            rlputkeys(&b, s.v[i]);
+            print(&b, "\" \"");
+            for (iz j = 0; j < k->macro.len; j++) {
+                u8 c = k->macro[j];
+                if (c=='"' || c=='\\') putbyte(&b, '\\');
+                putbyte(&b, c);
+            }
+            print(&b, "\"\n");
+        } else if (readable) {
+            putbyte(&b, '"');
+            rlputkeys(&b, s.v[i]);
+            print(&b, "\": \"");
+            rlputkeys(&b, k->macro);
+            print(&b, "\"\n");
+        } else {
+            rlputkeys(&b, s.v[i]);
+            print(&b, " outputs ");
+            rlputkeys(&b, k->macro);
+            putbyte(&b, '\n');
+        }
+    }
+    return finish(&b);
+}
+
+static Str bindvariables(Editor *ed, b32 readable, Arena *a)
+{
+    RlVar t[RLVARMAX];
+    iz    n = rlvars(ed, t);
+    Buf   b(a, 1<<11);
+    for (i32 pass = 0; pass < 2; pass++) {
+        for (iz i = 0; i < n; i++) {
+            if ((t[i].type == RV_BOOL) == !!pass) continue;
+            Str v = rlvarvalue(ed, a, t[i]);
+            if (readable) {
+                print(&b, "set ");
+                print(&b, t[i].name);
+                putbyte(&b, ' ');
+                print(&b, v);
+            } else {
+                print(&b, t[i].name);
+                print(&b, " is set to `");
+                print(&b, v);
+                putbyte(&b, '\'');
+            }
+            putbyte(&b, '\n');
+        }
+    }
+    return finish(&b);
+}
+
+// bind -x: "keyseq": command, the command perhaps quoted
+static b32 bindcommand(Editor *ed, Shell *sh, Str arg, Arena a)
+{
+    Str s = rlskip(arg);
+    iz  i = 1;
+    if (s.len && s[0]=='"') {
+        for (; i<s.len && s[i]!='"'; i++) {
+            if (s[i]=='\\' && i+1<s.len) i++;
+        }
+        if (i == s.len) {
+            builtinerror(sh, a, "bind", concat(&a, "no closing `\"' in ", arg));
+            return 0;
+        }
+    }
+    if (!s.len || s[0]!='"' || i+1>=s.len || s[i+1]!=':') {
+        builtinerror(sh, a, "bind", concat(&a, arg, ": first non-whitespace character is not `\"'"));
+        return 0;
+    }
+    Str seq = rlkeyseq(&a, span(s.data+1, s.data+i));
+    Str cmd = rlskip(cuthead(s, i+2));
+    if (cmd.len>=2 && (cmd[0]=='"' || cmd[0]=='\'') && cmd[cmd.len-1]==cmd[0]) {
+        cmd = span(cmd.data+1, cmd.data+cmd.len-1);
+    }
+    rlbind(ed, seq, EF_SHELLCMD, {});
+    KeyNode *n = rlnode(rlkeymap(ed, ed->vars.keymap), seq);
+    if (n) n->macro = clone(&ed->perm, cmd);
+    return 1;
+}
+
+static i32 b_bind(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    Arena  *a  = &scratch;
+    Editor *ed = editor(sh);
+    if (!ed->inited) {
+        ed->inited = 1;
+        rlstart(ed, sh);
+    }
+    if (!sh->interactive || (!sh->opt[O_EMACS] && !sh->opt[O_VI])) {
+        builtinerror(sh, scratch, "bind", "warning: line editing not enabled");
+    }
+
+    enum : u32 {
+        F_L = 1<<0, F_P = 1<<1, F_PP = 1<<2, F_S = 1<<3, F_SS = 1<<4,
+        F_V = 1<<5, F_VV = 1<<6, F_XX = 1<<7,
+    };
+    u32 flags = 0;
+    Str file = {}, query = {}, unbind = {}, keymap = {}, remove = {}, command = {};
+    b32 hasf = 0, hasq = 0, hasu = 0, hasm = 0, hasr = 0, hasx = 0;
+    iz  i = 1;
+    for (; i < nargs; i++) {
+        Str w = args[i];
+        if (w.len<2 || w[0]!='-') break;
+        if (w == "--") {
+            i++;
+            break;
+        }
+        for (iz k = 1; k < w.len; k++) {
+            u8  c      = w[k];
+            u8  opt[2] = {'-', c};
+            u32 bit    = 0;
+            switch (c) {
+            case 'l': bit = F_L;  break;
+            case 'p': bit = F_P;  break;
+            case 'P': bit = F_PP; break;
+            case 's': bit = F_S;  break;
+            case 'S': bit = F_SS; break;
+            case 'v': bit = F_V;  break;
+            case 'V': bit = F_VV; break;
+            case 'X': bit = F_XX; break;
+            case 'f': case 'q': case 'u': case 'm': case 'r': case 'x':
+                break;
+            default:
+                invalidoption(sh, scratch, "bind", clone(a, Str{opt, 2}));
+                return 2;
+            }
+            if (bit) {
+                flags |= bit;
+                continue;
+            }
+            Str v = cuthead(w, k+1);
+            if (!v.len) {
+                if (i+1 >= nargs) {
+                    Str msg = concat(a, clone(a, Str{opt, 2}), ": option requires an argument");
+                    builtinerror(sh, scratch, "bind", msg);
+                    usageerror(sh, scratch, "bind");
+                    return 2;
+                }
+                v = args[++i];
+            }
+            switch (c) {
+            case 'f': file    = v; hasf = 1; break;
+            case 'q': query   = v; hasq = 1; break;
+            case 'u': unbind  = v; hasu = 1; break;
+            case 'm': keymap  = v; hasm = 1; break;
+            case 'r': remove  = v; hasr = 1; break;
+            case 'x': command = v; hasx = 1; break;
+            }
+            break;
+        }
+    }
+
+    i32 saved = ed->vars.keymap;
+    if (hasm) {
+        i32 km = rlkeymapnamed(keymap);
+        if (km < 0) {
+            builtinerror(sh, scratch, "bind", concat3(a, "`", keymap, "': invalid keymap name"));
+            return 1;
+        }
+        ed->vars.keymap = km;
+    }
+    KeyNode *map    = rlkeymap(ed, ed->vars.keymap);
+    i32      status = 0;
+
+    if (flags & F_L) {
+        Buf b(a, 1<<12);
+        for (iz k = 0; k < countof(rlfunmap); k++) {
+            print(&b, rlfunmap[k]);
+            putbyte(&b, '\n');
+        }
+        bprint(sh, finish(&b));
+    }
+    if (flags & F_P)  bprint(sh, bindfunctions(map, 1, a));
+    if (flags & F_PP) bprint(sh, bindfunctions(map, 0, a));
+    if (flags & F_S)  bprint(sh, bindmacros(map, EF_MACRO, 1, a));
+    if (flags & F_SS) bprint(sh, bindmacros(map, EF_MACRO, 0, a));
+    if (flags & F_V)  bprint(sh, bindvariables(ed, 1, a));
+    if (flags & F_VV) bprint(sh, bindvariables(ed, 0, a));
+    if (hasf) {
+        i32 err = 0;
+        readwholefile(sh, a, tildefilename(sh, a, file), &err);
+        if (err) {
+            builtinerror(sh, scratch, "bind", concat3(a, file, ": cannot read: ", errtext(err)));
+            status = 1;
+        } else {
+            rlreadfile(ed, sh, file, 0, scratch);
+        }
+    }
+    if (hasq) {
+        i32 fn = rlnamedfn(query);
+        if (fn < 0) {
+            builtinerror(sh, scratch, "bind", concat3(a, "`", query, "': unknown function name"));
+            status = 1;
+        } else {
+            RlSeqs s = rlinvokers(a, map, RW_FN, fn);
+            Buf    b(a, 256);
+            print(&b, query);
+            if (s.len) {
+                print(&b, " can be invoked via ");
+                rllistkeys(&b, s);
+                print(&b, s.len>5 ? Str("\n") : ".\n");
+            } else {
+                print(&b, " is not bound to any keys.\n");
+                status = 1;
+            }
+            bprint(sh, finish(&b));
+        }
+    }
+    if (hasu) {
+        i32 fn = rlnamedfn(unbind);
+        if (fn < 0) {
+            builtinerror(sh, scratch, "bind", concat3(a, "`", unbind, "': unknown function name"));
+            status = 1;
+        } else {
+            RlSeqs s = rlinvokers(a, map, RW_FN, fn);
+            for (iz k = 0; k < s.len; k++) rlnode(map, s.v[k])->fn = EF_NONE;
+        }
+    }
+    if (hasr) {
+        Str      seq = rlkeyseq(a, remove);
+        KeyNode *n   = seq.len ? rlnode(map, seq) : 0;
+        if (n) {
+            n->fn    = EF_NONE;
+            n->macro = {};
+        }
+    }
+    if (hasx && !bindcommand(ed, sh, command, scratch)) status = 1;
+    if (flags & F_XX) bprint(sh, bindmacros(map, EF_SHELLCMD, 1, a));
+
+    for (; i < nargs; i++) {
+        RlRead r = {};
+        r.file = "bind";
+        rlline(ed, sh, &r, args[i], scratch);
+    }
+    if (hasm) ed->vars.keymap = saved;
+    return status;
 }

@@ -1,0 +1,18 @@
+# bind -x: the command sees the line, point and mark (in characters)
+# and a numeric argument, and what it leaves in them comes back; the
+# variables are gone afterward; its output takes the line's place
+size 20 60
+rc PS1='$ '
+rc bind -x '"\C-xu": READLINE_LINE=${READLINE_LINE^^}; READLINE_POINT=2'
+rc bind -x '"\C-xe": echo "[$READLINE_LINE|$READLINE_POINT|$READLINE_MARK|${READLINE_ARGUMENT-none}]"'
+rc bind -x '"\C-xk": unset READLINE_LINE; READLINE_POINT=99 READLINE_MARK=-3'
+keys héllo wörld\C-xu
+snap
+keys \C-a\C-kaé xyz\C-b\C-b\C-@\C-b\C-xe
+snap
+keys \e3\C-xe
+snap
+keys \C-xk
+snap
+keys \C-a\C-kecho ${READLINE_LINE-unset} ${READLINE_POINT-unset}\r
+snap

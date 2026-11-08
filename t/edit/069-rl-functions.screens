@@ -1,0 +1,155 @@
+== snap 1
+$ abab
+@ 0,6
+== snap 2
+$ ababababab
+@ 0,12
+== snap 3
+$ ababababab
+ab
+$ ababababab
+@ 2,12
+== snap 4
+$ ababababab
+ab
+$ x
+@ 2,3 bell 2
+== snap 5
+$ ababababab
+ab
+$ zxy
+@ 2,5 bell 4
+== snap 6
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$ : alpha two
+@ 5,5 bell 4
+== snap 7
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$ : alpha one
+@ 5,5 bell 4
+== snap 8
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$
+@ 5,2 bell 5
+== snap 9
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$
+@ 5,2 bell 6
+== snap 10
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$ abc
+@ 5,5 bell 6
+== snap 11
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$ abc
+\C-xm outputs hi
+$ abc
+@ 7,5 bell 6
+== snap 12
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$ abc
+\C-xm outputs hi
+$ abc
+"\C-xm": "hi"
+$ abc
+@ 9,5 bell 6
+== snap 13
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$ abc
+\C-xm outputs hi
+$ abc
+"\C-xm": "hi"
+$ ls /home/oracle/x
+@ 9,19 bell 6
+== snap 14
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$ abc
+\C-xm outputs hi
+$ abc
+"\C-xm": "hi"
+$ ls -l y
+@ 9,9 bell 6
+== snap 15
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$ abc
+\C-xm outputs hi
+$ abc
+"\C-xm": "hi"
+$ a
+@ 9,3 bell 6
+== snap 16
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$ abc
+\C-xm outputs hi
+$ abc
+"\C-xm": "hi"
+$ cd sdir
+@ 9,9 bell 6
+== snap 17
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$ abc
+\C-xm outputs hi
+$ abc
+"\C-xm": "hi"
+$ ab
+@ 9,4 bell 6
+== snap 18
+$ ababababab
+ab
+$ : alpha one
+$ : beta
+$ : alpha two
+$ abc
+\C-xm outputs hi
+$ abc
+"\C-xm": "hi"
+$ ab
+@ 9,4 bell 6

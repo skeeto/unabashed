@@ -102,22 +102,30 @@ Moved from M6 (m6.md, step 10), with bind and the rest of editor 2:
 
 - inputrc variables kept for `$if` (and `bind -v`) but without
   effect: blink-matching-paren, colored-stats and
-  colored-completion-prefix, echo-control-characters, enable-keypad,
-  enable-meta-key, expand-tilde, history-preserve-point,
-  horizontal-scroll-mode, mark-modified-lines, revert-all-at-newline,
-  show-mode-in-prompt and the mode strings, the active region colours,
-  byte-oriented, input-meta, output-meta and convert-meta.
+  colored-completion-prefix, enable-keypad, enable-meta-key,
+  horizontal-scroll-mode (our sideways display is TERM=dumb's, which
+  also drops the active region and bracketed paste),
+  revert-all-at-newline, show-mode-in-prompt and the mode strings
+  (step 7), the active region colours, byte-oriented, input-meta,
+  output-meta and convert-meta.
 - inputrc binding nothing to a prefix (`"\C-x":` alone): readline
   stores a do-nothing shadow, and folds an emptied keymap back into
   its parent; ours leaves the prefix unbound. Bash's own keys and the
   arrow keys are bound before the inputrc rather than after it "if
   unbound", which differs only when the inputrc unbinds one (or bind
-  does).
-- dabbrev-expand and export-completions are not implemented.
-- editing-mode vi is recorded and vi keymaps take bindings, but the
-  editor stays in emacs mode; vi-* and other unimplemented function
-  names (dabbrev-expand, paste-from-clipboard, ...) bind nothing, so
-  they ring and do not shadow.
+  does); the terminal's other keys (Delete, Insert, Home, End, Page
+  Up and Down as `\e[N~`) are bound after it, as readline does.
+- Functions that bind but only ring the bell: dabbrev-expand,
+  export-completions, vi-editing-mode and every vi-* function (step
+  7). tty-status rings as readline's does where there is no TIOCSTAT
+  (Linux, Windows).
+- Keyboard macros record the keys read, not readline's dispatched
+  keys: readline misses keys inserted together with self-insert's
+  type-ahead (`ab` typed at once records only `a`), and records again
+  a key macro's expansion as it runs. Not reproduced.
+- old-menu-complete runs menu-complete.
+- editing-mode vi is recorded and the vi keymaps hold bash's default
+  bindings, but the editor stays in emacs mode (step 7).
 - Invalid UTF-8 in the line is drawn as U+FFFD, a column per byte,
   which is what a terminal shows for the raw bytes readline writes;
   a byte that breaks a sequence in self-insert becomes a key of its

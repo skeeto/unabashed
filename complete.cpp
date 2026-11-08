@@ -324,7 +324,14 @@ static Slice<Str> compfiles(Editor *ed, Shell *sh, Comp *c, Str w, i32 keep)
     Str udir = takehead(w, slash+1);
     Str part = cuthead(w, slash+1);
     Str odir = udir.len ? udir : Str(".");
-    if (odir[0] == '~') odir = tildefilename(sh, a, odir);
+    if (odir[0] == '~') {
+        odir = tildefilename(sh, a, odir);
+        if (ed->vars.expandtilde) {
+            // expand-tilde: the matches carry the expanded directory
+            b32 slash = odir.len && odir[odir.len-1]=='/';
+            udir = slash ? odir : concat(a, odir, "/");
+        }
+    }
     if (c->dirhook) {
         odir = compexpdir(sh, a, odir);
         if (sh->shopt[S_DIREXPAND] && udir.len) udir = odir;

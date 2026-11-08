@@ -1,0 +1,38 @@
+# inputrc variables: history-preserve-point keeps point's column while
+# moving through history, mark-modified-lines marks a changed entry
+# with a star before the prompt, expand-tilde completes ~/ expanded,
+# echo-control-characters off leaves out the ^C of an interrupt
+size 20 60
+rc PS1='$ '
+rc cd ~ && mkdir -p tdir
+rc bind 'set history-preserve-point on'
+rc bind 'set mark-modified-lines on'
+rc bind 'set expand-tilde on'
+keys : one two three\r: four five six seven\r
+keys : xyz\C-a\C-f\C-f\C-f\C-p
+snap
+keys \C-p
+snap
+keys X
+snap
+keys \C-n
+snap
+keys \C-p
+snap
+keys \C-e\C-a\C-kls ~/td\t
+snap
+pause 200
+keys \C-c
+pause 200
+keys : abc
+pause 200
+keys \C-c
+pause 200
+snap
+keys bind 'set echo-control-characters off'\r
+pause 200
+keys : def
+pause 200
+keys \C-c
+pause 200
+snap

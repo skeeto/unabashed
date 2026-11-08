@@ -1,0 +1,55 @@
+== snap 1
+$ : one two three
+$ : four five six seven
+$ : four five six seven
+@ 2,5
+== snap 2
+$ : one two three
+$ : four five six seven
+$ : one two three
+@ 2,5
+== snap 3
+$ : one two three
+$ : four five six seven
+*$ : oXne two three
+@ 2,7
+== snap 4
+$ : one two three
+$ : four five six seven
+$ : four five six seven
+@ 2,5
+== snap 5
+$ : one two three
+$ : four five six seven
+*$ : oXne two three
+@ 2,6
+== snap 6
+$ : one two three
+$ : four five six seven
+*$ ls /home/oracle/tdir/
+@ 2,24
+== snap 7
+$ : one two three
+$ : four five six seven
+$ ls /home/oracle/tdir/^C
+$ : abc^C
+$
+@ 4,2
+== snap 8
+$ : one two three
+$ : four five six seven
+$ ls /home/oracle/tdir/^C
+$ : abc^C
+$ bind 'set echo-control-characters off'
+$ : def
+$
+@ 6,2
+== snap 9
+$ : one two three
+$ : four five six seven
+$ ls /home/oracle/tdir/^C
+$ : abc^C
+$ bind 'set echo-control-characters off'
+$ : def
+$
+@ 6,2

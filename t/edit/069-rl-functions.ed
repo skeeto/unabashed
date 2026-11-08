@@ -1,0 +1,63 @@
+# readline functions bound by name: keyboard macros (with a count, a
+# printout and C-g killing a definition), byte motions, substring and
+# repeated non-incremental history searches, M-x with completion,
+# dump-macros, tilde-expand, alias-expand-line,
+# forward-backward-delete-char, spell-correct-word, skip-csi-sequence
+size 30 70
+rc PS1='$ '
+rc cd ~ && mkdir -p sdir
+rc alias ll='ls -l'
+rc bind '"\C-xp": print-last-kbd-macro'
+rc bind '"\C-xb": backward-byte'
+rc bind '"\C-xf": forward-byte'
+rc bind '"\C-xs": history-substring-search-backward'
+rc bind '"\C-xn": non-incremental-reverse-search-history-again'
+rc bind '"\C-xd": dump-macros'
+rc bind '"\C-xm": "hi"'
+rc bind '"\C-xa": alias-expand-line'
+rc bind '"\C-xx": forward-backward-delete-char'
+rc bind '"\C-xc": spell-correct-word'
+rc bind '"\e[": skip-csi-sequence'
+keys \C-x(
+pause 100
+keys a
+pause 100
+keys b
+pause 100
+keys \C-x)
+pause 100
+keys \C-xe
+snap
+keys \e3\C-xe
+snap
+keys \C-xp
+snap
+keys \C-a\C-k\C-x(x\C-g\C-xe
+snap
+keys \C-a\C-kxy\C-xb\C-xb\C-xbz\C-xf\C-xf\C-xf
+snap
+keys \C-a\C-k: alpha one\r: beta\r: alpha two\r
+keys lph\C-xs
+snap
+keys \C-xs
+snap
+keys \C-a\C-k\epone\r
+snap
+keys \C-a\C-k\C-xn
+snap
+keys \C-a\C-kabc\C-a\exend-of-l\t\r
+snap
+keys \C-xd
+snap
+keys \e1\C-xd
+snap
+keys \C-a\C-kls ~/x\e&
+snap
+keys \C-a\C-kll y\C-xa
+snap
+keys \C-a\C-kabc\C-xx\C-b\C-xx
+snap
+keys \C-a\C-kcd sdri\C-xc
+snap
+keys \C-a\C-ka\e[1;9Xb
+snap
