@@ -2748,20 +2748,6 @@ static b32 inputready(Shell *sh, File *f)
     return 0;
 }
 
-// The length of the IFS character at s[i], else 0: a character at a
-// time in a UTF-8 locale, as field splitting (isdelim).
-static iz ifschar(Str ifs, Str s, iz i, b32 utf8)
-{
-    iz  n = charlen(s, i, utf8);
-    Str c = {s.data+i, n};
-    for (iz k = 0; k < ifs.len;) {
-        iz m = charlen(ifs, k, utf8);
-        if (Str{ifs.data+k, m} == c) return n;
-        k += m;
-    }
-    return 0;
-}
-
 static b32 ifsmember(Str ifs, u8 c)
 {
     for (iz i = 0; i < ifs.len; i++) {
@@ -2858,7 +2844,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     // The prompt, -e, -i and -s apply only to a terminal
     File *in  = sh->fds->fd[fd];
-    b32   tty = in && in->kind==F_OS && os_isatty(sh->os, in->h);
+    b32   tty = fileistty(sh, in);
     if (!tty) {
         prompt = itext = {};
         edit = silent = 0;
@@ -3159,7 +3145,12 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     b32 ifsset;
     Str ifs = clone(&scratch, ifsvalue(sh, &ifsset));  // read may assign IFS
     if (exact) ifs = {};  // -N does not split
-    b32 mb = sh->utf8;   // IFS a character at a time (ifschar)
+    // IFS a character at a time (ifsmatch), but an ASCII IFS matches no
+    // part of a multibyte character, so then a byte at a time
+    b32 mb = 0;
+    for (iz j = 0; sh->utf8 && j<ifs.len; j++) {
+        mb |= ifs[j] >= 0x80;
+    }
     if (arrname.data) {
         // Every field into the array's elements
         if (!validvarname(arrname)) {
@@ -3171,12 +3162,12 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         while (pos<s.len && !e[pos] && ifswhite(s[pos]) && ifsmember(ifs, s[pos])) pos++;
         while (pos < s.len) {
             iz start = pos;
-            while (pos<s.len && (e[pos] || !ifschar(ifs, s, pos, mb))) {
+            while (pos<s.len && (e[pos] || !ifsmatch(ifs, s, pos, mb))) {
                 pos += e[pos] ? 1 : charlen(s, pos, mb);
             }
             fields = push(&scratch, fields, span(s.data+start, s.data+pos));
             while (pos<s.len && !e[pos] && ifswhite(s[pos]) && ifsmember(ifs, s[pos])) pos++;
-            iz d = pos<s.len && !e[pos] && !ifswhite(s[pos]) ? ifschar(ifs, s, pos, mb) : 0;
+            iz d = pos<s.len && !e[pos] && !ifswhite(s[pos]) ? ifsmatch(ifs, s, pos, mb) : 0;
             if (d) {
                 pos += d;
                 while (pos<s.len && !e[pos] && ifswhite(s[pos]) && ifsmember(ifs, s[pos])) pos++;
@@ -3223,8 +3214,12 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (v == nvars-1) {
             // One more field ending the line, less its delimiter...
             iz end = pos;
-            while (end < s.len) {
-                b32 inifs = !e[end] && ifschar(ifs, s, end, mb);
+            if (!ifs.len) {
+                end = s.len;
+            } else if (!mb) {
+                for (; end<s.len && (e[end] || !isifs[s[end]]); end++) {}
+            } else while (end < s.len) {
+                b32 inifs = !e[end] && ifsmatch(ifs, s, end, mb);
                 if (inifs) break;
                 end += e[end] ? 1 : charlen(s, end, mb);
             }
@@ -3235,7 +3230,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                 next++;
             }
             if (next < s.len && !e[next] && !ifswhite(s[next])) {
-                next += ifschar(ifs, s, next, mb);
+                next += ifsmatch(ifs, s, next, mb);
             }
             while (next<s.len && !e[next] && ifswhite(s[next])) {
                 b32 inifs = isifs[s[next]];
@@ -3258,8 +3253,12 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             pos = s.len;
         } else {
             iz start = pos;
-            while (pos < s.len) {
-                b32 inifs = !e[pos] && ifschar(ifs, s, pos, mb);
+            if (!ifs.len) {
+                pos = s.len;
+            } else if (!mb) {
+                for (; pos<s.len && (e[pos] || !isifs[s[pos]]); pos++) {}
+            } else while (pos < s.len) {
+                b32 inifs = !e[pos] && ifsmatch(ifs, s, pos, mb);
                 if (inifs) break;
                 pos += e[pos] ? 1 : charlen(s, pos, mb);
             }
@@ -3271,7 +3270,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                 pos++;
             }
             if (pos < s.len && !e[pos] && !ifswhite(s[pos])) {
-                pos += ifschar(ifs, s, pos, mb);
+                pos += ifsmatch(ifs, s, pos, mb);
             }
         }
         if (!assignto(sh, scratch, args[i+v], val)) return v==nvars-1 ? 1 : 2;

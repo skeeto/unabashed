@@ -2306,17 +2306,32 @@ static iz charlen(Str s, iz i, b32 utf8)
 // Does the character at i split? IFS is taken a character at a time,
 // as bash in a multibyte locale: € in IFS splits on the whole of it,
 // and a lone byte of IFS never inside a valid character.
-static b32 isdelim(XField *f, Str ifs, iz i, b32 utf8)
+// The length of the IFS character at s[i], else 0. A byte below 0x80
+// (or any byte outside UTF-8) can only be a one-byte IFS character,
+// so only a multibyte character needs the comparison.
+static iz ifsmatch(Str ifs, Str s, iz i, b32 utf8)
 {
-    if ((f->flags[i] & (XF_SPLIT|XF_QUOTED|XF_KEEP)) != XF_SPLIT) return 0;
-    iz  n = charlen(f->data, i, utf8);
-    Str c = {f->data.data+i, n};
+    u8 b = s[i];
+    if (!utf8 || b<0x80) {
+        for (iz k = 0; k < ifs.len; k++) {
+            if (ifs[k] == b) return 1;
+        }
+        return 0;
+    }
+    iz  n = charlen(s, i, utf8);
+    Str c = {s.data+i, n};
     for (iz k = 0; k < ifs.len;) {
         iz m = charlen(ifs, k, utf8);
-        if (Str{ifs.data+k, m} == c) return 1;
+        if (Str{ifs.data+k, m} == c) return n;
         k += m;
     }
     return 0;
+}
+
+static b32 isdelim(XField *f, Str ifs, iz i, b32 utf8)
+{
+    if ((f->flags[i] & (XF_SPLIT|XF_QUOTED|XF_KEEP)) != XF_SPLIT) return 0;
+    return ifsmatch(ifs, f->data, i, utf8) > 0;
 }
 
 static b32 iswhitedelim(XField *f, Str ifs, iz i, b32 utf8)

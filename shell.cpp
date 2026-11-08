@@ -232,6 +232,7 @@ struct File {
     i32    kind;
     i32    refs;
     i32    flags;    // OF_READ OF_WRITE OF_APPEND
+    i32    tty;      // F_OS: isatty, cached by fileistty (0 unknown)
     Handle h;        // F_OS
     Buf   *cap;      // F_CAPTURE: command substitution output
     Str    mem;      // F_MEM: here-document or pipeline text
@@ -982,6 +983,15 @@ static File *newfile(Shell *sh, i32 kind, i32 flags)
     f->flags = flags;
     f->refs  = 1;
     return f;
+}
+
+// Is the file a terminal? Asked once per File, since a handle never
+// changes what it is (read asks on every call).
+static b32 fileistty(Shell *sh, File *f)
+{
+    if (!f || f->kind!=F_OS) return 0;
+    if (!f->tty) f->tty = os_isatty(sh->os, f->h) ? 2 : 1;
+    return f->tty == 2;
 }
 
 static void fileunref(Shell *sh, File *f)
