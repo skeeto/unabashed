@@ -45,6 +45,15 @@ None left: step 10 fixed the rest or accepted it (below).
 
 ## Test infrastructure
 
+- t/exec/634-coproc races, in bash as in ours: the first coprocess
+  answers and exits at once, and if the shell reaps it before line 7's
+  `read <&${COPROC[0]}` expands, COPROC is unset ("ambiguous
+  redirect"). The record check on Linux lost it 10 times in 10 (the
+  M8 build 3 in 10) when the shell image was on /mnt/c, whose page
+  faults through drvfs slow the shell's first pass through new code;
+  from ext4 it passed 20 in 20. Run Linux record checks with the image
+  on ext4 (~/ub). The script could keep the coprocess alive until read
+  (a second read) if this shows up elsewhere. (M9 step 7)
 - The vos's FIFOs are plain files: opening one does not wait for the
   other end, and reading one with no data is the end of file, so a
   test whose point is a reader waiting on a writer (t/exec/938) passes
