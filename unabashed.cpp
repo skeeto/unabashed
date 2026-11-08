@@ -279,6 +279,12 @@ static void numericchanged(Shell *sh)
 
 static void varchanged(Shell *sh, Str name)
 {
+    // Every assignment comes here: most names leave at the first byte
+    switch (name.len ? name[0] : 0) {
+    case 'B': case 'G': case 'H': case 'I': case 'L': case 'O': case 'P':
+    case '_': case 'h': break;
+    default: return;
+    }
     if (name=="HISTSIZE" || name=="HISTCONTROL" || name=="histchars" ||
             name=="HISTTIMEFORMAT" || name=="HISTFILESIZE") {
         histvarchanged(sh, name);
