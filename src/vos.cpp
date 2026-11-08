@@ -222,6 +222,13 @@ struct Vos {
     VNamedPipe npipes[64];
     i32        nnpipes;
     i32        npipeseq;  // named pipes made so far
+    // The Windows clipboard: text (CF_UNICODETEXT) when cliptext,
+    // opens left that fail as if another program held it, and how
+    // many times it was set (clipctl drives and shows these)
+    Str        clip;
+    b32        cliptext;
+    i32        clipbusy;
+    i32        clipsets;
 };
 
 static VNode *vnew(Vos *v, VNode *dir, Str name, i32 type, i32 mode)
@@ -1969,6 +1976,40 @@ static Str os_localtz(Os *os, Arena *)
 {
     Vos *v = osvos(os);
     return v->localtz.data ? v->localtz : Str("UTC0");
+}
+
+static ClipText os_clipget(Os *os, Arena *a)
+{
+    Vos     *v = osvos(os);
+    ClipText r = {};
+    if (!v->win) {
+        r.err = E_NOSYS;
+    } else if (v->clipbusy) {
+        v->clipbusy--;
+        r.err = E_ACCES;
+    } else {
+        r.text = clone(a, v->cliptext ? v->clip : Str(""));
+    }
+    return r;
+}
+
+// As Windows stores it: UTF-16, so up to a NUL and with WTF-8's
+// conversion of what is not UTF-8
+static i32 os_clipset(Os *os, Arena scratch, Str text)
+{
+    Vos *v = osvos(os);
+    if (!v->win) return E_NOSYS;
+    if (v->clipbusy) {
+        v->clipbusy--;
+        return E_ACCES;
+    }
+    Str16 w = towide(&scratch, text);
+    iz    n = 0;
+    for (; n<w.len && w.data[n]; n++) {}
+    v->clip     = fromwide(&v->a, w.data, n);
+    v->cliptext = 1;
+    v->clipsets++;
+    return 0;
 }
 
 // Signals. A shell receives every signal as a pending bit, and its core
@@ -3776,9 +3817,44 @@ static i32 vfake_cmd(Os *os, FakeCtx *ctx)
     return fkexit(&c.p, c.status);
 }
 
+// clipctl: drive the vos clipboard, as a Windows program could. "set"
+// puts standard input on it (as clip.exe), "get" prints it raw,
+// "nontext" leaves only an image on it, "busy N" makes the next N
+// opens fail, and "count" prints how many times it was set.
+static i32 vfake_clipctl(Os *os, FakeCtx *ctx)
+{
+    FkProg p   = fkprog(os, ctx);
+    Vos   *v   = osvos(os);
+    Str    cmd = ctx->argc>1 ? ctx->argv[1] : Str("");
+    if (cmd == "set") {
+        Str in = fkreadall(&p, ctx->fd[0]);
+        Arena scratch = *p.a;
+        v->clipbusy = 0;
+        os_clipset(os, scratch, in);
+    } else if (cmd == "get") {
+        if (v->cliptext) print(&p.out, v->clip);
+    } else if (cmd == "nontext") {
+        v->clip     = {};
+        v->cliptext = 0;
+        v->clipsets++;
+    } else if (cmd=="busy" && ctx->argc>2) {
+        i32 n = 0;
+        for (iz i = 0; i < ctx->argv[2].len; i++) n = n*10 + ctx->argv[2][i] - '0';
+        v->clipbusy = n;
+    } else if (cmd == "count") {
+        print(&p.out, (i64)v->clipsets);
+        print(&p.out, "\n");
+    } else {
+        print(&p.err, "usage: clipctl set|get|nontext|busy N|count\n");
+        return fkexit(&p, 2);
+    }
+    return fkexit(&p, 0);
+}
+
 static Fake vwinfakes[] = {
     {"alias",   vfake_alias,   1},
     {"argv",    vfake_argv,    1},
+    {"clipctl", vfake_clipctl, 1},
     {"busybox", vfake_busybox, 1},
     {"cmd",     vfake_cmd,     1},
 };
@@ -3866,6 +3942,8 @@ static void vwintree(Vos *v)
             vinstallpe(v, "C:/w64/bin", "argvk.exe", i, X64, "kernel32.dll", 0);
         } else if (name == "busybox") {
             vinstallpe(v, "C:/w64/bin", "busybox.exe", i, X64, "msvcrt.dll", 0);
+        } else if (name == "clipctl") {
+            vinstallpe(v, "C:/w64/bin", "clipctl.exe", i, X64, "kernel32.dll", 0);
         } else if (name == "cmd") {
             vinstallpe(v, "C:/Windows/System32", "cmd.exe", i, X64, "ucrtbase.dll", 0);
         } else if (!v->fakes[i].win && name!="recho" && name!="zecho"

@@ -1443,6 +1443,9 @@ static u64 os_entropy(Os *os)
 
 // glibc's default zone is the file /etc/localtime, which the core
 // reads whole (transitions and footer), else UTC.
+static ClipText os_clipget(Os *, Arena *) { return {{}, E_NOSYS}; }
+static i32 os_clipset(Os *, Arena, Str) { return E_NOSYS; }
+
 static Str os_localtz(Os *, Arena *)
 {
     struct stat st;

@@ -85,6 +85,11 @@ struct Opened {
     i32    err;
 };
 
+struct ClipText {
+    Str text;
+    i32 err;
+};
+
 struct OsPipe {
     Handle r;
     Handle w;
@@ -433,6 +438,14 @@ static i64     os_now(Os *);
 // 64 bits from the system's random source. Never fails: without one,
 // a mix of the clock, the pid and a counter. The vos is deterministic.
 static u64     os_entropy(Os *);
+// Windows: the clipboard's text (CF_UNICODETEXT) as UTF-8 (WTF-8), up
+// to its first NUL: empty, not an error, when it holds no text. Retries
+// briefly while another program has it open, then E_ACCES. E_NOSYS
+// elsewhere.
+static ClipText os_clipget(Os *, Arena *);
+// Windows: replace the clipboard's contents with text as CF_UNICODETEXT
+// (readers see it up to a NUL). 0, E_ACCES when busy, or E_NOSYS.
+static i32     os_clipset(Os *, Arena scratch, Str text);
 // The system's time zone, for local time while TZ is not in the
 // environment, in TZ's own syntax: a POSIX TZ string ("EST5EDT,M3.2.0,
 // M11.1.0"), or ':' and the absolute path of a zoneinfo file.

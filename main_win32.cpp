@@ -298,6 +298,11 @@ W32(uz,     GetCurrentThread());
 W32(b32,    GetNumberOfConsoleInputEvents(uz, i32 *));
 W32(i32,    GetCurrentProcessId());
 W32(uz,     LoadLibraryW(c16 const *));
+W32(uz,     GlobalAlloc(i32, iz));
+W32(uz,     GlobalFree(uz));
+W32(void *, GlobalLock(uz));
+W32(iz,     GlobalSize(uz));
+W32(b32,    GlobalUnlock(uz));
 W32(i32,    GetTempPathW(i32, c16 *));
 W32(c16 *,  GetEnvironmentStringsW());
 W32(void,   GetStartupInfoW(StartupInfo *));
@@ -632,6 +637,14 @@ struct Os {
     u8   (__stdcall *genrandom)(void *, u32);
     b32  gentried;
     u64  entropyn;  // the fallback's counter
+    // The clipboard functions, from user32 on first use, so that the
+    // import table stays kernel32 and most shells never load it
+    b32  (__stdcall *openclip)(uz);
+    b32  (__stdcall *closeclip)();
+    b32  (__stdcall *emptyclip)();
+    uz   (__stdcall *getclip)(i32);
+    uz   (__stdcall *setclip)(i32, uz);
+    b32  cliptried;
     Arena      perm;       // platform records, recycled through free lists
     uz         wake;       // auto-reset event for the main thread
     Wnode     *wakeq;      // atomic stack pushed by other threads
@@ -4116,6 +4129,81 @@ static u64 os_entropy(Os *os)
     x  = (x ^ x>>30) * 0xbf58476d1ce4e5b9u;
     x  = (x ^ x>>27) * 0x94d049bb133111ebu;
     return x ^ x>>31;
+}
+
+// Open the clipboard, loading user32 first if need be: 0, E_NOSYS
+// without it, or E_ACCES while another program keeps it open (about
+// 150 ms of retries, as the holder usually lets go at once).
+static i32 clipopen(Os *os)
+{
+    if (!os->cliptried) {
+        os->cliptried = 1;
+        uz m = LoadLibraryW(u"user32.dll");
+        if (m) {
+            os->openclip  = (b32 (__stdcall *)(uz))GetProcAddress(m, "OpenClipboard");
+            os->closeclip = (b32 (__stdcall *)())GetProcAddress(m, "CloseClipboard");
+            os->emptyclip = (b32 (__stdcall *)())GetProcAddress(m, "EmptyClipboard");
+            os->getclip   = (uz (__stdcall *)(i32))GetProcAddress(m, "GetClipboardData");
+            os->setclip   = (uz (__stdcall *)(i32, uz))GetProcAddress(m, "SetClipboardData");
+        }
+    }
+    if (!os->openclip || !os->closeclip || !os->emptyclip || !os->getclip || !os->setclip) {
+        return E_NOSYS;
+    }
+    for (i32 i = 0; i < 20; i++) {
+        if (os->openclip(0)) return 0;
+        Sleep(i<5 ? 1 : 10);
+    }
+    return E_ACCES;
+}
+
+enum { CF_UNICODETEXT = 13, GMEM_MOVEABLE = 2 };
+
+static ClipText os_clipget(Os *os, Arena *a)
+{
+    ClipText r = {};
+    r.err = clipopen(os);
+    if (r.err) return r;
+    r.text = Str("");  // present, though perhaps empty
+    uz h = os->getclip(CF_UNICODETEXT);  // synthesized from CF_TEXT
+    c16 *s = h ? (c16 *)GlobalLock(h) : 0;
+    if (s) {
+        iz max = GlobalSize(h) / 2;  // do not trust the terminator
+        iz len = 0;
+        for (; len<max && s[len]; len++) {}
+        r.text = fromwide(a, s, len);
+        GlobalUnlock(h);
+    }
+    os->closeclip();
+    return r;
+}
+
+static i32 os_clipset(Os *os, Arena scratch, Str text)
+{
+    Str16 w = towide(&scratch, text);
+    iz    n = 0;
+    for (; n<w.len && w.data[n]; n++) {}  // readers stop at a NUL anyway
+    uz h = GlobalAlloc(GMEM_MOVEABLE, (n+1)*2);
+    c16 *d = h ? (c16 *)GlobalLock(h) : 0;
+    if (!d) {
+        if (h) GlobalFree(h);
+        return E_NOMEM;
+    }
+    for (iz i = 0; i < n; i++) d[i] = w.data[i];
+    d[n] = 0;
+    GlobalUnlock(h);
+    i32 err = clipopen(os);
+    if (err) {
+        GlobalFree(h);
+        return err;
+    }
+    // Owned by the system once set; else still ours to free
+    if (!os->emptyclip() || !os->setclip(CF_UNICODETEXT, h)) {
+        GlobalFree(h);
+        err = E_ACCES;
+    }
+    os->closeclip();
+    return err;
 }
 
 static byte *fiberstack(Os *, iz) { return 0; }    // unused on Win32
