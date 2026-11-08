@@ -1,0 +1,9 @@
+# A command's own escapes: a window title (OSC 2, then OSC 0 ended by
+# ST) and SGR attributes. On a console without VT the shell's output
+# goes through vtcon as the editor's does, so the screens are the same.
+rc PS1='$ '
+keys printf '\\e]2;title\\a\\e[1mbold\\e[m \\e[7mrev\\e[m \\e]0;t2\\e\\\\plain\\n'\r
+snap
+keys echo $'\\e[1mx\\e[0m' y\r
+snap
+keys exit\r

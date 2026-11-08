@@ -169,6 +169,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 
 #include "unicode.cpp"
 #include "wide.cpp"
+#include "vtcon.cpp"
 #include "parse.cpp"
 #include "print.cpp"
 #include "arith.cpp"
@@ -193,7 +194,6 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "trap.cpp"
 #include "jobs.cpp"
 #include "history.cpp"
-#include "vtcon.cpp"
 #include "edit.cpp"
 #include "complete.cpp"
 #include "pcomplete.cpp"
@@ -845,7 +845,8 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
         initwinvars(sh, scratch);
     }
     g = getvar(sh, a, "TERM");
-    if (!g.set) setvar(sh, scratch, "TERM", "dumb");
+    // busybox-w32 leaves TERM unset, which a console needs no more of
+    if (!g.set && sh->pathmode!=PM_NATIVE) setvar(sh, scratch, "TERM", "dumb");
     g = getvar(sh, a, "SHELL");
     if (!g.set) setvar(sh, scratch, "SHELL", shell);
     g = getvar(sh, a, "PATH");

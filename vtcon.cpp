@@ -2,9 +2,11 @@
 // processing (XP, 7, or VT refused), through the console primitives of
 // os_con (notes/m6.md, step 8). Text and the controls the console
 // processes itself (CR, LF, BS, BEL) pass through; the escapes become
-// cursor moves, fills and attributes. The editor flushes whole
-// buffers, so no UTF-8 sequence or escape is split between writes,
-// though the parser state carries over anyway.
+// cursor moves, fills and attributes, OSC 0 and 2 the window's title.
+// The editor flushes whole buffers, so no UTF-8 sequence or escape is
+// split between its writes; the shell's own output to such a console
+// (fdwrite) goes through here too, as busybox-w32 emulates it, and
+// may split them, so the parser state carries over.
 // This is free and unencumbered software released into the public domain.
 
 enum : i32 { VC_GROUND, VC_ESC, VC_CSI, VC_OSC, VC_OSCESC };
@@ -20,7 +22,20 @@ struct VtCon {
     i32 bg;
     b32 bold;
     b32 reverse;
+    i32 osclen;    // OSC text so far, past osc's capacity if too long
+    u8  osc[256];
 };
+
+// The end of an OSC: 0 and 2 set the title, the rest are ignored.
+static void vcosc(Os *os, Handle h, VtCon *v)
+{
+    if (v->osclen<2 || v->osclen>countof(v->osc)) return;
+    if ((v->osc[0]!='0' && v->osc[0]!='2') || v->osc[1]!=';') return;
+    ConOp c = {};
+    c.op   = CON_TITLE;
+    c.text = {v->osc+2, v->osclen-2};
+    os_con(os, h, &c);
+}
 
 static i32 vcclamp(i32 v, i32 lo, i32 hi)
 {
@@ -182,7 +197,8 @@ static void vtconwrite(Os *os, Handle h, VtCon *v, Str s)
                 v->prefix  = 0;
                 for (i32 j = 0; j < countof(v->params); j++) v->params[j] = 0;
             } else if (b == ']') {
-                v->state = VC_OSC;
+                v->state  = VC_OSC;
+                v->osclen = 0;
             } else {
                 v->state = VC_GROUND;  // ESC 7 and the like: ignored
             }
@@ -203,10 +219,18 @@ static void vtconwrite(Os *os, Handle h, VtCon *v, Str s)
             }
             break;
         case VC_OSC:
-            if (b == 0x07) v->state = VC_GROUND;
-            if (b == 0x1b) v->state = VC_OSCESC;
+            if (b == 0x07) {
+                vcosc(os, h, v);
+                v->state = VC_GROUND;
+            } else if (b == 0x1b) {
+                v->state = VC_OSCESC;
+            } else {
+                if (v->osclen < countof(v->osc)) v->osc[v->osclen] = b;
+                v->osclen += v->osclen <= countof(v->osc);
+            }
             break;
         case VC_OSCESC:
+            if (b == '\\') vcosc(os, h, v);
             v->state = b=='\\' ? VC_GROUND : VC_OSC;
             break;
         }

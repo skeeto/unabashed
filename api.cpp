@@ -276,7 +276,7 @@ struct Tty {
 
 // A Windows console without VT processing (Tty.legacy), as vtcon.cpp
 // drives it (os_con). Cells count from the top left of the window.
-enum : i32 { CON_INFO, CON_MOVE, CON_WRITE, CON_FILL, CON_ATTR };
+enum : i32 { CON_INFO, CON_MOVE, CON_WRITE, CON_FILL, CON_ATTR, CON_TITLE };
 
 struct ConOp {
     i32 op;     // CON_*
@@ -284,7 +284,8 @@ struct ConOp {
     i32 y;
     iz  n;      // CON_FILL: cells, row after row
     Str text;   // CON_WRITE: UTF-8 at the cursor, CR LF BS BEL acted
-                // on, wrapping and scrolling as the console does
+                // on, wrapping and scrolling as the console does;
+                // CON_TITLE: the window's title, UTF-8
     i32 attr;   // CON_ATTR: for writes; CON_FILL: for the cells;
                 // CON_INFO: the current one
     i32 cols;   // CON_INFO: the window's size

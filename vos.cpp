@@ -893,6 +893,11 @@ static void vttyout(Vos *v, u8 *buf, iz len)
     if (!v->tty.edwriting) v->tty.edforeign = 1;
     for (iz i = 0; i < len; i++) {
         if (buf[i] == '\n') vtbyte(t, '\r');
+        if (buf[i]==0x1b && v->tty.legacy) {
+            // A console without VT shows the escape as a character
+            for (u8 *p = (u8 *)"\xe2\x86\x90"; *p; p++) vtbyte(t, *p);
+            continue;
+        }
         vtbyte(t, buf[i]);
     }
 }
@@ -1299,6 +1304,8 @@ static b32 os_con(Os *os, Handle out, ConOp *o)
         i32 fg  = rev ? o->attr>>4 : o->attr;
         t->attr = (u8)((rev ? VA_REVERSE : 0) | (fg&8 ? VA_BOLD : 0));
     } break;
+    case CON_TITLE:
+        break;  // no title bar
     }
     return 1;
 }

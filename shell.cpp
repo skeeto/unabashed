@@ -232,7 +232,8 @@ struct File {
     i32    kind;
     i32    refs;
     i32    flags;    // OF_READ OF_WRITE OF_APPEND
-    i32    tty;      // F_OS: isatty, cached by fileistty (0 unknown)
+    i32    tty;      // F_OS: isatty, cached by fileistty (0 unknown,
+                     // 1 no, 2 yes, 3 a console without VT, Windows)
     i32    seek;     // F_OS: seekable, cached by fileseekable (0 unknown)
     Handle h;        // F_OS
     Buf   *cap;      // F_CAPTURE: command substitution output
@@ -551,6 +552,7 @@ struct Shell {
     b32      utf8;         // UTF-8 locale, else bytes
     u8       radix;        // LC_NUMERIC's decimal point, 0 for '.'
     b32      win32;        // on Windows: platform facts, not paths
+    VtCon    vtcon;        // writes to a console without VT (fdwrite)
     PathMode pathmode;     // how paths read and print (paths.cpp)
     PathCtx *paths;        // the mount table and the rest, from startup
     Str      exe;          // the shell's own image, native (OsInfo.exe)
@@ -815,6 +817,8 @@ static void sigpipe(Shell *sh)
     escape(sh, ESC_EXIT);
 }
 
+static b32 fileistty(Shell *, File *);
+
 // Write to one of the shell's descriptors, through its current file.
 static b32 fdwrite(Shell *sh, i32 fd, Str s)
 {
@@ -826,6 +830,12 @@ static b32 fdwrite(Shell *sh, i32 fd, Str s)
     switch (f->kind) {
     case F_OS:
         if (!s.len) return 1;
+        if (fileistty(sh, f) && f->tty==3) {
+            // A Windows console without VT: escapes interpreted, as
+            // busybox-w32 does for its own output
+            vtconwrite(sh->os, f->h, &sh->vtcon, s);
+            return 1;
+        }
         err = taskwrite(sh->sched, f->h, s.data, s.len);
         break;
     case F_CAPTURE:
@@ -1002,8 +1012,13 @@ static File *newfile(Shell *sh, i32 kind, i32 flags)
 static b32 fileistty(Shell *sh, File *f)
 {
     if (!f || f->kind!=F_OS) return 0;
-    if (!f->tty) f->tty = os_isatty(sh->os, f->h) ? 2 : 1;
-    return f->tty == 2;
+    if (!f->tty) {
+        f->tty = os_isatty(sh->os, f->h) ? 2 : 1;
+        if (f->tty==2 && os_tty(sh->os, f->h, f->h, TTY_QUERY).legacy) {
+            f->tty = 3;
+        }
+    }
+    return f->tty >= 2;
 }
 
 // Can the file seek? Asked once per File, as fileistty.

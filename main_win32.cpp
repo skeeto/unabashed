@@ -341,6 +341,7 @@ W32(b32,    TerminateProcess(uz, u32));
 W32(b32,    TerminateJobObject(uz, u32));
 W32(b32,    SetConsoleCtrlHandler(void *, b32));
 W32(b32,    SetConsoleMode(uz, i32));
+W32(b32,    SetConsoleTitleW(c16 *));
 W32(byte *, VirtualAlloc(byte *, iz, i32, i32));
 W32(byte *, VirtualAllocEx(uz, byte *, iz, i32, i32));
 W32(b32,    VirtualFree(byte *, iz, i32));
@@ -3188,6 +3189,15 @@ static b32 os_con(Os *os, Handle out, ConOp *o)
     }
     case CON_ATTR:
         return SetConsoleTextAttribute(out, o->attr);
+    case CON_TITLE: {
+        c16 title[512];
+        i32 n = 0;
+        for (iz i = 0; i<o->text.len && n<countof(title)-3;) {
+            n += (i32)utf16encode(title+n, utf8decode(o->text, &i));
+        }
+        title[n] = 0;
+        return SetConsoleTitleW(title);
+    }
     }
     return 0;
 }
