@@ -41,6 +41,7 @@ struct PathCtx {
     Str          temp;          // canonical %TEMP%, for usertemp mounts
     u32          drives;        // existing drives, bit 0 for A:, 0 if unknown
     i64          pid;           // our pid as /proc names it, for /dev/fd/N
+    i64          bashpid;       // a subshell's BASHPID, also ours, or 0
     Str          windir;        // the Windows directory, for children
 };
 
@@ -97,9 +98,11 @@ static Str slashify(Arena *a, Str s, u8 to)  // both separators become to
 }
 
 // The decimal value of all of s, or -1 if empty, not digits, or huge.
-static i64 pathnum(Str s)
+// A decimal number in a path, or -1: up to 9 digits for descriptors,
+// 18 for a /proc process id (a subshell's BASHPID is often 10).
+static i64 pathnum(Str s, iz maxlen = 9)
 {
-    if (!s.len || s.len>9) return -1;
+    if (!s.len || s.len>maxlen) return -1;
     i64 r = 0;
     for (iz i = 0; i < s.len; i++) {
         if (!digit(s[i])) return -1;
@@ -1062,14 +1065,14 @@ static PathRes virtualpath(PathCtx *ctx, Arena *a, Str p)
         return r;
     } else if (c.head == "self") {
         r.num = -1;
-    } else if (pathnum(c.head) > 0) {
-        r.num = pathnum(c.head);
+    } else if (pathnum(c.head, 18) > 0) {
+        r.num = pathnum(c.head, 18);
     } else {
         r.sub = rest;  // /proc/cpuinfo and the like
         return r;
     }
     r.sub = c.tail;
-    if (startswith(c.tail, "fd/") && (r.num<0 || r.num==ctx->pid)) {
+    if (startswith(c.tail, "fd/") && (r.num<0 || r.num==ctx->pid || r.num==ctx->bashpid)) {
         i64 fd = pathnum(cuthead(c.tail, 3));
         if (fd >= 0) {
             r.kind = PK_FD;
