@@ -2535,12 +2535,14 @@ static void checkerrexit(Shell *sh)
 }
 
 // Recursion deep enough to exhaust the stack: bash would crash with
-// SIGSEGV, so this shell (or subshell) dies with that status.
+// SIGSEGV, so this shell (or subshell) dies by it, no EXIT trap run,
+// and its parent reports "Segmentation fault".
 static void checkstack(Shell *sh)
 {
     byte here = 0;
     if (sh->stackmax && sh->stacktop-&here > sh->stackmax) {
         sh->status  = 139;
+        sh->killsig = 11;
         sh->exiting = 1;
         escape(sh, ESC_EXIT);
     }
