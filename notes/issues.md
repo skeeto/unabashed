@@ -97,7 +97,6 @@ None: the XP flakes were fixed or not seen again at step 10 (m7.md).
   `command_not_found_handle` defined start directly again (now a
   vproc, so the handler cannot fill the stage's pipe before its
   reader starts). (m3a.md, fuzz triage, review)
-- Read-ahead for foreign pipes on Windows (Linux peeks with tee(2)).
 - No compile cache for `=~` (bash has none either).
 - **Arenas never decommit**: a scratch arena keeps its peak commit for
   the shell's life, so one `[[ =~ ]]` whose back-reference memo grows

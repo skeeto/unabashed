@@ -233,6 +233,7 @@ struct File {
     i32    refs;
     i32    flags;    // OF_READ OF_WRITE OF_APPEND
     i32    tty;      // F_OS: isatty, cached by fileistty (0 unknown)
+    i32    seek;     // F_OS: seekable, cached by fileseekable (0 unknown)
     Handle h;        // F_OS
     Buf   *cap;      // F_CAPTURE: command substitution output
     Str    mem;      // F_MEM: here-document or pipeline text
@@ -992,6 +993,14 @@ static b32 fileistty(Shell *sh, File *f)
     if (!f || f->kind!=F_OS) return 0;
     if (!f->tty) f->tty = os_isatty(sh->os, f->h) ? 2 : 1;
     return f->tty == 2;
+}
+
+// Can the file seek? Asked once per File, as fileistty.
+static b32 fileseekable(Shell *sh, File *f)
+{
+    if (!f || f->kind!=F_OS) return 0;
+    if (!f->seek) f->seek = os_seek(sh->os, f->h, 0, 1)>=0 ? 2 : 1;
+    return f->seek == 2;
 }
 
 static void fileunref(Shell *sh, File *f)

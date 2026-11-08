@@ -36,6 +36,13 @@ struct Os {
     iz     stack;       // OsInfo.stack, likewise
     i32    ttyraw;      // os_tty: the mode set (TTY_*), 0 if never changed
     termios ttysave;    // and its mode before
+    // Output to a regular file is coalesced (see os_write)
+    i32    wpend;       // the file's descriptor, while wlen > 0
+    i32    wlen;
+    i64    wtime;       // CLOCK_MONOTONIC ns when the buffer began
+    i32    werrfd;      // a flush to this descriptor failed, else -1
+    u8     wkind[256];  // per descriptor: 0 unknown, 1 regular, 2 not
+    u8     wbuf[1<<14];
 };
 
 static u64 volatile sigbits;  // caught signals not yet taken
@@ -48,7 +55,6 @@ enum : u32 { NLEVELQ = 32 };
 static LevelSig levelq[NLEVELQ];
 static u32 volatile levelhead, leveltail;
 
-static Os *sigos;  // for the signal handler
 
 static Fibers *osfibers(Os *os)
 {
@@ -68,8 +74,30 @@ static b32 writeall(i32 fd, u8 *buf, iz len)
     return 1;
 }
 
+static i64 monons()
+{
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (i64)ts.tv_sec*1000000000 + ts.tv_nsec;
+}
+
+// Write out the coalesced output. A failure shows at the descriptor's
+// next write. Every platform call but os_write to that same file does
+// this first, so whatever can observe the file (a program, a stat,
+// another descriptor, a reader of a pipe waiting for a later write)
+// sees it, and so do exits and forks.
+static void flushw(Os *os)
+{
+    if (!os->wlen) return;
+    if (!writeall(os->wpend, os->wbuf, os->wlen)) os->werrfd = os->wpend;
+    os->wlen = 0;
+}
+
+static Os *sigos;  // for the signal handler, os_oom and exits
+
 [[noreturn]] static void os_oom()
 {
+    if (sigos) flushw(sigos);
     Str msg = "bash: out of memory\n";
     writeall(2, msg.data, msg.len);
     _exit(2);
@@ -86,13 +114,57 @@ static b32 os_commit(Os *, byte *p, iz len)
     return !mprotect(p, (uz)len, PROT_READ|PROT_WRITE);
 }
 
-static b32 os_write(Os *, Handle h, u8 *buf, iz len)
+// Output to a regular file gathers in wbuf: a write costs about as much
+// as a builtin's whole run. It goes out before any other call (flushw),
+// when full, and at the first write 100 ms after it began. Whether a
+// descriptor is a regular file is remembered until os_close frees it.
+static b32 wfailed(Os *os, i32 fd)
 {
-    return writeall((i32)h, buf, len);
+    if (os->werrfd != fd) return 0;
+    os->werrfd = -1;
+    return 1;
 }
 
-static iz os_read(Os *, Handle h, u8 *buf, iz len)
+static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
 {
+    i32 fd   = (i32)h;
+    i32 kind = 0;
+    if (fd>=0 && fd<countof(os->wkind)) {
+        kind = os->wkind[fd];
+        if (!kind) {
+            struct stat st;
+            kind = !fstat(fd, &st) && S_ISREG(st.st_mode) ? 1 : 2;
+            os->wkind[fd] = (u8)kind;
+        }
+    }
+    if (kind != 1) {
+        flushw(os);
+        return !wfailed(os, fd) && writeall(fd, buf, len);
+    }
+    if (os->wlen && os->wpend!=fd) flushw(os);
+    if (wfailed(os, fd)) return 0;
+    iz room = countof(os->wbuf) - os->wlen;
+    if (len > room) {
+        flushw(os);
+        if (wfailed(os, fd)) return 0;
+        if (len > countof(os->wbuf)/2) return writeall(fd, buf, len);
+    }
+    if (!os->wlen) {
+        os->wpend = fd;
+        os->wtime = monons();
+    }
+    copybytes(os->wbuf+os->wlen, buf, len);
+    os->wlen += (i32)len;
+    if (monons()-os->wtime >= 100000000) {
+        flushw(os);
+        if (wfailed(os, fd)) return 0;
+    }
+    return 1;
+}
+
+static iz os_read(Os *os, Handle h, u8 *buf, iz len)
+{
+    flushw(os);
     iz max = (iz)1<<30;  // macOS rejects reads over INT_MAX
     for (;;) {
         iz n = read((i32)h, buf, (uz)(len<max ? len : max));
@@ -130,8 +202,9 @@ static i32 highfd(i32 fd)
     return r;
 }
 
-static Opened os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode)
+static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
+    flushw(os);
     Opened r = {};
     i32 oflags = O_CLOEXEC;
     if ((flags&OF_READ) && (flags&OF_WRITE)) oflags |= O_RDWR;
@@ -154,13 +227,15 @@ static Opened os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode)
     return r;
 }
 
-static i32 os_unlink(Os *, Arena scratch, Str path)
+static i32 os_unlink(Os *os, Arena scratch, Str path)
 {
+    flushw(os);
     return unlink(cpath(&scratch, path)) ? errno : 0;
 }
 
-static i32 os_rename(Os *, Arena scratch, Str from, Str to)
+static i32 os_rename(Os *os, Arena scratch, Str from, Str to)
 {
+    flushw(os);
     char *f = cpath(&scratch, from);
     char *t = cpath(&scratch, to);
     return rename(f, t) ? errno : 0;
@@ -168,6 +243,7 @@ static i32 os_rename(Os *, Arena scratch, Str from, Str to)
 
 static Opened os_tempfile(Os *os, Arena scratch)
 {
+    flushw(os);
     // As bash: created in TMPDIR (or /tmp), then unlinked, readable
     // only by the user
     Str dir = {};
@@ -204,27 +280,34 @@ static Opened os_tempfile(Os *os, Arena scratch)
     return r;
 }
 
-static void os_close(Os *, Handle h)
+static void os_close(Os *os, Handle h)
 {
-    if (h != BADHANDLE) close((i32)h);
+    flushw(os);
+    if (h == BADHANDLE) return;
+    if ((i32)h < countof(os->wkind)) os->wkind[h] = 0;  // the number may come back
+    if (os->werrfd == (i32)h) os->werrfd = -1;
+    close((i32)h);
 }
 
-static Handle os_dup(Os *, Handle h)
+static Handle os_dup(Os *os, Handle h)
 {
+    flushw(os);
     i32 fd = fcntl((i32)h, F_DUPFD_CLOEXEC, 10);
     return fd<0 ? BADHANDLE : (Handle)fd;
 }
 
-static NamedPipe os_namedpipe(Os *, Arena *, Str, i32)
+static NamedPipe os_namedpipe(Os *os, Arena *, Str, i32)
 {
+    flushw(os);
     NamedPipe r = {};
     r.h   = BADHANDLE;
     r.err = E_NOSYS;
     return r;
 }
 
-static iz os_pipecap(Os *)
+static iz os_pipecap(Os *os)
 {
+    flushw(os);
 #ifdef __linux__
     return 1<<16;
 #else
@@ -232,8 +315,9 @@ static iz os_pipecap(Os *)
 #endif
 }
 
-static OsPipe os_pipe(Os *)
+static OsPipe os_pipe(Os *os)
 {
+    flushw(os);
     OsPipe r = {};
     i32 fds[2];
     if (pipe(fds)) {
@@ -251,6 +335,7 @@ static OsPipe os_pipe(Os *)
 // a private pipe, which is then drained. Zero when it holds nothing.
 static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
 {
+    flushw(os);
     struct stat st;
     if (fstat((i32)h, &st) || !S_ISFIFO(st.st_mode)) {
         return -1;
@@ -280,14 +365,16 @@ static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
     return n;
 }
 #else
-static iz os_peek(Os *, Handle, u8 *, iz)
+static iz os_peek(Os *os, Handle, u8 *, iz)
 {
+    flushw(os);
     return -1;  // pipes cannot be peeked
 }
 #endif
 
-static i64 os_seek(Os *, Handle h, i64 off, i32 whence)
+static i64 os_seek(Os *os, Handle h, i64 off, i32 whence)
 {
+    flushw(os);
     return lseek((i32)h, off, whence==0 ? SEEK_SET : whence==1 ? SEEK_CUR : SEEK_END);
 }
 
@@ -323,8 +410,9 @@ static Stat tostat(struct stat *s)
     return r;
 }
 
-static Str os_readlink(Os *, Arena *a, Str path)
+static Str os_readlink(Os *os, Arena *a, Str path)
 {
+    flushw(os);
     char *p = cpath(a, path);
     for (iz cap = 256; cap < 1<<20; cap *= 2) {
         char *buf = (char *)allocbytes(a, cap);
@@ -335,8 +423,9 @@ static Str os_readlink(Os *, Arena *a, Str path)
     return {};
 }
 
-static Stat os_stat(Os *, Arena scratch, Str path, b32 follow)
+static Stat os_stat(Os *os, Arena scratch, Str path, b32 follow)
 {
+    flushw(os);
     struct stat s;
     char *p = cpath(&scratch, path);
     if (follow ? stat(p, &s) : lstat(p, &s)) {
@@ -347,8 +436,9 @@ static Stat os_stat(Os *, Arena scratch, Str path, b32 follow)
     return tostat(&s);
 }
 
-static Stat os_fstat(Os *, Handle h)
+static Stat os_fstat(Os *os, Handle h)
 {
+    flushw(os);
     struct stat s;
     if (fstat((i32)h, &s)) {
         Stat r = {};
@@ -360,13 +450,15 @@ static Stat os_fstat(Os *, Handle h)
 
 static void onsignal(int, siginfo_t *, void *);
 
-static b32 os_con(Os *, Handle, ConOp *)
+static b32 os_con(Os *os, Handle, ConOp *)
 {
+    flushw(os);
     return 0;  // no legacy consoles here
 }
 
 static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
 {
+    flushw(os);
     Tty     r = {};
     termios t;
     if (!isatty((i32)in) || !isatty((i32)out) || tcgetattr((i32)in, &t)) {
@@ -436,8 +528,9 @@ static b32 os_isatty(Os *, Handle h)
     return isatty((i32)h);
 }
 
-static Dirent *os_list(Os *, Arena *a, Str dir, i32 *err)
+static Dirent *os_list(Os *os, Arena *a, Str dir, i32 *err)
 {
+    flushw(os);
     Arena tmp = *a;
     DIR *d = opendir(cpath(&tmp, dir));
     *err = d ? 0 : errno;
@@ -495,6 +588,7 @@ static void joingroup(pid_t pid, i64 pgid, b32 fg, i32 tty)
 
 static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 {
+    flushw(os);
     if (s->image.base) return forkimage(os, scratch, s);
     Spawned r = {};
     r.proc = BADHANDLE;
@@ -581,14 +675,16 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 // child (forkimage) already has at the same address.
 static ImageRef os_imagenew(Os *os, iz cap)
 {
+    flushw(os);
     ImageRef r = {};
     r.base = os_reserve(os, cap);
     r.cap  = r.base ? cap : 0;
     return r;
 }
 
-static void os_imagefree(Os *, ImageRef im)
+static void os_imagefree(Os *os, ImageRef im)
 {
+    flushw(os);
     if (im.base) munmap(im.base, (uz)im.cap);
 }
 
@@ -699,6 +795,7 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
 // a successful exec, written to on failure (the copy then vanishes).
 static i32 os_forkexec(Os *os, Arena scratch, Spawn *s)
 {
+    flushw(os);
     i32 sync[2];
     if (pipe(sync)) return errno;
     for (i32 i = 0; i < 2; i++) sync[i] = highfd(sync[i]);
@@ -745,8 +842,9 @@ static i32 os_forkexec(Os *os, Arena scratch, Spawn *s)
 // execve fails (a script without #!, which the shell then runs itself):
 // the targets were saved first, the other descriptors are only marked
 // close-on-exec, the directory and signal actions are put back.
-static i32 os_exec(Os *, Arena scratch, Spawn *s)
+static i32 os_exec(Os *os, Arena scratch, Spawn *s)
 {
+    flushw(os);
     char *path = cpath(&scratch, s->path);
     char *cwd  = cpath(&scratch, s->cwd);
     char **argv = alloc<char *>(&scratch, s->argc+1);
@@ -840,8 +938,9 @@ static b32 isproc(Io *io)
     return io->op==IO_PROC || io->op==IO_PROCSTOP;
 }
 
-static i32 os_waitproc(Os *, Handle proc)
+static i32 os_waitproc(Os *os, Handle proc)
 {
+    flushw(os);
     i32 status;
     while (waitpid((pid_t)proc, &status, 0) < 0) {
         if (errno != EINTR) return 127;
@@ -949,8 +1048,9 @@ static Rlimit os_getrlimit(Os *, i32 res)
     return r;
 }
 
-static i32 os_setrlimit(Os *, i32 res, Rlimit r)
+static i32 os_setrlimit(Os *os, i32 res, Rlimit r)
 {
+    flushw(os);
     if (res == RL_PIPE) return E_INVAL;
     i32 n = rlres(res);
     if (n < 0) return E_NOSYS;
@@ -958,19 +1058,22 @@ static i32 os_setrlimit(Os *, i32 res, Rlimit r)
     return setrlimit(n, &l) ? errno : 0;
 }
 
-static i32 os_kill(Os *, i64 pid, i32 sig)
+static i32 os_kill(Os *os, i64 pid, i32 sig)
 {
+    flushw(os);
     if (!pid || pid<-(i64)0x7fffffff || pid>(i64)0x7fffffff) return E_SRCH;
     return kill((pid_t)pid, sig) ? errno : 0;
 }
 
-static i32 os_setpgid(Os *, i64 pid, i64 pgid)
+static i32 os_setpgid(Os *os, i64 pid, i64 pgid)
 {
+    flushw(os);
     return setpgid((pid_t)pid, (pid_t)pgid) ? errno : 0;
 }
 
-static i64 os_tcpgrp(Os *, Handle tty, i64 pgid)
+static i64 os_tcpgrp(Os *os, Handle tty, i64 pgid)
 {
+    flushw(os);
     if (!pgid) {
         pid_t r = tcgetpgrp((i32)tty);
         return r<0 ? -errno : r;
@@ -1027,8 +1130,9 @@ static b32 ourprocess(i64 pid)
     return alen>0 && alen==blen && !__builtin_memcmp(a, b, (uz)alen);
 }
 
-static i32 os_siglevel(Os *, i64 pid, i64 level, i32 sig)
+static i32 os_siglevel(Os *os, i64 pid, i64 level, i32 sig)
 {
+    flushw(os);
     i64 serial = (level>>22) - 1;
     if (pid<=0 || pid>(i64)0x7fffffff || serial<0 || serial>=(i64)1<<23 ||
         sig<0 || sig>255 || (level & (((i64)1<<22) - 1))!=pid) {
@@ -1040,8 +1144,9 @@ static i32 os_siglevel(Os *, i64 pid, i64 level, i32 sig)
     return sigqueue((pid_t)pid, siglevelnum(), v) ? errno : 0;
 }
 #else
-static i32 os_siglevel(Os *, i64, i64, i32)
+static i32 os_siglevel(Os *os, i64, i64, i32)
 {
+    flushw(os);
     return E_NOSYS;
 }
 #endif
@@ -1077,6 +1182,7 @@ static void os_racy(Os *)
 
 static void os_sigmode(Os *os, i32 sig, i32 mode)
 {
+    flushw(os);
     u64 bit = (u64)1 << (sig-1);
     if (sig<1 || sig>=NSIG || sig==SIGKILL || sig==SIGSTOP) return;
     if ((os->entryign & bit) && mode!=SIGM_CLAIM) return;
@@ -1191,6 +1297,7 @@ static i32 pollnow(Io *io, i32 timeout)
 
 static void os_submit(Os *os, Io *io)
 {
+    flushw(os);
     io->done = 0;
     io->next = 0;
     if (tryio(io, isproc(io) ? 1 : pollnow(io, 0))) {
@@ -1204,6 +1311,7 @@ static void os_submit(Os *os, Io *io)
 
 static Io *os_wait(Os *os, i64 deadline)
 {
+    if (deadline != WAIT_POLL) flushw(os);  // it may block
     enum { MAXPOLL = 256 };
     struct pollfd fds[MAXPOLL];
     for (;;) {
@@ -1265,6 +1373,7 @@ static Io *os_wait(Os *os, i64 deadline)
 
 static b32 os_cancel(Os *os, Io *io)
 {
+    flushw(os);
     for (Io **p = &os->pending; *p; p = &(*p)->next) {
         if (*p == io) {
             *p = io->next;
@@ -1362,6 +1471,7 @@ static Slice<InheritFd> inherited(Arena *a)
 int main(int argc, char **argv)
 {
     static Os os;
+    os.werrfd = -1;
     OsInfo info = {};
     info.reserve = (iz)1 << (sizeof(void *)==8 ? 34 : 28);
     Arena a = newarena(&os, (iz)1<<26);
@@ -1415,6 +1525,7 @@ int main(int argc, char **argv)
 
 static void exitwith(i32 status)
 {
+    if (sigos) flushw(sigos);
     if (status & WSIGNALED) {
         // Killed by a signal: die by it, so that the parent sees that
         i32 sig = (status & 255) - 128;

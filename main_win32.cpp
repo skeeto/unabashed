@@ -302,6 +302,7 @@ W32(b32,    GetFileAttributesExW(c16 *, i32, FileAttributes *));
 W32(i32,    GetFileAttributesW(c16 *));
 W32(b32,    GetFileInformationByHandle(uz, FileInfo *));
 W32(i32,    GetFileType(uz));
+W32(u32,    GetTickCount());
 W32(i32,    GetFullPathNameW(c16 *, i32, c16 *, c16 **));
 W32(i32,    GetLastError());
 W32(i32,    GetModuleFileNameW(uz, c16 *, i32));
@@ -511,6 +512,8 @@ struct Wobj {
     i32        lent;     // children holding it directly
     Interpose *ip;
     b32        pipeout;  // a named pipe's server: writes to its client
+    b32        mine;     // a pipe's read end that this shell made
+    i32        streak;   // reads since a child last took it (fillahead)
     c16        pname[64];  // a named pipe's server: its name, else empty
 };
 
@@ -649,6 +652,12 @@ struct Os {
     u32        jobflags;   // limits of each program's job (see newjob)
     c16        self[512];  // this program's image path (see sameimage)
     i32        selflen;
+    // Output to a regular file is coalesced (see os_write)
+    uz         wpend;      // the file's handle, while wlen > 0
+    i32        wlen;
+    u32        wtick;      // GetTickCount when the buffer began
+    uz         werrh;      // a flush to this handle failed
+    u8         wbuf[1<<14];
 };
 
 enum : i32 { MAXHELPERS = 64 };
@@ -676,8 +685,23 @@ static b32 writeall(uz h, u8 *buf, iz len)
     return 1;
 }
 
+static Os *ctrlos;  // the one Os, for the console handler and os_oom
+
+// Write out the coalesced output. A failure shows at the handle's next
+// write. Every platform call but os_write to that same file does this
+// first, so whatever can observe the file (a program, a stat, another
+// handle, a reader of a pipe waiting for a later write) sees it, and so
+// do exits.
+static void flushw(Os *os)
+{
+    if (!os->wlen) return;
+    if (!writeall(os->wpend, os->wbuf, os->wlen)) os->werrh = os->wpend;
+    os->wlen = 0;
+}
+
 [[noreturn]] static void os_oom()
 {
+    if (ctrlos) flushw(ctrlos);
     Str msg = "bash: out of memory\n";
     writeall(GetStdHandle(STD_ERROR_HANDLE), msg.data, msg.len);
     ExitProcess(2);
@@ -934,6 +958,29 @@ static void reserveahead(Wobj *w, iz extra)
     if (w->ahead) VirtualFree((byte *)w->ahead, 0, MEM_RELEASE);
     w->ahead = buf;
     w->acap  = cap;
+}
+
+// Read a block ahead from a pipe this shell made, once the shell has
+// read it some while with no child taking it. Bytes read ahead are
+// still the shell's to hand on: a child that takes the pipe gets an
+// interposed one, holding them first (lend), which is why a loop that
+// starts a program on the pipe each time keeps reading it exactly.
+// An inherited pipe may have other readers, so is never read ahead.
+enum : i32 { AHEADSTREAK = 16, AHEADBLOCK = 1<<14 };
+
+static void fillahead(Wobj *w, uz h)
+{
+    if (!w->mine || w->streak<AHEADSTREAK || w->alen>w->aoff || w->eof ||
+            w->helper || w->lent || w->ip) {
+        return;
+    }
+    i32 avail = 0;
+    if (!PeekNamedPipe(h, 0, 0, 0, &avail, 0) || !avail) return;
+    reserveahead(w, AHEADBLOCK);
+    i32 n = 0;
+    if (ReadFile(h, w->ahead+w->alen, chunk(avail<AHEADBLOCK ? avail : AHEADBLOCK), &n, 0)) {
+        w->alen += n;
+    }
 }
 
 static void appendahead(Wobj *w, u8 *buf, iz len)
@@ -1306,6 +1353,10 @@ static b32 startio(Os *os, Wobj *w, Io *io)
         return 1;
     }
     if (io->op == IO_READ) {
+        if (w->kind == K_PIPE) {
+            w->streak += w->streak < AHEADSTREAK;
+            fillahead(w, h);
+        }
         if (w->alen>w->aoff || w->eof) {
             readahead(w, h, io);
             return 1;
@@ -1605,6 +1656,7 @@ static uz lend(Os *os, uz h, Wobj **out, b32 *viaip)
     if (!w || (w->kind!=K_PIPE && w->kind!=K_CONIN)) return h;
     drainwake(os);
     *out = w;
+    w->streak = 0;  // read exactly again for a while (fillahead)
     if (!w->ip && w->helper && w->helper->op==H_READ && !w->active && os->cancelsync) {
         // An abandoned read: end it if possible, so that the child can
         // have the object itself
@@ -1704,7 +1756,6 @@ static void releaselends(Os *os, uz proc)
 // SIGINT and Ctrl-Break SIGQUIT for every level of the shell (the
 // whole console group gets them), closing the console SIGHUP. A main
 // thread blocked in a pipe read is woken with CancelSynchronousIo.
-static Os *ctrlos;
 
 static void lockrecent(Os *os)
 {
@@ -2410,7 +2461,43 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
 {
     Wobj *w    = lookup(os, h);
     i32   mode = 0;
-    if (w ? w->kind!=K_CONOUT : !GetConsoleMode(h, &mode)) {
+
+    // Output to a regular file gathers in wbuf: a write costs about as
+    // much as a builtin's whole run. It goes out before any other call
+    // (flushw), when full, and at the first write 100 ms after it began.
+    if (!w && h == os->werrh) {
+        os->werrh = 0;
+        return 0;
+    }
+    if (!w && (os->wlen ? h==os->wpend : GetFileType(h)==FILE_TYPE_DISK)) {
+        iz room = countof(os->wbuf) - os->wlen;
+        if (len > room) {
+            flushw(os);
+            if (os->werrh == h) {
+                os->werrh = 0;
+                return 0;
+            }
+            if (len > countof(os->wbuf)/2) return writeall(h, buf, len);
+        }
+        if (!os->wlen) {
+            os->wpend = h;
+            os->wtick = GetTickCount();
+        }
+        copybytes(os->wbuf+os->wlen, buf, len);
+        os->wlen += (i32)len;
+        if (GetTickCount()-os->wtick >= 100) {
+            flushw(os);
+            if (os->werrh == h) {
+                os->werrh = 0;
+                return 0;
+            }
+        }
+        return 1;
+    }
+    flushw(os);
+    // Only a character device can be a console: asking a file costs a
+    // GetConsoleMode, a third of a write
+    if (w ? w->kind!=K_CONOUT : GetFileType(h)!=FILE_TYPE_CHAR || !GetConsoleMode(h, &mode)) {
         return writeall(h, buf, len);
     }
 
@@ -2450,6 +2537,7 @@ static iz rawread(uz h, u8 *buf, iz len)
 // file, as with ReadFile, and Ctrl-C ends the read (-1).
 static iz os_read(Os *os, Handle h, u8 *buf, iz len)
 {
+    flushw(os);
     Wobj *w = lookup(os, h);
     i32   mode = 0;
     if (!w && GetConsoleMode(h, &mode)) w = track(os, h);
@@ -2457,10 +2545,16 @@ static iz os_read(Os *os, Handle h, u8 *buf, iz len)
         return rawread(h, buf, len);
     }
     drainwake(os);
+    if (w->kind == K_PIPE) {
+        w->streak += w->streak < AHEADSTREAK;
+        fillahead(w, h);
+    }
     for (;;) {
         iz n = takeahead(w, buf, len);
         if (n) {
-            if (w->kind==K_PIPE && !busy(w) && !w->lent) n += peekread(h, buf+n, len-n);
+            if (w->kind==K_PIPE && !busy(w) && !w->lent && w->streak<AHEADSTREAK) {
+                n += peekread(h, buf+n, len-n);
+            }
             return n;
         }
         if (w->eof) {
@@ -2496,9 +2590,11 @@ static iz os_read(Os *os, Handle h, u8 *buf, iz len)
 
 static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
 {
+    flushw(os);
     Wobj *w = lookup(os, h);
     if (!w || (w->kind!=K_PIPE && w->kind!=K_CONIN)) return -1;
     drainwake(os);
+    if (w->kind == K_PIPE) fillahead(w, h);
     iz n = w->alen - w->aoff;
     n = n<len ? n : len;
     copybytes(buf, w->ahead+w->aoff, n);
@@ -2510,14 +2606,16 @@ static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
     return n;
 }
 
-static i32 os_unlink(Os *, Arena scratch, Str path)
+static i32 os_unlink(Os *os, Arena scratch, Str path)
 {
+    flushw(os);
     Str16 w = widepath(&scratch, path);
     return DeleteFileW(w.data) ? 0 : errnum(GetLastError());
 }
 
-static i32 os_rename(Os *, Arena scratch, Str from, Str to)
+static i32 os_rename(Os *os, Arena scratch, Str from, Str to)
 {
+    flushw(os);
     enum { MOVEFILE_REPLACE_EXISTING = 1 };
     Str16 f = widepath(&scratch, from);
     Str16 t = widepath(&scratch, to);
@@ -2526,6 +2624,7 @@ static i32 os_rename(Os *, Arena scratch, Str from, Str to)
 
 static Opened os_tempfile(Os *os, Arena)
 {
+    flushw(os);
     // A uniquely named file in the temporary directory, deleted by the
     // system when its last handle closes
     Opened r = {};
@@ -2564,6 +2663,7 @@ static Opened os_tempfile(Os *os, Arena)
 
 static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
+    flushw(os);
     Opened r = {};
     r.h = BADHANDLE;
 
@@ -2626,7 +2726,9 @@ static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 // An operation that ended meanwhile may release it in drainwake already.
 static void os_close(Os *os, Handle h)
 {
+    flushw(os);
     if (h == BADHANDLE) return;
+    if (h == os->werrh) os->werrh = 0;  // the handle value may come back
     Wobj *w = unreg(os, h);
     if (w) {
         drainwake(os);
@@ -2637,6 +2739,7 @@ static void os_close(Os *os, Handle h)
 
 static Handle os_dup(Os *os, Handle h)
 {
+    flushw(os);
     uz self = GetCurrentProcess();
     uz r    = 0;
     if (!DuplicateHandle(self, h, self, &r, 0, 0, DUPLICATE_SAME_ACCESS)) {
@@ -2658,6 +2761,7 @@ static iz os_pipecap(Os *)
 
 static OsPipe os_pipe(Os *os)
 {
+    flushw(os);
     OsPipe r = {};
     uz rd = 0;
     uz wr = 0;
@@ -2668,7 +2772,9 @@ static OsPipe os_pipe(Os *os)
         r.r = r.w = BADHANDLE;
         return r;
     }
-    reg(os, rd, newobj(os, K_PIPE));
+    Wobj *rw = newobj(os, K_PIPE);
+    rw->mine = 1;
+    reg(os, rd, rw);
     reg(os, wr, newobj(os, K_PIPE));
     r.r = rd;
     r.w = wr;
@@ -2681,6 +2787,7 @@ static OsPipe os_pipe(Os *os)
 // client leaving unread (one that only looked) takes nothing with it.
 static NamedPipe os_namedpipe(Os *os, Arena *a, Str name, i32 how)
 {
+    flushw(os);
     NamedPipe r = {};
     r.h = BADHANDLE;
     static u32 counter;
@@ -2742,6 +2849,7 @@ static NamedPipe os_namedpipe(Os *os, Arena *a, Str name, i32 how)
 
 static i64 os_seek(Os *os, Handle h, i64 off, i32 whence)
 {
+    flushw(os);
     i64 pos = 0;
     if (lookup(os, h) || GetFileType(h)!=FILE_TYPE_DISK) {
         return -1;
@@ -2794,13 +2902,15 @@ static Stat handlestat(uz h)
 }
 
 // Reparse points are not read: callers treat a link as a plain file.
-static Str os_readlink(Os *, Arena *, Str)
+static Str os_readlink(Os *os, Arena *, Str)
 {
+    flushw(os);
     return {};
 }
 
-static Stat os_stat(Os *, Arena scratch, Str path, b32 follow)
+static Stat os_stat(Os *os, Arena scratch, Str path, b32 follow)
 {
+    flushw(os);
     Stat r = {};
 
     // A trailing slash demands a directory.
@@ -2895,6 +3005,7 @@ enum : i32 {  // console modes
 
 static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
 {
+    flushw(os);
     Tty r = {};
     i32 imode = 0;
     i32 omode = 0;
@@ -2966,6 +3077,7 @@ static i32 concoord(i32 x, i32 y)
 
 static b32 os_con(Os *os, Handle out, ConOp *o)
 {
+    flushw(os);
     ConsoleInfo ci = {};
     if (!GetConsoleScreenBufferInfo(out, &ci)) return 0;
     switch (o->op) {
@@ -3003,6 +3115,7 @@ static b32 os_isatty(Os *os, Handle h)
 
 static Stat os_fstat(Os *os, Handle h)
 {
+    flushw(os);
     // Registered objects are described without touching the handle,
     // which an operation in flight may hold
     Wobj *w = lookup(os, h);
@@ -3016,8 +3129,9 @@ static Stat os_fstat(Os *os, Handle h)
     return r;
 }
 
-static Dirent *os_list(Os *, Arena *a, Str dir, i32 *err)
+static Dirent *os_list(Os *os, Arena *a, Str dir, i32 *err)
 {
+    flushw(os);
     *err = 0;
 
     // Only the first call uses the pattern, so it may share memory with
@@ -3325,6 +3439,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
 
 static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 {
+    flushw(os);
     return startproc(os, scratch, s, 0, 0);
 }
 
@@ -3391,6 +3506,7 @@ static Rlimit os_getrlimit(Os *os, i32 res)
 
 static i32 os_setrlimit(Os *os, i32 res, Rlimit r)
 {
+    flushw(os);
     Rlimit *t = rltable(os) + res;
     if (t->err) return t->err;
     switch (res) {
@@ -3417,6 +3533,7 @@ static i64 os_tcpgrp(Os *, Handle, i64)
 
 static i32 os_kill(Os *os, i64 pid, i32 sig)
 {
+    flushw(os);
     if (pid<=0 || pid>(i64)0x7fffffff) return E_SRCH;
     if (sig<0 || sig>=NSIGNAL) return E_INVAL;
     if (sig && sig!=9 && sig!=19 && !chansend(pid, 0, sig)) {
@@ -3515,6 +3632,7 @@ static void os_racy(Os *)
 // (imagecopy) and then releases.
 static ImageRef os_imagenew(Os *os, iz cap)
 {
+    flushw(os);
     ImageRef r = {};
     r.base = os_reserve(os, cap);
     r.cap  = r.base ? cap : 0;
@@ -3568,6 +3686,7 @@ static ImageRef imagearg(Str s)
 // its channel goes to the program, as it would to the program exec'd.
 static i32 os_exec(Os *os, Arena scratch, Spawn *s)
 {
+    flushw(os);
     uz      job = 0;
     Spawned r   = startproc(os, scratch, s, 1, &job);
     if (r.err) return r.err;
@@ -3600,6 +3719,7 @@ static i32 os_forkexec(Os *, Arena, Spawn *)
 // and interpositions keep going meanwhile. Signals do not end it.
 static i32 os_waitproc(Os *os, Handle proc)
 {
+    flushw(os);
     for (;;) {
         uz  hs[2] = {proc, os->wake};
         i32 r = WaitForMultipleObjects(2, hs, 0, INFINITE);
@@ -3616,6 +3736,7 @@ static i32 os_waitproc(Os *os, Handle proc)
 
 static void os_submit(Os *os, Io *io)
 {
+    flushw(os);
     io->done   = 0;
     io->next   = 0;
     io->plt[0] = S_NONE;
@@ -3687,6 +3808,7 @@ static void os_submit(Os *os, Io *io)
 
 static Io *os_wait(Os *os, i64 deadline)
 {
+    if (deadline != WAIT_POLL) flushw(os);  // it may block
     for (;;) {
         drainwake(os);
         Io *io = os->done;
@@ -3715,6 +3837,7 @@ static Io *os_wait(Os *os, i64 deadline)
 
 static b32 os_cancel(Os *os, Io *io)
 {
+    flushw(os);
     drainwake(os);  // perhaps completed meanwhile
     switch (io->plt[0]) {
     case S_QUEUED: {
@@ -4075,6 +4198,7 @@ void mainCRTStartup()
     // which Cygwin's processes also take for death by SIGINT; by
     // another signal, with SIGEXIT
     i32 status = sh_main(&os, &info);
+    flushw(&os);
     u32 code   = (u32)(status & 255);
     if (status == (WSIGNALED|(128+2))) {
         code = 0xc000013a;

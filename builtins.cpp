@@ -2968,7 +2968,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     b32 seekable = 0;
     if (peekable && os_peek(sh->os, in->h, 0, 0)<0) {
         peekable = 0;
-        seekable = os_seek(sh->os, in->h, 0, 1) >= 0;
+        seekable = fileseekable(sh, in);
     }
     u8 *ahead = 0;
     iz  alen = 0, aoff = 0;
