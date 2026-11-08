@@ -249,6 +249,18 @@ static void hostile(Arena perm)
         expect(!r.data, "budget for ((a*)*)*\\1x", r);
     }
     {
+        // The back-references' spans are bounded like the memo: with
+        // two groups nearly every pair of position and length is one
+        Arena a = perm;
+        a.mem = 0;
+        a.end = a.beg + ((iz)1<<23);
+        Str    s = concat(&a, repeat(&a, "a", 600), "bx");
+        RxComp c = rxcompile("(a*)(a*)\\1\\2x", 0, &a);
+        RxMatch *m = alloc<RxMatch>(&a, 3);
+        i32 r = rxexec(c.re, s, m, a);
+        expect(r==-2, "span bound for (a*)(a*)\\1\\2x", r==1 ? Str("match") : "other");
+    }
+    {
         // Messages
         expect(rxerrors[RXE_EBRACK]=="Unmatched [, [^, [:, [., or [=", "EBRACK", {});
         expect(rxerrors[RXE_ERPAREN]=="Unmatched ) or \\)", "ERPAREN", {});

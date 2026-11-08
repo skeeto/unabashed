@@ -142,6 +142,13 @@ static b32 os_commit(Os *os, byte *p, iz len)
     return 1;
 }
 
+// Poisoned, as the contents are gone.
+static void os_decommit(Os *os, byte *p, iz len)
+{
+    assert(p>=os->heap && p+len<=os->heap+os->heapcap);
+    memset(p, 0x55, (uz)len);
+}
+
 // Reservations come from the lower half of the heap; the vos owns the
 // upper half.
 static iz reservelimit(Os *os)

@@ -1394,6 +1394,7 @@ struct RxCtx {
                     // 0 inside a character, 0xff for an invalid byte
     i64    budget;  // steps left for back-references, negative for no limit
     b32    gaveup;
+    b32    espace;  // gave up for room: the spans outgrew memomax
     b32  (*stop)(void *);  // polled now and then: true gives up
     void  *stopctx;
     u32    ticks;
@@ -1925,6 +1926,7 @@ static b32 rxsame(RxCtx *c, iz a, iz b, iz len)
 
 static b32 rxspend(RxCtx *c)
 {
+    if (c->gaveup) return 0;
     if (c->stop && !(++c->ticks & 0xfff) && c->stop(c->stopctx)) {
         c->gaveup = 1;
         return 0;
@@ -2366,7 +2368,9 @@ struct RxLong {
     RxEntSet      *set;
 };
 
-static void rxrecord(RxLong *r, RxMemo *seen, Arena *a, RxEntry en)
+// Bounded by memomax, as glibc's malloc failure (REG_ESPACE) bounds
+// its own: past that, the search gives up.
+static void rxrecord(RxCtx *c, RxLong *r, RxMemo *seen, Arena *a, RxEntry en)
 {
     u64       h = (u64)en.idx<<32 ^ (u64)(u32)en.node<<12 ^ (u32)en.len;
     RxEntSet **e = &r->set;
@@ -2374,6 +2378,10 @@ static void rxrecord(RxLong *r, RxMemo *seen, Arena *a, RxEntry en)
         RxEntry *o = r->ents.data + (*e)->i;
         if (o->idx==en.idx && o->node==en.node && o->len==en.len) return;
         e = &(*e)->child[h>>62];
+    }
+    if (r->ents.len >= c->memomax/2/(iz)(sizeof(RxEntry)+sizeof(RxEntSet))) {
+        c->gaveup = c->espace = 1;
+        return;
     }
     *e = alloc<RxEntSet>(rxframes(seen, (iz)sizeof(RxEntSet)+16));
     (*e)->i = (i32)r->ents.len;
@@ -2465,7 +2473,7 @@ static RxLong rxlongest(RxCtx *c, iz s, u32 *closes, b32 record, Arena *perm)
             b32     g = !x->cons || rxprev(c, x->cons, idx, ref ? idx : s);
             if (!g && !rxeps(x->type)) {  // not in the state
                 if (x->type==RT_END && !record) {
-                    rxrecord(&r, &seen, &scratch, {idx, cur, -2});
+                    rxrecord(c, &r, &seen, &scratch, {idx, cur, -2});
                 }
                 b32 grow = x->type==RT_BACKREF && idx==s && re->initclose[x->arg];
                 if (!grow || rxbit(eps, cur)) break;
@@ -2493,13 +2501,13 @@ static RxLong rxlongest(RxCtx *c, iz s, u32 *closes, b32 record, Arena *perm)
             }
             if (x->type == RT_END) {
                 if (rxnext(c, x->cons, idx, 0)) {
-                    if (!record) rxrecord(&r, &seen, &scratch, {idx, cur, -1});
+                    if (!record) rxrecord(c, &r, &seen, &scratch, {idx, cur, -1});
                     if (idx >= r.best) {
                         r.last = idx>r.best || cur<r.last ? cur : r.last;
                         r.best = idx;
                     }
                 } else if (!record) {
-                    rxrecord(&r, &seen, &scratch, {idx, cur, -2});
+                    rxrecord(c, &r, &seen, &scratch, {idx, cur, -2});
                 }
                 break;
             }
@@ -2551,7 +2559,7 @@ static RxLong rxlongest(RxCtx *c, iz s, u32 *closes, b32 record, Arena *perm)
                     for (i32 i = 1; i < ng; i++) regs[i].so = regs[i].eo = -1;
                 }
                 k = use ? m.eo-m.so : 0;
-                if (use && !record) rxrecord(&r, &seen, &scratch, {idx, cur, (i32)k});
+                if (use && !record) rxrecord(c, &r, &seen, &scratch, {idx, cur, (i32)k});
                 if (!k) {
                     if (rxbit(eps, cur)) break;
                     rxset(eps, cur);
@@ -2608,7 +2616,8 @@ static RxLong rxlongest(RxCtx *c, iz s, u32 *closes, b32 record, Arena *perm)
 // Match s against re: 1 with m[0..nsub] filled for a match (-1 for an
 // unset group), 0 for none, -1 when budget steps (back-references and
 // submatches) ran out, or stop (polled every few thousand of them)
-// returned true; a negative budget has no limit.
+// returned true; a negative budget has no limit. -2 when the
+// back-references' spans outgrew the memo's room (glibc's REG_ESPACE).
 static i32 rxexec(Regex *re, Str s, RxMatch *m, Arena scratch, i64 budget = -1,
                   b32 (*stop)(void *) = 0, void *stopctx = 0)
 {
@@ -2655,7 +2664,7 @@ static i32 rxexec(Regex *re, Str s, RxMatch *m, Arena scratch, i64 budget = -1,
                     rxlongest(&c, p, closes, 1, &u);
                 }
                 lg = rxlongest(&c, p, closes, 0, &t);
-                if (c.gaveup) return -1;
+                if (c.gaveup) return c.espace ? -2 : -1;
                 if (lg.best >= 0) {
                     b       = p;
                     e       = lg.best;
@@ -2702,7 +2711,7 @@ static i32 rxexec(Regex *re, Str s, RxMatch *m, Arena scratch, i64 budget = -1,
                 }
             }
             b32 ok = rxwalk(&c, v, last, b, e, m, t);
-            if (c.gaveup) return -1;
+            if (c.gaveup) return c.espace ? -2 : -1;
             if (!ok) return 0;
             for (i32 i = 1; i <= re->nsub; i++) {
                 // glibc offsets an unclosed group's -1 by the match start

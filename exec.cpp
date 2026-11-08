@@ -186,7 +186,13 @@ static Arena *scratchat(Shell *sh, i32 depth)
         os_oom();
     }
     if (!sh->pool[depth]) {
-        Arena a = newarena(sh->os, sh->reserve);
+        // 32-bit address space holds only a few full-size reservations:
+        // the first level (most comsubs) gets half, deeper ones what a
+        // vproc gets
+        iz    cap = sizeof(void *)==8 ? sh->reserve
+                  : depth<=1          ? sh->reserve/2
+                  :                     sh->sched->reserve;
+        Arena a = newarena(sh->os, cap);
         sh->pool[depth] = alloc<Arena>(&a);
         *sh->pool[depth] = a;
     }
@@ -3296,7 +3302,8 @@ static i32 condregex(Shell *sh, Arena a, Str s, Str re)
     i32      ng = rc.re->nsub + 1;
     RxMatch *m  = alloc<RxMatch>(&a, ng);
     i32      r  = rxexec(rc.re, s, m, a, -1, rxsigstop, sh);
-    if (r < 0) sigfatal(sh);  // stopped by a signal that ends this level
+    if (r == -1) sigfatal(sh);  // stopped by a signal that ends this level
+    // -2: out of room, as glibc's REG_ESPACE, which bash takes for no match
     b32      ok = r == 1;
 
     i32 aflags = SV_FORCE;
@@ -4261,6 +4268,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
 {
     byte *beg = scratch.beg;
     byte *end = scratch.mem ? scratch.mem->limit : scratch.end;
+    byte *floor = scratch.mem ? scratch.mem->commit : scratch.end;
     src = dropcr(&scratch, src, crmode(sh));
     Lexer *L = newlexer(&scratch, src);
     L->fill          = fill;
@@ -4448,6 +4456,8 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             L->idx  = 0;
             L->newunit = 1;
             *L->a   = unit;
+            // The outermost reader gives back what a big command took
+            if (!outer) arenatrim(L->a, floor);
         }
     }
     keepcmdtext(sh, beg, end);

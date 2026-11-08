@@ -32,6 +32,24 @@ static Arena newarena(Os *os, iz reserve)
     return a;
 }
 
+// Give back the pages well past an arena's front, as after a command
+// that needed far more than usual. Copies of the arena older than
+// floor's commit may still think the memory below it committed, so
+// the pages under floor stay.
+static void arenatrim(Arena *a, byte *floor)
+{
+    Mem *m = a->mem;
+    if (!m) return;
+    iz   keep = (iz)1<<23;
+    byte *cut = a->beg>floor ? a->beg : floor;
+    if (m->commit-cut <= 4*keep) return;
+    cut += keep;
+    cut += -(uz)cut & 0xffff;
+    os_decommit(m->os, cut, m->commit-cut);
+    m->commit = cut;
+    a->end    = a->end<cut ? a->end : cut;
+}
+
 
 // Output: buffered with a sticky error flag
 

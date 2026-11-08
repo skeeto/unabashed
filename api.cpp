@@ -292,6 +292,9 @@ struct ConOp {
 static byte   *os_reserve(Os *, iz);
 // Commit part of a reservation. Returns false on failure.
 static b32     os_commit(Os *, byte *, iz);
+// Return committed pages to the system: the range is no longer usable
+// until committed again.
+static void    os_decommit(Os *, byte *, iz);
 // Write all bytes, returning false on error.
 static b32     os_write(Os *, Handle, u8 *, iz);
 // Read up to len bytes. Returns 0 at end of file, -1 on error.

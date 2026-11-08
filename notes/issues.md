@@ -48,11 +48,6 @@ None: the XP flakes were fixed or not seen again at step 10 (m7.md).
   history7 wait on it.
   Moved from M7 (step 9): it needs readline's own redisplay bytes, an
   editor-2 piece beside vi mode and bind.
-- regex.cpp's back-reference span records (`RxEntry`, kept once each
-  per start) are not bounded by the memo's 256 MiB: with two groups a
-  search records a span for most pairs of position and length, which
-  costs time (`(a*)(a*)\1\2x` on 600 a's: 10.6 s on master, 15.0 s)
-  and memory. (m4.md)
 - **Shell-code stages cannot stop** (m7.md, step 7d): under set -m a
   pipeline stage that is shell code, a `( )` or a function runs in the
   shell's process, so ^Z stops only the programs; a pipeline whose last
@@ -98,12 +93,21 @@ None: the XP flakes were fixed or not seen again at step 10 (m7.md).
   vproc, so the handler cannot fill the stage's pipe before its
   reader starts). (m3a.md, fuzz triage, review)
 - No compile cache for `=~` (bash has none either).
-- **Arenas never decommit**: a scratch arena keeps its peak commit for
-  the shell's life, so one `[[ =~ ]]` whose back-reference memo grows
-  (up to 256 MiB; `^(a+)+\1$` on 1000 a's takes 96 MB) leaves that
-  much committed. plan.md's `os_decommit` is not implemented. (m4.md,
-  review)
 
+- **010-writes flakes on Windows** (t/win32): `f x | "$U" -c 'read l'`
+  expects f to die of SIGPIPE (141) after 20,000 lines (120 KB), but
+  at times f finishes with 0, always on XP now. With our own shell as
+  the reader the writer's pipe takes more than its 64 KiB: the write
+  quota (NtQueryInformationFile) runs down to near 0 and comes back to
+  65536 although neither process calls ReadFile (an instrumented
+  build), and the reader still gets every byte. With ping.exe as a
+  reader that does not read, the quota stays at 0 and f gets 141.
+  Unexplained; seen at af2229d too, more often since step 2's speedups.
+  (m8.md, step 3)
+- t/win32/012-ctrlc-young fails with the i686 build on Windows 11 (the
+  missed Ctrl-C during `sleep 5` is not seen: "after 0"), before step 3
+  too; it passes on XP and with the x64 build. Step 10, with the other
+  Ctrl-C items.
 
 Moved from M6 (m6.md, step 10), with bind and the rest of editor 2:
 

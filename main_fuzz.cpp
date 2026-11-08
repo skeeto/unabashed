@@ -186,6 +186,11 @@ static b32 os_commit(Os *, byte *, iz)
     return 1;
 }
 
+static void os_decommit(Os *, byte *p, iz len)
+{
+    memset(p, 0x55, (uz)len);
+}
+
 // Fiber stacks still allocated, freed after a run that ran out of
 // memory and so never released them.
 static byte *stacks[1024];

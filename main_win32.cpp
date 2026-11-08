@@ -1,6 +1,8 @@
 // Win32 platform layer: no CRT, no headers, runs on Windows XP and later
 // $ g++ -std=c++20 -O2 -s -nostartfiles -static-libgcc -Wl,--stack,0x1000000
 //       -o unabashed.exe main_win32.cpp
+// The i686 build also takes -Wl,--large-address-aware (4 GiB on x64
+// Windows) and subsystem version 5.01 for XP: see the Makefile.
 //
 // Imports only kernel32.dll. Anything newer than XP must be resolved at
 // run time with a fallback.
@@ -66,6 +68,7 @@ enum : i32 {
     JobObjectBasicProcessIdList  = 3,
     JobObjectExtendedLimitInformation = 9,
     MEM_COMMIT                   = 0x1000,
+    MEM_DECOMMIT                 = 0x4000,
     MEM_RESERVE                  = 0x2000,
     MEM_PRIVATE                  = 0x20000,
     MEM_RELEASE                  = 0x8000,
@@ -2455,6 +2458,11 @@ static byte *os_reserve(Os *, iz len)
 static b32 os_commit(Os *, byte *p, iz len)
 {
     return !!VirtualAlloc(p, len, MEM_COMMIT, PAGE_READWRITE);
+}
+
+static void os_decommit(Os *, byte *p, iz len)
+{
+    VirtualFree(p, len, MEM_DECOMMIT);
 }
 
 static b32 os_write(Os *os, Handle h, u8 *buf, iz len)

@@ -31,7 +31,7 @@ unabashed.exe: main_win32.cpp $(SOURCES)
 unabashed32.exe: main_win32.cpp $(SOURCES)
 	$(CXX32) $(FLAGS) $(WARN) $(RELEASE) $(WIN32) \
 	    -Wl,--major-subsystem-version=5,--minor-subsystem-version=1 \
-	    -o $@ main_win32.cpp
+	    -Wl,--large-address-aware -o $@ main_win32.cpp
 
 debug.exe: main_win32.cpp $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) $(DEBUG) $(WIN32) -o $@ main_win32.cpp

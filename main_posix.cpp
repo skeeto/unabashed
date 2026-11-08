@@ -114,6 +114,12 @@ static b32 os_commit(Os *, byte *p, iz len)
     return !mprotect(p, (uz)len, PROT_READ|PROT_WRITE);
 }
 
+// Mapping over the range drops its pages and their contents.
+static void os_decommit(Os *, byte *p, iz len)
+{
+    mmap(p, (uz)len, PROT_NONE, MAP_PRIVATE|MAP_ANON|MAP_NORESERVE|MAP_FIXED, -1, 0);
+}
+
 // Output to a regular file gathers in wbuf: a write costs about as much
 // as a builtin's whole run. It goes out before any other call (flushw),
 // when full, and at the first write 100 ms after it began. Whether a
