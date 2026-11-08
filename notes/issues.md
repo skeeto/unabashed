@@ -43,6 +43,18 @@ None left: step 10 fixed the rest or accepted it (below).
 (none: step 5 fixed or accepted the bridge items, below)
 
 
+## After M9
+
+- Nested synchronous subshells run out of memory long before the
+  stack limit when each level writes: `f() { ((n++)); ((n%10)) ||
+  echo $n; ( f ); }; f` stops with "out of memory" at 280 levels on
+  x64 (220 on i686), not with status 139 near 2,100. Private memory
+  goes from 3 MB at 100 levels to 67 MB at 200, so each write costs
+  more the deeper it is (perhaps output buffering, copied per level
+  above the store watermark). Not traced. Found while moving Shell
+  copies off the stack (2026-11-08).
+
+
 ## Test infrastructure
 
 - t/exec/634-coproc races, in bash as in ours: the first coprocess

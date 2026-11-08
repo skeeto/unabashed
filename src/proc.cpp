@@ -994,22 +994,30 @@ static void pipestopped(Shell *sh, Arena scratch, Node *n, Task **tasks,
 
 static void runpipeline(Shell *sh, Node *n, Arena scratch)
 {
-    // Flatten the right-nested chain, left to right
-    Node *stages[256];
-    i32   nstages = 0;
-    Node *cur = n;
-    while (cur->kind==N_CONNECT && cur->connector=='|' && nstages<255 &&
-           (cur==n || (!cur->flags && !cur->redirs))) {
-        stages[nstages++] = cur->a;
-        cur = cur->b;
+    // Flatten the right-nested chain, left to right, the per-stage
+    // tables in scratch (calls below take scratch by value, after them)
+    i32 nstages = 1;
+    for (Node *c = n; c->kind==N_CONNECT && c->connector=='|' &&
+                      (c==n || (!c->flags && !c->redirs)); c = c->b) {
+        nstages++;
     }
-    stages[nstages++] = cur;
+    Node  **stages   = alloc<Node *>(&scratch, nstages);
+    File  **in       = alloc<File *>(&scratch, nstages);  // after the first
+    File  **out      = alloc<File *>(&scratch, nstages);  // before the last
+    b32    *ext      = alloc<b32>(&scratch, nstages);
+    Task  **tasks    = alloc<Task *>(&scratch, nstages);
+    Handle *procs    = alloc<Handle>(&scratch, nstages);
+    i32    *statuses = alloc<i32>(&scratch, nstages);
+    i64    *pids     = alloc<i64>(&scratch, nstages);
+    b32    *ran      = alloc<b32>(&scratch, nstages);
+    Node   *cur      = n;
+    for (i32 k = 0; k+1 < nstages; k++, cur = cur->b) {
+        stages[k] = cur->a;
+    }
+    stages[nstages-1] = cur;
 
     Sched *s      = sh->sched;
     i32    before = sh->status;  // what $? is in every stage
-    File  *in[256]  = {};        // each stage's input, after the first
-    File  *out[256] = {};        // each stage's output, before the last
-    b32    ext[256];
     for (i32 k = 0; k < nstages; k++) {
         ext[k] = likelyexternal(sh, stages[k]);
     }
@@ -1049,11 +1057,6 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     // first, which holds the terminal, shell code in processes of their
     // own (spawnstage)
     i64    grp     = 0;
-    Task  *tasks[256] = {};
-    Handle procs[256];
-    i32    statuses[256];
-    i64    pids[256] = {};
-    b32    ran[256];
     for (i32 k = 0; k+1 < nstages; k++) {
         if (!sh->flow) sh->status = before;
         procs[k] = BADHANDLE;

@@ -856,6 +856,7 @@ static void pipeclose(Sched *s, Pipe *p, b32 writer)
 // between a named pipe and a descriptor (bridges, exec.cpp).
 
 enum : i32 { NSPARE = 2 };  // a bridge's instances listening ahead
+enum : i32 { PUMPBUF = 1<<12 };
 
 enum : i32 {
     PUMP_TOHANDLE, PUMP_FROMHANDLE, PUMP_TEXT, PUMP_TOBUF,
@@ -882,6 +883,7 @@ struct Pump {
     b32     waiting;    // for a client
     b32     connected;  // a client is being served
     b32     ending;     // the program exited: no client is to come
+    u8     *data;       // PUMPBUF bytes in transit, kept across reuse
 };
 
 // A Pump that outlives the arena of whoever starts it, pooled.
@@ -890,9 +892,12 @@ static Pump *newpump(Sched *s)
     Pump *p = s->freepumps;
     if (p) {
         s->freepumps = p->next;
+        u8 *data = p->data;
         *p = {};
+        p->data = data;
     } else {
         p = alloc<Pump>(&s->a);
+        p->data = allocbytes(&s->a, PUMPBUF);
     }
     return p;
 }
@@ -930,11 +935,11 @@ static void pumpmain(Task *t)
 {
     Pump  *p = (Pump *)t->arg;
     Sched *s = t->s;
-    u8     buf[1<<12];
+    u8    *buf = p->data;
     switch (p->kind) {
     case PUMP_TOHANDLE:
         for (;;) {
-            iz n = pipereadraw(s, p->pipe, buf, countof(buf));
+            iz n = pipereadraw(s, p->pipe, buf, PUMPBUF);
             if (n<=0 || taskwrite(s, p->h, buf, n)) break;
         }
         os_close(s->os, p->h);
@@ -944,7 +949,7 @@ static void pumpmain(Task *t)
         break;
     case PUMP_FROMHANDLE:
         for (;;) {
-            iz n = taskread(s, p->h, buf, countof(buf));
+            iz n = taskread(s, p->h, buf, PUMPBUF);
             if (n<=0 || pipewrite(s, p->pipe, buf, n)) break;
         }
         pipeclose(s, p->pipe, 1);
@@ -954,7 +959,7 @@ static void pumpmain(Task *t)
         break;
     case PUMP_TOBUF:
         for (;;) {
-            iz n = taskread(s, p->h, buf, countof(buf));
+            iz n = taskread(s, p->h, buf, PUMPBUF);
             if (n <= 0) break;
             if (p->buf) {
                 tracewrite(s, p->wtrace);
@@ -974,7 +979,7 @@ static void pumpmain(Task *t)
             if (c == BADHANDLE) break;
             for (b32 fresh = 1; !t->cancel; fresh = 0) {
                 if (!len && !eof) {
-                    len = taskread(s, p->peer, buf, countof(buf));
+                    len = taskread(s, p->peer, buf, PUMPBUF);
                     eof = len <= 0;
                     len = eof ? 0 : len;
                 }
@@ -997,7 +1002,7 @@ static void pumpmain(Task *t)
             Handle c   = nextclient(s, p);
             i32    err = c==BADHANDLE;
             for (; !err;) {
-                iz n = taskread(s, c, buf, countof(buf));
+                iz n = taskread(s, c, buf, PUMPBUF);
                 if (n <= 0) break;
                 err = p->pipe ? pipewrite(s, p->pipe, buf, n)
                               : taskwrite(s, p->peer, buf, n);

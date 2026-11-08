@@ -536,7 +536,8 @@ static void runjob(Shell *sh, SubJob *j, Arena scratch)
 [[gnu::noinline]]
 static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
 {
-    Shell     saved = *sh;
+    Shell    *saved = alloc<Shell>(&scratch);  // large: not on the stack
+    *saved = *sh;
     Watermark w     = storeenter(sh->store);
     Escape    e     = {};
     e.up    = sh->esc;
@@ -578,7 +579,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
         sh->status = 1;
     }
     if (!sh->execed && !sh->killsig && sh->traps) {
-        if (sh->errexited) unwind(sh, saved.undo);
+        if (sh->errexited) unwind(sh, saved->undo);
         runexittrap(sh, scratch);
     }
     i32 status = sh->status;
@@ -591,7 +592,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     }
     sigleave(sh, &sig);
     if (sh->jobs) orphanjobs(sh);  // its jobs run on
-    unwind(sh, saved.undo);
+    unwind(sh, saved->undo);
     restorefds(sh, fds);
     if (sh->psubs) {
         // Its procsubs end with it, once their descriptors are closed
@@ -600,8 +601,8 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     storeleave(sh->store, &w);
     // Keep the scratch arenas the subshell reserved for deeper levels:
     // they are not store memory, and dropping them leaks reservations
-    for (i32 i = 0; i < NPOOL; i++) saved.pool[i] = sh->pool[i];
-    *sh = saved;
+    for (i32 i = 0; i < NPOOL; i++) saved->pool[i] = sh->pool[i];
+    *sh = *saved;
     if (sh->frame) *sh->frame = frame;
     sh->status   = status;
     sh->childsig = killed;
@@ -2087,9 +2088,10 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         return r.err ? -r.err : 0;
     }
     if (capfile) {
-        u8 buf[4096];
+        iz  cap = (iz)1<<12;
+        u8 *buf = allocbytes(&a, cap);
         for (;;) {
-            iz n = taskread(s, capread, buf, countof(buf));
+            iz n = taskread(s, capread, buf, cap);
             if (n <= 0) break;
             // tracing: for the program, which is in this task's group
             tracewrite(s, &((Capture *)capfile->cap)->wtrace);
@@ -2378,7 +2380,8 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
     if (err == E_NOEXEC && isshellscript(sh, a, path)) {
         // No #! line: bash runs it as a shell script in a subshell
         Str src = readwholefile(sh, &a, path, &err);
-        Shell saved = *sh;
+        Shell *saved = alloc<Shell>(&a);  // large: not on the stack
+        *saved = *sh;
         Fdsave fds = savefds(sh, &a);
         Watermark w = storeenter(sh->store);
         Escape e = {};
@@ -2416,19 +2419,19 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
             runsource(sh, src, name, *scratchat(sh, sh->capdepth), 1);
         }
         if (!sh->execed && !sh->killsig && sh->traps) {
-            if (sh->errexited) unwind(sh, saved.undo);
+            if (sh->errexited) unwind(sh, saved->undo);
             runexittrap(sh, *scratchat(sh, sh->capdepth));
         }
         i32 status = sh->status;
         i32 killed = sh->killsig;
         i64 pid    = sh->bashpid;
         sigleave(sh, &sig);
-        unwind(sh, saved.undo);
+        unwind(sh, saved->undo);
         restorefds(sh, fds);
         joinpsubs(sh);
         storeleave(sh->store, &w);
-        for (i32 i = 0; i < NPOOL; i++) saved.pool[i] = sh->pool[i];
-        *sh = saved;
+        for (i32 i = 0; i < NPOOL; i++) saved->pool[i] = sh->pool[i];
+        *sh = *saved;
         if (killed) {
             sh->childsig = killed;
             sh->childpid = pid;

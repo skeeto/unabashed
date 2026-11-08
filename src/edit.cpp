@@ -731,7 +731,7 @@ static void edbindings(Editor *ed)
         u8 seq[] = {0x1b, c};
         keybind(a, r, {seq, 2}, EF_DIGIT_ARGUMENT);
     }
-    struct { Str seq; i32 fn; } map[] = {
+    static struct { Str seq; i32 fn; } map[] = {
         {"\x00", EF_SET_MARK},
         {"\x01", EF_BEGINNING_OF_LINE},   {"\x02", EF_BACKWARD_CHAR},
         {"\x04", EF_DELETE_CHAR},         {"\x05", EF_END_OF_LINE},
@@ -979,7 +979,7 @@ static void edbindings(Editor *ed)
 // where nothing else has
 static void edtermkeys(Editor *ed)
 {
-    struct { Str seq; i32 fn; } map[] = {
+    static struct { Str seq; i32 fn; } map[] = {
         {"\x1b[3~", EF_DELETE_CHAR},       {"\x1b[2~", EF_OVERWRITE_MODE},
         {"\x1b[1~", EF_BEGINNING_OF_LINE}, {"\x1b[4~", EF_END_OF_LINE},
         {"\x1b[5~", EF_HISTORY_SEARCH_BACKWARD},
