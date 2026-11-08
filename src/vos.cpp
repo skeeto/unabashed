@@ -107,6 +107,7 @@ struct VProc {
     b32     failed;   // resumed to fail its blocked call (deadlock)
     b32     intr;     // resumed by a signal (shells): fail a read or os_wait
     i64     pid;
+    i64     ppid;     // the process that spawned it
     i64     pgid;     // its process group
     b32     stopped;  // by a signal: it does not run until continued
     i32     change;   // a stop or continue not yet reported (IO_PROCSTOP)
@@ -3042,6 +3043,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     p->failed = 0;
     p->intr   = 0;
     p->pid    = v->nextpid++;
+    p->ppid   = v->procs[v->cur].pid;
     p->pgid   = s->pgid<0 ? p->pid : s->pgid ? s->pgid : v->procs[v->cur].pgid;
     p->stopped  = 0;
     p->change   = 0;
@@ -3981,6 +3983,7 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes, b32 win = 0)
     v->procs[0].state = VP_RUN;
     v->procs[0].shell = 1;
     v->procs[0].pid   = 2;  // as the harnesses' OsInfo
+    v->procs[0].ppid  = 1;
     v->procs[0].pgid  = 2;
     v->procs[0].lid   = 1;
     v->procs[0].ntasks  = 1;

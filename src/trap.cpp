@@ -167,7 +167,7 @@ static void updatesigmode(Shell *sh, i32 sig)
     } else if (trapset(sh, TRAP_EXIT)) {
         switch (sig) {
         case 1: case 2: case 3: case 10: case 12: case 14: case 15:
-        case 24: case 25: case 26: case 27:
+        case 24: case 25: case 26:  // not PROF: a profiler's, as bash
             mode = SIGM_CATCH;  // run the EXIT trap, then die
         }
     }
@@ -336,11 +336,16 @@ static b32 signoop(Shell *sh, i32 sig)
     return sigharmless(sig) || ((sig==3 || sig==15) && interactivetop(sh));
 }
 
-// Die by a signal: the EXIT trap runs first (except for SIGKILL), then
-// the level exits with 128+sig, reported as a death by that signal.
+// Die by a signal: the EXIT trap runs first, except for KILL and the
+// signals bash leaves at their defaults (STKFLT PROF IO PWR, real
+// time), then the level exits with 128+sig, reported as a death by
+// that signal.
 [[noreturn]] static void sigdie(Shell *sh, i32 sig, Arena scratch)
 {
-    if (sig != 9) runexittrap(sh, scratch);
+    switch (sig) {
+    case 9: case 16: case 27: case 29: case 30: break;
+    default: if (sig < 32) runexittrap(sh, scratch);
+    }
     sh->killsig = sig;
     sh->status  = 128 + sig;
     sh->exiting = 1;

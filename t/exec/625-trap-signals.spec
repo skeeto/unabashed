@@ -1,4 +1,4 @@
-== stdout 307
+== stdout 435
 in
 trapst 1
 st 0
@@ -43,6 +43,20 @@ int
 int
 term
 19 0
+exit HUP
+HUP 129
+exit ALRM
+ALRM 142
+exit VTALRM
+VTALRM 154
+STKFLT 144
+PROF 155
+IO 157
+PWR 158
+RTMIN 162
+RTMAX 192
+20 155
+21 155
 
 == stderr 428
 Terminated                 ( kill $BASHPID; echo no )
@@ -52,7 +66,7 @@ User defined signal 1      ( trap - USR1; kill -USR1 $BASHPID; echo no )
 Terminated                 true | ( kill -TERM $BASHPID )
 Terminated                 bash -c 'trap "echo exit \$?" EXIT; kill $$; echo after'
 
-== merged 735
+== merged 863
 in
 trapst 1
 st 0
@@ -103,5 +117,19 @@ int
 int
 term
 19 0
+exit HUP
+HUP 129
+exit ALRM
+ALRM 142
+exit VTALRM
+VTALRM 154
+STKFLT 144
+PROF 155
+IO 157
+PWR 158
+RTMIN 162
+RTMAX 192
+20 155
+21 155
 
 == status 0

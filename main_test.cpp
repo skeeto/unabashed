@@ -270,7 +270,7 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     info.pid     = osvos(os)->procs[osvos(os)->cur].pid;
     info.pgid    = osvos(os)->procs[osvos(os)->cur].pgid;
     info.sigign  = osvos(os)->procs[osvos(os)->cur].sigign;
-    info.ppid    = 2;
+    info.ppid    = osvos(os)->procs[osvos(os)->cur].ppid;
     info.uid     = info.euid = 1000;
     info.gid     = info.egid = 1000;
     info.host    = "oracle";

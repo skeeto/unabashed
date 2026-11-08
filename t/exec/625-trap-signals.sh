@@ -42,3 +42,12 @@ kill -2 $$
 trap 'echo term' TERM
 kill $$
 kill -0 $$; echo "19 $?"
+# The EXIT trap runs before a death by a signal bash catches for it,
+# but not by one it leaves at its default (STKFLT PROF IO PWR, real
+# time), whoever sends it
+for s in HUP ALRM VTALRM STKFLT PROF IO PWR RTMIN RTMAX; do
+    { ( trap 'echo "exit $s"' EXIT; kill -s $s $BASHPID; echo no ); } 2>/dev/null
+    echo "$s $?"
+done
+{ bash -c 'trap "echo exit" EXIT; kill -PROF $$; echo after'; } 2>/dev/null; echo "20 $?"
+{ bash -c 'trap "echo exit" EXIT; bash -c "kill -PROF \$PPID"; echo after'; } 2>/dev/null; echo "21 $?"

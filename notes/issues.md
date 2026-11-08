@@ -82,6 +82,21 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
 - A shell that dies of SIGINT exits 0xC000013A, so a parent that keeps
   only the low byte sees 58, not 130 (Git Bash maps the code to 130).
 
+Found while profiling under gprof (2026-11-08), not yet fixed; real
+signals sent by another process, on Linux, against bash 5.3:
+
+- bash ignores SIGQUIT in every shell, interactive or not (sig.c,
+  initialize_shell_signals); a non-interactive shell of ours dies of it
+  (status 131), with or without an EXIT trap.
+- SIGINT that arrives while a foreground program runs: bash waits for
+  the program and dies only if the program died of SIGINT too, so
+  `/bin/kill -INT $$` from a script goes on; ours dies at once (with an
+  EXIT trap: runs it, then dies). The terminal's INT, sent to the whole
+  group, is already handled as bash does.
+- With an EXIT trap set, SIGSYS kills ours without running it; bash
+  runs the trap first. SIGPIPE is ignored by our shell (m3a), where
+  bash runs the trap and dies with 141.
+
 
 ## Test infrastructure
 
