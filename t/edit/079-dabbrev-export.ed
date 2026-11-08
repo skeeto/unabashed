@@ -1,0 +1,32 @@
+# dabbrev-expand cycles history words newest first, unsorted and with
+# nothing appended, continuing menu-complete; export-completions prints
+# the count, the word, its span and the matches, and with an argument
+# above one also clears the line
+size 24 70
+rc PS1='$ '
+rc mkdir ex && cd ex && touch ab1 ab2 'a c' && FIGNORE=.o
+rc bind '"\C-xd": dabbrev-expand'; bind '"\C-xe": export-completions'
+keys : zeta zebra.o alpha\r
+keys : zoo zeta\r
+keys : z\C-xd
+snap
+keys \C-xd
+snap
+keys \C-xd\C-xd
+snap
+keys \C-a\C-k: q\C-xd x
+snap
+keys \C-a\C-k: z\t\C-xd
+snap
+keys \C-a\C-kls ab\C-xe
+snap
+keys \C-a\C-kls a\C-xe
+snap
+keys \C-a\C-kls qq\C-xe
+snap
+keys \C-a\C-kls ab1 x\C-b\C-b\C-xe
+snap
+keys \C-a\C-kls ab\e2\C-xe
+snap
+keys \C-y
+snap

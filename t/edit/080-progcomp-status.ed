@@ -1,0 +1,16 @@
+# A completion function's status leaves $? and PIPESTATUS as they were;
+# command substitutions in one (bash-completion's) run below it; a
+# compspec comes before $ variable completion
+size 10 60
+rc PS1='$ '
+rc lg() { COMPREPLY=(xone); return 3; }; complete -F lg ff
+rc vv() { COMPREPLY=('${HOME}' vx); }; complete -F vv vv
+rc g() { local v=$(echo bb) w=`echo cc`; COMPREPLY=($v$w); }; complete -F g gg
+keys false\r
+keys ff a\t\C-a\C-kecho $? ${PIPESTATUS[@]}\r
+keys false | true\r
+keys ff a\t\C-a\C-kecho $? ${PIPESTATUS[@]}\r
+keys gg \t
+snap
+keys \C-a\C-kvv $HO\t\t
+snap

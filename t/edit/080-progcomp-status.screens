@@ -1,0 +1,31 @@
+== snap 1
+$ false
+$ echo $? ${PIPESTATUS[@]}
+1 1
+$ false | true
+$ echo $? ${PIPESTATUS[@]}
+0 1 0
+$ gg bbcc
+@ 6,10
+== snap 2
+$ false
+$ echo $? ${PIPESTATUS[@]}
+1 1
+$ false | true
+$ echo $? ${PIPESTATUS[@]}
+0 1 0
+$ vv $HO
+${HOME}  vx
+$ vv $HO
+@ 8,8 bell 1
+== snap 3
+$ false
+$ echo $? ${PIPESTATUS[@]}
+1 1
+$ false | true
+$ echo $? ${PIPESTATUS[@]}
+0 1 0
+$ vv $HO
+${HOME}  vx
+$ vv $HO
+@ 8,8 bell 1

@@ -24,6 +24,7 @@ enum : i32 {
     CX_HISTORY,   // M-TAB
     CX_GLOB,      // M-g: the word with * appended
     CX_GLOBX,     // C-x * and C-x g: as typed, * appended by an argument
+    CX_DABBREV,   // dabbrev-expand: history words, newest first
 };
 
 // One attempt
@@ -51,6 +52,9 @@ struct Comp {
     Str        breaks;    // the word breaks used
     u8         mode;      // CM_*
     b32        partial;   // not bash's full quoting
+    b32        nosort;    // complete -o nosort: generation order
+    b32        fullquote; // -o fullquote: quoted as file names are
+    b32        nofiles;   // no file name completion as the last resort
 };
 
 static Str compdequote(Arena *a, Str s, u8 quote)
@@ -591,11 +595,12 @@ static Slice<Str> comphosts(Shell *sh, Comp *c, Str w)
 }
 
 
-// Every word of every history line (M-TAB)
-static Slice<Str> comphistory(Shell *sh, Comp *c, Str w)
+// Every word of every history line (M-TAB), oldest or newest line first
+static Slice<Str> comphistory(Shell *sh, Comp *c, Str w, b32 newest)
 {
     Slice<Str> m = {};
-    for (iz i = 0; i < sh->hist.len; i++) {
+    for (iz n = 0; n < sh->hist.len; n++) {
+        iz i = newest ? sh->hist.len-1-n : n;
         HWords hw = histwords(c->a, sh->hist.ents[i]->line, 0, -1);
         for (iz k = 0; k < hw.len; k++) {
             if (startswith(hw.word[k], w)) m = compadd(c, m, hw.word[k]);
@@ -626,6 +631,8 @@ static Slice<Str> compglob(Shell *sh, Comp *c, Str pat)
     return m;
 }
 
+static Slice<Str> pcomplete(Editor *, Shell *, Comp *, b32 *, i32 *);  // pcomplete.cpp
+
 // Choose and run the generator (§4.3)
 static Slice<Str> compgenerate(Editor *ed, Shell *sh, Comp *c, i32 gen)
 {
@@ -639,7 +646,11 @@ static Slice<Str> compgenerate(Editor *ed, Shell *sh, Comp *c, i32 gen)
     case CX_VARIABLE: return compvariables(sh, c, w);
     case CX_USER:     return compusers(sh, c, w);
     case CX_HOST:     return comphosts(sh, c, w);
-    case CX_HISTORY:  return comphistory(sh, c, w);
+    case CX_HISTORY:  return comphistory(sh, c, w, 0);
+    case CX_DABBREV:
+        c->nosort   = 1;  // adjacent duplicates only are dropped
+        c->noappend = 1;
+        return comphistory(sh, c, w, 1);
     case CX_GLOB:     return compglob(sh, c, concat(c->a, c->word, "*"));
     case CX_GLOBX:
         return compglob(sh, c, ed->argset ? concat(c->a, c->word, "*") : c->word);
@@ -649,10 +660,6 @@ static Slice<Str> compgenerate(Editor *ed, Shell *sh, Comp *c, i32 gen)
     b32 cmdpos  = ed->shellline && compcmdpos(sh, c, ed->ps1, &invalid);
     if (invalid) return {};
     Str raw = c->word;
-    if (raw.len && raw[0]=='$' && !(raw.len>1 && raw[1]=='(')) {
-        Slice<Str> m = compvariables(sh, c, raw);
-        if (m.len) return m;
-    }
     if (raw.len && raw[0]=='`' && c->quote!='\'') {
         // A command substitution: the rest as a command word
         Str rest = cuthead(raw, 1);
@@ -668,6 +675,17 @@ static Slice<Str> compgenerate(Editor *ed, Shell *sh, Comp *c, i32 gen)
             if (!c->noappend) c->append = '/';
             return m;
         }
+    }
+    if (ed->ps1) {
+        // Programmable completion (pcomplete.cpp)
+        i32 how = 0;
+        Slice<Str> m = pcomplete(ed, sh, c, &cmdpos, &how);
+        if (how == 1) return m;
+    }
+    // Variables after programmable completion, as bash's order
+    if (raw.len && raw[0]=='$' && !(raw.len>1 && raw[1]=='(')) {
+        Slice<Str> m = compvariables(sh, c, raw);
+        if (m.len) return m;
     }
     if (raw.len && raw[0]=='~' && !compin(raw, '/')) {
         // No user database: nothing here, and the file names below
@@ -701,6 +719,7 @@ static Slice<Str> compgenerate(Editor *ed, Shell *sh, Comp *c, i32 gen)
         if (m.len>1 && c->mode==CM_LIST && raw[raw.len-1]=='/') c->noappend = 1;
         if (m.len==1 || (m.len && c->mode!=CM_TAB)) return m;
     }
+    if (c->nofiles) return {};
     return compfiles(ed, sh, c, w, 1);
 }
 
@@ -793,7 +812,7 @@ static void complcd(Editor *ed, Comp *c, Str typed)
 static void compprocess(Editor *ed, Shell *sh, Comp *c)
 {
     Slice<Str> m = c->m;
-    sort(m.data, m.len, compless, *c->a);
+    if (!c->nosort) sort(m.data, m.len, compless, *c->a);
     iz n = 0;
     for (iz i = 0; i < m.len; i++) {
         if (!n || m[i]!=m[n-1]) m[n++] = m[i];
@@ -880,7 +899,7 @@ static Str compquote(Editor *, Shell *sh, Comp *c, Str s, b32 mult, i32 *style)
 
 static b32 compshouldquote(Comp *c, Str s)
 {
-    if (!c->files || c->noqfn) return 0;
+    if ((!c->files && !c->fullquote) || c->noqfn) return 0;
     for (iz i = 0; i < s.len; i++) {
         if (compin(" \t\n\\\"'@<>=;|&()#$`?*[!:{~", s[i])) return 1;
     }
@@ -1292,7 +1311,7 @@ static void compbraces(Editor *ed, Shell *, Comp *c)
 // One completion attempt in a mode with a generator
 static void edcomplete1(Editor *ed, Shell *sh, u8 mode, i32 gen)
 {
-    Arena a = *scratchat(sh, sh->capdepth+1);
+    Arena a = *scratchat(sh, sh->capdepth);  // claimed by edcomplete
     Str before = clone(&a, edtext(ed));
     Comp c = {};
     c.a      = &a;
@@ -1303,6 +1322,8 @@ static void edcomplete1(Editor *ed, Shell *sh, u8 mode, i32 gen)
     c.breaks  = breaks;
     c.mode    = mode;
     c.partial = gen != CX_SHELL;
+    sh->comptype = mode;  // COMP_TYPE and COMP_KEY
+    sh->compkey  = ed->curkey;
     compword(&c, breaks, gen==CX_SHELL && sh->shopt[S_HOSTCOMPLETE]);
     if (!ed->shellline && gen==CX_SHELL) gen = CX_FILE;
     c.m = compgenerate(ed, sh, &c, gen);
@@ -1365,12 +1386,18 @@ static u8 compmode(Editor *ed, i32 fn)
     return CM_TAB;
 }
 
-// menu-complete and menu-complete-backward (§8)
+// menu-complete and menu-complete-backward (§8), and bash's
+// dabbrev-expand, which also continues a menu-complete
 static void edmenu(Editor *ed, Shell *sh, i32 fn, i32 count)
 {
     if (fn == EF_MENU_COMPLETE_BACKWARD) count = -count;
-    b32 cont = (ed->lastfn==EF_MENU_COMPLETE || ed->lastfn==EF_MENU_COMPLETE_BACKWARD)
+    i32 last = ed->lastfn;
+    b32 cont = (last==EF_MENU_COMPLETE || last==EF_MENU_COMPLETE_BACKWARD
+                || (last==EF_DABBREV_EXPAND && fn==EF_DABBREV_EXPAND))
                && !ed->menudone && ed->menu && ed->menu->m.len;
+    i32 gen = fn==EF_DABBREV_EXPAND ? CX_DABBREV
+            : ed->shellline         ? CX_SHELL
+            :                         CX_FILE;
     if (!ed->menu) ed->menu = alloc<Comp>(&ed->perm);
     if (!cont) {
         ed->cmem = {(byte *)(ed->cmem.mem+1), ed->cmem.end, ed->cmem.mem};
@@ -1381,10 +1408,12 @@ static void edmenu(Editor *ed, Shell *sh, i32 fn, i32 count)
         c->append = ' ';
         c->breaks = compbreaks(sh, c->a);
         c->mode   = CM_TAB;
+        sh->comptype = '%';
+        sh->compkey  = ed->curkey;
         compword(c, c->breaks, sh->shopt[S_HOSTCOMPLETE]);
         c->line = clone(c->a, c->line);
         c->word = cuthead(c->line, c->start);
-        c->m = compgenerate(ed, sh, c, ed->shellline ? CX_SHELL : CX_FILE);
+        c->m = compgenerate(ed, sh, c, gen);
         compprocess(ed, sh, c);
         ed->menudone = 0;
         ed->menuidx  = 0;
@@ -1434,8 +1463,60 @@ static void edmenu(Editor *ed, Shell *sh, i32 fn, i32 count)
     }
 }
 
-// Run a completion command
-static void edcomplete(Editor *ed, Shell *sh, i32 fn, i32 count)
+// export-completions: the matches written out for another program, and
+// the line cleared by an argument above one. The display is left as it
+// was, as readline does.
+static void edexport(Editor *ed, Shell *sh, i32 count)
+{
+    Arena a = *scratchat(sh, sh->capdepth);  // claimed by edcomplete
+    Comp c = {};
+    c.a      = &a;
+    c.line   = {ed->line.data, ed->point};
+    c.append = ' ';
+    c.breaks = compbreaks(sh, &a);
+    c.mode   = '$';
+    sh->comptype = '$';
+    sh->compkey  = ed->curkey;
+    compword(&c, c.breaks, sh->shopt[S_HOSTCOMPLETE]);
+    c.m = compgenerate(ed, sh, &c, ed->shellline ? CX_SHELL : CX_FILE);
+    compprocess(ed, sh, &c);
+
+    Buf b(&a, 256);
+    iz n = c.m.len>1 ? c.m.len+1 : c.m.len;
+    print(&b, "\r\n");
+    print(&b, (i64)n);
+    print(&b, "\r\n");
+    print(&b, c.word);
+    print(&b, "\r\n");
+    print(&b, (i64)c.start);
+    print(&b, ":");
+    print(&b, (i64)c.end);
+    print(&b, "\r\n");
+    for (iz i = 0; i < n; i++) {
+        Str m = c.m.len>1 ? (i ? c.m[i-1] : c.lcd) : c.m[i];
+        compputs(&b, m);
+        u8 mark = compmark(ed, sh, &c, m);
+        if (mark) putbyte(&b, mark);
+        print(&b, "\r\n");
+    }
+    // Written past the editor's output, which stays as it was
+    edflush(ed, sh);
+    Str out = finish(&b);
+    if (ed->tty.legacy) {
+        vtconwrite(sh->os, ed->out, &ed->vtcon, out);
+    } else {
+        fdwrite(sh, 2, out);
+    }
+
+    if (count > 1) {
+        edgroup(ed, U_BEGIN);
+        eddelete(ed, 0, ed->line.len);
+        edgroup(ed, U_END);
+        ed->point = ed->mark = 0;
+    }
+}
+
+static void edcomplete2(Editor *ed, Shell *sh, i32 fn, i32 count)
 {
     switch (fn) {
     case EF_COMPLETE:
@@ -1490,8 +1571,21 @@ static void edcomplete(Editor *ed, Shell *sh, i32 fn, i32 count)
         return;
     case EF_MENU_COMPLETE:
     case EF_MENU_COMPLETE_BACKWARD:
+    case EF_DABBREV_EXPAND:
         edmenu(ed, sh, fn, count);
+        return;
+    case EF_EXPORT_COMPLETIONS:
+        edexport(ed, sh, count);
         return;
     }
     edbell(ed);
+}
+
+// Run a completion command. It claims a scratch depth, since compspecs
+// run shell code whose command substitutions take the next one.
+static void edcomplete(Editor *ed, Shell *sh, i32 fn, i32 count)
+{
+    i32 depth = ++sh->capdepth;
+    edcomplete2(ed, sh, fn, count);
+    sh->capdepth = depth - 1;
 }

@@ -1,0 +1,54 @@
+== snap 1
+$ cd dd/sub
+@ 0,11 bell 2
+== snap 2
+$ export XVAR
+@ 0,13 bell 4
+== snap 3
+$ unset XVAR
+XVAR1  XVAR2
+$ unset XVAR
+@ 2,12 bell 5
+== snap 4
+$ unset XVAR
+XVAR1  XVAR2
+$ kill -s HUP
+@ 2,14 bell 5
+== snap 5
+$ unset XVAR
+XVAR1  XVAR2
+$ kill -SIGU
+@ 2,12 bell 7
+== snap 6
+$ unset XVAR
+XVAR1  XVAR2
+$ set -o noclobber
+@ 2,19 bell 7
+== snap 7
+$ unset XVAR
+XVAR1  XVAR2
+$ shopt -s nocase
+nocaseglob   nocasematch
+$ shopt -s nocase
+@ 4,17 bell 8
+== snap 8
+$ unset XVAR
+XVAR1  XVAR2
+$ shopt -s nocase
+nocaseglob   nocasematch
+$ type wha
+@ 4,10 bell 9
+== snap 9
+$ unset XVAR
+XVAR1  XVAR2
+$ shopt -s nocase
+nocaseglob   nocasematch
+$ command -v echo
+@ 4,18 bell 9
+== snap 10
+$ unset XVAR
+XVAR1  XVAR2
+$ shopt -s nocase
+nocaseglob   nocasematch
+$ command -v echo
+@ 4,18 bell 9

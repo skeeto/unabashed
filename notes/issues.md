@@ -36,9 +36,6 @@ None: the XP flakes were fixed or not seen again at step 10 (m7.md).
 
 ## M8 (performance)
 
-- **Programmable completion**: `complete`, `compgen` beyond the name
-  lists, `compopt` (plan.md's M8 row); the suite's complete test is
-  FAIL until then (t/oracle-posix.txt).
 - **`bash -i` whose input is not a terminal still reads with readline**:
   it interprets the editing keys (C-b, C-r, arrows) and writes
   readline's redisplay to stderr, terminal escapes and all (TERM=dumb:
@@ -114,9 +111,8 @@ Moved from M6 (m6.md, step 10), with bind and the rest of editor 2:
   unbound", which differs only when the inputrc unbinds one (or bind
   does); the terminal's other keys (Delete, Insert, Home, End, Page
   Up and Down as `\e[N~`) are bound after it, as readline does.
-- Functions that bind but only ring the bell: dabbrev-expand and
-  export-completions (step 8). tty-status rings as readline's does where there is no TIOCSTAT
-  (Linux, Windows).
+- tty-status rings the bell, as readline's does where there is no
+  TIOCSTAT (Linux, Windows).
 - Keyboard macros record the keys read, not readline's dispatched
   keys: readline misses keys inserted together with self-insert's
   type-ahead (`ab` typed at once records only `a`), and records again

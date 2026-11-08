@@ -1,0 +1,26 @@
+# bash-completion (EDRECORD_BC, never committed) for programs: long
+# options read from --help, file names filtered by extension, users
+# and groups, options after --
+size 24 100
+rc PS1='$ '
+rc PATH=/usr/local/bin:/usr/bin:/bin
+rc . /opt/bash-completion/bash_completion
+rc cd ~ && mkdir -p w && cd w && touch a.tar a.tgz b.gz c.txt && mkdir sub
+keys ls --colo\t
+snap
+keys \C-a\C-ktar xf \t\t
+snap
+keys \C-a\C-kgzip -d \t\t
+snap
+keys \C-a\C-kchown orac\t
+snap
+keys \C-a\C-kchgrp orac\t
+snap
+keys \C-a\C-ksort --rev\t
+snap
+keys \C-a\C-kfind . -nam\t
+snap
+keys \C-a\C-kchmod u+x \t\t
+snap
+keys \C-a\C-kecho $XDG\t\C-a\C-kecho ${HOM\t
+snap

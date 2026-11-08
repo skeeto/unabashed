@@ -1,0 +1,32 @@
+# bash-completion (EDRECORD_BC, never committed): commands after
+# wrappers (env, timeout, nice, xargs), redirections, tilde users,
+# owner:group, dd operands, find tests and quoted file names
+size 24 100
+rc PS1='$ '
+rc PATH=/usr/local/bin:/usr/bin:/bin
+rc . /opt/bash-completion/bash_completion
+rc cd ~ && mkdir -p v && cd v && touch 'sp ace1' 'sp ace2' plain.c && mkdir dir1
+keys env X=1 ls --colo\t
+snap
+keys \C-a\C-ktimeout 5 sort --rev\t
+snap
+keys \C-a\C-knice -n 3 uniq --ski\t
+snap
+keys \C-a\C-kxargs ls --hyperl\t
+snap
+keys \C-a\C-kcat < sp\t
+snap
+keys \C-a\C-kls 2>/dev/nu\t
+snap
+keys \C-a\C-kls ~orac\t
+snap
+keys \C-a\C-kchown oracle:ora\t
+snap
+keys \C-a\C-kdd con\t
+snap
+keys \C-a\C-kfind . -typ\t
+snap
+keys \C-a\C-krm sp\t\t
+snap
+keys \C-a\C-krmdir \t
+snap

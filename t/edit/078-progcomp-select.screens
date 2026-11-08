@@ -1,0 +1,33 @@
+== snap 1
+$
+@ 0,2 bell 5
+== snap 2
+$ zap w
+@ 0,7 bell 6
+== snap 3
+$ zap w
+@ 0,7 bell 7
+== snap 4
+$ dft qd/f
+@ 0,10 bell 9
+== snap 5
+$ bdf $HOME/
+@ 0,12 bell 9
+== snap 6
+$ cat ~/log
+1<_EmptycmD_> 2<> 3<> L<> P<0> C<-1>
+1<_InitialWorD_> 2<fo> 3<fo> L<fo> P<2> C<0>
+1<_InitialWorD_> 2<> 3<> L<> P<0> C<-1>
+1<_InitialWorD_> 2<> 3<foo> L<foo x> P<0> C<0>
+load<zap>
+$
+@ 6,2 bell 9
+== snap 7
+$ cat ~/log
+1<_EmptycmD_> 2<> 3<> L<> P<0> C<-1>
+1<_InitialWorD_> 2<fo> 3<fo> L<fo> P<2> C<0>
+1<_InitialWorD_> 2<> 3<> L<> P<0> C<-1>
+1<_InitialWorD_> 2<> 3<foo> L<foo x> P<0> C<0>
+load<zap>
+$
+@ 6,2 bell 9

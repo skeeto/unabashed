@@ -196,6 +196,7 @@ static i32 selftest(Os *os, Arena *perm, Output *out)
 #include "vtcon.cpp"
 #include "edit.cpp"
 #include "complete.cpp"
+#include "pcomplete.cpp"
 #include "inputrc.cpp"
 
 

@@ -1,0 +1,26 @@
+# bash-completion (EDRECORD_BC, never committed) for builtins: cd to
+# directories, variables for export and unset, signals for kill, set
+# -o and shopt options, commands after type and command
+size 24 100
+rc PS1='$ '
+rc PATH=/usr/local/bin:/usr/bin:/bin
+rc . /opt/bash-completion/bash_completion
+rc cd ~ && mkdir -p dd/sub1 dd/sub2 && touch dd/file1 && XVAR1=1 XVAR2=2
+keys cd dd/\t\t
+snap
+keys \C-a\C-kexport XVA\t\t
+snap
+keys \C-a\C-kunset XVAR\t\t
+snap
+keys \C-a\C-kkill -s HU\t
+snap
+keys \C-a\C-kkill -SIGU\t\t
+snap
+keys \C-a\C-kset -o noc\t
+snap
+keys \C-a\C-kshopt -s nocase\t\t
+snap
+keys \C-a\C-ktype wha\t
+snap
+keys \C-a\C-kcommand -v ech\t
+snap

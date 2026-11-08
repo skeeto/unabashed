@@ -581,6 +581,7 @@ struct Editor {
     KeyNode  vimove;    // vi bindings, kept for nothing yet
     KeyNode  viins;
     i32      keytimeout;  // keyseq-timeout, ms, 0 forever
+    u8       curkey;      // the key that ran the current command
     i64      deadline;    // read -t: os_now time when reading ends, or 0
     b32      timedout;    // and it has
     u8       pushed[32];  // keys read ahead and put back, the next last
@@ -1249,8 +1250,13 @@ static void edmove(Editor *ed, i32 row, i32 col)
     }
     ed->crow = row;
     if (col == ed->ccol) return;
-    if (!col) {
+    if (!col || col+1<ed->ccol-col) {
+        // A carriage return is shorter, as readline reckons
         edput(ed, "\r");
+        ed->ccol = 0;
+    }
+    if (col == ed->ccol) {
+        // there
     } else if (col > ed->ccol) {
         edcsi(ed, col-ed->ccol, 'C');
     } else if (ed->ccol-col == 1) {
@@ -4155,6 +4161,8 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
     case EF_COMPLETE_INTO_BRACES:
     case EF_MENU_COMPLETE:
     case EF_MENU_COMPLETE_BACKWARD:
+    case EF_DABBREV_EXPAND:
+    case EF_EXPORT_COMPLETIONS:
         edcomplete(ed, sh, fn, ed->argset ? ed->count : 1);
         break;
     case EF_RE_READ_INIT_FILE:
@@ -5199,6 +5207,7 @@ static b32 eddispatch(Editor *ed, Shell *sh)
         ed->result = ED_EOF;
         return 1;
     }
+    ed->curkey = s.key;
     switch (s.fn) {
     case EF_DIGIT_ARGUMENT:
         edarg(ed, sh, s.key);

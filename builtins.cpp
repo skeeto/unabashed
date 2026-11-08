@@ -4581,14 +4581,7 @@ static i32 b_times(Shell *sh, Str *, iz, Arena)
 }
 
 
-// compgen, for the actions that list names. Completion proper, with
-// files, commands, globs and -F/-C, arrives with the line editor (M8).
-
-enum : u32 {
-    CG_ALIAS = 1<<0, CG_BUILTIN = 1<<1, CG_EXPORT = 1<<2,
-    CG_FUNCTION = 1<<3, CG_KEYWORD = 1<<4, CG_VARIABLE = 1<<5,
-    CG_SETOPT = 1<<6, CG_SHOPT = 1<<7,
-};
+// Names for completion (complete.cpp, pcomplete.cpp)
 
 static void compaliases(Alias *t, Arena *a, Slice<Str> *out)
 {
@@ -4616,135 +4609,6 @@ static void compfuncs(Func *f, Arena *a, Slice<Str> *out)
 
 static void compbuiltins(Shell *, Arena *, Slice<Str> *);
 
-static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
-{
-    static struct { Str name; u32 bit; } actions[] = {
-        {"alias", CG_ALIAS}, {"builtin", CG_BUILTIN}, {"enabled", CG_BUILTIN},
-        {"export", CG_EXPORT}, {"function", CG_FUNCTION},
-        {"keyword", CG_KEYWORD}, {"variable", CG_VARIABLE},
-        {"setopt", CG_SETOPT}, {"shopt", CG_SHOPT},
-    };
-    Arena *a = &scratch;
-    u32 want = 0;
-    Str words = {}, prefix = {}, suffix = {}, filter = {};
-    b32 haswords = 0;
-    iz  i = 1;
-    for (; i<nargs && args[i].len>1 && args[i][0]=='-'; i++) {
-        Str arg = args[i];
-        if (arg == "--") {
-            i++;
-            break;
-        }
-        for (iz k = 1; k < arg.len; k++) {
-            u8   c   = arg[k];
-            Str *val = 0;
-            switch (c) {
-            case 'a': want |= CG_ALIAS;    continue;
-            case 'b': want |= CG_BUILTIN;  continue;
-            case 'e': want |= CG_EXPORT;   continue;
-            case 'k': want |= CG_KEYWORD;  continue;
-            case 'v': want |= CG_VARIABLE; continue;
-            case 'A': case 'W': case 'P': case 'S': case 'X': break;
-            default:
-                invalidoption(sh, scratch, "compgen", span(arg.data+k-1, arg.data+k+1));
-                return 2;
-            }
-            Str opt;
-            if (k+1 < arg.len) {
-                opt = cuthead(arg, k+1);
-            } else if (i+1 < nargs) {
-                opt = args[++i];
-            } else {
-                builtinerror(sh, scratch, "compgen", concat3(a, "-", Str{&arg.data[k], 1}, ": option requires an argument"));
-                usageerror(sh, scratch, "compgen");
-                return 2;
-            }
-            k = arg.len;
-            switch (c) {
-            case 'A': {
-                u32 bit = 0;
-                for (iz j = 0; j < countof(actions); j++) {
-                    if (actions[j].name == opt) bit = actions[j].bit;
-                }
-                if (!bit) {
-                    builtinerror(sh, scratch, "compgen", concat(a, opt, ": invalid action name"));
-                    return 2;
-                }
-                want |= bit;
-            } continue;
-            case 'W': val = &words;  haswords = 1; break;
-            case 'P': val = &prefix; break;
-            case 'S': val = &suffix; break;
-            case 'X': val = &filter; break;
-            }
-            *val = opt;
-        }
-    }
-    Str word = i<nargs ? args[i] : Str("");
-
-    Slice<Str> names = {};
-    // Each action's names in turn, as bash: tables in their own order,
-    // the others sorted
-    for (u32 bit = 1; bit <= CG_SHOPT; bit <<= 1) {
-        iz start = names.len;
-        switch (want & bit) {
-        case CG_ALIAS:    compaliases(sh->aliases, a, &names); break;
-        case CG_BUILTIN:  compbuiltins(sh, a, &names);         break;
-        case CG_EXPORT:   compvars(sh->vars, 1, a, &names);    break;
-        case CG_FUNCTION: compfuncs(sh->funcs, a, &names);     break;
-        case CG_VARIABLE: compvars(sh->vars, 0, a, &names);    break;
-        case CG_KEYWORD:
-            for (iz j = 0; j < countof(reserved); j++) {
-                names = push(a, names, reserved[j].word);
-            }
-            break;
-        case CG_SETOPT:
-            for (i32 k = 0; k < O_COUNT; k++) {
-                if (hasoption(sh, k)) names = push(a, names, setoptions[k].name);
-            }
-            break;
-        case CG_SHOPT:
-            for (i32 k = 0; k < S_COUNT; k++) {
-                if (hasshopt(sh, k)) names = push(a, names, shoptnames[k]);
-            }
-            break;
-        }
-        if (bit!=CG_BUILTIN && bit!=CG_KEYWORD) {
-            sort(names.data+start, names.len-start, strless, *a);
-        }
-    }
-    if (haswords) {
-        // Split on IFS, then expand each word
-        Got ifs = getvar(sh, a, "IFS");
-        Str sep = ifs.set ? ifs.value : Str(" \t\n");
-        for (iz j = 0; j < words.len;) {
-            iz beg = j;
-            while (j<words.len && !ifsmember(sep, words[j])) j++;
-            if (j > beg) {
-                Str w = span(words.data+beg, words.data+j);
-                names = push(a, names, expandstring(sh, a, w));
-            }
-            j += j < words.len;
-        }
-    }
-
-    b32 negate = filter.len && filter[0]=='!';
-    if (negate) filter = cuthead(filter, 1);
-    i32 flags = sh->shopt[S_EXTGLOB] ? PM_EXTGLOB : 0;
-    b32 any = 0;
-    for (iz j = 0; j < names.len; j++) {
-        Str n = names[j];
-        if (!startswith(n, word)) continue;
-        if (filter.data && patmatch(filter, n, flags, *a) != negate) continue;
-        bprint(sh, prefix);
-        bprint(sh, n);
-        bprint(sh, suffix);
-        bprint(sh, "\n");
-        any = 1;
-    }
-    return !any;
-}
-
 // The table
 
 static i32 b_trap(Shell *, Str *, iz, Arena);  // trap.cpp
@@ -4758,6 +4622,9 @@ static i32 b_disown(Shell *, Str *, iz, Arena);
 static i32 b_fg(Shell *, Str *, iz, Arena);
 static i32 b_bg(Shell *, Str *, iz, Arena);
 static i32 b_suspend(Shell *, Str *, iz, Arena);
+static i32 b_compgen(Shell *, Str *, iz, Arena);   // pcomplete.cpp
+static i32 b_complete(Shell *, Str *, iz, Arena);  // pcomplete.cpp
+static i32 b_compopt(Shell *, Str *, iz, Arena);   // pcomplete.cpp
 
 static i32 b_enable(Shell *, Str *, iz, Arena);
 static i32 b_help(Shell *, Str *, iz, Arena);         // help.cpp
@@ -4776,6 +4643,8 @@ static Builtin builtins[] = {
     {"cd",       b_cd,       0},
     {"command",  b_command,  0},
     {"compgen",  b_compgen,  0},
+    {"complete", b_complete, 0},
+    {"compopt",  b_compopt,  0},
     {"continue", b_continue, B_SPECIAL},
     {"cygpath",  b_cygpath,  B_MSYS|B_NOHELP},
     {"declare",  b_declare,  B_DECL},

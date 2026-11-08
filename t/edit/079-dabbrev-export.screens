@@ -1,0 +1,185 @@
+== snap 1
+$ : zeta zebra.o alpha
+$ : zoo zeta
+$ : zoo
+@ 2,7
+== snap 2
+$ : zeta zebra.o alpha
+$ : zoo zeta
+$ : zeta
+@ 2,8
+== snap 3
+$ : zeta zebra.o alpha
+$ : zoo zeta
+$ : z
+@ 2,5 bell 1
+== snap 4
+$ : zeta zebra.o alpha
+$ : zoo zeta
+$ : q x
+@ 2,7 bell 2
+== snap 5
+$ : zeta zebra.o alpha
+$ : zoo zeta
+$ : zoo
+@ 2,7 bell 3
+== snap 6
+$ : zeta zebra.o alpha
+$ : zoo zeta
+$ ls ab
+3
+ab
+3:5
+ab
+ab1
+ab2
+
+@ 9,0 bell 3
+== snap 7
+$ : zeta zebra.o alpha
+$ : zoo zeta
+$ ls ab
+3
+ab
+3:5
+ab
+ab1
+ab2
+  ls a
+4
+a
+3:4
+a
+a c
+ab1
+ab2
+
+@ 17,0 bell 3
+== snap 8
+$ : zeta zebra.o alpha
+$ : zoo zeta
+$ ls ab
+3
+ab
+3:5
+ab
+ab1
+ab2
+  ls a
+4
+a
+3:4
+a
+a c
+ab1
+ab2
+  ls qq
+0
+qq
+3:5
+
+@ 21,0 bell 3
+== snap 9
+3
+ab
+3:5
+ab
+ab1
+ab2
+  ls a
+4
+a
+3:4
+a
+a c
+ab1
+ab2
+  ls qq
+0
+qq
+3:5
+  ls ab1 x
+1
+ab1
+3:6
+ab1
+
+@ 23,0 bell 3
+== snap 10
+4
+a
+3:4
+a
+a c
+ab1
+ab2
+  ls qq
+0
+qq
+3:5
+  ls ab1 x
+1
+ab1
+3:6
+ab1
+$ ls ab
+3
+ab
+3:5
+ab
+ab1
+ab2
+
+@ 23,2 bell 3
+== snap 11
+4
+a
+3:4
+a
+a c
+ab1
+ab2
+  ls qq
+0
+qq
+3:5
+  ls ab1 x
+1
+ab1
+3:6
+ab1
+$ ls ab
+3
+ab
+3:5
+ab
+ab1
+ab2
+  ls ab1 x
+@ 23,10 bell 3
+== snap 12
+4
+a
+3:4
+a
+a c
+ab1
+ab2
+  ls qq
+0
+qq
+3:5
+  ls ab1 x
+1
+ab1
+3:6
+ab1
+$ ls ab
+3
+ab
+3:5
+ab
+ab1
+ab2
+  ls ab1 x
+@ 23,10 bell 3

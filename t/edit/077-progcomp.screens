@@ -1,0 +1,96 @@
+== snap 1
+$ wf al
+@ 0,7 bell 1
+== snap 2
+$ wf all
+@ 0,8 bell 3
+== snap 3
+$ : x; FOO=1 ff a=b 'c d' x\ y >g x
+@ 0,35 bell 5
+== snap 4
+$
+@ 0,2 bell 9
+== snap 5
+$ ns ab
+@ 0,7 bell 10
+== snap 6
+$ fn pd/
+a b  d1/  f1
+$ fn pd/
+@ 2,8 bell 11
+== snap 7
+$ fn pd/
+a b  d1/  f1
+$ fn pd/d1/
+@ 2,11 bell 11
+== snap 8
+$ fn pd/
+a b  d1/  f1
+$ srt
+zz  yy  xx
+$ srt
+@ 4,6 bell 12
+== snap 9
+$ fn pd/
+a b  d1/  f1
+$ srt
+zz  yy  xx
+$ mf xbash: completion: function `nothere' not found
+$ mf x
+@ 5,6 bell 14
+== snap 10
+$ fn pd/
+a b  d1/  f1
+$ srt
+zz  yy  xx
+$ mf xbash: completion: function `nothere' not found
+$ self bash: warning: programmable_completion: self: possible retry lo
+op
+
+@ 7,0 bell 16
+== snap 11
+$ fn pd/
+a b  d1/  f1
+$ srt
+zz  yy  xx
+$ mf xbash: completion: function `nothere' not found
+$ self bash: warning: programmable_completion: self: possible retry lo
+op
+  cat ~/log
+1<ff> 2<> 3<g> L<ff a=b 'c d' x\ y >g > P<21> T<9> K<9> C<8>
+[ff][a][=][b]['c d'][x\ y][>][g][]
+1<ff> 2<x> 3<g> L<ff a=b 'c d' x\ y >g x> P<22> T<9> K<9> C<8>
+[ff][a][=][b]['c d'][x\ y][>][g][x]
+1<ff> 2<> 3<ab> L<ff ab  cd> P<6> T<9> K<9> C<2>
+[ff][ab][][cd]
+1<ff> 2<> 3<--opt> L<ff --opt=> P<9> T<9> K<9> C<2>
+[ff][--opt][=]
+1<ff> 2<ab c> 3<ff> L<ff "ab c> P<8> T<9> K<9> C<1>
+[ff]["ab c]
+1<ff> 2<q> 3<-x> L<ff -x q> P<7> T<9> K<9> C<2>
+[ff][-x][q]
+$
+@ 20,2 bell 16
+== snap 12
+$ fn pd/
+a b  d1/  f1
+$ srt
+zz  yy  xx
+$ mf xbash: completion: function `nothere' not found
+$ self bash: warning: programmable_completion: self: possible retry lo
+op
+  cat ~/log
+1<ff> 2<> 3<g> L<ff a=b 'c d' x\ y >g > P<21> T<9> K<9> C<8>
+[ff][a][=][b]['c d'][x\ y][>][g][]
+1<ff> 2<x> 3<g> L<ff a=b 'c d' x\ y >g x> P<22> T<9> K<9> C<8>
+[ff][a][=][b]['c d'][x\ y][>][g][x]
+1<ff> 2<> 3<ab> L<ff ab  cd> P<6> T<9> K<9> C<2>
+[ff][ab][][cd]
+1<ff> 2<> 3<--opt> L<ff --opt=> P<9> T<9> K<9> C<2>
+[ff][--opt][=]
+1<ff> 2<ab c> 3<ff> L<ff "ab c> P<8> T<9> K<9> C<1>
+[ff]["ab c]
+1<ff> 2<q> 3<-x> L<ff -x q> P<7> T<9> K<9> C<2>
+[ff][-x][q]
+$
+@ 20,2 bell 16

@@ -1,0 +1,148 @@
+== snap 1
+$ ls --
+--all                                      --ignore=
+--almost-all                               --indicator-style=
+--author                                   --inode
+--block-size=                              --kibibytes
+--classify                                 --literal
+--color                                    --no-group
+--color=                                   --numeric-uid-gid
+--context                                  --quote-name
+--dereference                              --quoting-style=
+--dereference-command-line                 --recursive
+--dereference-command-line-symlink-to-dir  --reverse
+--directory                                --show-control-chars
+--dired                                    --si
+--escape                                   --size
+--file-type                                --sort
+--format=                                  --sort=
+--full-time                                --tabsize=
+--group-directories-first                  --time
+--help                                     --time-style=
+--hide-control-chars                       --time=
+--hide=                                    --version
+--human-readable                           --width=
+--hyperlink                                --zero
+--ignore-backups
+$ ls --
+@ 25,7 bell 1
+== snap 2
+$ ls --
+--all                                      --ignore=
+--almost-all                               --indicator-style=
+--author                                   --inode
+--block-size=                              --kibibytes
+--classify                                 --literal
+--color                                    --no-group
+--color=                                   --numeric-uid-gid
+--context                                  --quote-name
+--dereference                              --quoting-style=
+--dereference-command-line                 --recursive
+--dereference-command-line-symlink-to-dir  --reverse
+--directory                                --show-control-chars
+--dired                                    --si
+--escape                                   --size
+--file-type                                --sort
+--format=                                  --sort=
+--full-time                                --tabsize=
+--group-directories-first                  --time
+--help                                     --time-style=
+--hide-control-chars                       --time=
+--hide=                                    --version
+--human-readable                           --width=
+--hyperlink                                --zero
+--ignore-backups
+$ help comp
+compgen   complete  compopt
+$ export HOME
+@ 27,13 bell 2
+== snap 3
+$ ls --
+--all                                      --ignore=
+--almost-all                               --indicator-style=
+--author                                   --inode
+--block-size=                              --kibibytes
+--classify                                 --literal
+--color                                    --no-group
+--color=                                   --numeric-uid-gid
+--context                                  --quote-name
+--dereference                              --quoting-style=
+--dereference-command-line                 --recursive
+--dereference-command-line-symlink-to-dir  --reverse
+--directory                                --show-control-chars
+--dired                                    --si
+--escape                                   --size
+--file-type                                --sort
+--format=                                  --sort=
+--full-time                                --tabsize=
+--group-directories-first                  --time
+--help                                     --time-style=
+--hide-control-chars                       --time=
+--hide=                                    --version
+--human-readable                           --width=
+--hyperlink                                --zero
+--ignore-backups
+$ help comp
+compgen   complete  compopt
+$ kill -l
+@ 27,10 bell 4
+== snap 4
+$ ls --
+--all                                      --ignore=
+--almost-all                               --indicator-style=
+--author                                   --inode
+--block-size=                              --kibibytes
+--classify                                 --literal
+--color                                    --no-group
+--color=                                   --numeric-uid-gid
+--context                                  --quote-name
+--dereference                              --quoting-style=
+--dereference-command-line                 --recursive
+--dereference-command-line-symlink-to-dir  --reverse
+--directory                                --show-control-chars
+--dired                                    --si
+--escape                                   --size
+--file-type                                --sort
+--format=                                  --sort=
+--full-time                                --tabsize=
+--group-directories-first                  --time
+--help                                     --time-style=
+--hide-control-chars                       --time=
+--hide=                                    --version
+--human-readable                           --width=
+--hyperlink                                --zero
+--ignore-backups
+$ help comp
+compgen   complete  compopt
+$ unset -f myf
+@ 27,14 bell 6
+== snap 5
+$ ls --
+--all                                      --ignore=
+--almost-all                               --indicator-style=
+--author                                   --inode
+--block-size=                              --kibibytes
+--classify                                 --literal
+--color                                    --no-group
+--color=                                   --numeric-uid-gid
+--context                                  --quote-name
+--dereference                              --quoting-style=
+--dereference-command-line                 --recursive
+--dereference-command-line-symlink-to-dir  --reverse
+--directory                                --show-control-chars
+--dired                                    --si
+--escape                                   --size
+--file-type                                --sort
+--format=                                  --sort=
+--full-time                                --tabsize=
+--group-directories-first                  --time
+--help                                     --time-style=
+--hide-control-chars                       --time=
+--hide=                                    --version
+--human-readable                           --width=
+--hyperlink                                --zero
+--ignore-backups
+$ help comp
+compgen   complete  compopt
+$ unset -f myf
+@ 27,14 bell 6

@@ -1,0 +1,18 @@
+# bash-completion (EDRECORD_BC, never committed): a long option list,
+# help topics, export, signals for kill -l, getent databases, unset -f
+# functions
+size 40 100
+rc PS1='$ '
+rc PATH=/usr/local/bin:/usr/bin:/bin
+rc . /opt/bash-completion/bash_completion
+rc myfa() { :; }; myfb() { :; }
+keys ls --\t\t
+snap
+keys \C-a\C-khelp comp\t\t
+keys \C-a\C-kexport HOM\t
+snap
+keys \C-a\C-kkill -l \t\t
+snap
+keys \C-a\C-kgetent pass\t
+keys \C-a\C-kunset -f myf\t\t
+snap

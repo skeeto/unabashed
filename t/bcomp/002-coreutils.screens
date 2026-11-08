@@ -1,0 +1,70 @@
+== snap 1
+$ ls --color
+@ 0,12 bell 1
+== snap 2
+$ tar xf
+a.tar  a.tgz  sub/
+$ tar xf
+@ 2,9 bell 2
+== snap 3
+$ tar xf
+a.tar  a.tgz  sub/
+$ gzip -d
+a.tgz  b.gz   sub/
+$ gzip -d
+@ 4,10 bell 3
+== snap 4
+$ tar xf
+a.tar  a.tgz  sub/
+$ gzip -d
+a.tgz  b.gz   sub/
+$ chown oracle
+@ 4,15 bell 3
+== snap 5
+$ tar xf
+a.tar  a.tgz  sub/
+$ gzip -d
+a.tgz  b.gz   sub/
+$ chgrp oracle
+@ 4,15 bell 3
+== snap 6
+$ tar xf
+a.tar  a.tgz  sub/
+$ gzip -d
+a.tgz  b.gz   sub/
+$ sort --reverse
+@ 4,17 bell 3
+== snap 7
+$ tar xf
+a.tar  a.tgz  sub/
+$ gzip -d
+a.tgz  b.gz   sub/
+$ find . -name
+@ 4,15 bell 3
+== snap 8
+$ tar xf
+a.tar  a.tgz  sub/
+$ gzip -d
+a.tgz  b.gz   sub/
+$ chmod u+x
+a.tar  a.tgz  b.gz   c.txt  sub/
+$ chmod u+x
+@ 6,12 bell 4
+== snap 9
+$ tar xf
+a.tar  a.tgz  sub/
+$ gzip -d
+a.tgz  b.gz   sub/
+$ chmod u+x
+a.tar  a.tgz  b.gz   c.txt  sub/
+$ echo ${HOME}
+@ 6,15 bell 5
+== snap 10
+$ tar xf
+a.tar  a.tgz  sub/
+$ gzip -d
+a.tgz  b.gz   sub/
+$ chmod u+x
+a.tar  a.tgz  b.gz   c.txt  sub/
+$ echo ${HOME}
+@ 6,15 bell 5

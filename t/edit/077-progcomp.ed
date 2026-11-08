@@ -1,0 +1,44 @@
+# Programmable completion at the prompt: -W, a -F function's COMP_*
+# variables and arguments (written to a log, shown at the end), word
+# splitting at COMP_WORDBREAKS, TAB TAB's COMP_TYPE, -o nospace,
+# filenames and nosort, compopt inside the function, a missing
+# function, progcomp_alias (an alias of itself loops to the warning)
+size 24 70
+rc PS1='$ '
+rc cd ~ && mkdir -p pd/d1 pd/d2 && touch 'pd/a b' pd/f1
+rc complete -W 'alpha beta alto' wf
+rc lg() { { echo "1<$1> 2<$2> 3<$3> L<$COMP_LINE> P<$COMP_POINT> T<$COMP_TYPE> K<$COMP_KEY> C<$COMP_CWORD>"; printf '[%s]' "${COMP_WORDS[@]}"; echo; } >> ~/log; COMPREPLY=(xone xtwo); }
+rc complete -F lg ff
+rc nsp() { COMPREPLY=(ab abc); compopt -o nospace; }
+rc complete -F nsp ns
+rc complete -o filenames -W 'pd/a\ b pd/d1 pd/f1' fn
+rc complete -o nosort -W 'zz yy xx' srt
+rc complete -F nothere mf
+rc alias fa='ff -x' self='self -y'; shopt -s progcomp_alias
+keys wf a\t
+snap
+keys \tl\t
+snap
+keys \C-a\C-k: x; FOO=1 ff a=b 'c d' x\\ y >g \t\t
+snap
+keys \C-a\C-kff ab  cd\C-b\C-b\C-b\t
+keys \C-a\C-kff --opt=\t
+keys \C-a\C-kff "ab c\t
+keys \C-a\C-kff one two\C-a\t
+keys \C-a\C-k
+snap
+keys ns a\t
+snap
+keys \C-a\C-kfn pd/\t\t
+snap
+keys \C-a\C-kfn pd/d\t
+snap
+keys \C-a\C-ksrt \t\t
+snap
+keys \C-a\C-kmf x\t
+snap
+keys \C-a\C-kfa q\t
+keys \C-a\C-kself \t
+snap
+keys \C-a\C-kcat ~/log\r
+snap

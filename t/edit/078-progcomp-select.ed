@@ -1,0 +1,30 @@
+# Choosing the compspec: -E on an empty line, -I for the command word,
+# after a separator and at column 0, none after an assignment alone, a
+# -D loader that installs a compspec and returns 124, -o default and
+# -o bashdefault
+size 24 70
+rc PS1='$ '
+rc cd ~ && mkdir -p qd && touch qd/f1 qd/f2
+rc lg() { echo "1<$1> 2<$2> 3<$3> L<$COMP_LINE> P<$COMP_POINT> C<$COMP_CWORD>" >> ~/log; COMPREPLY=(); }
+rc complete -E -F lg; complete -I -F lg
+rc ld() { echo "load<$1>" >> ~/log; complete -W "w1 w2" "$1"; return 124; }
+rc complete -D -F ld
+rc complete -o default -W zz dft
+rc complete -o bashdefault -W zz bdf
+keys \t
+keys fo\t
+keys \C-a\C-kls; \t
+keys \C-a\C-kfoo x\C-a\t
+keys \C-a\C-kX=1 \t
+keys \C-a\C-k
+snap
+keys zap w\t
+snap
+keys \C-a\C-kzap w\t
+snap
+keys \C-a\C-kdft qd/\t\t
+snap
+keys \C-a\C-kbdf $HOM\t
+snap
+keys \C-a\C-kcat ~/log\r
+snap

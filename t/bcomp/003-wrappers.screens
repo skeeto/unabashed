@@ -1,0 +1,39 @@
+== snap 1
+$ env X=1 ls --color
+@ 0,20 bell 1
+== snap 2
+$ timeout 5 sort --reverse
+@ 0,27 bell 1
+== snap 3
+$ nice -n 3 uniq --ski
+@ 0,22 bell 2
+== snap 4
+$ xargs ls --hyperlink
+@ 0,23 bell 2
+== snap 5
+$ cat < sp\ ace
+@ 0,15 bell 3
+== snap 6
+$ ls 2>/dev/null
+@ 0,17 bell 3
+== snap 7
+$ ls ~oracle/
+@ 0,13 bell 3
+== snap 8
+$ chown oracle:oracle
+@ 0,22 bell 3
+== snap 9
+$ dd conv=
+@ 0,10 bell 3
+== snap 10
+$ find . -type
+@ 0,15 bell 3
+== snap 11
+$ rm sp\ ace
+@ 0,12 bell 5
+== snap 12
+$ rmdir dir1/
+@ 0,13 bell 5
+== snap 13
+$ rmdir dir1/
+@ 0,13 bell 5

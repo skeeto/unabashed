@@ -3,8 +3,8 @@
 # FAIL: ours. A test may move up, never down (notes/m7.md).
 # Frozen at M7's close: categories d and e all PASS or BASH. The FAILs
 # left, each owned in notes/issues.md: builtins (our own help text),
-# complete (complete and compgen, M8), dollars (a bash bug not copied),
-# history (bash -i reading a non-terminal with readline, M8).
+# dollars (a bash bug not copied), history (bash -i reading a
+# non-terminal with readline, M8). complete passes since M8 step 8.
 alias PASS
 appendop PASS
 arith PASS
@@ -17,7 +17,7 @@ braces PASS
 builtins FAIL
 case PASS
 casemod PASS
-complete FAIL
+complete PASS
 comsub PASS
 comsub-eof PASS
 comsub-posix PASS

@@ -406,6 +406,8 @@ struct Coproc {       // bash 5.3 allows several
 
 struct SniffCache;  // spawn.cpp
 struct Editor;      // edit.cpp
+struct CompTable;   // pcomplete.cpp
+struct CompSpec;
 
 // The command history (history.cpp)
 enum : i32 { HC_IGNSPACE = 1<<0, HC_IGNDUPS = 1<<1, HC_ERASEDUPS = 1<<2 };
@@ -554,6 +556,11 @@ struct Shell {
     Str      exe;          // the shell's own image, native (OsInfo.exe)
     SniffCache *sniffs;    // Windows: what files hold, shared by subshells
     Editor     *editor;    // the line editor, made on first use (edit.cpp)
+    CompTable  *comps;     // compspecs (pcomplete.cpp)
+    CompSpec   *compcur;   // the running completion's copy, for compopt
+    Str         compcurkey;
+    i32         comptype;  // COMP_TYPE and COMP_KEY of the last completion
+    i32         compkey;
     Hist        hist;      // command history (history.cpp)
     i64         cmdnumber; // \# in prompts: commands the reader ran, plus one
     i32         promptkind;  // the prompt decoding: 1 PS1, 2 PS2, 3 PS0,
