@@ -1215,6 +1215,9 @@ static void os_sigmode(Os *os, i32 sig, i32 mode)
     if (sig<1 || sig>=NSIG || sig==SIGKILL || sig==SIGSTOP) return;
     if ((os->entryign & bit) && mode!=SIGM_CLAIM) return;
     if (sig == SIGCHLD) return;  // os_wait's own handler
+    if (mode==SIGM_DEFAULT && !(os->changed & bit)) {
+        return;  // still as on entry, which may be a profiler's SIGPROF
+    }
     struct sigaction sa = {};
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
