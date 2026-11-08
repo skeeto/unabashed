@@ -140,6 +140,14 @@ Moved from M5a: limits of the test tiers, not of the shell.
 
 ## Accepted deviations
 
+- **Accepted: RANDOM is PCG64, not Park-Miller.** RANDOM and SRANDOM
+  come from PCG64 streams (vars.cpp), so a seed (`RANDOM=n`) gives a
+  different sequence than bash's, though the same one on every
+  platform. Bash's repeat avoidance and the BASH_COMPAT<=50 output are
+  not emulated. As in bash, every subshell, comsub, pipeline stage and
+  child process reseeds on first use, from the process's
+  os_entropy and its BASHPID; SRANDOM cannot be seeded. Chosen for
+  quality over bit-exact values (2026-11-08).
 - **Accepted: a here-document's nested $'...' message.** With extquote
   off, a here-document's `${x#${$'x1'}}` is a bad substitution with our
   usual message; bash reports "bad substitution: no closing `}' in"

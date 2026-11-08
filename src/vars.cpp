@@ -373,16 +373,72 @@ static i64 dynnow(Shell *sh)
     return os_now(sh->os);
 }
 
-// Bash's RANDOM: the Park-Miller "minimal standard" generator, with
-// the low bits of each result mixed into the 15-bit value.
+// The high 64 bits of a 64x64-bit product.
+static u64 mulhi64(u64 a, u64 b)
+{
+    u64 al = a & 0xffffffff, ah = a >> 32;
+    u64 bl = b & 0xffffffff, bh = b >> 32;
+    u64 ll = al*bl, lh = al*bh, hl = ah*bl;
+    u64 mid = (ll>>32) + (lh & 0xffffffff) + (hl & 0xffffffff);
+    return ah*bh + (lh>>32) + (hl>>32) + (mid>>32);
+}
+
+// Advance the state (the LCG with PCG's 128-bit multiplier), then
+// permute it into 64 bits of output.
+static u64 pcgnext(Pcg *g)
+{
+    u64 ml = 0x4385df649fccf645, mh = 0x2360ed051fc65da4;
+    u64 hi = mulhi64(g->lo, ml) + g->lo*mh + g->hi*ml;
+    u64 lo = g->lo*ml + g->inclo;
+    hi += g->inchi + (lo < g->inclo);
+    g->lo = lo;
+    g->hi = hi;
+    u64 x = hi ^ lo;
+    i32 r = (i32)(hi >> 58);
+    return x>>r | x<<(-r & 63);
+}
+
+// PCG's seeding: a starting state, and the stream to follow.
+static Pcg pcgseed(u64 state, u64 stream)
+{
+    Pcg g = {};
+    g.inclo = stream<<1 | 1;
+    g.inchi = stream >> 63;
+    pcgnext(&g);
+    u64 lo = g.lo + state;
+    g.hi += lo < state;
+    g.lo  = lo;
+    pcgnext(&g);
+    return g;
+}
+
+// A generator for this BASHPID's own stream, from the process's random
+// base: distinct in every subshell, vproc and process.
+static Pcg freshpcg(Shell *sh, u64 salt)
+{
+    Sched *s = sh->sched;
+    if (!s->entropy) s->entropy = os_entropy(sh->os) | 1;
+    return pcgseed(s->entropy ^ salt, (u64)sh->bashpid);
+}
+
+// RANDOM: 15 bits, from a stream that assigning RANDOM seeds.
 static i32 nextrandom(Shell *sh)
 {
-    i64 h = sh->seed ? sh->seed : 0x123459876;
-    i64 l = h % 127773;
-    i64 t = 16807*l - 2836*(h/127773);
-    if (t < 0) t += 0x7fffffff;
-    sh->seed = (u32)t;
-    return (i32)((t>>16 ^ (t & 0xffff)) & 0x7fff);
+    if (sh->randompid != sh->bashpid) {
+        sh->random    = freshpcg(sh, 0);
+        sh->randompid = sh->bashpid;
+    }
+    return (i32)(pcgnext(&sh->random) >> 49);
+}
+
+// SRANDOM: 32 bits, from a stream that cannot be seeded.
+static u32 nextsrandom(Shell *sh)
+{
+    if (sh->srandompid != sh->bashpid) {
+        sh->srandom    = freshpcg(sh, 0x5352414e444f4d00);  // "SRANDOM"
+        sh->srandompid = sh->bashpid;
+    }
+    return (u32)(pcgnext(&sh->srandom) >> 32);
 }
 
 static Str fmti64(Arena *a, i64 v)
@@ -429,10 +485,7 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
     switch (v->dyn) {
     case DYN_LINENO:        return fmti64(a, sh->lastlineno = sh->line);
     case DYN_RANDOM:        return fmti64(a, sh->lastrandom = nextrandom(sh));
-    case DYN_SRANDOM: {
-        u64 x = (u64)dynnow(sh) * 0x9e3779b97f4a7c15u;
-        return fmti64(a, (i64)(u32)(x >> 32));
-    }
+    case DYN_SRANDOM:       return fmti64(a, nextsrandom(sh));
     case DYN_SECONDS:
         return fmti64(a, (dynnow(sh) - sh->start)/1000000000 + v->base);
     case DYN_EPOCHSECONDS:  return fmti64(a, dynnow(sh)/1000000000);
@@ -1188,7 +1241,9 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
     if (val->dyn == DYN_RANDOM) {
         Arena a = scratch;
         Arith r = evalarith(sh, &a, value);
-        sh->seed = (u32)(r.ok ? r.value : 0);
+        // The same seed gives the same sequence, in this BASHPID
+        sh->random    = pcgseed((u64)(r.ok ? r.value : 0), 0);
+        sh->randompid = sh->bashpid;
     } else if (val->dyn == DYN_SECONDS) {
         Arena a = scratch;
         Arith r = evalarith(sh, &a, value);

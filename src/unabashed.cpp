@@ -1567,7 +1567,6 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     sh->egid    = info->egid;
     sh->umask   = 022;
     sh->start   = os_now(os);
-    sh->seed    = (u32)(sh->start ^ info->pid);
 
     Escape top = {};
     sh->esc = &top;

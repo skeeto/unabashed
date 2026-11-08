@@ -128,6 +128,7 @@ struct VProc {
     Handle  wproc;
     Io     *ios;      // submitted and not yet completed
     u64     lid;      // tracing: identity, the same under every seed
+    u64     entropies;  // os_entropy calls so far
     u64     tag;      // tracing: a shell's running task (os_tasktag)
     iz      ntasks;   // tracing: a shell's task count
     u64     group;    // tracing: a shell's running task's group (os_tasktag)
@@ -1953,6 +1954,15 @@ static i64 os_now(Os *os)
     return v->clock += 1000;
 }
 
+// Deterministic, from the process's identity: its tracing identity
+// (the same under every chaos seed) when tracing, else its pid.
+static u64 os_entropy(Os *os)
+{
+    Vos   *v = osvos(os);
+    VProc *p = v->procs + v->cur;
+    return vmix(p->lid ? p->lid : (u64)p->pid, ++p->entropies);
+}
+
 // The system zone: UTC as in the oracle's container, unless a test
 // configures another (a spec's "# localtz:" line).
 static Str os_localtz(Os *os, Arena *)
@@ -3011,6 +3021,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     p->ios    = 0;
     p->ctx    = ctx;
     p->tag    = 0;
+    p->entropies = 0;
     p->ntasks = 1;
     p->group  = 0;
     p->ingroup = vgroup(v);

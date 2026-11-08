@@ -297,6 +297,7 @@ W32(uz,     GetCurrentProcess());
 W32(uz,     GetCurrentThread());
 W32(b32,    GetNumberOfConsoleInputEvents(uz, i32 *));
 W32(i32,    GetCurrentProcessId());
+W32(uz,     LoadLibraryW(c16 const *));
 W32(i32,    GetTempPathW(i32, c16 *));
 W32(c16 *,  GetEnvironmentStringsW());
 W32(void,   GetStartupInfoW(StartupInfo *));
@@ -626,6 +627,11 @@ struct Os {
     b32 (__stdcall *iswow64)(uz, b32 *);  // IsWow64Process, XP SP2
     Str  exe;  // this program, for self-spawning (os_spawn with an image)
     b32  (__stdcall *cancelsync)(uz);    // CancelSynchronousIo, Vista
+    // RtlGenRandom (XP), from advapi32 when entropy is first wanted, so
+    // that shells that never ask do not load it
+    u8   (__stdcall *genrandom)(void *, u32);
+    b32  gentried;
+    u64  entropyn;  // the fallback's counter
     Arena      perm;       // platform records, recycled through free lists
     uz         wake;       // auto-reset event for the main thread
     Wnode     *wakeq;      // atomic stack pushed by other threads
@@ -4087,6 +4093,27 @@ static i64 os_now(Os *os)
     Filetime t = {};
     os->now(&t);
     return unixns(t);
+}
+
+static u64 os_entropy(Os *os)
+{
+    if (!os->gentried) {
+        os->gentried = 1;
+        uz m = LoadLibraryW(u"advapi32.dll");
+        if (m) {
+            void *f = GetProcAddress(m, "SystemFunction036");
+            os->genrandom = (u8 (__stdcall *)(void *, u32))f;
+        }
+    }
+    u64 r = 0;
+    if (os->genrandom && os->genrandom(&r, sizeof(r))) {
+        return r;
+    }
+    u64 x = (u64)os_now(os) ^ (u64)GetCurrentProcessId()<<40;
+    x += ++os->entropyn * 0x9e3779b97f4a7c15u;
+    x  = (x ^ x>>30) * 0xbf58476d1ce4e5b9u;
+    x  = (x ^ x>>27) * 0x94d049bb133111ebu;
+    return x ^ x>>31;
 }
 
 // The shell runs on a fiber of this reservation, not on the main

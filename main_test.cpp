@@ -685,6 +685,45 @@ static void test_arena(Test *t)
     expectint(t, "arena oom", hit, 1);
 }
 
+// RANDOM's PCG64: pcg-c's published outputs for pcg64_srandom_r(42, 54),
+// and the 64-bit halves against 128-bit integers for other seeds.
+static void test_pcg(Test *t)
+{
+    Pcg g = pcgseed(42, 54);
+    u64 want[] = {
+        0x86b1da1d72062b68, 0x1304aa46c9853d39, 0xa3670e9e0dd50358,
+        0xf9090e529a7dae00, 0xc85b9fd837996f2c, 0x606121f8e3919196,
+    };
+    i32 ok = 1;
+    for (i32 i = 0; i < countof(want); i++) {
+        ok &= pcgnext(&g) == want[i];
+    }
+    expectint(t, "pcg64 known answers", ok, 1);
+
+    #if __SIZEOF_INT128__
+    typedef unsigned __int128 u128;
+    u128 mul = (u128)0x2360ed051fc65da4<<64 | 0x4385df649fccf645;
+    ok = 1;
+    for (u64 k = 1; k < 64; k++) {
+        u64  seed   = k * 0x9e3779b97f4a7c15u;
+        u64  stream = ~seed ^ k<<60;
+        Pcg  p      = pcgseed(seed, stream);
+        u128 inc    = (u128)stream<<1 | 1;
+        u128 s      = 0;
+        s = s*mul + inc;
+        s += seed;
+        s = s*mul + inc;
+        for (i32 i = 0; i < 100; i++) {
+            s = s*mul + inc;
+            u64 x = (u64)(s>>64) ^ (u64)s;
+            i32 r = (i32)(s >> 122);
+            ok &= pcgnext(&p) == (x>>r | x<<(-r & 63));
+        }
+    }
+    expectint(t, "pcg64 halves match 128-bit", ok, 1);
+    #endif
+}
+
 // The scheduler on its own: pipes between tasks, joins, EPIPE, and
 // deadlock recovery.
 
@@ -1794,6 +1833,7 @@ int main(int argc, char **argv)
     test_vterm(&t);
     test_conkey(&t);
     test_arena(&t);
+    test_pcg(&t);
     test_sched(&t);
     test_sigpipe(&t);
     test_vwin(&t);

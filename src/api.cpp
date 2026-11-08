@@ -430,6 +430,9 @@ static u64     os_siggroup(Os *);
 static void    os_sigmode(Os *, i32 sig, i32 mode);
 // Realtime clock, in ns since the epoch.
 static i64     os_now(Os *);
+// 64 bits from the system's random source. Never fails: without one,
+// a mix of the clock, the pid and a counter. The vos is deterministic.
+static u64     os_entropy(Os *);
 // The system's time zone, for local time while TZ is not in the
 // environment, in TZ's own syntax: a POSIX TZ string ("EST5EDT,M3.2.0,
 // M11.1.0"), or ':' and the absolute path of a zoneinfo file.

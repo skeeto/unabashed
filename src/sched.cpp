@@ -120,6 +120,8 @@ struct Sched {
     Pump   *freepumps;
     Vproc  *freevprocs;  // pooled vproc memory (proc.cpp)
     iz      reserve;     // address space for each arena of a vproc
+    u64     entropy;     // the process's random base for RANDOM and
+                         // SRANDOM (os_entropy once, on first use), or 0
     iz      ntasks;      // live tasks, including the main task
     iz      npending;    // tasks blocked on an Io
     i32     budget;      // safe points until the next yield check

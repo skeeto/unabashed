@@ -18,6 +18,9 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#if __APPLE__
+#include <sys/random.h>  // getentropy
+#endif
 extern "C" int rename(char const *, char const *);  // stdio.h, whose macros collide
 #include "src/unabashed.cpp"
 #include "src/fibers.cpp"
@@ -43,6 +46,7 @@ struct Os {
     i32    werrfd;      // a flush to this descriptor failed, else -1
     u8     wkind[256];  // per descriptor: FK_* (fdkind)
     u8     wbuf[1<<14];
+    u64    entropyn;    // os_entropy's fallback counter
 };
 
 static u64 volatile sigbits;  // caught signals not yet taken
@@ -1422,6 +1426,19 @@ static i64 os_now(Os *)
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     return (i64)ts.tv_sec*1000000000 + ts.tv_nsec;
+}
+
+static u64 os_entropy(Os *os)
+{
+    u64 r = 0;
+    if (!getentropy(&r, sizeof(r))) {
+        return r;
+    }
+    u64 x = (u64)os_now(os) ^ (u64)getpid()<<40;
+    x += ++os->entropyn * 0x9e3779b97f4a7c15u;
+    x  = (x ^ x>>30) * 0xbf58476d1ce4e5b9u;
+    x  = (x ^ x>>27) * 0x94d049bb133111ebu;
+    return x ^ x>>31;
 }
 
 // glibc's default zone is the file /etc/localtime, which the core

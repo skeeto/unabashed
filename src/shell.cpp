@@ -470,6 +470,13 @@ struct EdRead {   // what read -e asks of the editor
     i64 deadline; // -t: os_now time when reading gives up, or 0
 };
 
+// PCG64 (XSL RR 128/64): a 128-bit state and an odd increment that
+// selects the stream, as 64-bit halves (i686 has no 128-bit integer).
+struct Pcg {
+    u64 lo, hi;
+    u64 inclo, inchi;
+};
+
 struct Shell {
     Os      *os;
     Sched   *sched;        // shared by every vproc of the process
@@ -589,7 +596,13 @@ struct Shell {
     i64      gid;
     i64      egid;
     i64      start;        // ns since the epoch
-    u32      seed;         // RANDOM
+    // RANDOM and SRANDOM, each with the BASHPID that seeded it: a
+    // subshell, vproc or child process reseeds on first use, as bash's
+    // subshells do, so that none repeats its parent's sequence
+    Pcg      random;
+    i64      randompid;
+    Pcg      srandom;
+    i64      srandompid;
     Str      cwd;          // native working directory, for the platform
                            // (empty: a virtual msys directory, as /proc)
     Str      wd;           // logical working directory (bash's
