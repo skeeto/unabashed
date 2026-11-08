@@ -81,6 +81,23 @@ static X *newx(Shell *sh, Arena *a)
     return x;
 }
 
+// Does the word expand to itself, one field, under any flags? None of
+// its bytes starts an expansion, quotes, a tilde, a brace expansion, a
+// pattern (extglob too) or a procsub, and none is a CR, which native
+// mode's splitting treats specially. Literal text is never split.
+static b32 literalword(Str s)
+{
+    for (iz i = 0; i < s.len; i++) {
+        switch (s[i]) {
+        case '$': case '`': case '\'': case '"': case '\\': case '~':
+        case '*': case '?': case '[': case '{': case '}': case '(':
+        case ')': case '\r':
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void xput(X *x, Str s, u8 flag)
 {
     print(&x->data, s);
@@ -480,6 +497,7 @@ static Str expandword(X *x, Str word, i32 ctx)
 // Expand a pattern: quoted characters are backslash-escaped.
 static Str expandpat(X *x, Str word, i32 ctx)
 {
+    if (literalword(word)) return word;  // nothing quoted to escape
     X *y = newx(x->sh, x->a);
     y->nosplit = 1;
     expandinto(y, word, ctx | XC_PATTERN);
@@ -2697,6 +2715,10 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
     Slice<XField> fields = {};
     Slice<XField> split2 = {};
     for (Word *w = words; w; w = w->next) {
+        if (literalword(w->text)) {
+            out = push(a, out, w->text);
+            continue;
+        }
         Slice<Str> texts = {};
         if (braces && !(w->flags & W_NOBRACE) && hasbrace(w->text)) {
             texts = braceexpand(a, w->text);
@@ -2779,6 +2801,7 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
 // Expand a word to a single string, without splitting or globbing.
 static Str expandstring(Shell *sh, Arena *a, Str text, i32 ctx = 0)
 {
+    if (literalword(text)) return text;  // in any context
     X *x = newx(sh, a);
     x->nosplit = 1;
     expandinto(x, text, ctx);
@@ -2788,6 +2811,7 @@ static Str expandstring(Shell *sh, Arena *a, Str text, i32 ctx = 0)
 // Expand a word as a pattern: quoted characters are escaped.
 static Str expandpattern(Shell *sh, Arena *a, Str text, i32 ctx = 0)
 {
+    if (literalword(text)) return text;  // nothing quoted to escape
     X *x = newx(sh, a);
     return expandpat(x, text, ctx);
 }
