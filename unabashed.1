@@ -834,6 +834,7 @@ In native mode only
 .IR /dev/null ,
 .IR /dev/zero ,
 .IR /dev/urandom ,
+.IR /dev/clipboard ,
 .IR /dev/tty ,
 .IR /dev/console ,
 .IR /dev/stdin ,
@@ -1544,11 +1545,33 @@ Read as the same endless stream of random bytes, from ChaCha8 keyed from
 the operating system's random source.
 Writes are discarded.
 .TP
-.IR /dev/clipboard ", and the recognised names that are not listed"
+.I /dev/clipboard
+The Windows clipboard's text.
+Opened for reading, it is a snapshot of the text as it is then, line
+endings unchanged (text copied from most Windows programs ends its lines
+with CRLF); a clipboard that holds no text, or only an image, reads as
+empty.
+Opened for writing, with
+.B >
+or
+.BR >> ,
+it starts empty, and what is written through that open accumulates:
+each write by the shell sets the clipboard to all of it, and a program's
+output is added when the program closes it.
+An open with no write, such as
+.BR :\~>/dev/clipboard ,
+leaves the clipboard alone.
+While another program keeps the clipboard open, the shell retries for
+about 300 milliseconds and then fails with
+.BR "Permission denied" .
+Only the shell's own redirections reach it, so write
+.BR "cat </dev/clipboard" ,
+not
+.BR "cat /dev/clipboard" .
+.TP
+The names recognised but not listed
 Writes are discarded and reads fail with
 .BR "No such file or directory" .
-.I /dev/clipboard
-does not reach the Windows clipboard.
 .PP
 A generator device opened for reading is a pipe that the shell fills, so
 builtins and programs read it alike, and
@@ -1627,7 +1650,9 @@ In native mode, as in busybox-w32, only
 .IR /dev/zero ,
 and
 .I /dev/urandom
-are devices, and behave as in msys mode.
+are devices, and so is
+.IR /dev/clipboard ,
+which busybox-w32 lacks; all behave as in msys mode.
 Any other name, such as
 .IR /dev/full ,
 .IR /dev/random ,
@@ -3245,6 +3270,21 @@ The emulated generators, such as
 are pipes when read, so
 .B test \-p
 is true on a descriptor open on one (see Devices above).
+.IP \(bu 2
+.I /dev/clipboard
+holds only the clipboard's Unicode text, where Git Bash also keeps
+Cygwin's own copy of the bytes, so text written there ends at a NUL
+byte and invalid UTF-8 does not survive the round trip.
+It holds at most 64 MiB, or 2 MiB in the 32-bit build, past which writes
+fail with
+.BR "Cannot allocate memory" .
+Everything written through one open adds to the same text, a child's
+output included, where a Git Bash child starts its own text, lost at
+the parent's next write.
+As in Git Bash, each of the shell's writes is a separate change to the
+clipboard.
+A clipboard held open by another program is an error, where Git Bash
+reads nothing and drops the write.
 .IP \(bu 2
 Process substitution shows
 .BI /dev/fd/ N
