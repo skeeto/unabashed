@@ -672,6 +672,11 @@ static void pathsetup(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
             // own directory, so PATH survives a trip through msys form
             addmount(c, perm, bindir, "/bin", 0, 0);
         }
+        // nor a tmp: /tmp is the user's temporary directory, as Git for
+        // Windows' fstab mounts it (usertemp), so /tmp paths work
+        if (c->temp.len) {
+            addmount(c, perm, c->temp, "/tmp", MNT_NOCASE|MNT_IMMUTABLE, 0);
+        }
     }
     Str argv0    = info->nargs ? info->args[0] : sh->exe;
     sh->pathmode = personaof(argv0.len ? argv0 : Str("bash"), fstab.data!=0);

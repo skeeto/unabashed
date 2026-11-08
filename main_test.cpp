@@ -341,6 +341,7 @@ enum : i32 {
     PERS_LINUX,   // the oracle container
     PERS_NATIVE,  // Windows, the shell as w64devkit's sh.exe
     PERS_MSYS,    // Windows, the shell as an MSYS2 install's bash.exe
+    PERS_W64BASH, // Windows, the shell as w64devkit's bash.exe (no fstab)
 };
 
 static i32 personality(Str name)  // -1 if unknown
@@ -348,6 +349,7 @@ static i32 personality(Str name)  // -1 if unknown
     if (name == "linux")  return PERS_LINUX;
     if (name == "native") return PERS_NATIVE;
     if (name == "msys")   return PERS_MSYS;
+    if (name == "w64bash") return PERS_W64BASH;
     return -1;
 }
 
@@ -475,10 +477,12 @@ static Result runshell(Test *t, Str *args, iz nargs, Str input = {},
             msysenv[3] = "Path=C:\\msys\\usr\\bin;C:\\w64\\bin;C:\\Windows\\System32";
             e = msysenv;
         }
-        Str exe = pers==PERS_MSYS ? Str("C:/msys/usr/bin/bash.exe") : Str("C:/w64/bin/sh.exe");
+        Str exe = pers==PERS_MSYS    ? Str("C:/msys/usr/bin/bash.exe")
+                : pers==PERS_W64BASH ? Str("C:/w64/bin/bash.exe")
+                :                      Str("C:/w64/bin/sh.exe");
         // a parent that quotes for Cygwin, so that a script given with
         // -c arrives as written in the msys shell's own split
-        wininfo(os, &info, exe, e, countof(env), "C:/work", pers==PERS_MSYS);
+        wininfo(os, &info, exe, e, countof(env), "C:/work", pers!=PERS_NATIVE);
         if (cmdline.data) info.cmdline = cmdline;
     }
     return finishrun(os, &info);
