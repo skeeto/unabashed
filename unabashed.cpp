@@ -1761,7 +1761,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             if (!getvar(sh, &scratch, "PS1").set) setvar(sh, scratch, "PS1", "\\s-\\v\\$ ");
             if (!getvar(sh, &scratch, "PS2").set) setvar(sh, scratch, "PS2", "> ");
             b32 tty = os_isatty(os, info->std[0]) || os_isatty(os, info->std[2]);
-            if (!st.busybox && !tty && !sh->opt[O_NOEXEC]) {
+            if (!st.busybox && !tty) {
                 // As bash finding no terminal for job control (a
                 // terminal on either stream stands in for /dev/tty):
                 // the group it went back to, unless it led its own

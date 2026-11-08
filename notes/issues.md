@@ -36,15 +36,6 @@ None: the XP flakes were fixed or not seen again at step 10 (m7.md).
 
 ## M8 (performance)
 
-- **`bash -i` whose input is not a terminal still reads with readline**:
-  it interprets the editing keys (C-b, C-r, arrows) and writes
-  readline's redisplay to stderr, terminal escapes and all (TERM=dumb:
-  backspaces), each line echoed. Ours reads plainly. The bytes are
-  readline's, which the editor's screen-not-bytes redisplay does not
-  give. run-history's history4 and
-  history7 wait on it.
-  Moved from M7 (step 9): it needs readline's own redisplay bytes, an
-  editor-2 piece beside vi mode and bind.
 - **Shell-code stages cannot stop** (m7.md, step 7d): under set -m a
   pipeline stage that is shell code, a `( )` or a function runs in the
   shell's process, so ^Z stops only the programs; a pipeline whose last

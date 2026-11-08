@@ -622,6 +622,9 @@ struct Editor {
     b32      hscroll;   // TERM=dumb: one row, scrolled sideways
     i32      lmargin;   // hscroll: the first column shown
     i32      hshown;    // hscroll: columns drawn
+    Str      hlast;     // notty: what was drawn, and the cursor in it
+    iz       hlastcur;
+    b32      notty;     // input not a terminal, read with the editor
     Layout   shown;
     i32      crow;      // where the cursor is, relative to the prompt's row
     i32      ccol;
@@ -1382,6 +1385,7 @@ static void hredisplay(Editor *ed, Layout *nl)
     i32   total = r->width;
     i32   phys  = cpos - ed->lmargin;
     i32   lm    = ed->lmargin;
+    i32   oldlm = lm;
     if (phys > w-2) {
         lm = cpos - 2*t;
         lm = lm<0 ? 0 : lm;
@@ -1406,6 +1410,21 @@ static void hredisplay(Editor *ed, Layout *nl)
     }
     if (atcur < 0) atcur = vis.len;
     i32 shown = (total<lm+w ? total : lm+w) - lm;
+    Str now = {vis.data, vis.len};
+    if (ed->notty && lm==oldlm && ed->hlastcur==ed->hlast.len &&
+            atcur==now.len && startswith(now, ed->hlast)) {
+        // As readline, which draws only what changed: what was added at
+        // the end (input that is no terminal shows these bytes)
+        print(&ed->out_, cuthead(now, ed->hlast.len));
+        ed->hlast    = now;
+        ed->hlastcur = atcur;
+        ed->hshown   = shown;
+        ed->crow     = 0;
+        ed->ccol     = cpos - lm;
+        return;
+    }
+    ed->hlast    = now;
+    ed->hlastcur = atcur;
     edput(ed, "\r");
     print(&ed->out_, {vis.data, vis.len});
     for (i32 i = shown; i < ed->hshown; i++) edput(ed, " ");
@@ -5420,9 +5439,29 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     Editor *ed = editor(sh);
     ed->in  = fin->h;
     ed->out = ferr->h;
-    ed->tty = os_tty(sh->os, ed->in, ed->out, TTY_RAW);
-    if (ed->tty.err) return ED_NOTTY;
-    edsize(ed, sh, ed->tty);
+    ed->tty   = os_tty(sh->os, ed->in, ed->out, TTY_RAW);
+    ed->notty = 0;
+    if (ed->tty.err) {
+        // The shell's input that is no terminal is still read with the
+        // editor, as bash's readline does, drawing as on a dumb
+        // terminal COLUMNS wide
+        if (!opts->shell || os_isatty(sh->os, ed->in)) return ED_NOTTY;
+        Tty t = {};
+        t.cols = 80;
+        Arena a = *scratchat(sh, sh->capdepth+1);
+        Str cols = getvar(sh, &a, "COLUMNS").value;
+        i64 v = 0;
+        for (iz i = 0; i<cols.len && v<100000; i++) {
+            if (cols[i]<'0' || cols[i]>'9') { v = 0; break; }
+            v = v*10 + cols[i] - '0';
+        }
+        if (v > 1) t.cols = (i32)v;
+        t.rows = 24;
+        ed->tty   = t;
+        ed->notty = 1;
+    } else {
+        edsize(ed, sh, ed->tty);
+    }
     if (ed->tty.cols < 2) ed->tty.cols = 80;
     ed->width = ed->tty.xenl ? ed->tty.cols : ed->tty.cols-1;
 
@@ -5437,8 +5476,10 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     ed->silent  = opts->silent;
     ed->deadline = opts->deadline;
     ed->timedout = 0;
-    ed->hscroll = ed->tty.rows<=1 || eddumb(sh, ed->linemem);
+    ed->hscroll = ed->notty || ed->tty.rows<=1 || eddumb(sh, ed->linemem);
     ed->lmargin = ed->hshown = ed->unread = 0;
+    ed->hlast   = {};
+    ed->hlastcur = 0;
     if (!ed->inited) {
         ed->inited = 1;
         if (ed->hscroll) ed->vars.bracketpaste = ed->vars.activeregion = 0;
@@ -5540,7 +5581,9 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     // Leave the cursor past the line
     Layout *l = &ed->shown;
     b32 crlf = 1;
-    if (ed->result == ED_ABORT) {
+    if (ed->result==ED_EOF && ed->notty) {
+        crlf = 0;  // the end of input that is no terminal: "exit" follows
+    } else if (ed->result == ED_ABORT) {
         ed->line.len = ed->point = 0;  // the message is past the line
         crlf = 0;
     } else if (ed->result == ED_TIMEOUT) {
@@ -5584,10 +5627,12 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         edmove(ed, l->nrows-1, l->rows[l->nrows-1].width);
     }
     // read -e: the shell's interrupt writes the newline
-    if (crlf && !(ed->result==ED_INTR && isread)) edput(ed, "\r\n");
+    if (crlf && !(ed->result==ED_INTR && isread)) {
+        edput(ed, ed->notty ? Str("\n") : "\r\n");  // readline's crlf
+    }
     if (bracket) edput(ed, "\x1b[?2004l\r");
     edflush(ed, sh);
-    edsize(ed, sh, os_tty(sh->os, ed->in, ed->out, TTY_RESTORE));
+    if (!ed->notty) edsize(ed, sh, os_tty(sh->os, ed->in, ed->out, TTY_RESTORE));
     print(out, {ed->line.data, ed->line.len});
     return ed->result;
 }
