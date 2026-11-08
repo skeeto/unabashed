@@ -335,6 +335,16 @@ Pitfalls:
 10. Windows XP: no ConPTY and no VT console, so console editing needs the plain console API path.
 11. Cost of the `-x` check: reading file headers during PATH search should be cached per command hash.
 
+/dev/clipboard in Git Bash 5.3.15 (probed 2026-11-08 on Windows 11, the clipboard read and counted through PowerShell's Get-Clipboard and GetClipboardSequenceNumber):
+- Writes accumulate per open file description, and each write() sets the Windows clipboard to everything written so far. `{ printf a; printf b; } >/dev/clipboard` leaves `ab` after two clipboard sets, and a five-line loop makes five.
+- `>>` starts empty like `>`. `: >/dev/clipboard`, which opens without writing, leaves the clipboard alone.
+- A child process has its own buffer. In `{ echo a; /usr/bin/printf 'b\n'; echo c; } >/dev/clipboard`, the child's `b` is lost when the parent's next write sets `a c`. A native child (`cmd //c echo b`) writes to NUL.
+- No newline conversion either way: CRLF copied from Windows reads as CRLF (`$(<)` and `read -r` keep the CR), and LF written reaches Windows as LF.
+- Text is CF_UNICODETEXT plus Cygwin's private format, which round-trips bytes between Cygwin programs. `printf 'a\0b'` reaches Windows as `a` but reads back as `a\0b`, and a lone 0xFF byte reaches Windows as U+00FF but reads back as the byte. Non-BMP characters become surrogate pairs.
+- An empty clipboard, or one holding only an image, reads as empty output with status 0.
+- `[ -e -r -w -c -s ]` are all true, `-f` false. `ls -l` gives `crw-rw-rw-` 13, 254, and stat reports size 2.
+- While another process held the clipboard open (PowerShell OpenClipboard(NULL) then a sleep), a write and a read both still succeeded at once with status 0, and the text landed.
+
 Sources:
 - https://raw.githubusercontent.com/msys2/msys2-runtime/msys2-3.6.5/winsup/cygwin/msys2_path_conv.cc
 - https://raw.githubusercontent.com/msys2/msys2-runtime/msys2-3.6.5/winsup/cygwin/path.cc
