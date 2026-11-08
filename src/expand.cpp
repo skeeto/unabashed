@@ -2030,6 +2030,42 @@ static iz arithsubscript(X *x, Str s, iz i)
     return e + 1;
 }
 
+// The text of an arithmetic expansion whose only expansions are $name,
+// as $((i+1)) or $(($n*2)), without the general machinery: no quotes,
+// escapes, command substitutions, subscripts (arithsubscript) or other
+// parameters. A null string declines.
+static Str arithtext(X *x, Str body)
+{
+    Shell *sh = x->sh;
+    b32 dollars = 0;
+    for (iz i = 0; i < body.len; i++) {
+        switch (body[i]) {
+        case '`': case '\\': case '\'': case '"': case '[':
+            return {};
+        case '$':
+            if (i+1==body.len || !identstart(body[i+1])) return {};
+            dollars = 1;
+        }
+    }
+    if (!dollars) return body;
+    Buf b(x->a, body.len + 16);
+    for (iz i = 0; i < body.len;) {
+        if (body[i] != '$') {
+            putbyte(&b, body[i++]);
+            continue;
+        }
+        iz e = i + 1;
+        for (; e<body.len && identchar(body[e]); e++) {}
+        Value *v = rawlookup(sh, span(body.data+i+1, body.data+e));
+        if (v && (v->attrs & V_NAMEREF)) return {};
+        Got g = getvalue(sh, x->a, v);
+        if (!g.set && sh->opt[O_NOUNSET]) return {};  // full path reports it
+        print(&b, g.value);
+        i = e;
+    }
+    return finish(&b);
+}
+
 static void expandinto(X *x, Str s, i32 ctx)
 {
     Shell *sh = x->sh;
@@ -2234,7 +2270,8 @@ static void expandinto(X *x, Str s, i32 ctx)
                 }
                 if (isarith(s, i, e)) {
                     Str body = span(s.data+i+3, s.data+(e>=i+5 ? e-2 : e));
-                    Str text = expandword(x, body, XC_ARITH|XC_DQUOTE);
+                    Str text = arithtext(x, body);
+                    if (!text.data) text = expandword(x, body, XC_ARITH|XC_DQUOTE);
                     Arith r  = evalarith(sh, x->a, text);
                     if (r.ok) putvalue(x, fmti64(x->a, r.value), ctx);
                 } else {
