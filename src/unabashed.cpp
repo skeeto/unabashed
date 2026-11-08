@@ -300,8 +300,11 @@ static void varchanged(Shell *sh, Str name)
 {
     // Every assignment comes here: most names leave at the first byte
     switch (name.len ? name[0] : 0) {
+    case '_':
+        if (name.len == 1) sh->lastargdirty = 1;  // no longer the dynamic $_
+        return;
     case 'B': case 'G': case 'H': case 'I': case 'L': case 'O': case 'P':
-    case '_': case 'h': break;
+    case 'h': break;
     default: return;
     }
     if (name=="HISTSIZE" || name=="HISTCONTROL" || name=="histchars" ||
@@ -334,8 +337,6 @@ static void varchanged(Shell *sh, Str name)
         }
         if (sh->lexer) sh->lexer->utf8 = utf8;
         sh->utf8 = utf8;
-    } else if (name == "_") {
-        sh->lastargdirty = 1;  // no longer the dynamic $_
     } else if (name == "BASH_XTRACEFD") {
         // Traces go to an open descriptor it names, else to stderr
         Arena none = {};
