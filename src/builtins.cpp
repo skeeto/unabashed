@@ -2243,11 +2243,13 @@ static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
     if (msys) dir = msysdir(sh, &scratch, dir);
 
     // Relative to bash's the_current_working_directory, not $PWD; a
-    // native path resolves through the drives' directories (topath)
+    // native path resolves through the drives' directories (topath). In
+    // msys mode a Windows-form directory, as imported from a native
+    // parent's PWD, stays in that form, as Git Bash keeps it: made
+    // POSIX first, a one-letter directory under / would be a drive.
     Got pwd    = getvar(sh, &scratch, "PWD");
     Str old    = pwd.set ? pwd.value : sh->wd;
     Str base   = sh->wd;
-    if (msys && !startswith(base, "/")) base = msysdir(sh, &scratch, base);
     b32 native = sh->pathmode == PM_NATIVE;
     Str target = isabsolute(sh, dir) || native ? dir : joinpath(&scratch, base, dir);
 
@@ -2280,6 +2282,7 @@ static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
     }
     Str dest = physical ? cdcanon(sh, &scratch, target) : logical;
     if (native) dest = diskcase(sh, &scratch, dest);
+    if (msys && physical) dest = msysdir(sh, &scratch, dest);  // as getcwd's
     b32 ok = setcwd(sh, scratch, dest, old);
     if (printdir) {
         bprint(sh, sh->wd);
