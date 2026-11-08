@@ -811,7 +811,10 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     setvar(sh, scratch, "OPTIND", "1");
     setattrs(sh, "OPTIND", V_INTEGER, 0);
     setvar(sh, scratch, "IFS", " \t\n");
-    setvar(sh, scratch, "PS4", "+ ");
+    // PS4 comes from the environment, except for root
+    if (info->euid==0 || !getvar(sh, a, "PS4").set) {
+        setvar(sh, scratch, "PS4", "+ ");
+    }
     setvar(sh, scratch, "HOSTNAME", info->host.len ? info->host : Str("oracle"));
     setvar(sh, scratch, "PPID", fmti64(a, info->ppid));
     setattrs(sh, "PPID", V_INTEGER|V_READONLY, 0);
