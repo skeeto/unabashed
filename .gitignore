@@ -9,3 +9,4 @@ third_party/
 /unabashed
 tools/ptyrun
 tools/unabashed-linux
+/unabashed-*.tar.gz

@@ -10,7 +10,7 @@ fully virtual platform layers for testing. Work in progress; see
 Each build is a single command (see the header of each `main_*.cpp`);
 the Makefile is only a convenience.
 
-    $ g++ -std=c++20 -O2 -s -nostartfiles -static-libgcc -o unabashed.exe main_win32.cpp
+    $ g++ -std=c++20 -O2 -s -nostartfiles -static-libgcc -Wl,--stack,0x1000000 -o unabashed.exe main_win32.cpp
     $ g++ -std=c++20 -O2 -o unabashed main_posix.cpp
     $ make tests.exe && ./tests.exe     # Windows host, virtual OS
     $ make tests && ./tests             # Linux host, virtual OS

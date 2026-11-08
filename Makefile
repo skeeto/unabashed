@@ -5,6 +5,7 @@
 #                       argv.exe argv32.exe (tools/argv.cpp, for t/msys)
 # Linux:                make unabashed debug tests
 # Fuzzing (AFL++):      make fuzz
+# Source tarball:       make dist (HEAD as unabashed-YYYYMMDD-HASH.tar.gz)
 
 CXX     = g++
 CXX32   = i686-w64-mingw32-g++
@@ -58,6 +59,13 @@ tests: main_test.cpp $(SOURCES)
 
 fuzz: main_fuzz.cpp $(SOURCES)
 	$(AFLCXX) $(FLAGS) $(DEBUG) -o $@ main_fuzz.cpp
+
+# What w64devkit's Dockerfile takes: the committed tree, named after the
+# commit's date and hash.
+dist:
+	v=$$(git log -1 --date=format:%Y%m%d --format=%cd-%h) && \
+	git archive --prefix=unabashed-$$v/ -o unabashed-$$v.tar.gz HEAD && \
+	echo unabashed-$$v.tar.gz
 
 check: tests
 	./tests
