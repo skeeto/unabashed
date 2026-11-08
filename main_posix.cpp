@@ -41,7 +41,7 @@ struct Os {
     i32    wlen;
     i64    wtime;       // CLOCK_MONOTONIC ns when the buffer began
     i32    werrfd;      // a flush to this descriptor failed, else -1
-    u8     wkind[256];  // per descriptor: 0 unknown, 1 regular, 2 not
+    u8     wkind[256];  // per descriptor: FK_* (fdkind)
     u8     wbuf[1<<14];
 };
 
@@ -125,19 +125,25 @@ static b32 wfailed(Os *os, i32 fd)
     return 1;
 }
 
+// What a descriptor is, remembered until os_close frees its number.
+enum : u8 { FK_UNKNOWN, FK_REG, FK_FIFO, FK_OTHER };
+
+static u8 fdkind(Os *os, i32 fd)
+{
+    b32 cache = fd>=0 && fd<countof(os->wkind);
+    if (cache && os->wkind[fd]) return os->wkind[fd];
+    struct stat st;
+    u8 kind = fstat(fd, &st) ? FK_OTHER :
+              S_ISREG(st.st_mode) ? FK_REG :
+              S_ISFIFO(st.st_mode) ? FK_FIFO : FK_OTHER;
+    if (cache) os->wkind[fd] = kind;
+    return kind;
+}
+
 static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
 {
-    i32 fd   = (i32)h;
-    i32 kind = 0;
-    if (fd>=0 && fd<countof(os->wkind)) {
-        kind = os->wkind[fd];
-        if (!kind) {
-            struct stat st;
-            kind = !fstat(fd, &st) && S_ISREG(st.st_mode) ? 1 : 2;
-            os->wkind[fd] = (u8)kind;
-        }
-    }
-    if (kind != 1) {
+    i32 fd = (i32)h;
+    if (fdkind(os, fd) != FK_REG) {
         flushw(os);
         return !wfailed(os, fd) && writeall(fd, buf, len);
     }
@@ -336,8 +342,7 @@ static OsPipe os_pipe(Os *os)
 static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
 {
     flushw(os);
-    struct stat st;
-    if (fstat((i32)h, &st) || !S_ISFIFO(st.st_mode)) {
+    if (fdkind(os, (i32)h) != FK_FIFO) {
         return -1;
     } else if (!len) {
         return 0;
@@ -1526,6 +1531,9 @@ int main(int argc, char **argv)
 static void exitwith(i32 status)
 {
     if (sigos) flushw(sigos);
+    #if PROFILE
+    exit(status & 255);  // -DPROFILE -pg: exit writes gprof's gmon.out
+    #endif
     if (status & WSIGNALED) {
         // Killed by a signal: die by it, so that the parent sees that
         i32 sig = (status & 255) - 128;
