@@ -1,0 +1,4128 @@
+.TH UNABASHED 1 2026-11-08 "w64devkit" "w64devkit Manual"
+.SH NAME
+unabashed, sh, ash, lash, bash \- a bash 5.3 shell for Windows
+.SH SYNOPSIS
+.B sh
+.RI [ options ]
+.B \-c
+.I command
+.RI [ name
+.RI [ argument ...]]
+.br
+.B sh
+.RI [ options ]
+.I file
+.RI [ argument ...]
+.br
+.B sh
+.RI [ options ]
+.RB [ \-s ]
+.RI [ argument ...]
+.SH DESCRIPTION
+unabashed is a shell written to behave as GNU bash 5.3 does, for Windows.
+It runs commands read from a string, a file, or standard input.
+In w64devkit the one program is installed four times, as
+.BR sh ,
+.BR ash ,
+.BR lash ,
+and
+.BR bash ,
+and the name it is started under chooses how it treats paths, the
+environment, and the programs it runs.
+The synopsis shows
+.BR sh ,
+but every name accepts the same forms.
+.PP
+This page describes what is particular to unabashed: its two modes,
+invocation, startup, paths, devices, how it finds and runs Windows
+programs, and where it differs from bash.
+It does not teach the language, which is bash's.
+GNU publishes the Bash Reference Manual at
+.IR https://www.gnu.org/software/bash/manual/ ,
+and the
+.B help
+builtin describes each builtin command:
+.B help
+alone lists them,
+.B help \-d
+.I name
+gives a one-line summary, and
+.B help \-m
+.I name
+prints one in the form of a manual page.
+.SS Names and modes
+The mode comes from the name the shell is started under, which is the
+first word of its command line as Windows splits it, not the file name
+of the executable.
+The file name stands in only when the command line has no words, and
+an empty first word gives msys mode.
+The shell removes one leading
+.BR \- ,
+then everything up to the last
+.BR / ,
+.BR \e ,
+or
+.BR : ,
+then one trailing
+.B .exe
+in any case.
+If what remains is
+.BR sh ,
+.BR ash ,
+or
+.BR lash ,
+in any case, the shell is in
+.IR "native mode" :
+Windows paths such as
+.IR C:/Users/me ,
+and the conventions of busybox-w32's shell, which the kit used before.
+Any other name, such as
+.BR bash ,
+.BR rbash ,
+or
+.BR unabashed ,
+gives
+.IR "msys mode" :
+POSIX paths such as
+.I /c/Users/me
+over a mount table, as MSYS2's and Git for Windows' bash have them.
+So
+.BR SH.EXE ,
+.BR \-lash ,
+and
+.I C:\ew64devkit\ebin\esh.exe
+are native, and a parent that runs
+.I bash.exe
+with a command line whose first word is
+.B sh
+gets native mode.
+.PP
+An
+.I etc/fstab
+in the install root selects msys mode for every name, including
+.BR sh ,
+as in an MSYS2 or Git for Windows installation, where
+.B sh
+is bash.
+The install root is the directory of the executable, minus a final
+.I /usr/bin
+or
+.IR /bin ,
+matched in any case; when the directory ends in neither, it is the
+install root itself.
+Only whether the file exists decides the mode; its contents are the
+mount table (see Paths in msys mode below).
+w64devkit ships no
+.IR etc/fstab .
+.PP
+Started as
+.BR cygpath ,
+an msys name, the program does not run as a shell: it acts as the
+.B cygpath
+program on its arguments and exits.
+.B cygpath \-\-help
+lists its options;
+.B help
+has no topic for it.
+.PP
+The hidden
+.B shopt
+option
+.B msyspath
+switches mode at run time:
+.B shopt \-s msyspath
+selects msys mode and
+.B shopt \-u msyspath
+native mode.
+It exists only in the Windows build, and neither
+.B shopt
+nor
+.B shopt \-p
+lists it, nor does
+.BR BASHOPTS ,
+but
+.B shopt
+.BR msyspath ,
+.BR "shopt \-q" ,
+and the
+.B \-O
+and
+.B +O
+options accept it.
+Switching rewrites
+.B PATH
+and
+.B PWD
+in the new form and forgets the remembered command locations.
+It also changes what a leading
+.B /
+means, the
+.B PATH
+separator, the form in which paths print, which carriage returns the
+parser drops, and whether
+.BR "set \-o igncr" ,
+.BR "shopt completion_strip_exe" ,
+and the
+.B cygpath
+builtin exist.
+It also changes how the shell finds and runs programs: the extensions
+it tries, which files count as executable, whether it skips busybox
+stubs, how it runs a script without
+.B #!\&
+and looks up a
+.B #!\&
+interpreter, and whether it converts the arguments and environment it
+passes to a Windows program (see Running programs below), as well as
+whether it reads
+.B TZ
+zone files.
+It does not import the environment again or change the startup rules,
+which follow the name the shell started under, and
+.BR BASH ,
+.BR OSTYPE ,
+.BR MACHTYPE ,
+.BR HOSTTYPE ,
+.BR HOME ,
+.BR SHELL ,
+and
+.B TERM
+keep their values.
+The shell itself passes
+.B \-O msyspath
+or
+.B +O msyspath
+to the copy of itself that runs a script meant for this shell, such as
+a
+.B #!/bin/sh
+or
+.B #!/bin/bash
+script, so the script runs in the parent's mode (see Running programs
+below).
+Only the mode carries over.
+The copy is started under the executable's own path, so its identity
+variables, environment import, and login and startup rules follow the
+file name, not the parent's name: a script run by
+.I bash.exe
+started as
+.B sh
+sees
+.B OSTYPE
+.BR cygwin ,
+and one run by
+.B lash
+is a login shell and reads the login files again.
+.PP
+The variables that identify the shell follow the mode it started in.
+In native mode
+.B OSTYPE
+is
+.BR win32 ,
+.B MACHTYPE
+is
+.B x86_64\-w64\-mingw32
+.RB ( i686\-w64\-mingw32
+in the 32-bit build), and
+.B BASH
+is the executable's full Windows path with forward slashes, such as
+.IR C:/w64devkit/bin/sh.exe .
+In msys mode
+.B OSTYPE
+is
+.BR cygwin ,
+.B MACHTYPE
+is
+.B x86_64\-pc\-cygwin
+.RB ( i686\-pc\-cygwin ),
+and
+.B BASH
+is the executable's POSIX path without a trailing
+.BR .exe ,
+such as
+.IR /bin/bash .
+In both modes
+.B HOSTTYPE
+is
+.B x86_64
+or
+.BR i686 ,
+.B BASH_VERSION
+is
+.BR 5.3.0(1)\-release ,
+and
+.B BASH_VERSINFO
+is
+.BR "(5 3 0 1 release" " \fIMACHTYPE\fB)\fR."
+.PP
+The name also bears on whether the shell is a login shell: a name
+beginning with
+.B \-
+makes one in both modes, and in native mode so does
+.B lash
+(see Invocation below).
+A name of
+.BR rbash ,
+after the same trimming, makes a restricted shell in msys mode.
+.SS Invocation
+In native mode the shell's arguments are exactly as Windows splits its
+command line (the rules of
+.BR CommandLineToArgvW ),
+and
+.B $0
+keeps the first word as given, backslashes and
+.B .exe
+included.
+.PP
+In msys mode the shell splits its command line again, as the MSYS2
+runtime does for a program started by a Windows parent:
+.IP \(bu 2
+Double and single quotes both group words, by Cygwin's rules.
+Inside quotes two backslashes stand for one, where a Windows program
+would keep both, so
+.B \(dqC:\e\ex\(dq
+gives
+.IR C:\ex ,
+and inside double quotes
+.B \e\(dq
+and
+.B \(dq\(dq
+stand for
+.BR \(dq .
+.IP \(bu 2
+An unquoted
+.BI @ file
+naming a readable regular file is replaced by the words in that file,
+which may name further response files, up to 10 in all.
+An eleventh prints
+.IB name ": @" file ": too many levels of response files"
+and the shell exits with status 1.
+An
+.BI @ file
+that names no file, or a directory, stays as it is.
+.IP \(bu 2
+An unquoted word containing
+.BR * ,
+.BR ? ,
+or
+.BR [ ,
+or beginning with
+.BR ~ ,
+is expanded as a file name pattern, and stays as it is when nothing
+matches, except that a leading
+.B ~
+alone or before
+.B /
+first becomes the value of
+.B HOME
+when that names a directory, so
+.B ~/nosuch
+stays as
+.IR /c/Users/me/nosuch .
+A word containing
+.B {
+first becomes one word for each alternative in its braces, whether or
+not any file matches, so
+.B q{1,2}
+becomes
+.B q1
+and
+.BR q2 ,
+and each of those is then expanded as a pattern.
+.IP \(bu 2
+A first word containing
+.B :
+or
+.B \e
+is converted to a POSIX path through the mount table and loses a
+trailing
+.B .exe
+in any case, so in a kit installed at
+.IR C:\ew64devkit ,
+.I C:\ew64devkit\ebin\ebash.exe
+gives
+.B $0
+the value
+.IR /bin/bash ,
+and
+.I C:\ex\ebash.exe
+gives
+.IR /c/x/bash .
+A first word without either, such as
+.BR bash.exe ,
+is kept as it is.
+.PP
+A parent that is itself unabashed quotes the command line for whichever
+of these the child will use.
+.PP
+With
+.BR \-c ,
+the shell runs
+.IR command ,
+the first argument after the options, so
+.B sh \-c \-e
+.I command
+also works.
+.I name
+becomes
+.BR $0 ,
+by default the shell's own first word, and the remaining arguments
+become the positional parameters.
+.B BASH_EXECUTION_STRING
+holds
+.IR command .
+.PP
+Given a
+.IR file ,
+the shell runs the commands in it, with
+.I file
+as
+.B $0
+and the arguments after it as the positional parameters.
+A
+.I file
+that does not exist and contains no
+.BR / ,
+.BR \e ,
+or drive prefix is looked for along
+.BR PATH ,
+whose separator is
+.B ;
+in native mode.
+.BR $0 ,
+.BR BASH_SOURCE ,
+and the start of each message keep the name given; only a syntax error
+in the file names the file found.
+A
+.I file
+that is not found gives status 127, and a directory, a binary file, or
+any other read error gives status 126.
+.PP
+Otherwise, or with
+.BR \-s ,
+the shell reads commands from standard input,
+.B $0
+is its first word, and the arguments become the positional parameters.
+.PP
+A shell without
+.B \-c
+that reads standard input is interactive when standard input and
+standard error are both consoles.
+Only a Windows console counts: the pipe that mintty and other terminal
+emulators provide does not, so a shell under one needs
+.BR \-i ,
+and
+.B test \-t
+is false there.
+.B test \-t
+is also false for
+.I nul
+and other character devices.
+.B \-i
+makes any shell interactive.
+An interactive shell turns on job control when standard input or
+standard error is a console.
+In msys mode, an interactive shell with neither prints bash's two
+warnings that it has no job control; native mode prints nothing.
+.PP
+Messages from a non-interactive shell begin with
+.B $0
+as it was given, so a native shell started by its full path prints
+that path.
+An interactive shell's messages begin with its name without the
+directory and
+.BR .exe .
+.PP
+A login shell is one started with
+.B \-l
+or
+.BR \-\-login ,
+or under a name that begins with
+.BR \- ,
+and in native mode also one whose name, after that trimming, begins
+with
+.B l
+or
+.BR L ,
+which among the native names means
+.BR lash .
+The kit's launcher,
+.BR w64devkit.exe ,
+starts
+.BR "sh \-l" .
+In native mode a login shell reads its login files whether or not it is
+interactive.
+In msys mode a login shell in POSIX mode reads no login files.
+Otherwise a shell named with
+.B \-
+reads them only when it is interactive, while
+.B \-l
+reads them in any shell.
+The read-only
+.B shopt
+option
+.B login_shell
+reports the result.
+No login shell changes directory.
+.PP
+A shell is restricted when started as
+.BR rbash ,
+or with
+.B \-r
+or
+.BR \-\-restricted .
+Such a shell ignores
+.BR SHELLOPTS ,
+.BR BASHOPTS ,
+and functions in the environment, and the restrictions begin after the
+startup files.
+.PP
+POSIX mode begins with
+.BR \-\-posix ,
+.BR "\-o posix" ,
+or
+.B posix
+in an inherited
+.BR SHELLOPTS ,
+or when
+.B POSIXLY_CORRECT
+is in the environment, with any value, even empty.
+An msys shell named
+.BR sh ,
+which needs an
+.IR etc/fstab ,
+enters POSIX mode after reading its startup files, as bash does.
+A native shell never enters POSIX mode by its name, so in w64devkit
+.B sh
+is bash in its usual mode.
+.SS Startup files
+In native mode the startup files are busybox-w32's, whatever other
+options say.
+A login shell, unless given
+.BR \-\-noprofile ,
+reads these, in order, skipping any that is missing or unreadable:
+.IP \(bu 2
+.I /etc/profile
+on the drive of the Windows directory
+.RI ( C:/etc/profile
+when that is unknown);
+.IP \(bu 2
+.I ../etc/profile
+relative to the shell's own directory, which is the kit's
+.IR etc/profile ;
+.IP \(bu 2
+.IR $HOME/.profile ,
+when
+.B HOME
+is set, even to an empty value.
+.PP
+An interactive shell, login or not, then reads the file named by
+.BR ENV ,
+whose value is expanded but whose leading
+.B ~
+is not.
+Native mode reads nothing else: not
+.BR BASH_ENV ,
+.IR ~/.bashrc ,
+or logout files.
+.BR \-\-norc ,
+.BR \-\-rcfile ,
+and
+.B \-\-init\-file
+have no effect there, and
+.B \-\-posix
+does not change the files read.
+.PP
+In msys mode the files are bash's, with paths through the mount table,
+so that
+.I /etc
+is the install root's
+.I etc
+directory:
+.IP \(bu 2
+A login shell, as described under Invocation above, reads
+.I /etc/profile
+and then the first that exists of
+.IR ~/.bash_profile ,
+.IR ~/.bash_login ,
+and
+.IR ~/.profile .
+.IP \(bu 2
+A non-interactive shell reads the file named by
+.BR BASH_ENV ,
+after any login files.
+.IP \(bu 2
+An interactive shell that is not a login shell reads
+.I /etc/bash.bashrc
+and then
+.IR ~/.bashrc ,
+or in its place the file given by
+.B \-\-rcfile
+or
+.BR \-\-init\-file .
+.B \-\-norc
+skips both.
+.IP \(bu 2
+In POSIX mode, a non-interactive shell reads nothing, and an
+interactive one reads only the file named by
+.BR ENV .
+.IP \(bu 2
+A shell named
+.B sh
+reads
+.I /etc/profile
+and
+.I ~/.profile
+as a login shell, never
+.BR BASH_ENV ,
+and when interactive the file named by
+.B ENV
+in place of the bashrc files, even with
+.BR \-\-norc .
+.PP
+A leading
+.B ~
+in these names, and in the value of
+.B ENV
+or
+.BR BASH_ENV ,
+is expanded from
+.BR HOME .
+A missing file is skipped, and a directory or an unreadable file is
+reported.
+.PP
+In msys mode a login shell that ends, either as an interactive shell or
+by the
+.B exit
+builtin outside a subshell, reads
+.I ~/.bash_logout
+and then
+.IR /etc/bash.bash_logout ,
+once, keeping its exit status.
+.B \-\-noprofile
+does not stop them.
+.PP
+An interactive shell sets
+.B HISTFILE
+when it is unset, to
+.I $HOME/.bash_history
+in the form of
+.B HOME
+for the mode, or to
+.I $HOME/.sh_history
+when already in POSIX mode by the time options are parsed.
+A shell that enters POSIX mode by its name does so later, and keeps
+.IR .bash_history .
+The history file is read after the startup files.
+.SS "The two modes compared"
+Each entry gives msys mode first and native mode second.
+.TP
+paths shown
+In msys mode
+.BR pwd ,
+.BR PWD ,
+and
+.B \(ti
+are POSIX paths such as
+.IR /c/Users/me ,
+except that an inherited
+.B PWD
+naming the working directory in Windows form is kept as it is, as is
+the result of
+.B cd
+to a drive-relative name such as
+.IR C:Users .
+In native mode they are Windows paths with forward slashes and an
+uppercase drive letter, such as
+.IR C:/Users/me .
+.TP
+.RI "a leading " /
+In msys mode
+.I /
+is the install root, and other directories come from a mount table (see
+Paths in msys mode below).
+In native mode
+.I /x
+is
+.I x
+at the root of the current drive or network share.
+.TP
+.RI "drive letters and " /c
+In msys mode
+.I /c/x
+is
+.I C:/x
+(by default
+.I /cygdrive/c/x
+when there is an
+.IR etc/fstab ),
+and
+.I C:/x
+and
+.I C:\ex
+are accepted as input, with
+.I C:
+alone meaning the root of drive C.
+In native mode
+.I C:x
+is relative to drive C's working directory, and
+.I /c/x
+is a directory named
+.I c
+on the current drive.
+.TP
+.BR PATH " separator"
+In msys mode
+.BR PATH ,
+.BR CDPATH ,
+and other lists are split on every
+.BR : ,
+so their elements must be in POSIX form.
+In native mode they are split on
+.BR ; ,
+and assigning
+.B PATH
+turns its colons into semicolons, except after a drive letter.
+.TP
+environment import
+In msys mode
+.BR PATH ,
+.BR HOME ,
+.BR SHELL ,
+.BR TMPDIR ,
+.BR TMP ,
+.BR TEMP ,
+and a few others are converted to POSIX form at startup.
+In native mode, when the environment holds a mixed-case
+.BR Path ,
+.BR ComSpec ,
+or
+.BR ProgramData ,
+as one from a Windows program, Git Bash, or an msys mode shell does,
+every variable name is made uppercase and backslashes in values other
+than
+.B COMSPEC
+and
+.B SYSTEMROOT
+become forward slashes, as busybox-w32 does; otherwise, as from a
+native mode shell, the environment is taken as is (see Environment
+below).
+.TP
+environment for programs
+In msys mode the path variables are converted back to Windows form for
+programs, and for a Windows program that is not an MSYS2 program, other
+values that look like POSIX paths are converted too.
+In native mode programs get the environment unchanged.
+.TP
+argument conversion
+In msys mode arguments to a Windows program, other than an MSYS2
+program, that look like POSIX paths are converted to Windows paths by
+MSYS2's rules, unless
+.B MSYS_NO_PATHCONV
+or
+.B MSYS2_ARG_CONV_EXCL
+says otherwise (see Running programs below).
+In native mode arguments are passed as written, except for libtool's
+.B "cmd //c echo"
+(see Running programs below).
+.TP
+command lookup and extensions
+In msys mode a command
+.B foo
+finds
+.IR foo.exe ,
+and
+.BR type ,
+.BR "command \-v" ,
+and
+.B hash
+show it without the
+.BR .exe .
+In native mode
+.B foo
+is tried as written and then with
+.BR .com ,
+.BR .exe ,
+.BR .sh ,
+.BR .bat ,
+and
+.BR .cmd ,
+and the name shown includes the extension (see Finding commands below).
+.TP
+what is executable
+In msys mode a file is executable when its name ends in
+.B .exe
+or it begins with
+.BR #! ,
+.BR MZ ,
+or a line holding only
+.B :
+and ending in a bare LF; other names, such as
+.B .bat
+or
+.BR .com ,
+count for nothing.
+In native mode a file is executable when its name ends in one of the
+five extensions above, or it begins with
+.BR #! ,
+or it is a Windows program.
+.TP
+carriage returns
+In msys mode the parser drops every carriage return, and
+.B set \-o igncr
+also drops them from
+.B read
+and command substitutions.
+In native mode the parser and
+.B read
+drop a carriage return only before a newline.
+In both modes a command substitution strips trailing newlines with one
+carriage return before each.
+.TP
+startup files
+In msys mode the files are bash's, plus
+.I /etc/bash.bashrc
+and
+.IR /etc/bash.bash_logout .
+In native mode they follow busybox-w32's rules: profile files for a login
+shell and the file named by
+.B ENV
+for an interactive one (see Startup files above).
+.TP
+.BR OSTYPE " and " MACHTYPE
+In msys mode
+.B OSTYPE
+is
+.B cygwin
+and
+.B MACHTYPE
+is
+.BR x86_64\-pc\-cygwin .
+In native mode they are
+.B win32
+and
+.BR x86_64\-w64\-mingw32 .
+A 32-bit build has
+.B i686
+in place of
+.BR x86_64 .
+.TP
+POSIX mode
+In msys mode a shell named
+.BR sh ,
+possible only in an installation with an
+.IR etc/fstab ,
+enters POSIX mode after its startup files.
+In native mode the name never selects POSIX mode.
+.TP
+busybox applets
+In msys mode an applet's alias program runs like any other Windows
+program.
+In native mode an alias program found beside
+.B busybox.exe
+is skipped and
+.B busybox.exe
+runs the applet directly, unless
+.B BB_OVERRIDE_APPLETS
+names it (see Running programs below).
+.TP
+devices
+In msys mode
+.I /dev
+holds Cygwin's usual names and
+.I /proc
+a few entries.
+In native mode only
+.IR /dev/null ,
+.IR /dev/zero ,
+.IR /dev/urandom ,
+.IR /dev/tty ,
+.IR /dev/console ,
+.IR /dev/stdin ,
+.IR /dev/stdout ,
+.IR /dev/stderr ,
+and
+.I /dev/fd/N
+exist, and a DOS device name such as
+.B nul
+is a device in any directory and with any extension (see Devices below).
+.TP
+.BR cygpath " and " "pwd \-W"
+In msys mode
+.B cygpath
+is a builtin and
+.B pwd \-W
+prints the Windows form of the working directory.
+In native mode there is no
+.B cygpath
+builtin, and
+.B pwd \-W
+prints the same as
+.BR pwd .
+.SS "Paths in msys mode"
+Paths are POSIX paths over a mount table, which maps POSIX directories
+onto Windows directories.
+The install root is as defined under Names and modes above.
+.PP
+Without an
+.I etc/fstab
+in the install root, as in w64devkit, the table is:
+.IP \(bu 2
+.B /
+is the install root.
+.IP \(bu 2
+.I /bin
+is the shell's own directory when the shell sits in
+.IR <root>/bin ,
+as in w64devkit, and
+.I <root>/usr/bin
+otherwise.
+.I /usr/bin
+is always
+.I <root>/usr/bin
+through the root mount, and does not exist in w64devkit.
+.IP \(bu 2
+.I /tmp
+is the directory named by
+.BR TEMP ,
+or by
+.B TMP
+when
+.B TEMP
+is unset, as found in the environment at startup.
+.IP \(bu 2
+.IR /c ,
+.IR /d ,
+and so on are the drives: the drive prefix is empty.
+A first component that is a single letter always names a drive, even
+when the root holds a directory of that name.
+Drives are not listed in
+.BR / .
+.IP \(bu 2
+.I /dev
+and
+.I /proc
+are virtual directories (see Devices below).
+.PP
+.RS 4
+.EX
+$ cygpath \-m / /bin /tmp /c
+C:/w64devkit/
+C:/w64devkit/bin
+C:/Users/me/AppData/Local/Temp
+C:/
+.EE
+.RE
+.PP
+An
+.I etc/fstab
+replaces those defaults, as in an MSYS2 or Git for Windows installation,
+and selects msys mode for every name (see Names and modes above).
+Only that one file is read.
+Each line holds a Windows directory, a POSIX mount point, a type, and
+options, separated by blanks or tabs, and further fields are ignored.
+In a field
+.B \e040
+is a space, a line whose first field begins with
+.B #
+is a comment, and a carriage return ending a line is ignored.
+For an ordinary mount the Windows directory must be a drive path or a
+UNC path, and the mount point must begin with
+.BR / ,
+or the line is ignored.
+A line with only two fields mounts the directory with the mount point
+matched ignoring case, a line with three fields is ignored, and so is a
+line with an option not in this list:
+.BR acl ,
+.BR auto ,
+.BR binary ,
+.BR bind ,
+.BR cygexec ,
+.BR dos ,
+.BR exec ,
+.BR ihash ,
+.BR noacl ,
+.BR nosuid ,
+.BR notexec ,
+.BR nouser ,
+.BR override ,
+.BR posix=0 ,
+.BR posix=1 ,
+.BR sparse ,
+.BR text ,
+and
+.BR user .
+Only four of them have an effect:
+.TP
+.B posix=0
+Match the mount point ignoring case.
+.TP
+.B posix=1
+Match the mount point exactly, the default for a line with options.
+.TP
+.B bind
+The first field is a POSIX path, resolved through the mounts made so
+far.
+.TP
+.B override
+Replace the
+.B /
+mount or a
+.B usertemp
+mount, which other lines cannot replace.
+.PP
+The type
+.B cygdrive
+sets the drive prefix to the mount point and ignores the first field, so
+.B "none / cygdrive binary,posix=0 0 0"
+gives
+.I /c
+as in Git for Windows.
+A mount point that does not begin with
+.B /
+sets the prefix to
+.IR / .
+The type
+.B usertemp
+mounts the
+.B TEMP
+(else
+.BR TMP )
+directory at the mount point.
+Any other type is an ordinary mount.
+A later line for the same mount point replaces an earlier one.
+With an
+.IR etc/fstab ,
+the drive prefix is
+.I /cygdrive/
+unless a
+.B cygdrive
+line sets it,
+.I /bin
+is
+.I <root>/usr/bin
+unless a line mounts
+.IR /bin ,
+and there is no
+.I /tmp
+unless a line mounts it.
+.PP
+A POSIX path maps through the drive prefix first: a path below the
+prefix names a drive or nothing, and with a prefix of
+.I /
+a single-letter first component names a drive even when a line mounts
+it.
+Any other path maps through the mount point that is the longest match at
+a component boundary.
+The default
+.I /bin
+mount, the drive prefix,
+.IR /dev ,
+and
+.I /proc
+match case-sensitively, while the default
+.I /tmp
+mount and the drive letter ignore case.
+A directory listing, for globbing or completion, also shows the mount
+points directly inside an existing directory, and
+.B /
+lists
+.I dev
+and
+.IR proc .
+.PP
+Windows paths are accepted wherever a path is opened, tested, or given
+to
+.BR cd :
+.IR C:/x ,
+.IR C:\ex ,
+.I \ex
+on the current drive,
+.I //server/share
+and
+.IR \e\eserver\eshare ,
+and paths with a
+.I \e\e?\e
+prefix, so
+.I \e\e?\eC:\ex
+is
+.IR /c/x .
+A bare
+.I C:
+is the root of the drive and
+.I C:x
+is
+.IR C:/x ,
+not a path under the drive's working directory.
+A relative path is joined to
+.B PWD
+first, so
+.B ..\&
+climbs in the POSIX namespace, across mount points.
+.PP
+.BR pwd ,
+.BR PWD ,
+the prompt, and
+.B \(ti
+give POSIX paths.
+A Windows path is shown through the mount whose Windows directory holds
+it, chosen by Cygwin's rule (the largest POSIX length minus Windows length
+wins), so a directory under
+.B TEMP
+shows as
+.IR /tmp/... ,
+and otherwise a drive path shows under the drive prefix with a lowercase
+letter.
+The Windows directory is compared with the same case rule as the mount
+point, so a path spelled in another case than the root or
+.I /bin
+mount shows under the drive prefix instead.
+Globbing keeps the spelling of the pattern's directory part, and
+.B cd
+keeps the case typed.
+.B cd
+converts an absolute operand written in Windows form, so
+.B cd C:\eWindows
+gives
+.IR /c/Windows ,
+but leaves a drive-relative one in Windows form, so
+.B cd C:Windows
+sets
+.B PWD
+to
+.IR C:/Windows .
+An inherited
+.B PWD
+that names the working directory is kept as it is spelled, even in
+Windows form: a bash started from native
+.BR sh ,
+which exports
+.BR PWD=C:/Users/me ,
+shows
+.I C:/Users/me
+until
+.B cd
+is given an absolute path.
+.PP
+.BR PATH ,
+.BR CDPATH ,
+and the other lists are split on every colon, so a Windows path in one
+is split at its drive letter: write
+.IR /c/x ,
+not
+.IR C:/x .
+.PP
+.B pwd \-W
+prints the working directory in Windows form with forward slashes and no
+trailing slash except on a drive root:
+.PP
+.RS 4
+.EX
+$ cd \(aqC:\eWindows\(aq
+$ pwd
+/c/Windows
+$ pwd \-W
+C:/Windows
+$ cygpath \-w /tmp/x
+C:\eUsers\eme\eAppData\eLocal\eTemp\ex
+.EE
+.RE
+.PP
+The
+.B cygpath
+builtin converts each
+.I name
+between the POSIX form, the Windows form with backslashes, and the mixed
+form with forward slashes, through the shell's own mount table:
+.PP
+.RS 4
+.B cygpath
+.RB [ \-u | \-w | \-m ]
+.RB [ \-alps ]
+.IR name ...
+.PP
+.B cygpath
+.RB [ \-u | \-w | \-m ]
+.RB [ \-alps ]
+.B \-f
+.I file
+.PP
+.B cygpath
+.RB [ \-u | \-w | \-m ]
+.BR \-W | \-S
+.RE
+.PP
+Short options may be grouped, and
+.B \-\-
+ends the options.
+.TP
+.BR \-u ", " \-\-unix
+Print the POSIX form, the default.
+A relative name stays relative, with
+.B \e
+turned into
+.BR / .
+.TP
+.BR \-w ", " \-\-windows
+Print the Windows form with backslashes.
+A relative name stays relative unless
+.B ..\&
+climbs above the working directory.
+A name with no Windows form, such as
+.I /dev/tty
+or
+.IR /proc/self ,
+is printed as given;
+.IR /dev/null ,
+the generator devices, and
+.I /dev/clipboard
+print as
+.IR \e\e.\eNUL ,
+and
+.I /dev/fd
+prints as
+.BI \eproc\e pid \efd\fR,
+with the shell's process ID.
+.TP
+.BR \-m ", " \-\-mixed
+Print the Windows form with forward slashes.
+.TP
+.BR \-a ", " \-\-absolute
+Make a relative name absolute, against the working directory.
+Ignored with
+.BR \-p .
+.TP
+.BR \-p ", " \-\-path
+Convert lists.
+With
+.BR \-u ,
+a list is split on
+.B ;
+and joined with
+.BR : ,
+dropping empty elements.
+With
+.B \-w
+or
+.BR \-m ,
+a list is split on every
+.B :
+and joined with
+.BR ; ,
+and an empty element becomes
+.BR . .
+.TP
+\fB\-f\fR \fIfile\fR, \fB\-\-file\fR[\fB=\fR]\fIfile\fR
+Convert each line of
+.IR file ,
+or of standard input when
+.I file
+is
+.BR \- .
+The argument may also be attached to
+.BR \-f .
+A carriage return ending a line is dropped.
+.TP
+.BR \-W ", " \-\-windir
+Print the Windows directory:
+.BR SYSTEMROOT ,
+else
+.BR WINDIR ,
+else
+.IR C:/Windows .
+.TP
+.BR \-S ", " \-\-sysdir
+Print the Windows system directory, the Windows directory's
+.IR System32 .
+.TP
+.BR \-l ", " \-\-long\-name ", " \-s ", " \-\-short\-name
+Accepted with no effect.
+.TP
+.BR \-h ", " \-\-help
+Print a usage summary on standard output and exit 0.
+.PP
+The exit status is 0 on success and 1 on an error.
+An unknown option, a missing
+.I file
+for
+.BR \-f ,
+more than one of
+.BR \-u ,
+.BR \-w ,
+and
+.BR \-m ,
+a name given with
+.B \-W
+or
+.BR \-S ,
+or no names print a message and the usage line on standard error.
+An empty
+.I name
+stops the conversion with
+.BR "can\(aqt convert empty path" .
+.B help
+has no
+.B cygpath
+topic, as in Git Bash, where
+.B cygpath
+is a program: use
+.BR "cygpath \-\-help" .
+A copy of the program named
+.I cygpath.exe
+acts as this builtin and exits.
+.PP
+The parser drops every carriage return in msys mode: in scripts,
+.B \-c
+text,
+.BR eval ,
+sourced files, command substitution bodies, and interactive lines,
+including those inside quotes and here-documents.
+.B $\(aq\er\(aq
+still gives a carriage return.
+Without
+.BR igncr ,
+.B read
+and
+.B mapfile
+keep carriage returns, as in Git Bash.
+.PP
+.B igncr
+is a
+.B set \-o
+option that exists only in msys mode, with no single-letter flag, and is
+off by default; it may also come from an inherited
+.BR SHELLOPTS .
+When it is on, command substitutions lose every carriage return, and
+.B read
+drops them from what it stores, not counting them for
+.B \-n
+or
+.BR \-N ;
+a carriage return escaped with
+.B \e
+stays.
+.B mapfile
+keeps them.
+.PP
+In both Windows modes a command substitution strips trailing newlines
+together with one carriage return before each, so
+.B a
+CR LF CR LF gives
+.BR a ,
+while
+.B a
+CR CR LF keeps one carriage return and a lone trailing carriage return
+stays.
+.SS "Paths in native mode"
+Paths are Windows paths, as busybox-w32's shell has them.
+There is no mount table.
+A path beginning with a single
+.B /
+or
+.B \e
+is on the root of the current drive, or of the current share when the
+working directory is a UNC path.
+.I /c/x
+is
+.I C:/c/x
+when the working directory is on drive C, not
+.IR C:/x .
+.I /proc
+is an ordinary directory, and of
+.I /dev
+only the names under Devices below are special.
+.PP
+.I C:/x
+and
+.I C:\ex
+are absolute.
+.I C:
+and
+.I C:x
+are relative to drive C's working directory, which comes from the
+.B =C:
+environment entry that Windows programs inherit, else from the working
+directory when it is on drive C, else the drive root.
+Each
+.BR cd ,
+in either mode, records the new directory in that drive's entry, which
+child processes inherit.
+UNC paths are written
+.I //server/share
+or
+.IR \e\eserver\eshare ,
+and a
+.I \e\e?\e
+prefix is accepted, so
+.I \e\e?\eC:\ex
+is
+.IR C:/x .
+Both slashes separate components, and
+.B .\&
+and
+.B ..\&
+are resolved as text.
+.PP
+.B pwd
+and
+.B PWD
+give Windows paths with forward slashes and an uppercase drive letter,
+such as
+.IR C:/Users/me .
+.B \(ti
+is
+.B HOME
+as it stands: the shell does not make it canonical, and it has forward
+slashes only where the import or the default from
+.B USERPROFILE
+gave them (see Environment below).
+An inherited
+.B PWD
+is never used: at startup
+.B PWD
+is the process's working directory.
+.B cd
+gives each component the case it has on disk, so
+.B cd c:/users/ME
+shows
+.IR C:/Users/me ,
+but a share's server and share names keep the case typed.
+Globbing does no conversion: matches keep the spelling of the pattern's
+directory part.
+In a pattern, as in msys mode, a backslash quotes the next character, so
+patterns need forward slashes.
+.PP
+.B PATH
+and
+.B CDPATH
+are split on
+.BR ; .
+Every assignment to
+.BR PATH ,
+and its import at startup, turns each colon into a semicolon, except a
+colon after a single letter at the start of an element, which is taken
+for a drive letter (so
+.I a:b
+stays).
+.B CDPATH
+is not rewritten.
+.PP
+.RS 4
+.EX
+$ PATH=C:/x:/usr/bin:D:/y
+$ echo "$PATH"
+C:/x;/usr/bin;D:/y
+.EE
+.RE
+.PP
+For libtool, when a Windows program is run as exactly
+.BR "cmd //c echo" ,
+the
+.B //c
+is passed as
+.BR /c .
+Other spellings, such as
+.BR cmd.exe ,
+are left alone.
+Msys mode gets the same effect from its argument conversion.
+.PP
+The parser drops a carriage return that comes before a newline, so
+scripts with CR LF line endings run, but keeps one elsewhere, even
+inside quotes.
+.B read
+drops a carriage return before the newline, except with
+.BR \-N ,
+and field splitting turns CR LF into LF whatever
+.B IFS
+holds.
+.B mapfile
+keeps carriage returns, and a command substitution strips trailing
+newlines with one carriage return before each, as in msys mode.
+There is no
+.B igncr
+option.
+.PP
+Some busybox-w32 features are missing.
+Globbing is case sensitive, as in bash, unless
+.B shopt \-s nocaseglob
+is set, where busybox-w32 ignores case by default.
+There is no
+.B \-X
+option, no
+.B title
+builtin, and no
+.BR "cd \-a" ,
+and the colons in
+.B MANPATH
+are not rewritten.
+Of the
+.B BB_
+variables only
+.B BB_OVERRIDE_APPLETS
+is read:
+.BR BB_GLOBBING ,
+.BR BB_UMASK ,
+.BR BB_SYSTEMROOT ,
+and the others have no effect.
+.SS Devices
+The shell emulates devices in its own redirections, file tests,
+pathname expansion, and
+.BR cd .
+A program given a device name as an argument sees what argument
+conversion makes of it (see Running programs below).
+In msys mode
+.I /dev/null
+becomes
+.B nul
+and
+.I /dev/zero
+becomes
+.IR /Device/Null ,
+which busybox's applets cannot open, so redirect instead:
+.BR "head \-c 4 </dev/urandom" .
+In native mode the name is passed as written, and busybox's applets
+emulate it themselves.
+.PP
+In msys mode
+.I /dev
+is a virtual directory that lists
+.IR clipboard ,
+.IR console ,
+.IR fd ,
+.IR full ,
+.IR null ,
+.IR random ,
+.IR stderr ,
+.IR stdin ,
+.IR stdout ,
+.IR tty ,
+.IR urandom ,
+and
+.IR zero .
+.IR ptmx ,
+.IR conin ,
+.IR conout ,
+.IR windows ,
+.IR consN ,
+.IR ptyN ,
+and
+.IR ttySN ,
+for a number
+.IR N ,
+are recognised but not listed.
+The names are matched case-sensitively.
+.TP
+.I /dev/null
+The NUL device.
+.TP
+.IR /dev/tty ", " /dev/console
+The console, opened as
+.B CONIN$
+for reading and
+.B CONOUT$
+otherwise.
+.TP
+.IR /dev/stdin ", " /dev/stdout ", " /dev/stderr ", " /dev/fd/N
+A copy of the shell's descriptor 0, 1, 2, or
+.IR N .
+A closed descriptor gives
+.BR "Bad file descriptor" .
+.I /dev/fd
+is a directory that cannot be listed.
+.TP
+.IR /dev/zero ", " /dev/full
+Read as endless zero bytes.
+Writes to
+.I /dev/zero
+are discarded.
+Writes to
+.I /dev/full
+fail: the shell's own with
+.BR "No space left on device" ,
+a program's because its handle is open only for reading.
+.TP
+.IR /dev/random ", " /dev/urandom
+Read as the same endless stream of random bytes, from ChaCha8 keyed from
+the operating system's random source.
+Writes are discarded.
+.TP
+.IR /dev/clipboard ", and the recognised names that are not listed"
+Writes are discarded and reads fail with
+.BR "No such file or directory" .
+.I /dev/clipboard
+does not reach the Windows clipboard.
+.PP
+A generator device opened for reading is a pipe that the shell fills, so
+builtins and programs read it alike, and
+.B test \-p
+is true of its descriptor.
+A path below a device, such as
+.IR /dev/null/x ,
+fails with
+.BR "Not a directory" .
+There is no
+.I /dev/tcp
+or
+.IR /dev/udp .
+.PP
+In msys mode
+.I /proc
+lists Cygwin's fixed entries
+.RI ( cpuinfo ,
+.IR mounts ,
+.IR version ,
+and the rest), the shell's own process ID, and
+.IR self .
+The fixed files cannot be read
+.RB ( "Permission denied" )
+and the fixed directories list nothing.
+Only these have contents:
+.TP
+.I /proc/self/exename
+The shell's POSIX path, without
+.BR .exe .
+.TP
+.I /proc/self/winexename
+The shell's Windows path, with backslashes.
+.TP
+.I /proc/self/fd/N
+The shell's descriptor
+.IR N ,
+as
+.IR /dev/fd/N .
+.TP
+.I /proc/cygdrive
+The drive prefix, so
+.I /proc/cygdrive/c
+is drive C.
+.PP
+.I /proc/
+followed by
+.B $$
+or
+.BR BASHPID ,
+even in a subshell, is the same as
+.IR /proc/self ,
+so
+.BI /proc/$BASHPID/fd/ N
+names the shell's own descriptor
+.IR N .
+These paths work only in the shell's own redirections and builtins: a
+program such as busybox
+.B cat
+cannot open them.
+.B cd
+can enter
+.I /dev
+and
+.IR /proc ;
+a program started there runs in the install root.
+.PP
+In native mode, as in busybox-w32, only
+.IR /dev/null ,
+.IR /dev/tty ,
+.IR /dev/console ,
+.IR /dev/stdin ,
+.IR /dev/stdout ,
+.IR /dev/stderr ,
+.IR /dev/fd/N ,
+.IR /dev/zero ,
+and
+.I /dev/urandom
+are devices, and behave as in msys mode.
+Any other name, such as
+.IR /dev/full ,
+.IR /dev/random ,
+or
+.I /dev/fd
+itself, is an ordinary path on the current drive, though a path below
+one of the msys names, such as
+.IR /dev/random/x ,
+still fails with
+.BR "Not a directory" .
+.PP
+In both Windows modes the DOS device names
+.BR CON ,
+.BR PRN ,
+.BR AUX ,
+.BR NUL ,
+.BR COM1 " to " COM9 ,
+.BR LPT1 " to " LPT9 ,
+.BR CONIN$ ,
+and
+.BR CONOUT$ ,
+in any case and in any directory, open the device, so
+.B 2>nul
+discards standard error where Git Bash would create a file named
+.IR nul .
+.B NUL
+is
+.I /dev/null
+and
+.B CON
+the console.
+In native mode the Windows rules apply: an extension, anything after a
+colon, and trailing dots and spaces are ignored, so
+.I nul.txt
+and
+.I con:
+are devices too.
+In msys mode only the bare name is a device, and a name such as
+.IR nul.txt ,
+or one ending in a dot or a space, is an ordinary file that can be
+created.
+.SS Environment
+At startup every environment entry whose name is a valid variable name
+becomes an exported variable.
+An entry whose name is not, such as
+.B ProgramFiles(x86)
+or the
+.B =C:
+entries that hold each drive's working directory, defines no variable
+but is passed on to programs, converted only as described below for a
+native program started from msys mode.
+An entry named
+.BI BASH_FUNC_ name %%
+defines the exported function
+.IR name ,
+as in bash, and reaches programs only while that function stays
+exported.
+Native mode converts some environments as it imports them, as
+described below.
+.PP
+In msys mode the import converts as an MSYS2 program's runtime does.
+Names that match
+.BR COMMONPROGRAMFILES ,
+.BR COMSPEC ,
+.BR PATH ,
+.BR PROGRAMFILES ,
+.BR SYSTEMDRIVE ,
+.BR SYSTEMROOT ,
+.BR TEMP ,
+.BR TMP ,
+.BR WINDIR ,
+or
+.B MSYSTEM
+ignoring case are uppercased, so
+.B Path
+becomes
+.BR PATH .
+.B PATH
+and
+.B ORIGINAL_PATH
+are split on
+.BR ; ,
+each element loses surrounding double quotes and trailing backslashes,
+empty elements are dropped, and the rest are converted to POSIX form and
+joined with
+.BR : .
+.B LD_LIBRARY_PATH
+is converted the same way, but its elements keep their quotes and
+trailing backslashes.
+.BR HOME ,
+.BR SHELL ,
+.BR TMPDIR ,
+.BR TMP ,
+and
+.B TEMP
+are converted to POSIX form, a relative value joined to the working
+directory.
+An inherited
+.B TERM=msys
+is dropped.
+Other values are kept as they are.
+When unset,
+.B HOME
+is taken from
+.B USERPROFILE
+in POSIX form,
+.B TERM
+is set to
+.BR xterm\-256color ,
+and
+.B PATH
+to
+.IR /usr/bin ,
+which names no directory in w64devkit's layout; all three are exported.
+.B SHELL
+defaults to
+.I /usr/bin/bash
+and is not exported.
+.PP
+A native program, or a batch file, started from msys mode gets the
+environment converted back, as MSYS2 builds it for a Windows program:
+.IP \(bu 2
+.BR PATH ,
+.BR ORIGINAL_PATH ,
+and
+.B LD_LIBRARY_PATH
+become Windows lists: split on every
+.BR : ,
+an empty element becoming
+.BR . ,
+each element converted to Windows form with backslashes, and joined
+with
+.BR ; .
+.IP \(bu 2
+.BR HOME ,
+.BR SHELL ,
+.BR TMPDIR ,
+.BR TMP ,
+and
+.B TEMP
+become absolute Windows paths with backslashes.
+When such a value names no file but the same name with
+.B .exe
+added is a file,
+.B .exe
+is appended, so
+.B SHELL=/bin/bash
+arrives as the full path of
+.IR bash.exe .
+These eight names are matched exactly, in uppercase.
+.IP \(bu 2
+Every other entry with a non-empty value goes, whole, through the
+argument conversion described under Running programs below, so
+.B A=/c/x
+arrives as
+.BR A=C:/x .
+No entry does when the environment holds
+.BR MSYS_NO_PATHCONV ,
+and an entry is skipped when it starts with one of the
+.BR ; -separated
+prefixes in
+.B MSYS2_ENV_CONV_EXCL
+(whose name is matched ignoring case), or when that variable holds
+.BR * .
+.IP \(bu 2
+.B TZ
+(in any case) is dropped unless its value is empty, or does not start
+with
+.B :
+and holds only letters, digits,
+.BR \- ,
+.BR + ,
+and
+.BR : .
+So
+.B TZ=EST5EDT
+passes, while
+.B EST5EDT,M3.2.0,M11.1.0
+and
+.B America/New_York
+do not.
+.IP \(bu 2
+The
+.B =C:
+entries are passed unchanged.
+When
+.B PATH
+is not exported or is empty (an empty
+.B PATH=
+entry stays too),
+.BI PATH= root \eusr
+is added, where
+.I root
+is the install root in Windows form.
+.B SYSTEMROOT
+and
+.B WINDIR
+are added from the Windows directory when missing.
+.B MSYSTEM
+is never added.
+.PP
+For example:
+.PP
+.RS 4
+.EX
+$ export A=/c/x B=\-\-opt=/c/y C=/c/a:/d/b
+$ printenv A B C
+C:/x
+\-\-opt=C:/y
+C:\ea;D:\eb
+$ MSYS2_ENV_CONV_EXCL=B printenv A B
+C:/x
+\-\-opt=/c/y
+.EE
+.RE
+.PP
+An MSYS2 or Cygwin program, or a copy of this shell, started from msys
+mode gets only the eight variables above in Windows form, by the same
+rules, and every other entry as it is.
+An MSYS2 or Cygwin program converts them back at startup, as does a
+copy in msys mode.
+A copy in native mode imports them as native mode does (see below):
+their backslashes become
+.B /
+when the environment holds a mixed-case
+.BR ProgramData ,
+as it does when Windows started the msys mode shell, and stay
+otherwise.
+A Windows-form value in one of them therefore reaches such a program in
+POSIX form, and
+.B MSYS2_ENV_CONV_EXCL
+and
+.B MSYS_NO_PATHCONV
+do not prevent that.
+An MSYS2 program converts with its own install's mount table, not the
+shell's.
+.PP
+In native mode the import follows busybox-w32, but only when the
+environment holds an entry named exactly
+.BR Path ,
+.BR ComSpec ,
+or
+.BR ProgramData ,
+as one from a Windows program, Git Bash, or an msys mode shell does.
+Then every name is uppercased, and every value except those of
+.B COMSPEC
+and
+.B SYSTEMROOT
+has its backslashes turned into
+.BR / .
+A name that is not a valid variable name is passed on to programs
+unchanged and also defines a variable with each invalid character
+replaced by
+.BR _ ,
+unless the result starts with a digit:
+.B ProgramFiles(x86)
+gives
+.BR PROGRAMFILES_X86_ .
+From another native shell or busybox, whose names are already
+uppercase, the environment is imported as it is.
+Either way, when unset,
+.B HOME
+is taken from
+.B USERPROFILE
+with forward slashes,
+.B USER
+and
+.B LOGNAME
+from
+.BR USERNAME ,
+.B PATH
+is the shell's own directory, and
+.B SHELL
+is the shell's own path; none of these is exported.
+.B TERM
+is left unset.
+Native mode passes the environment to every program as it stands,
+without conversion, so imported values keep their forward slashes.
+.SS "Finding commands"
+A command name that contains
+.B /
+or
+.BR \e ,
+or starts with a drive such as
+.BR C: ,
+is a path and is not looked up in
+.BR PATH .
+Otherwise the directories in
+.B PATH
+are searched in order, an empty element meaning the working directory.
+.B PATH
+is split on
+.B :
+in msys mode and on
+.B ;
+in native mode.
+With
+.B PATH
+unset, only the bare name in the working directory is tried, and a name
+not found there gives
+.IB name ": No such file or directory"
+and status 127.
+.B command \-p
+searches
+.I /usr/bin:/bin
+in msys mode and the shell's own directory in native mode.
+.PP
+In msys mode a name
+.I foo
+that does not exist is found as
+.I foo.exe
+when that is a file, and no other suffix is tried: a batch file must be
+named in full, as in
+.BR build.bat .
+The same holds for a path such as
+.IR ./foo ,
+and wherever the shell tests a file name, so
+.B [ \-e ls ]
+is true in a directory that holds only
+.IR ls.exe .
+.BR type ,
+.BR "command \-v" ,
+and
+.B hash
+show the path without
+.BR .exe .
+.PP
+In native mode each directory is tried for the bare name and then for
+the name with
+.BR .com ,
+.BR .exe ,
+.BR .sh ,
+.BR .bat ,
+and
+.B .cmd
+appended, in that order, unless the name already ends in one of those
+(in any case) or in a dot.
+A path that does not exist and lacks such an extension gets the same
+five tried, and a script found this way runs under the name with the
+extension appended:
+.B ./s
+runs
+.I s.sh
+with
+.B $0
+set to
+.BR ./s.sh .
+.B PATHEXT
+is not read, nor are
+.B MSYS
+and
+.BR CYGWIN ,
+in either mode, so settings such as
+.B noglob
+in them have no effect.
+.B type
+and
+.B command \-v
+show the file found on
+.BR PATH ,
+extension included, but find nothing for a path such as
+.I ./foo
+that runs only with an extension added.
+.PP
+Which files are executable, for
+.B test \-x
+and for the search, depends on the mode.
+In msys mode, as Cygwin decides without ACLs, a regular file is
+executable when its name ends in
+.BR .exe ,
+or its content starts with
+.BR #! ,
+.BR MZ ,
+or a colon and a bare LF.
+Other names, such as
+.BR .bat ,
+.BR .cmd ,
+or
+.BR .com ,
+count for nothing, so a batch file or an empty file is not executable,
+while a
+.B .com
+file that is a Windows image is.
+In native mode, as busybox-w32 decides, a file is executable when its
+name ends in one of the five extensions above, or it starts with
+.BR #! ,
+or it is an Actually Portable Executable (starting
+.BR MZqFpD ),
+or it is a Windows image that is not a DLL and has the native, GUI,
+console, or POSIX subsystem.
+.PP
+The search takes the first executable match.
+When nothing executable matches, it takes the first other file found,
+as bash does.
+Running it then fails in native mode with
+.B "Permission denied"
+and status 126, as in busybox-w32.
+In msys mode it runs anyway, by the rules under Running programs below,
+as under Git Bash; this is how a batch file named in full runs.
+As in bash, a found path is remembered
+.RB ( hash );
+assigning
+.B PATH
+forgets every remembered path, as does switching modes with the hidden
+.B msyspath
+option.
+.PP
+w64devkit installs each busybox applet, such as
+.I ls.exe
+or
+.IR sed.exe ,
+as a small stub program that starts
+.IR busybox.exe .
+In native mode the shell skips such a stub, whether found on
+.B PATH
+or named by path: when the program it is about to run is a Windows
+image of at most 64 KiB that uses no C runtime, is not a DLL, an MSYS2
+or Cygwin program, or the shell itself, and contains the text
+.BR busybox.exe ,
+and a
+.I busybox.exe
+is in the same directory, the shell starts that
+.I busybox.exe
+directly, passing the stub's name less
+.B .exe
+as the first argument, which names the applet, then the other
+arguments as given, with the environment unchanged.
+.B BB_OVERRIDE_APPLETS
+names applets whose stubs run as ordinary programs instead.
+It is read from the exported environment.
+Its entries are separated by spaces, commas, or semicolons (not tabs),
+a leading
+.B +
+on an entry is ignored, names are compared ignoring case, and an entry
+.B \-
+means every applet.
+Msys mode always runs the stub itself, as any other native program.
+.SS "Running programs"
+The shell starts each program itself with
+.BR CreateProcess ,
+not through
+.B cmd.exe
+or another shell; only a batch file runs through
+.BR cmd.exe ,
+as described below.
+The shell process never changes its own Windows working directory:
+.B cd
+changes the directory the shell keeps, and each program starts there.
+The directory the shell was started in therefore cannot be renamed or
+removed while the shell runs, even after
+.BR cd .
+In msys mode a program started from a virtual directory such as
+.I /proc
+starts in the install root.
+When Windows refuses the directory, as when it is too long or has been
+removed, the program starts in the directory the shell itself was
+started in.
+.PP
+A file whose name ends in
+.B .bat
+or
+.B .cmd
+(in any case) runs as a batch file, whatever it holds.
+Otherwise the file's first bytes decide.
+A Windows image that imports
+.I msys\-2.0.dll
+or
+.I cygwin1.dll
+is an MSYS2 or Cygwin program, an image of this shell under any name is
+a copy of the shell, and any other image is a native program.
+A file starting with
+.B #!\&
+is a script.
+.PP
+Windows passes a program one command line, which the program splits
+into arguments, so the shell quotes each argument for the way the
+target splits:
+.TP
+Native program, native mode
+By the rules of MSVCRT and
+.BR CommandLineToArgvW :
+an argument is put in double quotes when it is empty or contains a
+space, tab, newline, vertical tab,
+.BR \(dq ,
+.BR * ,
+.BR ? ,
+.BR [ ,
+.BR { ,
+or
+.BR \(aq ,
+and inside the quotes a
+.B \(dq
+is escaped with a backslash and the backslashes before it, or before
+the closing quote, are doubled.
+Quoting the wildcards keeps a program that expands its own command line
+from expanding them again.
+The first argument has its slashes turned into backslashes, so
+.B ./prog
+reaches the program as
+.BR .\eprog .
+.TP
+Native program, msys mode
+As an MSYS2 parent quotes, which every MSVCRT parser reads the same way:
+the first argument is the program's full Windows path with backslashes,
+the others are converted as described below, and an argument is quoted
+only when it is empty or contains a space, tab, carriage return,
+newline, or
+.BR \(dq .
+Since wildcards are not quoted, a program that expands its own command
+line expands an argument such as
+.B \(aq*.c\(aq
+itself, as under Git Bash.
+.TP
+MSYS2 or Cygwin program
+By Cygwin's rules, in both modes: an argument is quoted when it is
+empty, starts with
+.B ~
+or
+.BR @ ,
+or contains a space, tab, newline, carriage return,
+.BR \(dq ,
+.BR \(aq ,
+.BR ? ,
+.BR * ,
+.BR [ ,
+.BR ( ,
+.BR ) ,
+.BR { ,
+or
+.BR } ,
+and inside the quotes every
+.B \e
+and
+.B \(dq
+gets a backslash.
+The program receives each argument unchanged: none is converted, and
+the program expands no wildcard or response file in it.
+.TP
+Copy of this shell
+Quoted for the mode the copy's own name and install give it: Cygwin's
+rules for msys mode, MSVCRT's for native mode.
+.TP
+Batch file
+Run through
+.B cmd.exe
+with arguments escaped for it, as described next.
+.PP
+A batch file runs as exactly
+.PP
+.RS 4
+.EX
+%COMSPEC% /d /e:on /v:off /s /c "\fIfile\fR \fIargs\fR & exit"
+.EE
+.RE
+.PP
+where
+.B COMSPEC
+comes from the program's environment, ignoring case, and defaults to
+.I cmd.exe
+in the System32 directory, and
+.I file
+is the batch file's Windows path, always quoted.
+The trailing
+.B exit
+keeps the status of
+.BR "exit /b" ,
+which the
+.B cmd.exe
+of Windows XP otherwise loses.
+Each argument is escaped so that
+.B cmd.exe
+takes it literally, as Rust does against the flaw known as BatBadBut:
+it is quoted when it is empty, ends in a backslash, or holds anything
+but letters, digits, non-ASCII characters, and
+.BR #$*+\-./:?@\e_ ,
+inside the quotes a
+.B \(dq
+is doubled, as are the backslashes before it and at the end, and every
+.B %
+is broken up so that no variable is expanded.
+An argument containing a carriage return or a newline cannot be passed,
+and the command fails with
+.IB name ": Invalid argument"
+and status 126, where
+.I name
+is the command as typed.
+In msys mode the arguments are first converted as for a native program,
+and the environment is the native program's.
+.PP
+A command line longer than 32766 UTF-16 code units fails with
+.B "Argument list too long"
+and status 126.
+A program that requires elevation, such as many installers, is not
+elevated: it fails with
+.B "Permission denied"
+and status 126.
+Run it from an elevated shell, or through the
+.B start
+command of
+.BR cmd.exe .
+In native mode
+.B "cmd //c echo"
+is rewritten as described under Paths in native mode above.
+When a native program fails to start because a DLL is missing, the
+shell prints, as Cygwin does,
+.PP
+.RS 4
+.EX
+\fIprog\fR: error while loading shared libraries: \fIdll\fR: cannot
+open shared object file: No such file or directory
+.EE
+.RE
+.PP
+on one line, and the status is 127.
+.I prog
+is in POSIX form in msys mode, and
+.I dll
+is the first import found in none of the program's directory, the
+System32, SysWOW64, and Windows directories, and the program's
+.BR PATH ,
+or
+.B ?\&
+if they are all found.
+.PP
+In msys mode each argument but the first to a native program or batch
+file goes through MSYS2's path conversion, which turns what looks like
+a POSIX path into a Windows path.
+The shell copies MSYS2's rules, including their mistakes:
+.IP \(bu 2
+An argument is examined only when it contains
+.B /
+or
+.B \e
+before its first blank.
+An empty argument is never converted.
+.IP \(bu 2
+An argument is left whole when it starts with
+.B ~
+or
+.BR : ,
+or contains anywhere a backquote,
+.BR \(aq ,
+.BR * ,
+.BR ? ,
+.BR [ ,
+.BR ] ,
+.BR /~ ,
+.BR :: ,
+.BR :./ ,
+.BR :../ ,
+or
+.BR @@ .
+.IP \(bu 2
+Leading characters other than letters, digits,
+.BR / ,
+.BR \e ,
+.BR : ,
+.BR \- ,
+and
+.B .\&
+are kept, and conversion starts after them, so a response file
+.B @/c/args
+becomes
+.BR @C:/args .
+.IP \(bu 2
+A rooted path is converted through the mount table, with forward
+slashes:
+.B /c/Users/me
+becomes
+.BR C:/Users/me ,
+and with w64devkit at
+.IR C:/w64devkit ,
+.B /usr/include
+becomes
+.BR C:/w64devkit/usr/include .
+.B /dev/null
+becomes
+.BR nul ,
+.IR /dev/zero ,
+.IR /dev/full ,
+.IR /dev/random ,
+.IR /dev/urandom ,
+and
+.I /dev/clipboard
+become
+.IR /Device/Null ,
+and
+.I /dev/stdin
+becomes
+.IR /proc/self/fd/0 ,
+likewise for standard output and error,
+.I /dev/fd
+becomes
+.IR /proc/self/fd ,
+and
+.BI /dev/fd/ n
+becomes
+.BI /proc/ pid /fd/ n
+with the shell's process ID.
+Conversion stops at the first
+.BR /.. ,
+and the rest is copied as it is.
+Any other path with no Windows form, such as
+.IR /dev/tty ,
+is left as typed.
+.IP \(bu 2
+A rooted path whose first
+.B :
+is followed by
+.B /
+or
+.BR . ,
+and a word such as
+.BR a/b:/c ,
+are path lists: each element is converted on its own, with
+backslashes, and the elements are joined with
+.BR ; .
+.IP \(bu 2
+Conversion also starts after the first
+.BR = ,
+as in
+.B \-\-prefix=/usr
+or
+.BR VAR=/x ;
+right after an option letter followed by
+.BR / ,
+as in
+.B \-I/usr/include
+or
+.BR \-L/lib ;
+and after a
+.B :
+or
+.B ,
+in a word that starts with
+.BR \- ,
+as in
+.BR \-Wl,\-rpath,/usr/lib .
+.IP \(bu 2
+A leading
+.B //
+before a name with no further
+.BR / ,
+or a leading
+.BR /// ,
+loses one slash, so
+.B //c
+becomes
+.BR /c .
+This is how to pass a switch that starts with
+.BR / ,
+as in
+.BR "cmd //c" .
+.B //server/share
+is left as it is, apart from backslashes becoming slashes.
+.IP \(bu 2
+Windows paths, relative paths, URLs, and words such as
+.B foo:/bar
+or
+.B host:80
+are left as they are.
+.PP
+The usual mistake is a switch that starts with
+.BR / :
+.B /W3
+or
+.B /nologo
+is a rooted path and becomes a path under the install root.
+Write
+.BR //W3 .
+.PP
+For example, with the native busybox
+.BR echo :
+.PP
+.RS 4
+.EX
+$ /bin/echo /c/Users/me \-\-dir=/c/src \-I/c/inc \-L/d/lib
+C:/Users/me \-\-dir=C:/src \-IC:/inc \-LD:/lib
+$ /bin/echo /c/a:/d/b //c /dev/null
+C:\ea;D:\eb /c nul
+$ /bin/echo C:/x ./y foo:/bar \(aqa /c/b\(aq \(aq*/c/x\(aq
+C:/x ./y foo:/bar a /c/b */c/x
+$ /bin/echo a/b:/c
+a\eb;C:\e
+.EE
+.RE
+.PP
+Conversion is off for a program whose environment holds
+.BR MSYS_NO_PATHCONV ,
+with any value, even empty; it must be exported, or given in front of
+the command.
+.B MSYS2_ARG_CONV_EXCL
+holds
+.BR ; -separated
+prefixes: an argument starting with one of them is passed unchanged,
+and an entry
+.B *
+excludes every argument.
+Both names are matched exactly, and both also act from the command's
+own prefix assignments:
+.PP
+.RS 4
+.EX
+$ MSYS2_ARG_CONV_EXCL=\-\-dir= /bin/echo \-\-dir=/c/src /c/src
+\-\-dir=/c/src C:/src
+$ MSYS_NO_PATHCONV=1 /bin/echo /c/src
+/c/src
+.EE
+.RE
+.PP
+Native mode converts no argument.
+.PP
+Open descriptors above 2 are passed, as binary descriptors, to a
+program that uses a C runtime (msvcrt, UCRT, or an older msvcr DLL),
+such as busybox, and to a copy of this shell.
+They are not passed to an MSYS2 or Cygwin program, a program with no C
+runtime, or a batch file, and a coprocess's descriptors are passed to
+no program.
+.PP
+Process substitution expands to
+.BI /dev/fd/ n
+in both modes, which builtins and copies of this shell open directly.
+An argument to a native program that names an open descriptor 3 or
+above that way, whole or after its last
+.BR = ,
+as in
+.BR \-\-file=/dev/fd/63 ,
+is replaced by the path of a named pipe,
+\fB\e\e.\epipe\eunabashed\-\fIpid\fB\-\fIhex\fB.dll\fR,
+which the shell connects to the descriptor; this works for any such
+descriptor, not only a process substitution.
+At most 16 arguments of one command are replaced, and a program that
+opens the same path twice splits the data between the two.
+An MSYS2 or Cygwin program cannot use such a pipe, so it gets the path
+of a temporary file
+.BI sh\-fd\- hex
+in the directory that
+.B TEMP
+(or
+.BR TMP )
+named when the shell started, removed afterwards.
+For
+.BI <( list )\fR,
+.I list
+runs to completion and its whole output is written to the file before
+the program starts; beyond 1 GiB the shell gives up and passes
+.BI /dev/fd/ n
+unchanged.
+For
+.BI >( list )\fR,
+what the program wrote goes to
+.I list
+after the program exits.
+The program shows the temporary file's name where Git Bash would show
+.BR /dev/fd/63 .
+In msys mode a
+.BI /dev/fd/ n
+argument that is not replaced becomes
+.BI /proc/ pid /fd/ n\fR.
+.PP
+A script's
+.B #!\&
+line is read from the first 256 bytes of the file and ends at the first
+carriage return or newline.
+The interpreter is its first word, and the rest of the line, trimmed of
+blanks, is one argument.
+The interpreters
+.IR /bin/sh ,
+.IR /bin/bash ,
+.IR /usr/bin/sh ,
+and
+.IR /usr/bin/bash ,
+and
+.B /usr/bin/env
+with the single argument
+.B sh
+or
+.BR bash ,
+mean this shell: the script runs in a copy of this
+shell's own program, given
+.B \-O msyspath
+in msys mode or
+.B +O msyspath
+in native mode so that it keeps the current mode, then the line's
+argument (not for the
+.B env
+forms), the script, and its arguments.
+The copy's other traits follow the program's own name, so in w64devkit
+a
+.B #!/bin/bash
+script run from native
+.B sh
+runs in
+.I sh.exe
+with native paths,
+.BR OSTYPE=win32 ,
+and busybox's startup rules, and a
+.B #!/bin/sh
+script run from
+.B bash
+does not enter POSIX mode.
+.PP
+Any other interpreter is looked for at its path, through the mount
+table in msys mode, and in native mode on the current drive with the
+five extensions tried; failing that, its last component is searched for
+in
+.BR PATH .
+So
+.B #!/usr/bin/env python3
+and
+.B #!/usr/bin/perl
+work when
+.B env
+and
+.B perl
+are in
+.BR PATH ,
+though no
+.I /usr/bin
+exists.
+The interpreter then runs by these same rules and may itself be a
+script, up to four levels deep.
+A missing interpreter gives
+.IB script ": " interp ": bad interpreter: No such file or directory"
+and status 126, as does a fifth level, with
+.B "Too many levels of symbolic links"
+instead.
+.PP
+In native mode a file whose name ends in
+.B .sh
+always runs in this shell, as above, whatever its
+.B #!\&
+line names; the line's argument is still passed, so a
+.B .sh
+file starting
+.B "#!/usr/bin/python3 \-u"
+runs as shell code with
+.BR \-u .
+Also in native mode, as in busybox-w32, a command given as a missing
+.BI /bin/ x\fR,
+.BI /usr/bin/ x\fR,
+.BI /sbin/ x\fR,
+or
+.BI /usr/sbin/ x
+runs
+.I x
+found in
+.BR PATH ,
+and
+.BR sh ,
+.BR bash ,
+or
+.B ash
+runs this shell with the arguments as given, so
+.B SHELL=/bin/sh
+from a
+.B configure
+script works.
+That copy takes its mode from the name typed, as any copy does:
+.I /bin/bash
+starts an msys shell, and
+.I /bin/sh
+a native one unless the install has an
+.IR etc/fstab .
+.PP
+A file with no
+.B #!\&
+line that is not a Windows image, other than a
+.B .sh
+file in native mode, runs as a shell script, as bash does,
+when its first 80 bytes hold no NUL byte: inside the shell, in a
+subshell with options, traps, and functions reset and a new
+.BR BASHPID .
+In native mode this needs a file that native mode counts as executable;
+any other fails with
+.B "Permission denied"
+and status 126 (see Finding commands above).
+Otherwise it fails with
+.B "Exec format error"
+and status 126.
+A file that starts with
+.B MZ
+but is not a Windows image is handed to Windows as it is, and treated
+as a file with no
+.B #!\&
+line if Windows refuses it.
+.PP
+Subshells in the foreground, command substitutions, process
+substitutions, and every shell stage of a foreground pipeline run inside
+the shell, on copies of its state.
+A background job, a coprocess, and the shell stages of a background
+pipeline run alongside the shell, so they run in a separate copy of the
+shell started with the shell's whole state: variables, exported or not,
+functions, options, traps, and open descriptors.
+A background pipeline is one such process, and its stages run inside
+it.
+In every case
+.B $$
+stays the shell's process ID;
+.B BASHPID
+is the copy's real process ID in a separate copy, and a number that is
+no process ID inside the shell.
+A background command that runs no shell code, such as
+.BR "make &" ,
+starts the program directly, and
+.B $!\&
+is the program's process ID.
+If the copy cannot be started, the job runs inside the shell instead,
+and the shell waits for it before it exits.
+.PP
+Windows cannot replace a process, so
+.B exec
+starts the program as a child.
+When nothing else runs in the shell and it is not interactive, the
+shell passes on the signals it receives, waits, and exits with the
+program's exit code; the program dies if the shell is killed.
+Otherwise the program runs as an ordinary child, and the shell exits
+with its status.
+The program's process ID is not
+.BR $$ .
+.B exec \-a
+and
+.B exec \-l
+set the first argument a program receives, except for a native program
+started from msys mode, which always gets its own full path there, and
+a busybox stub in native mode, which gets the applet name.
+In native mode the slashes in that argument become backslashes.
+.PP
+On Windows 8 and later each program also runs in a job object of its
+own; see Jobs and signals below.
+.SS Files
+The shell never reads a reparse point.
+A symbolic link or a junction counts as a link when it is not
+followed:
+.B test \-h
+and
+.B test \-L
+are true for it.
+Its target is never read, so
+.BR "cd \-P" ,
+.BR "pwd \-P" ,
+and
+.B set \-o physical
+resolve nothing: they treat the path as text, as a logical
+.B cd
+does, and a link in the path stays in
+.BR PWD .
+In msys mode the physical result is converted back to a POSIX path,
+which may spell it through another mount.
+.PP
+Windows has no file modes, so the shell makes them up.
+.BR UID ,
+.BR EUID ,
+and the shell's group are always 1000, and every file is owned by user
+and group 1000.
+A directory has mode 0755 and a file 0644, without its write bits
+when it has the read-only attribute.
+Execute bits follow the rules for what is executable (see Finding
+commands above).
+ACLs are ignored.
+As a result, in
+.BR test :
+.IP \(bu 2
+.B \-r
+is true for every existing file, even one the user cannot read.
+.IP \(bu 2
+.B \-w
+is false only for a file with the read-only attribute, and true for
+every directory.
+.IP \(bu 2
+.B \-x
+is true for every directory.
+.IP \(bu 2
+.B \-O
+and
+.B \-G
+are true for every existing file, and
+.BR \-u ,
+.BR \-g ,
+and
+.B \-k
+are always false.
+.IP \(bu 2
+.B \-ef
+compares the volume serial number and the file index.
+.PP
+The hidden and system attributes are ignored.
+Globbing and completion list such files, and only a leading
+.B .\&
+hides a name.
+.PP
+Files the shell creates are given mode 0666 (0600 for the history
+file), so they are never made read-only.
+The umask starts at 022, and
+.B umask
+reports and changes it, but the shell never applies it.
+.PP
+The shell opens every file with read, write, and delete sharing, so
+other processes may read, write, rename, or delete a file the shell
+has open, such as the script it is running.
+A
+.B >
+redirection opens an existing file and truncates it in place, so the
+file keeps its identity and a hidden file can be overwritten.
+A
+.B >>
+redirection opens the file for appending only, so every write lands at
+the end, including writes by programs that inherit the descriptor.
+.PP
+The shell writes bytes to files and pipes unchanged, with no LF to
+CR LF translation, so text it writes has LF line endings in both modes.
+For how it reads carriage returns, see The two modes compared above.
+A UTF-8 byte order mark is never stripped: not from a script, a
+.B \-c
+string, a sourced or startup file, or an inputrc.
+A script saved with a byte order mark has no
+.B #!\&
+line, and its first word begins with the bytes EF BB BF:
+.PP
+.RS 4
+.EX
+$ printf \(aq\e357\e273\e277echo hi\en\(aq >bom.sh
+$ bash bom.sh
+bom.sh: line 1: $\(aq\e357\e273\e277echo\(aq: command not found
+.EE
+.RE
+.PP
+Paths passed to Windows are made absolute, and long ones are given the
+extended-length prefix, so the shell's own file operations
+(redirections,
+.BR cd ,
+tests, and globbing) have no MAX_PATH limit.
+Programs it starts have their own limits.
+.PP
+File names, arguments, the environment, and the working directory are
+UTF-16 to Windows and UTF-8 to the shell.
+An unpaired surrogate in a name becomes its WTF-8 encoding, and is
+converted back unchanged, so every name round-trips.
+A byte that is not part of valid UTF-8 becomes the Latin-1 character
+of the same value, so
+.B $\(aq\exe9\(aq
+and
+.B $\(aq\exc3\exa9\(aq
+name the same file.
+.PP
+On a console, the shell's input and output are UTF-8 whatever the
+console's code page: it writes with WriteConsoleW, reads with
+ReadConsoleW or, in the editor, ReadConsoleInputW, and never changes
+the code page.
+In its own console output a byte that is not valid UTF-8 shows as the
+Latin-1 character of the same value, and so does a character split
+across two writes.
+.SS Line editing
+An interactive shell reads lines with its own editor, which follows GNU
+readline: emacs and vi modes, the kill ring, undo, numeric arguments,
+incremental search, keyboard macros, history expansion, completion,
+and programmable completion
+.RB ( complete ,
+.BR compgen ,
+and
+.BR compopt ).
+.B bind \-l
+lists the bindable functions, and
+.B bind
+changes key bindings and variables.
+.B read \-e
+uses the editor too.
+.PP
+The editor reads standard input and draws on standard error.
+When the shell's own input is not a console, as with
+.B \-i
+and input from a pipe or file, it draws on one line scrolled
+sideways,
+.B COLUMNS
+wide (80 when that is unset or not a number above 1).
+It does the same in a console window one row high.
+It is not used when standard input is a console and standard error is
+not, nor by
+.B read \-e
+on input that is not a console.
+.BR \-\-noediting ,
+.B set +o emacs
+in emacs mode, or
+.B set +o vi
+in vi mode turns the editor off; the console's own line input then reads the
+line, and a Ctrl-Z at the start of a line is end of file.
+.PP
+The editor reads its init file on first use, from the file named by
+.B INPUTRC
+when that is not empty, else from
+.IR ~/.inputrc ,
+else from
+.IR /etc/inputrc .
+An unreadable file is skipped silently, and an unreadable
+.B INPUTRC
+has no fallback.
+.I /etc
+resolves through the mount table in msys mode, and to the root of the
+current drive in native mode.
+.B re\-read\-init\-file
+(C\-x C\-r) reads the init file found at first use again, or
+searches again when none was found; a file read by
+.B bind \-f
+or
+.B $include
+does not count.
+In msys mode a carriage return at the end of each line is ignored;
+native mode keeps it, as readline does, so an inputrc with CR LF line
+endings misbehaves there.
+.PP
+The inputrc directives are
+.BR $if ,
+.BR $else ,
+.BR $endif ,
+and
+.B $include
+(nested at most 32 deep).
+.B $if
+tests
+.BI term= name
+against
+.B TERM
+or its part before the first
+.BR \- ,
+.B mode=emacs
+or
+.BR mode=vi ,
+.B version
+with a comparison operator against 8.3, the application name
+.BR bash ,
+which is true under every name the shell is started by, and a
+variable compared with
+.BR = ,
+.BR == ,
+or
+.BR != .
+Native mode leaves
+.B TERM
+unset, so
+.B term=
+tests are false there unless the user sets it.
+Every variable that
+.B bind \-v
+lists can be set.
+These are accepted but have no effect:
+.BR blink\-matching\-paren ,
+.BR byte\-oriented ,
+.BR colored\-completion\-prefix ,
+.BR colored\-stats ,
+.BR enable\-keypad ,
+.BR enable\-meta\-key ,
+.BR horizontal\-scroll\-mode ,
+.BR input\-meta ,
+.BR meta\-flag ,
+.BR output\-meta ,
+.BR revert\-all\-at\-newline ,
+and the two active region colours.
+.B convert\-meta
+only changes how later bindings of 8-bit keys are stored, as
+.B force\-meta\-prefix
+does: while either is on, each byte above 0x7F in a key sequence is
+bound as ESC and the byte with its high bit cleared.
+.B bind \-v
+reports
+.B prefer\-visible\-bell
+as on, but the bell is audible until
+.B bell\-style
+or
+.B prefer\-visible\-bell
+is set.
+.PP
+Besides readline's default bindings, the arrow keys, Home, End,
+Ctrl-Left and Ctrl-Right, Alt-Left and Alt-Right, and Ctrl-Delete are
+bound before the init file is read.
+After it, unless the init file bound them or the editor draws on one
+line, Delete, Insert, and the other editing keys get their usual
+functions, and in emacs mode PageUp
+and PageDown search the history for lines that begin with the text
+before the cursor.
+.PP
+File name completion is case sensitive unless
+.B completion\-ignore\-case
+is set.
+Command completion shows names with their
+.B .exe
+suffix; in msys mode
+.B shopt \-s completion_strip_exe
+drops it, unless a file without the suffix exists beside it.
+There are no users on Windows, so user name completion finds nothing.
+.PP
+In an interactive shell, history and history expansion are on.
+When
+.B HISTFILE
+is unset it becomes
+.I $HOME/.bash_history
+in both modes, or
+.I $HOME/.sh_history
+when POSIX mode is on before the startup files (see Startup files
+above).
+.B HISTSIZE
+defaults to 500 and
+.B HISTFILESIZE
+to
+.BR HISTSIZE .
+The history file is read after the startup files, ignoring a carriage
+return at the end of each line.
+It is written when the shell exits, but not when the shell dies of a
+signal, so closing the console window loses the session's history
+unless a
+.B HUP
+trap exits.
+A symbolic link as the history file is written through in place.
+.PP
+When unset,
+.B PS1
+is
+.B \(aq\es\-\ev\e$\ \(aq
+and
+.B PS2
+is
+.BR \(aq>\ \(aq .
+.B \es
+is
+.B $0
+after its last
+.BR / ,
+so a native shell started by a path such as
+.I C:\ew64devkit\ebin\esh.exe
+shows that whole path in its prompt.
+Since the effective user ID is always 1000,
+.B \e$
+always shows
+.BR $ ,
+even in an elevated shell.
+.PP
+Bracketed paste is on: pasted text is inserted as it is, with each CR
+turned into LF, and becomes the active region.
+It needs a console with escape sequences, and is off when
+.B TERM
+is
+.BR dumb ,
+which also makes the editor draw on one line scrolled sideways.
+.PP
+While it reads a line, the editor puts the console in raw mode and
+asks it to interpret escape sequences.
+When the console refuses, as on Windows XP and 7, a legacy console, or
+any console whose mode cannot be changed, the editor draws through
+its own emulator with console functions instead.
+The choice depends on the console, not on the Windows version.
+After each line the editor restores the console's modes, so programs
+run with the console as the shell found it.
+.PP
+The same emulator also interprets the shell's own output to a console
+whose output mode lacked escape sequence processing when the shell
+first wrote to it: prompts, error messages, and the output of builtins
+such as
+.B echo
+and
+.BR printf .
+It handles cursor movement, erasing, the 16 colours, bright and
+reverse video, and the window title (OSC 0 and 2), and ignores other
+sequences.
+It never touches the output of other programs: their escape sequences
+reach the console unchanged, and only a console with escape sequence
+processing on interprets them.
+.SS Jobs and signals
+Job control
+.RB ( "set \-m" )
+is on in an interactive shell with a console, and
+.BR jobs ,
+.BR fg ,
+.BR bg ,
+.BR wait ,
+.BR kill ,
+and
+.B disown
+work.
+Windows cannot stop a process, so no job is ever stopped.
+Ctrl-Z stops nothing: the editor's emacs mode leaves it unbound, so it
+rings the bell, and vi insert mode inserts it.
+.B suspend
+fails with the message
+.BR "cannot suspend: no job control" .
+There are no process groups:
+.BI "kill %" n
+signals the job's one process.
+When the shell exits, background programs keep running;
+.B huponexit
+and
+.B disown \-h
+are accepted, but nothing sends
+.B SIGHUP
+at exit.
+.PP
+Signal names and numbers are Linux's in both modes (for example
+.B USR1
+is 10 and
+.B PWR
+is 30), so
+.B kill \-l
+differs from Git Bash's.
+Signals reach the shell from outside only as console events, a console
+resize while the editor reads, or
+.B kill
+from another copy of the shell:
+.IP \(bu 2
+Ctrl-C is
+.BR SIGINT .
+.IP \(bu 2
+Ctrl-Break is
+.BR SIGQUIT .
+.IP \(bu 2
+Closing the console window is
+.BR SIGHUP .
+Windows ends the shell a few seconds later, so a
+.B HUP
+trap must be brief.
+.IP \(bu 2
+Resizing the console is
+.BR SIGWINCH ,
+seen only while the editor reads a line.
+.PP
+Logoff and shutdown events are not handled: the system's default
+handling ends the shell, and no trap runs.
+While the editor reads a line, a
+.B WINCH
+or
+.B INT
+trap acts at once, and a signal with no trap that would end the shell
+ends it; other traps wait until the line is read.
+.PP
+Ctrl-C while the editor reads a line discards the line and sets
+.B $?\&
+to 130.
+As in bash, a Ctrl-C that arrives while the shell waits for a
+foreground program acts only if the program died of it.
+A Windows program may end any way it likes on Ctrl-C, so a program
+counts as killed by
+.B SIGINT
+when it exits with code 0xC000013A, or with any non-zero code after a
+Ctrl-C.
+A native program that handles Ctrl-C and exits non-zero therefore ends
+the script or loop that ran it.
+A program that the shell was about to start, or that is under 100 ms
+old and has not yet attached to the console, may miss the event, so
+the shell ends it with code 0xC000013A.
+Background programs and programs started under
+.B trap \(aq\(aq INT
+ignore Ctrl-C.
+.B fg
+passes Ctrl-C and Ctrl-Break on to the job with
+.BR kill .
+A job that is a copy of the shell takes them as signals, and the program
+it waits for, which ignores Ctrl-C, runs on to its end first, where
+bash ends it at once.
+.PP
+.B kill
+to a copy of this shell, including a subshell's
+.BR BASHPID ,
+delivers the signal, and that shell's traps decide; only
+.B KILL
+ends it at once, with no
+.B EXIT
+trap, and
+.B STOP
+does nothing.
+.B kill
+to any other program terminates it with exit code 0xC000013A for
+.BR INT ,
+or 0xE0550000 plus 128+\fIN\fR for signal
+.IR N ,
+except that signal 0 and
+.BR CHLD ,
+.BR CONT ,
+.BR STOP ,
+.BR TSTP ,
+.BR TTIN ,
+.BR TTOU ,
+.BR URG ,
+and
+.B WINCH
+only check that the process exists.
+.PP
+On Windows 8 and later every program the shell starts runs in a job
+object of its own.
+.BI "kill \-" sig " \-" pid
+on one of the last 64 background programs ends it together with
+everything it started, unless that program is a copy of this shell,
+which takes the signal as above, or the signal is one that only checks
+that the process exists.
+Before Windows 8, and for any other process,
+.BI \- pid
+means the process alone.
+.PP
+The shell decodes a program's exit code as death by a signal where
+one fits, and reports it with the signal's name, as in bash:
+.TP
+\fB0xE0550000\fR + 128+\fIN\fR
+Signal
+.IR N ,
+from
+.B kill
+or a shell that died of it.
+.TP
+.BR 0xC0000005 ", " 0xC00000FD
+Access violation and stack overflow:
+.B SIGSEGV
+(status 139).
+.TP
+.B 0xC000001D
+Illegal instruction:
+.B SIGILL
+(132).
+.TP
+.B 0xC0000094
+Integer division by zero:
+.B SIGFPE
+(136).
+.TP
+.B 0xC0000409
+Fast fail:
+.B SIGABRT
+(134).
+.TP
+.B 0xC000013A
+Ctrl-C:
+.B SIGINT
+(130).
+.TP
+.B 0xC0000135
+A missing DLL: status 127, with a message that names the DLL.
+.PP
+Any other exit code gives its low byte.
+The C runtime's
+.BR abort ()
+exits with code 3, which gives status 3.
+.PP
+The shell emulates
+.BR SIGPIPE :
+a shell process or subshell that writes to a pipe with no reader ends
+with status 141, unless
+.B PIPE
+is trapped or ignored; then the write fails with
+.BR "Broken pipe" .
+Programs get no emulation and behave as their runtime does.
+.PP
+Recursion that exhausts the stack kills the shell or subshell by
+.BR SIGSEGV :
+no
+.B EXIT
+trap runs, the status is 139, and the parent reports
+.BR "Segmentation fault" .
+A shell that dies of signal
+.I N
+in any way exits with code 0xE0550000 plus 128+\fIN\fR, or 0xC000013A
+for
+.BR SIGINT .
+Another copy of the shell sees status 128+\fIN\fR either way, and so
+does a Windows parent that keeps only the low byte, except for
+.BR SIGINT ,
+whose low byte is 58.
+Git Bash reports 0xC000013A as status 130 and the other codes as
+status 127.
+For example, a shell killed by
+.B SIGTERM
+exits with code 0xE055008F.
+.SS "Differences from bash"
+Apart from paths, devices, and the running of programs, described above,
+unabashed differs from bash 5.3 in these ways, in both modes unless one
+is named.
+.IP \(bu 2
+Only the C and POSIX locales and UTF-8 locales exist.
+Characters are UTF-8 when the first non-empty one of
+.BR LC_ALL ,
+.BR LC_CTYPE ,
+and
+.B LANG
+names a UTF-8 locale, and single bytes otherwise.
+Every UTF-8 locale counts as installed, and messages are never translated.
+On Windows any other locale name acts as C without a warning.
+In msys mode a built-in table of languages gives the decimal point;
+native mode always uses a period.
+.IP \(bu 2
+CPU time is not tracked:
+.B times
+and the
+.B time
+keyword report zero user and system time.
+.B time
+reports real time correctly.
+This is an open issue.
+.IP \(bu 2
+.B BASHPID
+in a subshell, command substitution, or pipeline stage that runs inside
+the shell is a virtual ID, not a process ID, which
+.B kill
+accepts.
+In a background job's child shell it is that process's real ID.
+.IP \(bu 2
+.B RANDOM
+and
+.B SRANDOM
+come from PCG64.
+Assigning a seed to
+.B RANDOM
+gives a different sequence than bash, but the same one on every platform.
+Every subshell, command substitution, pipeline stage, and child reseeds
+on first use.
+.B SRANDOM
+cannot be seeded: assigning to it makes it an ordinary variable with
+that value, where bash ignores the assignment.
+.IP \(bu 2
+The emulated generators, such as
+.IR /dev/zero ,
+are pipes when read, so
+.B test \-p
+is true on a descriptor open on one (see Devices above).
+.IP \(bu 2
+Process substitution shows
+.BI /dev/fd/ N
+inside the shell, but a native program gets the path of a named pipe
+under
+.IR \e\e.\epipe\e ,
+and an MSYS2 program the path of a temporary file (see Running programs
+above).
+.IP \(bu 2
+There is no
+.I /dev/tcp
+or
+.IR /dev/udp .
+.IP \(bu 2
+There is no mail checking.
+.BR MAIL ,
+.BR MAILPATH ,
+and
+.B MAILCHECK
+are ignored and not set, and
+.B shopt \-s mailwarn
+has no effect.
+.IP \(bu 2
+.B TMOUT
+is only the default timeout for
+.BR read :
+an interactive shell does not exit when no line arrives within that
+many seconds.
+.IP \(bu 2
+Native mode never enters POSIX mode because the shell is named
+.BR sh ;
+only the options and variables given under Invocation above, or
+.BR "set \-o posix" ,
+do.
+.IP \(bu 2
+The umask is the shell's own value, 0022 at startup.
+It is never read from or applied to the system, so
+.B umask
+changes what
+.B umask
+prints and nothing else.
+.IP \(bu 2
+.B GROUPS
+has one element, the shell's group ID, which is 1000 on Windows, as are
+.B UID
+and
+.BR EUID .
+.IP \(bu 2
+On Windows
+.B HOSTNAME
+is the NetBIOS computer name, not the DNS host name.
+.IP \(bu 2
+Nesting deep enough to exhaust the parser's stack, such as thousands of
+nested subshells written
+.BR "( ( ( " ...,
+makes the shell exit with status 139 and no message, where bash reports
+a syntax error.
+This is an open issue.
+.IP \(bu 2
+A trap action that sends its own signal stops after ten nested levels,
+and the shell exits with status 139.
+.IP \(bu 2
+.BI ~ user
+is left as typed, there being no user database, and so is
+.B ~
+when
+.B HOME
+is unset.
+.IP \(bu 2
+.B jobs \-l
+shows a background pipeline as one line with one process ID, that of
+the child shell running it, which is also
+.BR $! .
+.IP \(bu 2
+The end of a signalled job is seen at once, so
+.B kill %1; wait %1
+can give 127 where bash gives 143.
+.IP \(bu 2
+When every stage that runs inside the shell is blocked on another, the
+shell prints
+.B "unabashed: deadlock: every task is blocked"
+and fails the blocked reads and writes, where bash would hang.
+.IP \(bu 2
+A Windows pipe can take far more than 64 KiB before its reader exits, so
+the writer in
+.BI "f | " reader
+whose reader quits early may finish with status 0 instead of 141.
+.IP \(bu 2
+.B exec
+on Windows starts the program as a child and waits for it, so its
+process ID is not
+.BR $$ .
+.IP \(bu 2
+A background job that cannot get a process of its own runs inside the
+shell, which waits for it before exiting.
+.IP \(bu 2
+Traps for
+.BR TERM ,
+.BR HUP ,
+.BR QUIT ,
+.BR ALRM ,
+and the stop signals that arrive while a line is being edited run when
+the line is done, where bash runs them at once.
+.IP \(bu 2
+.B enable \-f
+fails with
+.BR "dynamic loading not available" ,
+although
+.B BASH_LOADABLES_PATH
+has its Linux default.
+.IP \(bu 2
+.B ulimit
+on Windows shows a fixed table like Git Bash's, in which
+.B \-s
+is 16384, the shell's own stack.
+Only
+.BR \-c ,
+.BR \-n ,
+.BR \-s ,
+and
+.B \-v
+can be changed.
+No value reaches the system or a program, and only
+.B \-n
+has an effect: it bounds the descriptors that
+.BI { var }
+redirections take.
+.IP \(bu 2
+.B BASH_VERSION
+is
+.B 5.3.0(1)\-release
+in every build, and a 32-bit build reports
+.B i686
+in
+.B MACHTYPE
+and
+.BR HOSTTYPE .
+.IP \(bu 2
+The text of
+.B help
+and
+.B \-\-help
+is unabashed's own, and mentions Windows only where msys mode's
+.B help pwd
+describes
+.BR \-W .
+There is no
+.B help cygpath
+topic; use
+.BR "cygpath \-\-help" .
+.IP \(bu 2
+.B \-\-debugger
+looks only for
+.IR /usr/local/share/bashdb/bashdb\-main.inc .
+.SH OPTIONS
+Long options come first, each spelled with two dashes or one, as in
+.B \-\-login
+or
+.BR \-login .
+The first argument that is not a long option ends them.
+After a single-letter option,
+.B \-\-login
+is rejected with
+\fIname\fB: \-\-: invalid option\fR,
+and
+.B \-login
+is taken as the letters
+.BR \-l ,
+.BR \-o ,
+and so on.
+Single-letter options follow, grouped or apart, with
+.B \-
+to turn one on and
+.B +
+to turn it off; for
+.BR \-c ,
+.BR \-s ,
+.BR \-l ,
+and
+.B \-D
+the sign makes no difference.
+.B \-o
+and
+.B \-O
+each take the next argument as an option name.
+An argument of
+.B \-
+or
+.B \-\-
+ends the options.
+An unknown option prints
+.IB name ": " option ": invalid option"
+and the usage text on standard error, and the shell exits with status
+2.
+The options and their order follow
+.BR "sh \-\-help" .
+.TP
+.B \-\-debug
+Accepted, and has no effect.
+.TP
+.B \-\-debugger
+Source
+.I /usr/local/share/bashdb/bashdb\-main.inc
+with
+.B extdebug
+on, before running a script or in a non-interactive shell.
+That file is not part of w64devkit, so the shell reports it missing,
+warns that debugging mode is disabled, and carries on.
+.TP
+.B \-\-dump\-po\-strings
+Like
+.BR \-D ,
+but print each string as a gettext PO entry: a
+.BI "#: " file : line
+comment, then
+.B msgid
+and an empty
+.BR msgstr .
+.TP
+.B \-\-dump\-strings
+The same as
+.BR \-D .
+.TP
+.B \-\-help
+Print the version line, the usage text, and two lines pointing to
+.B help
+on standard output, then exit with status 0, without looking at the
+single-letter options.
+The usage text names the shell by its zeroth argument, often a full path,
+converted in msys mode as for
+.B $0
+(see Invocation above).
+.TP
+.BI "\-\-init\-file " file
+The same as
+.BR \-\-rcfile .
+.TP
+.B \-\-login
+The same as
+.BR \-l .
+.TP
+.B \-\-noediting
+Do not turn on
+.B emacs
+editing in an interactive shell, so it reads lines without the line
+editor unless
+.B \-o vi
+or
+.BR "\-o emacs" ,
+on the command line or in a startup file, turns it on.
+.TP
+.B \-\-noprofile
+Read no login files.
+.TP
+.B \-\-norc
+In msys mode, read neither
+.I /etc/bash.bashrc
+nor
+.IR ~/.bashrc .
+It does nothing in native mode, where
+.B ENV
+is still read.
+.TP
+.B \-\-posix
+Enter POSIX mode before the startup files, setting
+.B POSIXLY_CORRECT
+to
+.BR y .
+.TP
+.B \-\-pretty\-print
+Print each command of the script or standard input in canonical form
+instead of running it.
+It is ignored with
+.BR \-c ,
+and ignored with a warning in an interactive shell.
+.TP
+.BI "\-\-rcfile " file
+In msys mode, read
+.I file
+in place of
+.I ~/.bashrc
+in an interactive shell that is not a login shell, after
+.IR /etc/bash.bashrc ,
+unless the shell is named
+.BR sh ,
+is in POSIX mode, or has
+.BR \-\-norc .
+It is ignored in native mode.
+Without
+.IR file ,
+the shell prints
+.IB name ": rcfile: option requires an argument"
+(or
+.B init\-file
+for
+.BR \-\-init\-file )
+and exits with status 2.
+.TP
+.B \-\-restricted
+The same as
+.BR \-r .
+.TP
+.B \-\-verbose
+The same as
+.BR \-v .
+.TP
+.B \-\-version
+Print
+.BI "unabashed, version 5.3.0(1)\-release (" MACHTYPE )
+and a line saying that the software is in the public domain, then exit
+with status 0, without looking at the single-letter options.
+.B \-\-help
+takes precedence.
+.TP
+.B \-i
+Be interactive.
+.B +i
+cancels an earlier
+.BR \-i ,
+but a shell that reads commands from a console, as described under
+Invocation above, is interactive regardless: one with no
+.BR \-c ,
+no
+.I file
+(or with
+.BR \-s ),
+and standard input and standard error both consoles.
+.TP
+.B \-l
+Be a login shell.
+.TP
+.B \-r
+Be restricted.
+.B +r
+is an invalid option.
+.TP
+.B \-s
+Read commands from standard input even when arguments remain, which
+become the positional parameters.
+It has no effect with
+.BR \-c .
+.TP
+.B \-D
+Print each
+.B $\(dq...\(dq\&
+string in the script, the
+.B \-c
+command, or standard input, and run nothing.
+.TP
+.B \-c
+Run the first argument after the options as a command.
+Without one, the shell prints
+.IB name ": \-c: option requires an argument"
+and exits with status 2.
+.TP
+.BI "\-O " option
+Turn on the
+.B shopt
+option
+.IR option ,
+or turn it off with
+.BR +O ,
+after the interactive defaults and before the startup files.
+.B \-O
+as the last argument prints every
+.B shopt
+option and its state, and
+.B +O
+prints them as
+.B shopt
+commands; the shell then carries on.
+An unknown name prints an error and the shell exits with status 2.
+The hidden
+.B msyspath
+option is accepted here.
+.TP
+.B \-abefhkmnptuvxBCEHPT
+Turn on the
+.B set
+option of that letter, or turn it off with
+.BR + ,
+as
+.B set
+does
+.RB ( "help set" ).
+.B \-h
+is
+.BR hashall ,
+not help.
+.TP
+.BI "\-o " option
+Turn on the
+.B set
+option named
+.IR option ,
+or turn it off with
+.BR +o .
+.B \-o
+as the last argument prints every
+.B set
+option and its state, and
+.B +o
+prints them as
+.B set
+commands; the shell then carries on.
+An unknown name prints an error and the shell exits with status 2.
+.SH ENVIRONMENT
+Only the variables that unabashed treats in its own way, or differently
+by mode, are listed.
+See Environment above for how the environment is imported and passed
+on.
+.TP
+.B BASH_ENV
+A file a non-interactive shell reads at startup, in msys mode only, and
+not when it is named
+.B sh
+or is in POSIX mode.
+Native mode never reads it.
+.TP
+.B BB_OVERRIDE_APPLETS
+In native mode, the applets whose busybox alias stubs run as ordinary
+programs instead of as
+.I busybox.exe
+directly.
+Names are separated by spaces, commas, or semicolons, may start with
+.BR + ,
+and match ignoring case;
+.B \-
+names every applet.
+It must be exported.
+.TP
+.B COMSPEC
+The command interpreter that runs
+.I .bat
+and
+.I .cmd
+files, from the program's environment.
+It defaults to
+.I System32\ecmd.exe
+in the Windows directory.
+.TP
+.B ENV
+A file an interactive shell reads at startup: always in native mode, and
+in msys mode only when the shell is named
+.B sh
+or is in POSIX mode.
+Native mode expands no
+.B ~
+in it.
+.TP
+.B HISTFILE
+The history file, in both modes by default
+.IR ~/.bash_history ,
+or
+.I ~/.sh_history
+when POSIX mode comes from
+.BR \-\-posix ,
+.BR "\-o posix" ,
+an inherited
+.BR SHELLOPTS ,
+or
+.BR POSIXLY_CORRECT ;
+a shell named
+.B sh
+keeps
+.IR ~/.bash_history .
+.TP
+.B HOME
+When unset at startup, the shell sets it from
+.BR USERPROFILE :
+in POSIX form and exported in msys mode, with forward slashes and not
+exported in native mode.
+Msys mode imports an inherited value in POSIX form and gives native
+programs the Windows form.
+.TP
+.B INPUTRC
+The line editor's settings file, by default
+.I ~/.inputrc
+and then
+.IR /etc/inputrc ,
+which in msys mode goes through the mount table and in native mode is on
+the current drive.
+.TP
+.BR LANG ", " LC_ALL ", " LC_CTYPE
+Whether the shell handles UTF-8 characters, as described in Differences
+from bash above.
+.TP
+.B LD_LIBRARY_PATH
+In msys mode, imported as a
+.BR : -separated
+list and given to native programs as a
+.BR ; -separated
+list of Windows paths.
+.TP
+.B MACHTYPE
+Set to
+.IB arch \-pc\-cygwin
+in msys mode and
+.IB arch \-w64\-mingw32
+in native mode, where
+.I arch
+is
+.B x86_64
+or
+.BR i686 .
+.TP
+.B MSYS2_ARG_CONV_EXCL
+In msys mode, argument prefixes, separated by
+.BR ; ,
+that are not converted for native programs;
+.B *
+excludes every argument.
+It is read from the program's environment, so it must be exported or
+given in front of the command.
+.TP
+.B MSYS2_ENV_CONV_EXCL
+In msys mode, prefixes of
+.IB name = value
+entries, separated by
+.BR ; ,
+that are not converted for native programs;
+.B *
+excludes all of them.
+The path variables listed under
+.B MSYS_NO_PATHCONV
+are converted regardless.
+.TP
+.B MSYS_NO_PATHCONV
+In msys mode, when present in a native program's environment, even
+empty, no argument and no environment value is converted, except
+.BR PATH ,
+.BR ORIGINAL_PATH ,
+.BR LD_LIBRARY_PATH ,
+.BR HOME ,
+.BR SHELL ,
+.BR TMPDIR ,
+.BR TMP ,
+and
+.BR TEMP .
+.TP
+.B ORIGINAL_PATH
+In msys mode, converted as
+.B PATH
+is.
+.TP
+.B OSTYPE
+Set to
+.B cygwin
+in msys mode and
+.B win32
+in native mode.
+.TP
+.B PATH
+Where commands are found.
+In msys mode it is imported as a
+.BR : -separated
+list of POSIX paths, becomes
+.I /usr/bin
+when unset, and reaches native programs as a
+.BR ; -separated
+list of Windows paths.
+In native mode it is
+.BR ; -separated,
+an assignment turns
+.B :
+into
+.B ;
+except after a drive letter, it becomes the shell's own directory, not
+exported, when unset, and programs get it unchanged.
+See Finding commands above.
+.TP
+.B PWD
+Always set and exported.
+Msys mode keeps an inherited value that names the working directory;
+native mode never inherits it.
+.TP
+.B SHELL
+When unset, set to
+.I /usr/bin/bash
+in msys mode and to the shell's own path in native mode, without being
+exported.
+Msys mode converts it as it does
+.BR HOME .
+.TP
+.BR SYSTEMROOT ", " WINDIR
+The Windows directory, for
+.B cygpath \-W
+and
+.BR \-S ,
+with
+.I C:/Windows
+as the last resort.
+Msys mode adds both to a native program's environment when they are
+missing.
+.TP
+.BR TEMP ", " TMP
+In msys mode without an
+.IR etc/fstab ,
+.I /tmp
+is the directory in
+.BR TEMP ,
+else in
+.BR TMP ,
+as set at startup.
+Msys mode converts both as it does
+.BR HOME .
+Here-documents that need a file get one in the directory in
+.BR TMP ,
+else in
+.BR TEMP ,
+as the shell inherited them; assigning either in the shell changes
+neither.
+.TP
+.B TERM
+The terminal type.
+When it is unset, msys mode sets and exports
+.BR xterm\-256color ,
+and native mode leaves it unset; msys mode also drops an inherited
+.BR TERM=msys .
+On Windows the line editor draws on one line, as on a dumb terminal,
+when
+.B TERM
+is
+.BR dumb ,
+and also in the other cases given under Line editing above.
+.TP
+.B TMPDIR
+Where
+.B fc
+and
+.B edit\-and\-execute\-command
+put their temporary file, when it names a directory; otherwise
+.IR /tmp .
+In native mode that is
+.I /tmp
+on the root of the current drive, which usually does not exist, so
+there
+.B fc
+fails with
+.B "cannot open temp file"
+unless
+.B TMPDIR
+is set.
+Msys mode converts it as it does
+.BR HOME .
+.TP
+.B TZ
+The time zone, when exported; otherwise the Windows zone.
+Msys mode reads zoneinfo files, by absolute path or under
+.IR /usr/share/zoneinfo ,
+and native mode reads none.
+Msys mode passes
+.B TZ
+to a native program only when it is empty, or does not start with
+.B :
+and holds only letters, digits,
+.BR + ,
+.BR \- ,
+and
+.BR : .
+.TP
+.B USERNAME
+In native mode, the default for
+.B USER
+and
+.BR LOGNAME ,
+which are not exported.
+.TP
+.B USERPROFILE
+The default for
+.BR HOME .
+.SH EXIT STATUS
+The shell exits with the status of the last command it ran, or with one
+of these.
+.TP
+.B 1
+A builtin failed, such as
+.B cd
+to a missing directory.
+.TP
+.B 2
+A usage error, a syntax error, an invalid startup option, or an
+exhausted memory reservation, which prints
+.BR "bash: out of memory" .
+.TP
+.B 126
+A command, or the script named on the command line, was found but cannot
+be run.
+.TP
+.B 127
+A command, or the script named on the command line, was not found.
+.TP
+.BI 128+ n
+The shell, a subshell, or the last command was killed by signal
+.IR n ,
+for example 130 by SIGINT (Ctrl-C), 141 by SIGPIPE, and 139 by SIGSEGV
+when shell recursion exhausts the stack, which runs no EXIT trap.
+Parser overflow and runaway trap recursion also exit with 139, but
+without a signal.
+.PP
+A native program's crash code counts as a signal, as in Cygwin:
+0xC0000005 and 0xC00000FD as SIGSEGV, 0xC000001D as SIGILL, 0xC0000094
+as SIGFPE, 0xC000013A as SIGINT, and 0xC0000409 as SIGABRT.
+0xC0000135, a missing DLL, gives 127 and a message naming the DLL.
+Any other exit code gives its low byte.
+.PP
+When the shell itself dies by a signal on Windows, its parent sees exit
+code 0xC000013A for SIGINT, as for a native program ended by Ctrl-C, and
+0xE0550000 plus 128+\fIn\fR for any other signal
+.IR n ,
+such as 0xE055008B for SIGSEGV.
+The low byte is the status for a parent that keeps only the low byte,
+such as busybox
+.BR sh ;
+a Cygwin or MSYS2 shell, such as Git Bash, reports 127 for the 0xE055
+codes.
+Another unabashed takes either code for death by the signal.
+.SH EXAMPLES
+The examples run at w64devkit's prompt, a native-mode
+.BR sh .
+.PP
+Convert paths with the msys-mode
+.BR cygpath :
+.PP
+.RS 4
+.EX
+$ bash \-c \(aqcygpath \-w /c/Windows/System32\(aq
+C:\eWindows\eSystem32
+$ bash \-c \(aqcygpath \-u "C:\eProgram Files"\(aq
+/c/Program Files
+.EE
+.RE
+.PP
+A
+.B #!/bin/bash
+script run from native mode stays in native mode, so run a script
+written for Git Bash with
+.BR bash :
+.PP
+.RS 4
+.EX
+$ cat hello.sh
+#!/bin/bash
+echo $OSTYPE
+$ ./hello.sh
+win32
+$ bash hello.sh
+cygwin
+.EE
+.RE
+.PP
+The kit's
+.I etc/profile
+exports
+.B PATH_SEPARATOR=\(aq;\(aq
+for native mode, but a login
+.B bash
+reads it too, and one started from native mode inherits it, although
+msys mode splits
+.B PATH
+on colons, so unset it before running a
+.B configure
+script with
+.BR bash .
+.PP
+Msys mode converts arguments that look like POSIX paths for a native
+program:
+.PP
+.RS 4
+.EX
+$ bash \-c \(aqbusybox echo /c/src \-I/c/inc\(aq
+C:/src \-IC:/inc
+.EE
+.RE
+.PP
+Pass every argument unconverted:
+.PP
+.RS 4
+.EX
+$ bash \-c \(aqMSYS_NO_PATHCONV=1 busybox echo /c/src \-I/c/inc\(aq
+/c/src \-I/c/inc
+.EE
+.RE
+.PP
+Leave only the arguments that start with
+.B \-I
+unconverted:
+.PP
+.RS 4
+.EX
+$ bash \-c \(aqMSYS2_ARG_CONV_EXCL=\-I busybox echo /c/src \-I/c/inc\(aq
+C:/src \-I/c/inc
+.EE
+.RE
+.PP
+In msys mode, give a device to a native program by redirection, since
+its name is converted:
+.PP
+.RS 4
+.EX
+$ bash \-c \(aqod \-An \-tx1 \-N8 /dev/zero\(aq
+od: /Device/Null: No such file or directory
+$ bash \-c \(aqod \-An \-tx1 \-N8 </dev/zero\(aq
+ 00 00 00 00 00 00 00 00
+.EE
+.RE
+.PP
+Switch a native shell to msys mode:
+.PP
+.RS 4
+.EX
+$ cd C:/Windows
+$ pwd
+C:/Windows
+$ shopt \-s msyspath
+$ pwd
+/c/Windows
+.EE
+.RE
+.PP
+Start a login shell that reads no profiles, with the long option first:
+.PP
+.RS 4
+.EX
+$ sh \-\-noprofile \-l
+.EE
+.RE
+.SH NOTES
+The Windows builds import only
+.IR kernel32.dll ,
+and look up anything newer than Windows XP at run time, with a fallback.
+The i686 build runs on Windows XP and is large-address-aware, so it can
+use 4 GiB on 64-bit Windows.
+The x86_64 build is untested on Windows XP x64.
+.PP
+On Windows the shell runs on a 16 MiB stack of its own, whatever the
+program's header says, and
+.B ulimit \-s
+reports 16384.
+Subshells, command substitutions, and pipeline stages that run inside
+the shell get 8 MiB, so recursion there fails sooner.
+Recursion that exhausts a stack kills the shell or subshell by SIGSEGV.
+.PP
+Memory is reserved as address space and committed as it is used: 16 GiB
+for each arena on 64-bit builds and 256 MiB on 32-bit builds.
+On 32-bit builds the first level of command substitution reserves 128
+MiB, and a subshell inside the shell or a deeper command substitution 16
+MiB.
+Running out prints
+.B bash: out of memory
+and ends the whole process with status 2, as does nesting command
+substitutions, traps, and prompts 64 levels deep.
+.PP
+Console input and output are UTF-8 to the shell whatever the console's
+code page, while data through files and pipes passes unchanged (see
+Files above).
+.PP
+busybox's own shell is still available as
+.BR "busybox sh" .
+.PP
+On Linux and macOS unabashed builds as a plain bash 5.3 clone, linked
+against libc only.
+It has no path modes, no mount table, no
+.BR cygpath ,
+and none of the Windows behaviour above: paths pass through unchanged,
+carriage returns are kept, and
+.I /dev
+and
+.I /proc
+are the system's.
+It has real processes, process groups, job control with stopped jobs,
+user IDs, and resource limits.
+Its
+.B MACHTYPE
+and
+.B OSTYPE
+always name x86_64 Linux.
+.SH SEE ALSO
+.BR busybox (1),
+.BR make (1),
+.BR w64devkit (1)

@@ -31,6 +31,7 @@ the Makefile is only a convenience.
 | `src/wide.cpp`       | UTF-16/WTF-8, command lines, CRT fds, PE sniff  |
 | `src/fibers.cpp`     | fibers for the platform layers                  |
 | `src/vos.cpp`        | the virtual OS, with `fakes.cpp` and `vterm.cpp` |
+| `unabashed.1`        | the manual page, in w64devkit's man style       |
 | `t/`, `tools/`       | tests, and the tools that record and run them   |
 | `notes/`             | research, design reviews, and the plan          |
 
