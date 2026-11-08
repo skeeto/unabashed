@@ -734,6 +734,11 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
     pid_t pid = fork();
     if (!pid) {
         joingroup(0, s->pgid, s->fg, (i32)s->tty);
+        if (s->gated) {
+            close((i32)s->gatew);
+            char c;
+            while (read((i32)s->gater, &c, 1)<0 && errno==EINTR) {}
+        }
         i32 base = fdbase(dst, nfds);
         for (i32 i = 0; i < nfds; i++) {
             if (src[i] < base) src[i] = fcntl(src[i], F_DUPFD, base);
@@ -1072,7 +1077,7 @@ static i32 os_setrlimit(Os *os, i32 res, Rlimit r)
 static i32 os_kill(Os *os, i64 pid, i32 sig)
 {
     flushw(os);
-    if (!pid || pid<-(i64)0x7fffffff || pid>(i64)0x7fffffff) return E_SRCH;
+    if (pid<-(i64)0x7fffffff || pid>(i64)0x7fffffff) return E_SRCH;
     return kill((pid_t)pid, sig) ? errno : 0;
 }
 
@@ -1260,9 +1265,19 @@ static b32 tryio(Io *io, i32 revents)
     switch (io->op) {
     case IO_READ: {
         if (!revents) return 0;
+        iz len = io->len<(1<<30) ? io->len : (1<<30);
+        i32 avail = 0;
+        if (!(revents & (POLLHUP|POLLERR)) && !ioctl((i32)io->h, FIONREAD, &avail)) {
+            // Another process reading the same pipe may have taken what
+            // poll saw: then read would block the whole shell, so wait
+            // again. Never ask for more than is there.
+            struct stat st;
+            if (!avail && !fstat((i32)io->h, &st) && S_ISFIFO(st.st_mode)) return 0;
+            if (avail>0 && avail<len) len = avail;
+        }
         iz n;
         do {
-            n = read((i32)io->h, io->buf, (uz)(io->len<(1<<30) ? io->len : (1<<30)));
+            n = read((i32)io->h, io->buf, (uz)len);
         } while (n<0 && errno==EINTR);
         io->n   = n<0 ? 0 : n;
         io->err = n<0 ? errno : 0;

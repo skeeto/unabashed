@@ -35,7 +35,7 @@ static Job *copyjobs(Store *, Job *);  // jobs.cpp
 static void closecoproc(Shell *);
 static void orphanjobs(Shell *);
 static void detachcaptures(Shell *, Shell *);  // jobs.cpp
-static Node *bgnode(Shell *, Arena *, Node *);  // jobs.cpp
+static Node *bgnode(Shell *, Arena *, Node *, b32 keepjobs = 0);  // jobs.cpp
 static Task *spawnwaiter(Sched *, Handle, b32);  // jobs.cpp
 static Job  *newjob(Shell *, Arena, Node *, Task *, i64 pid, b32 coproc);
 static i32   fgstop(Shell *, Arena, Job *);      // jobs.cpp
@@ -465,6 +465,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->spawngrp = 0;
     c->spawnfg  = 0;
     c->pipetail = 0;
+    c->gated    = 0;
     c->exitwarned = 0;
     c->bgstats  = 0;
     closecoproc(c);
@@ -514,7 +515,7 @@ static u64 imagebuild_(void)
 // Copy sh as a background subshell running n into region im, which a
 // child process takes over: its store, with the Mem behind it, the
 // copied Shell and node, all at the start of the region.
-static Image imagebuild(Shell *sh, Node *n, ImageRef im)
+static Image imagebuild(Shell *sh, Node *n, ImageRef im, b32 keepjobs = 0)
 {
     Mem   tmp = {sh->os, im.base, im.base + im.cap};
     Arena r   = {im.base, im.base, &tmp};
@@ -531,7 +532,7 @@ static Image imagebuild(Shell *sh, Node *n, ImageRef im)
     img.head->magic = IMAGEMAGIC;
     img.head->build = imagebuild_();
     img.head->sh    = c;
-    img.head->node  = bgnode(c, &st->a, n);
+    img.head->node  = bgnode(c, &st->a, n, keepjobs);
     img.ref     = im;
     img.ref.len = st->a.beg - im.base;
     mem->os     = 0;  // the child's
@@ -949,11 +950,23 @@ static b32 stagedebug(Shell *sh, Node *stage, i32 before, Arena scratch)
 // A grouped pipeline's last program stopped: the pipeline becomes a
 // stopped job, the last program's waiter its own. The other stages run
 // on as orphans (a program stopped too continues with the job). As
-// bash, $? is 128 and PIPESTATUS a lone 0.
+// bash, which waits for the first process to stop or end, $? is 128
+// plus its stop signal, or its exit status, and PIPESTATUS a lone 0.
 static void pipestopped(Shell *sh, Arena scratch, Node *n, Task **tasks,
                         Handle *procs, i32 last, i64 grp)
 {
     Sched *s = sh->sched;
+    i32    first = 0;
+    if (last>0 && procs[0]!=BADHANDLE) {
+        i32 st = taskwaitstop(s, procs[0]);
+        if (st>=0 && (st & WSTOP)) {
+            first = st & 255;
+        } else {
+            first = st<0 || (st & WSIGNALED) ? 0 : st & 255;
+            procs[0] = BADHANDLE;  // done with
+            tasks[0] = 0;
+        }
+    }
     for (i32 k = 0; k < last; k++) {
         Task *t = tasks[k];
         if (procs[k] != BADHANDLE) {
@@ -975,7 +988,7 @@ static void pipestopped(Shell *sh, Arena scratch, Node *n, Task **tasks,
     waitdone(sh, 0, 0);
     fgstop(sh, scratch, j);
     i32 zero = 0;
-    sh->status = 128;
+    sh->status = 128 + first;
     setpstat(sh, &zero, 1);
 }
 
@@ -1000,8 +1013,12 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     for (i32 k = 0; k < nstages; k++) {
         ext[k] = likelyexternal(sh, stages[k]);
     }
+    // Under job control every stage is a process of the job's group (as
+    // bash forks shell code too), joined by OS pipes
+    b32 grouped = fgjobctl(sh);
+    if (grouped && nstages>1) opengate(sh);
     for (i32 k = 0; k+1 < nstages; k++) {
-        if (ext[k] || ext[k+1]) {
+        if (ext[k] || ext[k+1] || grouped) {
             OsPipe p = os_pipe(sh->os);
             if (p.err) {
                 shellerror(sh, scratch, concat(&scratch, "pipe error: ", errtext(p.err)));
@@ -1009,6 +1026,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
                     fileunref(sh, in[j+1]);
                     fileunref(sh, out[j]);
                 }
+                closegate(sh);
                 sh->status = 1;
                 return;
             }
@@ -1027,9 +1045,9 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
 
     // Every stage but the last: externals started directly, the rest
     // on fiber vprocs, each getting going at once, as forked children.
-    // Under job control the programs share a process group, led by the
-    // first, which holds the terminal
-    b32    grouped = fgjobctl(sh);
+    // Under job control the stages share a process group, led by the
+    // first, which holds the terminal, shell code in processes of their
+    // own (spawnstage)
     i64    grp     = 0;
     Task  *tasks[256] = {};
     Handle procs[256];
@@ -1059,6 +1077,16 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             sh->status = before;
             sh->debugdone = stages[k]->kind == N_SIMPLE;  // for a retry
             sh->forked    = stages[k]->kind == N_SIMPLE;
+        }
+        if (retry && grouped) {
+            i64    pid  = 0;
+            Handle proc = spawnstage(sh, stages[k], in[k], out[k], grp, &pid, scratch);
+            if (proc != BADHANDLE) {
+                procs[k] = proc;
+                pids[k]  = pid;
+                if (!grp) grp = pid;
+                retry = 0;
+            }
         }
         if (retry) {
             b32 newloops = stages[k]->kind != N_SIMPLE;  // as bash: break | x is silent
@@ -1145,7 +1173,31 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             sh->spawnfg  = !grp;
             sh->pipetail = 1;
         }
-        status = subshell(sh, &j, child, 0);
+        Handle lproc = BADHANDLE;
+        i64    lpid  = 0;
+        if (grouped && !(ext[last] && stage->kind==N_SIMPLE)) {
+            lproc = spawnstage(sh, stage, 0, 0, grp, &lpid, scratch);
+        }
+        if (!(grouped && ext[last] && stage->kind==N_SIMPLE)) {
+            closegate(sh);  // else once runprogram started it
+        }
+        if (lproc != BADHANDLE) {
+            // Shell code as the last stage: its stop stops the job
+            i32 st = taskwaitstop(s, lproc);
+            if (st>=0 && (st & WSTOP)) {
+                s->stopproc = lproc;
+                s->stoppid  = lpid;
+                s->stopsig  = st & 255;
+                status = 128 + (st & 255);
+            } else {
+                st = st<0 ? 127 : st & ~(WMISSED|WNOLIB);
+                if (st & WSIGNALED) sh->childsig = (st & 255) - 128;
+                status = st & 255;
+            }
+            sh->childpid = lpid;
+        } else {
+            status = subshell(sh, &j, child, 0);
+        }
         sh->spawngrp  = 0;
         sh->spawnfg   = 0;
         sh->pipetail  = 0;
@@ -1155,6 +1207,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         sh->taillevel = 0;
         sh->simplestages -= stage->kind == N_SIMPLE;
     }
+    closegate(sh);  // also when the last stage was skipped
     sh->capdepth = depth - 1;
     sh->stdinredir = redir;
     unwind(sh, mark);

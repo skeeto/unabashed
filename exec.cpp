@@ -37,6 +37,9 @@ static void     closeall(Shell *);
 // Jobs (jobs.cpp)
 static b32      fgjobctl(Shell *);
 static i32      fgstopped(Shell *, Arena, Handle proc, i64 pid, i32 sig);
+static Handle   spawnstage(Shell *, Node *, File *in, File *out, i64 grp,
+                           i64 *pid, Arena);
+static b32      runfgimage(Shell *, Node *, Arena);
 static void     runasync(Shell *, Node *, Arena);
 static void     runcoproc(Shell *, Node *, Arena);
 static void     notifyjobs(Shell *, Arena);
@@ -1973,6 +1976,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         }
     }
     Spawned r = os_spawn(sh->os, a, &sp);
+    if (stops) closegate(sh);  // the group is whole: its stages may run
     for (i32 i = 0; i < nclose; i++) {
         os_close(sh->os, closeafter[i]);
     }
@@ -3585,6 +3589,7 @@ static void execfuncdef(Shell *sh, Node *n, Arena scratch)
 [[gnu::noinline]]
 static void execsubshell(Shell *sh, Node *n, Arena scratch)
 {
+    if (fgjobctl(sh) && runfgimage(sh, n, scratch)) return;
     SubJob j = {};
     j.kind = SUB_NODE;
     j.node = n->a;

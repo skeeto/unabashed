@@ -327,7 +327,7 @@ static i32 runtrap(Shell *sh, i32 idx)
 // command for the next prompt, and TERM and QUIT do nothing, as bash.
 static b32 interactivetop(Shell *sh)
 {
-    return sh->interactive && sh->sig==sh->sched->top;
+    return sh->interactive && !sh->subshell && sh->sig==sh->sched->top;
 }
 
 // Does the default action of sig do nothing at this level?

@@ -1397,7 +1397,7 @@ static void test_jobctl(Test *t)
     expectint(t, "jobctl leader exit", os_waitproc(os, l.proc), 0);
     expectint(t, "jobctl member exit", os_waitproc(os, m.proc), 0);
     expectint(t, "jobctl gone", os_kill(os, -l.pid, 15), E_SRCH);
-    expectint(t, "jobctl zero", os_kill(os, 0, 15), E_SRCH);
+    expectint(t, "jobctl zero", os_kill(os, 0, 0), 0);  // own group
 
     Spawned g = spawnsleep(os, a, "1", 0, (u64)1<<(20-1));
     expectint(t, "jobctl own group", os_kill(os, -2, 0), 0);

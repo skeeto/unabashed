@@ -118,6 +118,7 @@ struct VProc {
     u64     nodfl;    // shells: signals not in their default mode
                       // (os_sigmode), so TSTP TTIN TTOU stop it if not
     i64     until;    // VW_SLEEP, VW_IO with a deadline: time to wake at
+    b32     starting; // an image's startup: VW_SLEEP before it first runs
     Fiber  *fiber;    // where to resume it
     Fiber  *own;      // its own fiber, freed once reaped
     iz      stack;
@@ -814,6 +815,7 @@ static void vprocentry(Os *os, void *arg)
 {
     VProc *p = (VProc *)arg;
     Vos   *v = osvos(os);
+    p->starting = 0;
     i32 status = v->fakes[p->prog].main(os, &p->ctx);
     ImageRef im = p->ctx.image;
     if (im.base && v->nfreeimgs<countof(v->freeimgs)) {
@@ -1069,6 +1071,9 @@ static b32 vtyping(Vos *v)
     for (i32 i = 0; i < v->nprocs; i++) {
         VProc *p = v->procs + i;
         if (p->state==VP_BLOCK && p->wait==VW_TTY) return 0;
+        // a shell process starting up is not idle: ptyrun's quiet wait
+        // outlasts it
+        if (p->state==VP_BLOCK && p->starting && !p->stopped) return 0;
     }
     return 1;
 }
@@ -1998,7 +2003,7 @@ static void vsignal(Os *os, Vos *v, VProc *p, i32 sig)
         p->stopped = 0;
         p->change  = 0;
     }
-    if (p->shell && sig>=20 && sig<=22 && !(p->nodfl & bit)) {
+    if (p->shell && (sig==19 || (sig>=20 && sig<=22 && !(p->nodfl & bit)))) {
         vstop(os, v, p, sig);  // as the kernel's default action
         return;
     }
@@ -2011,9 +2016,9 @@ static void vsignal(Os *os, Vos *v, VProc *p, i32 sig)
     case 17: case 18: case 23: case 28:
         return;  // CHLD CONT URG WINCH
     }
-    if (sig!=9 && (p->sigign & bit)) return;
-    if (sig==20 || sig==21 || sig==22) {
-        vstop(os, v, p, sig);  // TSTP TTIN TTOU
+    if (sig!=9 && sig!=19 && (p->sigign & bit)) return;
+    if (sig>=19 && sig<=22) {
+        vstop(os, v, p, sig);  // STOP TSTP TTIN TTOU
     } else if (p->stopped && sig!=9) {
         p->stoppend |= bit;    // acted on once continued
     } else {
@@ -2025,7 +2030,7 @@ static i32 os_kill(Os *os, i64 pid, i32 sig)
 {
     Vos *v = osvos(os);
     if (sig<0 || sig>=NSIGNAL) return E_INVAL;
-    if (!pid) return E_SRCH;
+    if (!pid) pid = -v->procs[v->cur].pgid;  // the caller's group
     VProc *self = 0;
     b32    any  = 0;
     for (i32 i = 0; i < v->nprocs; i++) {
@@ -2960,6 +2965,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
         p->wait  = VW_SLEEP;
         p->until = v->clock + 5000000;  // 5 ms
     }
+    p->starting = p->wait == VW_SLEEP;
     p->ios    = 0;
     p->ctx    = ctx;
     p->tag    = 0;

@@ -172,6 +172,9 @@ struct Spawn {
                       // -1 a new one the child leads, else that group
     b32      fg;      // with pgid: the child's group takes terminal tty
     Handle   tty;     // (set in both parent and child, so no race)
+    b32      gated;   // POSIX image: the child closes gatew and waits for
+    Handle   gater;   // the end of gater before it runs, until the parent
+    Handle   gatew;   // has started the whole group (bash's pgrp pipe)
 };
 
 struct LevelSig {

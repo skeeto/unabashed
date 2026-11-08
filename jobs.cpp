@@ -806,13 +806,16 @@ static File *devnull(Shell *sh, Arena scratch)
 }
 
 // Make background subshell c, a copy of its parent's state, ready to
-// run a copy of n in arena a, which it returns.
-static Node *bgnode(Shell *c, Arena *a, Node *n)
+// run a copy of n in arena a, which it returns. keepjobs: a pipeline's
+// simple command, which lists its parent's jobs, as bash's does.
+static Node *bgnode(Shell *c, Arena *a, Node *n, b32 keepjobs)
 {
     c->loopdepth = 0;
-    c->jobs = 0;  // as a forked subshell, it starts with no jobs
-    c->curjob = c->prevjob = 0;
-    c->bgstats = 0;
+    if (!keepjobs) {
+        c->jobs = 0;  // as a forked subshell, it starts with no jobs
+        c->curjob = c->prevjob = 0;
+        c->bgstats = 0;
+    }
     Node *r = copynode(a, n);
     c->tailnode = n->kind==N_SIMPLE ? r : 0;
     if (r->kind == N_SUBSHELL) {
@@ -905,15 +908,17 @@ static BgFds bgfds(Shell *sh, Arena *a, File *in, File *out)
 // Start node as a background shell process continuing from an image of
 // this one (notes/m5b.md), its descriptors 0 and 1 replaced when in and
 // out are given. Returns its process handle, with *pid its pid, or -1
-// where the platform cannot (then it runs as a vproc).
+// where the platform cannot (then it runs as a vproc). fg: a foreground
+// job's process, in group sh->spawngrp, taking the terminal if it leads.
 static i64 spawnimage(Shell *sh, Node *n, File *in, File *out, i64 *pid,
-                      Arena scratch)
+                      Arena scratch, b32 fg = 0)
 {
     ImageRef im = os_imagenew(sh->os, sh->reserve);
     if (!im.base) return -1;
     BgFds fds = bgfds(sh, &scratch, in, out);
     i64   grp = sh->spawngrp;
-    Image img = imagebuild(sh, n, im);
+    Image img = imagebuild(sh, n, im, fg && n->kind==N_SIMPLE);
+    if (fg) img.head->sh->asyncign = 0;  // the terminal's INT reaches it
 
     Spawn sp = {};
     sp.rlimits = sh->rlmod ? sh->rl : 0;
@@ -925,6 +930,11 @@ static i64 spawnimage(Shell *sh, Node *n, File *in, File *out, i64 *pid,
     sp.nfds   = fds.nfds;
     sp.sigign = ignoredsigs(sh);
     sp.pgid   = grp;
+    sp.fg     = fg && grp==-1 && sh->jctty!=BADHANDLE;
+    sp.tty    = sh->jctty;
+    sp.gated  = fg && sh->gated;
+    sp.gater  = sh->gate.r;
+    sp.gatew  = sh->gate.w;
     if (!grp) sp.sigign |= (u64)1<<1 | (u64)1<<2;  // INT, QUIT
     Spawned r = os_spawn(sh->os, scratch, &sp);
     for (iz i = 0; i < fds.nclose; i++) {
@@ -945,16 +955,33 @@ static i64 spawnimage(Shell *sh, Node *n, File *in, File *out, i64 *pid,
     return (i64)r.proc;
 }
 
-// Start node as a background vproc, its descriptors 0 and 1 replaced
-// when in and out are given. Returns the task, with *pid its BASHPID.
-static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid,
-                     Arena scratch)
+// A grouped pipeline's shell stages wait to run until the parent has
+// started all its processes, as bash's children read its pgrp pipe: a
+// stage's `kill -STOP 0` then stops the whole job. Without a pipe they
+// do not wait.
+static void opengate(Shell *sh)
 {
-    // A here-document it inherits becomes an OS object first, so that
-    // both read one open file, as bash's forked child shares the
-    // temporary file or pipe: { read x; } & reads only its own line
+    OsPipe p = os_pipe(sh->os);
+    if (p.err) return;
+    sh->gate  = p;
+    sh->gated = 1;
+}
+
+static void closegate(Shell *sh)
+{
+    if (!sh->gated) return;
+    sh->gated = 0;
+    os_close(sh->os, sh->gate.r);
+    os_close(sh->os, sh->gate.w);
+}
+
+// A here-document a child inherits becomes an OS object first, so that
+// both read one open file, as bash's forked child shares the temporary
+// file or pipe: { read x; } & reads only its own line
+static void materializefds(Shell *sh, b32 skip0)
+{
     Fdtab *t = sh->fds;
-    for (i32 fd = in ? 1 : 0; fd < t->top; fd++) {
+    for (i32 fd = skip0 ? 1 : 0; fd < t->top; fd++) {
         File *f = t->fd[fd];
         if (f && f->kind==F_MEM) {
             byte  mem[256];
@@ -962,6 +989,75 @@ static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid,
             materialize(sh, a, f);
         }
     }
+}
+
+// Under job control, shell code in a foreground job (a pipeline stage
+// or a ( ) subshell) runs in a process of its own, as bash forks it, so
+// that it stops with the job: in group grp, or leading a new one that
+// takes the terminal when grp is 0. Returns its process, with *pid its
+// pid, or BADHANDLE where the platform cannot.
+static Handle spawnstage(Shell *sh, Node *n, File *in, File *out, i64 grp,
+                         i64 *pid, Arena scratch)
+{
+    materializefds(sh, in!=0);
+    i64 save = sh->spawngrp;
+    sh->spawngrp = grp ? grp : -1;
+    i64 proc = spawnimage(sh, n, in, out, pid, scratch, 1);
+    sh->spawngrp = save;
+    return proc<0 ? BADHANDLE : (Handle)proc;
+}
+
+// Run a foreground ( ) under job control as a process of its own
+// (spawnstage), waiting for it to end or stop: a stop makes it a
+// stopped job. False where the platform cannot start one.
+static b32 runfgimage(Shell *sh, Node *n, Arena scratch)
+{
+    Node m = *n;
+    m.redirs = 0;  // applied already, its descriptors inherited
+    i64    pid  = 0;
+    Handle proc = spawnstage(sh, &m, 0, 0, 0, &pid, scratch);
+    if (proc == BADHANDLE) return 0;
+    Sched *s = sh->sched;
+    takeossigs(sh);
+    sh->sig->fgwait = 1;
+    i32 st = taskwaitstop(s, proc);
+    if (sh->jctty != BADHANDLE) os_tcpgrp(sh->os, sh->jctty, sh->shellpgid);
+    sh->childsig = 0;
+    if (st>=0 && (st & WSTOP)) {
+        Job *j = newjob(sh, scratch, n, spawnwaiter(s, proc, 1), pid, 0);
+        j->pgid    = pid;
+        j->stopped = 1;
+        j->stopsig = st & 255;
+        waitdone(sh, 0, 0);
+        sh->status = fgstop(sh, scratch, j);
+    } else {
+        b32 missed = st>=0 && (st & WMISSED);
+        st = st<0 ? 127 : st & ~(WMISSED|WNOLIB);
+        b32 died = st & WSIGNALED;
+        i32 sig  = (st & 255) - 128;
+        if (died && sig==2) intrjob(sh);
+        if (died) {
+            sh->childsig = sig;
+            sh->childpid = pid;
+        }
+        u64 sigs = missed ? ~(u64)0 : died && sig>0 && sig<NSIGNAL ? sigbit(sig) : 0;
+        waitdone(sh, sigs, (st & 255)!=0);
+        sh->status = st & 255;
+    }
+    chldreaped(sh, 1);
+    if (!n->redirs) reportchild(sh, scratch, n);  // else once they are undone
+    setpstat1(sh);
+    checkerrexit(sh);
+    checksigs(sh, scratch);
+    return 1;
+}
+
+// Start node as a background vproc, its descriptors 0 and 1 replaced
+// when in and out are given. Returns the task, with *pid its BASHPID.
+static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid,
+                     Arena scratch)
+{
+    materializefds(sh, in!=0);
     i64   proc = spawnimage(sh, n, in, out, pid, scratch);
     if (proc >= 0) return spawnwaiter(sh->sched, (Handle)proc, sh->spawngrp!=0);
     Vproc *m = vprocwith(sh, in, out);
@@ -1905,7 +2001,9 @@ static void fgforward(Shell *sh, Job *j)
         p->pending &= ~got;
         self->intr  = 0;
         for (; got; got &= got-1) {
-            os_kill(sh->os, j->pid, __builtin_ctzll(got)+1);
+            // to its job where the platform has one (what it started)
+            i32 sig = __builtin_ctzll(got) + 1;
+            if (os_kill(sh->os, -j->pid, sig)) os_kill(sh->os, j->pid, sig);
         }
     }
     t->joiner    = 0;

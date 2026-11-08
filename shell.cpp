@@ -644,6 +644,8 @@ struct Shell {
     b32      spawnfg;      // and it takes the terminal (a pipeline's first)
     b32      pipetail;     // the program is a grouped pipeline's last:
                            // its stop is reported (Sched.stopproc)
+    b32      gated;        // a grouped pipeline is starting: its shell
+    OsPipe   gate;         // stages wait for gate.w to close (closegate)
     i64      exitwarned;   // cmdnumber when exit warned of stopped jobs
     b32      bifatal;      // the builtin's error ends a POSIX shell, if
                            // the builtin is special (usage, identifier)
@@ -759,6 +761,8 @@ static i32 crmode(Shell *sh)
 // Diagnostics
 
 [[noreturn]] static void escape(Shell *, i32 why);
+static void closegate(Shell *);
+static void opengate(Shell *);
 
 // Before the shell appends to a capture that programs also write
 // through pumps, let the pumps append whatever has arrived, so that
@@ -1178,6 +1182,7 @@ static iz fdread(Shell *sh, i32 fd, u8 *buf, iz len)
 // Unwind to the innermost escape point.
 [[noreturn]] static void escape(Shell *sh, i32 why)
 {
+    closegate(sh);  // a grouped pipeline's stages run on
     // A builtin's output buffer lives in its frame, which is now gone
     sh->bout     = sh->esc->bout;
     sh->esc->why = why;

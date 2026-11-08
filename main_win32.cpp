@@ -338,6 +338,7 @@ W32(b32,    SetFilePointerEx(uz, i64, i64 *, i32));
 W32(b32,    SetHandleInformation(uz, i32, i32));
 W32(uz,     OpenProcess(i32, b32, i32));
 W32(b32,    TerminateProcess(uz, u32));
+W32(b32,    TerminateJobObject(uz, u32));
 W32(b32,    SetConsoleCtrlHandler(void *, b32));
 W32(b32,    SetConsoleMode(uz, i32));
 W32(byte *, VirtualAlloc(byte *, iz, i32, i32));
@@ -575,6 +576,7 @@ struct PipeLocalInfo {  // FILE_PIPE_LOCAL_INFORMATION
 
 using NtQueryInformationFileFn = i32 (__stdcall *)(uz, IoStatusBlock *, void *, u32, i32);
 using NtQueryInformationProcessFn = i32 (__stdcall *)(uz, i32, void *, u32, u32 *);
+using NtWow64ReadFn = i32 (__stdcall *)(uz, u64, void *, u64, u64 *);
 
 // The signal channel (notes/m5b.md, step 6): every shell maps a
 // section named for its pid, where another of our shells (32- or
@@ -602,11 +604,25 @@ struct Killed {
     u32 code;
 };
 
+// A background program's job (Windows 8), so that a signal sent to its
+// "group" (os_kill with -pid) reaches what it started too, as one sent
+// to a process group would: w64devkit's alias stubs and the busybox
+// behind them.
+struct BgJob {
+    i32 pid;
+    uz  job;
+};
+
 struct Os {
     Fibers fibers;
     void (__stdcall *now)(Filetime *);  // precise clock where available
     NtQueryInformationFileFn queryfile;  // ntdll, resolved at run time
     NtQueryInformationProcessFn queryproc;  // ntdll, likewise
+    // A 32-bit build on 64-bit Windows (WOW64): ntdll's calls that read
+    // a 64-bit process's memory, else null
+    NtQueryInformationProcessFn queryproc64;
+    NtWow64ReadFn               read64;
+    b32 (__stdcall *iswow64)(uz, b32 *);  // IsWow64Process, XP SP2
     Str  exe;  // this program, for self-spawning (os_spawn with an image)
     b32  (__stdcall *cancelsync)(uz);    // CancelSynchronousIo, Vista
     Arena      perm;       // platform records, recycled through free lists
@@ -645,6 +661,8 @@ struct Os {
     i64        youngticks; // 100 ms: programs judged at a Ctrl-C
     Recent     recent[32];
     Killed     killed[16]; // os_kill's exit codes, for XP (procexit)
+    BgJob      bgjobs[64]; // jobs of recent background programs (ring)
+    i32        nbgjobs;
     i32        nkilled;
     uz         jobport;    // job messages for watched programs
     b32        ttyraw;     // os_tty: the console's modes were changed
@@ -1452,8 +1470,20 @@ static void helperdone(Os *os, Helper *hp)
         w->eof |= hp->eof;
         if (io) {
             readahead(w, w->own, io);
-            io->err = !io->n && !hp->eof && hp->code ? E_INTR : 0;
-            pushdone(os, io);
+            if (!io->n && !hp->eof && hp->code==ERROR_OPERATION_ABORTED && w->kind==K_PIPE) {
+                // Ended by lend (an abandoned read, which a reader then
+                // took up), not by the core: that reader reads again
+                // once the object is free, as bash's would block on
+                // the pipe it shares with the program
+                io->next   = w->queue;
+                w->queue   = io;
+                io->plt[0] = S_QUEUED;
+                io->plt[1] = (uz)w;
+                os->nwait++;
+            } else {
+                io->err = !io->n && !hp->eof && hp->code ? E_INTR : 0;
+                pushdone(os, io);
+            }
         }
         if (w->ip && !w->ip->started && w->ip->iw) {
             Interpose *ip = w->ip;
@@ -1791,17 +1821,63 @@ static b32 exited(uz proc)
     return !WaitForSingleObject(proc, 0);
 }
 
-// The pointer in slot i of a process's PEB, 0 if unknown.
-static byte *pebslot(Os *os, uz proc, iz i)
+// Another process's memory, read as its own bitness lays it out: from
+// a WOW64 build, a 64-bit process's through ntdll's Wow64 calls (its
+// addresses may lie past 4 GiB, and its PEB is not the one
+// NtQueryInformationProcess reports).
+struct Remote {
+    uz  proc;
+    u64 peb;     // 0 if unknown
+    b32 wide;    // 64-bit pointers
+    b32 via64;   // read with Os.read64
+};
+
+static Remote remote(Os *os, uz proc)
 {
-    uz pbi[6] = {};  // PROCESS_BASIC_INFORMATION
-    if (!os->queryproc || os->queryproc(proc, 0, pbi, sizeof(pbi), 0)) {
-        return 0;
+    Remote r = {};
+    r.proc = proc;
+    r.wide = sizeof(uz) == 8;
+    b32 wow64 = 1;
+    if (os->queryproc64 && os->iswow64(proc, &wow64) && !wow64) {
+        u64 pbi[6] = {};  // PROCESS_BASIC_INFORMATION64
+        if (!os->queryproc64(proc, 0, pbi, sizeof(pbi), 0)) {
+            r.peb   = pbi[1];
+            r.wide  = 1;
+            r.via64 = 1;
+        }
+        return r;
     }
-    byte *r  = 0;
-    iz    n  = 0;
-    byte *at = (byte *)pbi[1] + i*(iz)sizeof(uz);
-    return ReadProcessMemory(proc, at, &r, sizeof(r), &n) ? r : 0;
+    uz pbi[6] = {};  // PROCESS_BASIC_INFORMATION
+    if (os->queryproc && !os->queryproc(proc, 0, pbi, sizeof(pbi), 0)) {
+        r.peb = pbi[1];
+    }
+    return r;
+}
+
+static b32 rread(Os *os, Remote *r, u64 addr, void *buf, iz len)
+{
+    if (!addr) return 0;
+    if (r->via64) {
+        u64 n = 0;
+        return !os->read64(r->proc, addr, buf, (u64)len, &n) && n==(u64)len;
+    }
+    iz n = 0;
+    return ReadProcessMemory(r->proc, (void *)(uz)addr, buf, len, &n) && n==len;
+}
+
+// The pointer at addr in the process, 0 if unknown.
+static u64 rptr(Os *os, Remote *r, u64 addr)
+{
+    u64 v = 0;
+    u32 v32 = 0;
+    if (r->wide) return rread(os, r, addr, &v, 8) ? v : 0;
+    return rread(os, r, addr, &v32, 4) ? v32 : 0;
+}
+
+// The pointer in slot i of a process's PEB, 0 if unknown.
+static u64 pebslot(Os *os, Remote *r, iz i)
+{
+    return r->peb ? rptr(os, r, r->peb + (u64)(i*(r->wide ? 8 : 4))) : 0;
 }
 
 // A process's id from its handle (GetProcessId is XP SP1), 0 if unknown.
@@ -1818,22 +1894,22 @@ static i32 procpid(Os *os, uz proc)
 // it works before the process has run. False if unknown.
 static b32 consoleimage(Os *os, uz proc)
 {
-    byte *base = pebslot(os, proc, 2);  // ImageBaseAddress
-    iz    n    = 0;
+    Remote r    = remote(os, proc);
+    u64    base = pebslot(os, &r, 2);  // ImageBaseAddress
     if (!base) return 0;
     i32 nt = 0;  // IMAGE_DOS_HEADER.e_lfanew
-    if (!ReadProcessMemory(proc, base+0x3c, &nt, 4, &n) || nt<0) return 0;
-    c16 subsystem = 0;  // IMAGE_OPTIONAL_HEADER.Subsystem
-    if (!ReadProcessMemory(proc, base+nt+0x5c, &subsystem, 2, &n)) return 0;
+    if (!rread(os, &r, base+0x3c, &nt, 4) || nt<0) return 0;
+    c16 subsystem = 0;  // IMAGE_OPTIONAL_HEADER.Subsystem, PE32 or PE32+
+    if (!rread(os, &r, base+(u64)nt+0x5c, &subsystem, 2)) return 0;
     return subsystem == 3;  // IMAGE_SUBSYSTEM_WINDOWS_CUI
 }
 
-// Offsets in RTL_USER_PROCESS_PARAMETERS
+// Offsets in RTL_USER_PROCESS_PARAMETERS, by pointer width
 enum : iz {
-    PARAMS_FLAGS        = 8,
-    PARAMS_CONSOLEFLAGS = 16 + sizeof(uz),
-    PARAMS_IMAGEPATH    = sizeof(uz)==8 ? 0x60 : 0x38,
+    PARAMS_FLAGS = 8,
 };
+static iz paramsconsoleflags(b32 wide) { return wide ? 0x18 : 0x14; }
+static iz paramsimagepath(b32 wide)    { return wide ? 0x60 : 0x38; }
 
 struct Ustr {  // UNICODE_STRING
     c16  len;  // bytes
@@ -1846,12 +1922,10 @@ struct Ustr {  // UNICODE_STRING
 // missed or not. False if unknown.
 static b32 ignoresctrlc(Os *os, uz proc)
 {
-    byte *params = pebslot(os, proc, 4);  // ProcessParameters
-    u32   flags  = 0;
-    iz    n      = 0;
-    return params &&
-           ReadProcessMemory(proc, params+PARAMS_CONSOLEFLAGS, &flags, 4, &n) &&
-           flags&1;
+    Remote r      = remote(os, proc);
+    u64    params = pebslot(os, &r, 4);  // ProcessParameters
+    u32    flags  = 0;
+    return rread(os, &r, params+(u64)paramsconsoleflags(r.wide), &flags, 4) && flags&1;
 }
 
 static i32 foldpath(c16 c)
@@ -1864,23 +1938,25 @@ static i32 foldpath(c16 c)
 // Then it judges what it starts by these same rules. False if unknown.
 static b32 sameimage(Os *os, uz proc)
 {
-    byte *params = pebslot(os, proc, 4);  // ProcessParameters
-    u32   flags  = 0;
-    Ustr  path   = {};
-    iz    n      = 0;
+    Remote r      = remote(os, proc);
+    u64    params = pebslot(os, &r, 4);  // ProcessParameters
+    u32    flags  = 0;
+    c16    len    = 0;  // UNICODE_STRING.Length, bytes
     if (!os->selflen || !params) return 0;
-    if (!ReadProcessMemory(proc, params+PARAMS_FLAGS, &flags, 4, &n) ||
-        !ReadProcessMemory(proc, params+PARAMS_IMAGEPATH, &path, sizeof(path), &n) ||
-        path.len/2!=os->selflen) {
+    if (r.wide != (sizeof(uz)==8)) return 0;  // another build
+    u64 at = params + (u64)paramsimagepath(r.wide);
+    if (!rread(os, &r, params+PARAMS_FLAGS, &flags, 4) ||
+        !rread(os, &r, at, &len, 2) || len/2!=os->selflen) {
         return 0;
     }
+    u64 data = rptr(os, &r, at + (r.wide ? 8 : 4));  // .Buffer
     if (!(flags & 1)) {  // not yet normalized: an offset from params
-        path.data = (c16 *)(params + (uz)path.data);
+        data += params;
     }
     for (i32 i = 0; i < os->selflen; i += 64) {
         c16 buf[64];
         i32 len = os->selflen-i<64 ? os->selflen-i : 64;
-        if (!ReadProcessMemory(proc, path.data+i, buf, 2*len, &n)) return 0;
+        if (!rread(os, &r, data+2*(u64)i, buf, 2*len)) return 0;
         for (i32 k = 0; k < len; k++) {
             if (foldpath(buf[k]) != foldpath(os->self[i+k])) return 0;
         }
@@ -1893,7 +1969,8 @@ static b32 sameimage(Os *os, uz proc)
 // its own code. False if unknown.
 static b32 starting(Os *os, uz proc)
 {
-    uz flags = (uz)pebslot(os, proc, 10);  // CrossProcessFlags
+    Remote r     = remote(os, proc);
+    u64    flags = pebslot(os, &r, 10);  // CrossProcessFlags
     return flags>>1 & 1;
 }
 
@@ -1909,7 +1986,8 @@ static i32 endmissed(Os *os, uz proc)
 {
     if (ignoresctrlc(os, proc)) return END_SPARED;
     for (i64 end = ticks() + os->youngticks/2; !exited(proc) && ticks()<end;) {
-        if (pebslot(os, proc, 3)) {
+        Remote r = remote(os, proc);
+        if (pebslot(os, &r, 3)) {  // Ldr
             if (ignoresctrlc(os, proc)) return END_SPARED;
             TerminateProcess(proc, 0xc000013a);
             WaitForSingleObject(proc, 1000);
@@ -1956,9 +2034,10 @@ static void setupjobs(Os *os)
         os->jobflags &= own.flags;  // the shell's own job
     }
 
-    byte *params = pebslot(os, GetCurrentProcess(), 4);
-    Ustr  path   = {};
-    if (params) __builtin_memcpy(&path, params+PARAMS_IMAGEPATH, sizeof(path));
+    Remote r      = remote(os, GetCurrentProcess());
+    byte  *params = (byte *)(uz)pebslot(os, &r, 4);
+    Ustr   path   = {};
+    if (params) __builtin_memcpy(&path, params+paramsimagepath(sizeof(uz)==8), sizeof(path));
     if (path.data && path.len/2<=countof(os->self)) {
         __builtin_memcpy(os->self, path.data, path.len);
         os->selflen = path.len / 2;
@@ -3356,6 +3435,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
     // entered before it runs; exec's job is for kill-on-close only, so
     // also when the program ignores Ctrl-C (as in background, &)
     b32 tojob = os->lateattach && (!noint || exec);
+    b32 bgjob = os->lateattach && noint && !exec && !self;
     uz  ejob  = 0;  // exec's job before Windows 8
     i32 flags = CREATE_UNICODE_ENVIRONMENT;
     flags |= os->noconsole ? CREATE_NO_WINDOW : 0;
@@ -3377,7 +3457,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
     u64 ctrls  = (u64)1<<1 | (u64)1<<2;  // SIGINT, SIGQUIT (Ctrl-Break)
     b32 unseen = !noint && (nctrl!=os->nctrlseen ||
                  (__atomic_load_n(&os->siggrp, __ATOMIC_SEQ_CST) & ctrls));
-    flags |= tojob || ejob || unseen || self ? CREATE_SUSPENDED : 0;
+    flags |= tojob || bgjob || ejob || unseen || self ? CREATE_SUSPENDED : 0;
     if (noint) SetConsoleCtrlHandler(0, 1);
     b32 ok = CreateProcessW(app.data, line.data, 0, 0, 1, flags, wenv.data,
                             cwd.data, &si, &pi);
@@ -3397,7 +3477,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
             CloseHandle(pi.process);
             ok   = 0;
             code = err;
-        } else if (!tojob && !ejob && !unseen) {
+        } else if (!tojob && !bgjob && !ejob && !unseen) {
             ResumeThread(pi.thread);
         }
     }
@@ -3418,6 +3498,16 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
         if (ejob && j!=ejob) CloseHandle(ejob);
         if (flags & CREATE_SUSPENDED) ResumeThread(pi.thread);
         *job = j;
+    } else if (ok && bgjob) {
+        uz j = newjob(os, pi.process, 0);
+        if (j) {
+            BgJob *b = os->bgjobs + os->nbgjobs%countof(os->bgjobs);
+            if (b->job) CloseHandle(b->job);  // the oldest: let it go
+            b->pid = pi.pid;
+            b->job = j;
+            os->nbgjobs++;
+        }
+        if (!unseen) ResumeThread(pi.thread);
     } else if (ok && !noint) {
         uz j = tojob ? newjob(os, pi.process, 0) : 0;
         if (tojob) ResumeThread(pi.thread);
@@ -3539,9 +3629,40 @@ static i64 os_tcpgrp(Os *, Handle, i64)
     return -E_NOSYS;
 }
 
+// The job of a background program by its pid, 0 if none.
+static uz bgjobof(Os *os, i64 pid)
+{
+    i32 n = os->nbgjobs<countof(os->bgjobs) ? os->nbgjobs : countof(os->bgjobs);
+    for (i32 i = 0; i < n; i++) {
+        BgJob *b = os->bgjobs + i;
+        if (b->job && b->pid==pid) return b->job;
+    }
+    return 0;
+}
+
+// No process groups here: -pid is a background program and everything
+// in its job, the program alone if it has none.
 static i32 os_kill(Os *os, i64 pid, i32 sig)
 {
     flushw(os);
+    if (pid<0 && pid>=-(i64)0x7fffffff) {
+        uz job = bgjobof(os, -pid);
+        pid = -pid;
+        b32 kills = sig>0 && sig!=17 && sig!=18 && !(sig>=19 && sig<=23) && sig!=28;
+        if (job && kills) {
+            if (!chansend(pid, 0, sig)) return 0;  // one of our shells
+            // another program: end it and its kin
+            u32 code = sig==2 ? 0xc000013au : SIGEXIT|(u32)(128+sig);
+            if (TerminateJobObject(job, code)) {
+                i32     i = os->nkilled % countof(os->killed);
+                Killed *k = os->killed + i;
+                k->pid  = (i32)pid;
+                k->code = code;
+                os->nkilled = i + 1;
+                return 0;
+            }
+        }
+    }
     if (pid<=0 || pid>(i64)0x7fffffff) return E_SRCH;
     if (sig<0 || sig>=NSIGNAL) return E_INVAL;
     if (sig && sig!=9 && sig!=19 && !chansend(pid, 0, sig)) {
@@ -4036,6 +4157,13 @@ void mainCRTStartup()
         os.lateattach = 1;
     }
     os.queryproc = (NtQueryInformationProcessFn)dynamic(u"ntdll.dll", "NtQueryInformationProcess");
+    os.iswow64 = (b32 (__stdcall *)(uz, b32 *))dynamic(u"kernel32.dll", "IsWow64Process");
+    b32 wow64 = 0;
+    if (sizeof(uz)==4 && os.iswow64 && os.iswow64(GetCurrentProcess(), &wow64) && wow64) {
+        os.queryproc64 = (NtQueryInformationProcessFn)dynamic(u"ntdll.dll", "NtWow64QueryInformationProcess64");
+        os.read64      = (NtWow64ReadFn)dynamic(u"ntdll.dll", "NtWow64ReadVirtualMemory64");
+        if (!os.queryproc64 || !os.read64) os.queryproc64 = 0;
+    }
     os.xp = !dynamic(u"kernel32.dll", "GetTickCount64");  // Vista
     i32 conpid = 0;
     os.noconsole = !GetConsoleProcessList(&conpid, 1);

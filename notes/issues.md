@@ -36,91 +36,7 @@ None: the XP flakes were fixed or not seen again at step 10 (m7.md).
 
 ## M8 (performance)
 
-- **Shell-code stages cannot stop** (m7.md, step 7d): under set -m a
-  pipeline stage that is shell code, a `( )` or a function runs in the
-  shell's process, so ^Z stops only the programs; a pipeline whose last
-  stage is shell code then waits for it rather than stopping. Bash forks
-  these. Fix: run such a foreground job in a forked image child that
-  leads the group (the step 7 design), keeping PIPESTATUS.
-  Moved from M7 (step 9): a foreground job in an image child is the
-  same machinery as `&`'s but with the terminal handed over and
-  PIPESTATUS sent back, a large change to job control late in M7;
-  pipelines of programs alone already stop, and so do ^Z'd programs
-  run from shell code.
-- **Win32: fg's Ctrl-C ends only the job's own process**: a foreign
-  program is ended with TerminateProcess, so what it started runs on
-  (w64devkit's alias stubs leave busybox running), as `kill -INT` does
-  on Windows. A job of this shell's image takes the signal, but it
-  started with INT ignored, so its `trap ... INT` cannot be set and
-  bash's job (in a group of its own, INT not ignored) would run the
-  trap. Fix with a job object per background program (Windows 8 and
-  later) and an image flag saying INT is not really ignored.
-  Moved from M7 (step 8): background programs get no job now, and
-  the image flag changes the image format; Windows only, and only
-  after fg of a wrapper or of a shell with an INT trap.
-- POSIX: if another process reads the same pipe as a shell task, a read
-  after poll can block the whole shell until data arrives. (m3a.md)
-  Moved from M5b: never seen in a test; it belongs with the read-ahead
-  work on pipes other processes also read.
-- **A pipe lent to a program aborts another reader's helper read**
-  (step 8): passing a pipe descriptor that a pump also reads made the
-  pump's read fail with E_INTR (the lend's CancelSynchronousIo). The
-  bridges avoid it by not passing bridged descriptors; any other
-  shared reader of a lent pipe would hit it. (m5a.md, step 8)
-  Moved from M5b: no test of real background processes hit it; it
-  belongs with the read-ahead work on shared pipes.
-- No compile cache for `=~` (bash has none either).
-
-- **010-writes flakes on Windows** (t/win32): `f x | "$U" -c 'read l'`
-  expects f to die of SIGPIPE (141) after 20,000 lines (120 KB), but
-  at times f finishes with 0, always on XP now. With our own shell as
-  the reader the writer's pipe takes more than its 64 KiB: the write
-  quota (NtQueryInformationFile) runs down to near 0 and comes back to
-  65536 although neither process calls ReadFile (an instrumented
-  build), and the reader still gets every byte. With ping.exe as a
-  reader that does not read, the quota stays at 0 and f gets 141.
-  Unexplained; seen at af2229d too, more often since step 2's speedups.
-  (m8.md, step 3)
-- t/win32/012-ctrlc-young fails with the i686 build on Windows 11 (the
-  missed Ctrl-C during `sleep 5` is not seen: "after 0"), before step 3
-  too; it passes on XP and with the x64 build. Step 10, with the other
-  Ctrl-C items.
-
-Moved from M6 (m6.md, step 10), with bind and the rest of editor 2:
-
-- inputrc variables kept for `$if` (and `bind -v`) but without
-  effect: blink-matching-paren, colored-stats and
-  colored-completion-prefix, enable-keypad, enable-meta-key,
-  horizontal-scroll-mode (our sideways display is TERM=dumb's, which
-  also drops the active region and bracketed paste),
-  revert-all-at-newline, the active region colours, byte-oriented, input-meta,
-  output-meta and convert-meta.
-- inputrc binding nothing to a prefix (`"\C-x":` alone): readline
-  stores a do-nothing shadow, and folds an emptied keymap back into
-  its parent; ours leaves the prefix unbound. Bash's own keys and the
-  arrow keys are bound before the inputrc rather than after it "if
-  unbound", which differs only when the inputrc unbinds one (or bind
-  does); the terminal's other keys (Delete, Insert, Home, End, Page
-  Up and Down as `\e[N~`) are bound after it, as readline does.
-- tty-status rings the bell, as readline's does where there is no
-  TIOCSTAT (Linux, Windows).
-- Keyboard macros record the keys read, not readline's dispatched
-  keys: readline misses keys inserted together with self-insert's
-  type-ahead (`ab` typed at once records only `a`), and records again
-  a key macro's expansion as it runs. Not reproduced.
-- old-menu-complete runs menu-complete.
-- Invalid UTF-8 in the line is drawn as U+FFFD, a column per byte,
-  which is what a terminal shows for the raw bytes readline writes;
-  a byte that breaks a sequence in self-insert becomes a key of its
-  own. Not checked against recordings: a sequence cut short by the key
-  timeout or the end of input is inserted as it is (readline may hold
-  it until complete), and in the C locale readline (output-meta off)
-  shows bytes past 0x7f as `\NNN` where ours draws UTF-8 whatever the
-  locale. A first recording was inconclusive: \xc3\xa9 and \xff were
-  inserted and shown as \NNN, yet \xe6 ran M-f, which readline's C
-  defaults (convert-meta on) do not explain together; the .ed env
-  lines may leave LANG set twice (with input-meta and friends).
-
+None left: step 10 fixed the rest or accepted it (below).
 
 ## M9 (w64devkit)
 
@@ -301,6 +217,57 @@ Moved from M5a: limits of the test tiers, not of the shell.
   `kill -STOP` and `kill -9`, `wait` gives 137 where bash sometimes
   gives the stop's 147 (`wait -f` gives 137 in both). (M7, step 9;
   905 hides the mark.)
+- **Accepted: fg's Ctrl-C reaches a background shell job only as a
+  signal to that shell** on Windows: its INT trap runs, but the
+  program it waits for, started ignoring Ctrl-C as a background job's
+  programs must there (no process groups), runs on to its end first,
+  where bash's terminal ends it at once. Programs started straight in
+  the background are ended with all they started (a job object each).
+  (m8.md, step 10)
+- **Accepted: Windows pipes that take more than they hold.** A writer
+  to our own shell's pipe at times gets far more than 64 KiB in before
+  the reader exits: the write quota (NtQueryInformationFile) runs down
+  to near 0 and comes back to 65536 although neither process calls
+  ReadFile (an instrumented build), while with ping.exe as a reader
+  that does not read it stays at 0. So `f | reader` where the reader
+  quits early may let f finish a fixed amount of output without
+  SIGPIPE (status 0, not 141), always on XP; a writer that goes on
+  gets 141. t/win32/010-writes writes until then. (m8.md, steps 3
+  and 10)
+- **Accepted: inputrc settings without effect**, kept for `$if` and
+  `bind -v`: blink-matching-paren, colored-stats and
+  colored-completion-prefix, enable-keypad, enable-meta-key,
+  horizontal-scroll-mode (our sideways display is TERM=dumb's, which
+  also drops the active region and bracketed paste),
+  revert-all-at-newline, the active region colours, byte-oriented,
+  input-meta, output-meta and convert-meta. Colours and terminal modes
+  that bash's own tests and bash-completion do not rely on. (m6.md,
+  step 10; m8.md, step 10)
+- **Accepted: an empty inputrc binding**: `"\C-x":` alone leaves the
+  prefix unbound, where readline stores a do-nothing shadow and folds
+  an emptied keymap back into its parent. Bash's own keys and the
+  arrow keys are bound before the inputrc rather than after it "if
+  unbound", which differs only when the inputrc unbinds one (or bind
+  does); the terminal's other keys (Delete, Insert, Home, End, Page Up
+  and Down as `\e[N~`) are bound after it, as readline does. (m6.md,
+  step 10)
+- **Accepted: keyboard macros record the keys read**, not readline's
+  dispatched keys: readline misses keys inserted together with
+  self-insert's type-ahead (`ab` typed at once records only `a`), and
+  records a key macro's expansion again as it runs. Readline's quirks
+  depend on how fast keys arrive. (m6.md, step 10)
+- **Accepted: old-menu-complete runs menu-complete.** Readline keeps
+  the old function for compatibility; it differs in details of the
+  display prefix nobody binds it for. (m6.md, step 10)
+- **Accepted: invalid UTF-8 in the line** is drawn as U+FFFD, a column
+  per byte, which is what a terminal shows for the raw bytes readline
+  writes; a byte that breaks a sequence in self-insert becomes a key
+  of its own. A sequence cut short by the key timeout or the end of
+  input is inserted as it is (readline may hold it until complete),
+  and in the C locale readline (output-meta off) shows bytes past 0x7f
+  as `\NNN` where ours draws UTF-8 whatever the locale. A first
+  recording was inconclusive (\xe6 ran M-f, which readline's C
+  defaults do not explain together with the rest). (m6.md, step 10)
 - **Accepted: Win32 console Ctrl-C limits**: a Ctrl-C from
   GenerateConsoleCtrlEvent does not end a console read in progress (a
   typed one does); Ctrl-C during CreateProcess counts against the
