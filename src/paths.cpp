@@ -514,7 +514,8 @@ static Str rootnative(PathCtx *ctx)
 enum : i32 {  // Device kinds under /dev, exact names only
     DV_NONE,   // not a device: the mount table applies
     DV_NULL,   // null
-    DV_SINK,   // zero, full, random, urandom (readable: genfile), clipboard
+    DV_SINK,   // zero, full, random, urandom (readable: genfile), and
+               // clipboard (the Windows clipboard's text: openwin)
     DV_TTY,    // tty, console
     DV_STD,    // stdin, stdout, stderr: num is the fd
     DV_FDDIR,  // fd
@@ -1040,8 +1041,9 @@ static PathRes virtualpath(PathCtx *ctx, Arena *a, Str p)
         case DV_SINK:
         case DV_OTHER: r.kind = PK_DEV;  r.sub = d.name; break;
         }
-        if (!msys && r.kind==PK_DEV && d.name!="zero" && d.name!="urandom") {
-            r = {};  // busybox emulates only these
+        b32 native = d.name=="zero" || d.name=="urandom" || d.name=="clipboard";
+        if (!msys && r.kind==PK_DEV && !native) {
+            r = {};  // busybox emulates only the first two (the third is ours)
         }
         return r;
     } else if (d.kind) {

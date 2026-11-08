@@ -360,6 +360,7 @@ static void testnative(Arena scratch)
     wantfd(&ctx, a, "/dev/stderr",   PK_FD, 2, {});
     wantfd(&ctx, a, "/dev/zero",     PK_DEV, 0, "zero");
     wantfd(&ctx, a, "/dev/urandom",  PK_DEV, 0, "urandom");
+    wantfd(&ctx, a, "/dev/clipboard", PK_DEV, 0, "clipboard");
     wantmissing(&ctx, a, "");
     wantmissing(&ctx, a, "/dev/null/x");
     wantmissing(&ctx, a, "/dev/fd/x");

@@ -1,7 +1,8 @@
 # personality: native
-# Hand-checked baseline: the native persona has /dev/zero and
-# /dev/urandom only, as busybox-w32 does, read through a generator
-# pump by builtins and programs, and written as sinks.
+# Hand-checked baseline: of busybox-w32's devices the native persona
+# has /dev/zero and /dev/urandom only, as it does, read through a
+# generator pump by builtins and programs, and written as sinks. (It
+# also has /dev/clipboard: 046.)
 hex() { od -An -tx1 | tr -d ' \n'; echo; }
 head -c 8 </dev/zero | hex
 head -c 100000 </dev/zero | wc -c
