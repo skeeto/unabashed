@@ -4,9 +4,9 @@
 static void histoption(Shell *, i32 opt, b32 on);  // history.cpp
 static b32  exitwarning(Shell *);                  // jobs.cpp
 
-static Str helpsynopsis(Str name);  // help.cpp
+static Str helpsynopsis(Shell *, Str name);  // help.cpp
 
-static Str usage(Str name)
+static Str usage(Shell *sh, Str name)
 {
     static struct { Str name; Str text; } usages[] = {
         {"cd",       "cd [-L|[-P [-e]]] [-@] [dir]"},
@@ -56,10 +56,11 @@ static Str usage(Str name)
         {"suspend",  "suspend [-f]"},
         {"builtin",  "builtin [shell-builtin [arg ...]]"},
     };
+    if (sh->pathmode==PM_MSYS && name=="pwd") return "pwd [-LPW]";  // MSYS2's
     for (iz i = 0; i < countof(usages); i++) {
         if (usages[i].name == name) return usages[i].text;
     }
-    Str s = helpsynopsis(name);
+    Str s = helpsynopsis(sh, name);
     return s.data ? s : name;
 }
 
@@ -68,7 +69,7 @@ static void usageerror(Shell *sh, Arena a, Str name)
 {
     sh->bifatal = 1;
     flushbout(sh);
-    Str msg = concat3(&a, name, ": usage: ", usage(name));
+    Str msg = concat3(&a, name, ": usage: ", usage(sh, name));
     fdwrite(sh, 2, concat(&a, msg, "\n"));
 }
 

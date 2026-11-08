@@ -1048,17 +1048,37 @@ static HelpTopic const helptopics[] = {
      "The status of the last command."},
 };
 
-static HelpTopic const *helptopic(Str name)
+// MSYS2's pwd, with -W
+static HelpTopic const msyspwd =
+    {"pwd", "pwd [-LPW]",
+     "Print the working directory.\n"
+     "\n"
+     "Options:\n"
+     "  -L\tas $PWD holds it, with any symbolic links (the default)\n"
+     "  -P\twith symbolic links resolved\n"
+     "  -W\tin Windows form, with forward slashes\n"
+     "\n"
+     "Exit Status:\n"
+     "0, unless an option is invalid or the directory cannot be read."};
+
+// The topic as this shell describes it: msys mode has its own pwd
+static HelpTopic const *topicfor(Shell *sh, HelpTopic const *t)
+{
+    Str name = t->name;
+    return sh->pathmode==PM_MSYS && name=="pwd" ? &msyspwd : t;
+}
+
+static HelpTopic const *helptopic(Shell *sh, Str name)
 {
     for (iz i = 0; i < countof(helptopics); i++) {
-        if (helptopics[i].name == name) return helptopics + i;
+        if (helptopics[i].name == name) return topicfor(sh, helptopics+i);
     }
     return 0;
 }
 
-static Str helpsynopsis(Str name)
+static Str helpsynopsis(Shell *sh, Str name)
 {
-    HelpTopic const *t = helptopic(name);
+    HelpTopic const *t = helptopic(sh, name);
     return t ? t->synopsis : Str{};
 }
 
@@ -1131,9 +1151,9 @@ static void helplist(Shell *sh, Arena a)
     for (iz i = 0; i < height; i++) {
         b32 second = 2*i<n && i+height<n;
         // the left column is cut one character later than the right
-        helpcolumn(sh, &b, helptopics+i, width-3, second ? width : 0);
+        helpcolumn(sh, &b, topicfor(sh, helptopics+i), width-3, second ? width : 0);
         if (second) {
-            helpcolumn(sh, &b, helptopics+i+height, width-4, 0);
+            helpcolumn(sh, &b, topicfor(sh, helptopics+i+height), width-4, 0);
         }
         putbyte(&b, '\n');
     }
@@ -1198,7 +1218,7 @@ static i32 b_help(Shell *sh, Str *args, iz nargs, Arena scratch)
         for (i32 pass = 1; pass <= 2; pass++) {
             b32 here = 0;
             for (iz k = 0; k < countof(helptopics); k++) {
-                HelpTopic const *t = helptopics + k;
+                HelpTopic const *t = topicfor(sh, helptopics+k);
                 b32 m = pass==1 ? t->name==pattern || patmatch(pattern, t->name, PM_EXTGLOB, scratch)
                                 : startswith(t->name, pattern);
                 if (!m) continue;
@@ -1236,7 +1256,7 @@ static i32 b_help(Shell *sh, Str *args, iz nargs, Arena scratch)
 // NAME --help for a builtin: its synopsis and description, status 2
 static i32 builtinhelp(Shell *sh, Str name, Arena scratch)
 {
-    HelpTopic const *t = helptopic(name);
+    HelpTopic const *t = helptopic(sh, name);
     if (!t) return 2;
     Buf b(&scratch, 2048);
     print(&b, name);
