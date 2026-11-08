@@ -241,6 +241,7 @@ struct File {
     Pipe  *pipe;     // F_PIPE: the read end with OF_READ, else the write end
     iz     pos;
     b32    ownmem;   // mem is store memory to free with the file
+    b32    full;     // F_OS: /dev/full, whose writes fail with ENOSPC
 };
 
 // A command substitution's output: what its File (F_CAPTURE) points at.
@@ -843,6 +844,10 @@ static b32 fdwrite(Shell *sh, i32 fd, Str s)
     switch (f->kind) {
     case F_OS:
         if (!s.len) return 1;
+        if (f->full) {
+            err = E_NOSPC;
+            break;
+        }
         if (fileistty(sh, f) && f->tty==3) {
             // A Windows console without VT: escapes interpreted, as
             // busybox-w32 does for its own output

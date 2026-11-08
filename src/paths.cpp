@@ -511,7 +511,7 @@ static Str rootnative(PathCtx *ctx)
 enum : i32 {  // Device kinds under /dev, exact names only
     DV_NONE,   // not a device: the mount table applies
     DV_NULL,   // null
-    DV_SINK,   // zero, full, random, urandom, clipboard
+    DV_SINK,   // zero, full, random, urandom (readable: genfile), clipboard
     DV_TTY,    // tty, console
     DV_STD,    // stdin, stdout, stderr: num is the fd
     DV_FDDIR,  // fd

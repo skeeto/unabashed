@@ -140,6 +140,17 @@ Moved from M5a: limits of the test tiers, not of the shell.
 
 ## Accepted deviations
 
+- **Accepted: emulated /dev/zero and kin are pipes.** In the Windows
+  modes, /dev/zero, /dev/full, /dev/random and /dev/urandom opened for
+  reading are an OS pipe fed by a pump (genfile; the random ones from
+  the process's ChaCha8 stream, keyed with 256 bits of os_entropy and
+  reset by a fork). So a descriptor on one is a pipe to `test -p` and to
+  programs; a native program's writes to /dev/full fail with EBADF (a
+  handle opened only for reading), the shell's own with ENOSPC; a
+  background job reading one keeps its image child shell alive to feed
+  it, as the job would read forever under bash; and named as an argument
+  to a native program, msys mode passes MSYS2's /Device/Null and native
+  mode the name as typed (busybox's applets emulate it). (2026-11-08)
 - **Accepted: RANDOM is PCG64, not Park-Miller.** RANDOM and SRANDOM
   come from PCG64 streams (vars.cpp), so a seed (`RANDOM=n`) gives a
   different sequence than bash's, though the same one on every

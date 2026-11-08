@@ -143,7 +143,10 @@ static void joinorphans(Sched *s)
     while (s->orphans) {
         Task *t = s->orphans;
         s->orphans = t->sib;
-        if (iswaiter(t) && t->state!=TS_DONE) {
+        // Waiters, and /dev/zero's pumps (genfile) that a program
+        // still reads, never run again
+        b32 gen = t->fn==pumpmain && ((Pump *)t->arg)->kind==PUMP_GEN;
+        if ((iswaiter(t) || gen) && t->state!=TS_DONE) {
             if (!t->io.done && os_cancel(s->os, &t->io)) {
                 s->npending--;
             }

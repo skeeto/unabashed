@@ -89,6 +89,18 @@ struct Vproc;
 struct Pump;
 struct Shell;
 
+// ChaCha8 as the stream behind /dev/random and /dev/urandom: one per
+// process, keyed on first use with 256 bits of os_entropy (nothing else
+// is drawn from it), then the keystream of blocks 0, 1, 2, ... with a
+// zero nonce. Zero is unkeyed: a forked copy resets it to rekey.
+struct Chacha {
+    u32 key[8];
+    u64 block;      // the next block's counter
+    u8  out[64];    // the current block's keystream
+    i32 used;       // bytes of out already given
+    b32 keyed;
+};
+
 // A virtual process that signals can be sent to: the shell, each
 // synchronous subshell level, each fiber vproc (see trap.cpp).
 struct Sigproc {
@@ -122,6 +134,7 @@ struct Sched {
     iz      reserve;     // address space for each arena of a vproc
     u64     entropy;     // the process's random base for RANDOM and
                          // SRANDOM (os_entropy once, on first use), or 0
+    Chacha  chacha;      // /dev/random and /dev/urandom
     iz      ntasks;      // live tasks, including the main task
     iz      npending;    // tasks blocked on an Io
     i32     budget;      // safe points until the next yield check
@@ -858,12 +871,69 @@ static void pipeclose(Sched *s, Pipe *p, b32 writer)
 // between a named pipe and a descriptor (bridges, exec.cpp).
 
 enum : i32 { NSPARE = 2 };  // a bridge's instances listening ahead
-enum : i32 { PUMPBUF = 1<<12 };
+enum : i32 { PUMPBUF = 1<<12, GENBUF = 1<<16 };
+
+// One ChaCha block (DJB's layout: a 64-bit counter, then a 64-bit
+// nonce) with the given number of rounds, as little-endian bytes.
+static void chachablock(u8 *out, u32 *key, u64 counter, u64 nonce, i32 rounds)
+{
+    u32 s[16] = {
+        0x61707865, 0x3320646e, 0x79622d32, 0x6b206574,
+        key[0], key[1], key[2], key[3], key[4], key[5], key[6], key[7],
+        (u32)counter, (u32)(counter>>32), (u32)nonce, (u32)(nonce>>32),
+    };
+    u32 x[16];
+    for (i32 i = 0; i < 16; i++) x[i] = s[i];
+    #define QR(a, b, c, d)         x[a] += x[b]; x[d] ^= x[a]; x[d] = x[d]<<16 | x[d]>>16;         x[c] += x[d]; x[b] ^= x[c]; x[b] = x[b]<<12 | x[b]>>20;         x[a] += x[b]; x[d] ^= x[a]; x[d] = x[d]<< 8 | x[d]>>24;         x[c] += x[d]; x[b] ^= x[c]; x[b] = x[b]<< 7 | x[b]>>25
+    for (i32 r = 0; r < rounds; r += 2) {
+        QR(0, 4,  8, 12); QR(1, 5,  9, 13); QR(2, 6, 10, 14); QR(3, 7, 11, 15);
+        QR(0, 5, 10, 15); QR(1, 6, 11, 12); QR(2, 7,  8, 13); QR(3, 4,  9, 14);
+    }
+    #undef QR
+    for (i32 i = 0; i < 16; i++) {
+        u32 w = x[i] + s[i];
+        out[4*i+0] = (u8)(w >>  0);
+        out[4*i+1] = (u8)(w >>  8);
+        out[4*i+2] = (u8)(w >> 16);
+        out[4*i+3] = (u8)(w >> 24);
+    }
+}
+
+// Fill buf from the process's ChaCha8 stream, keying it first if new.
+static void chachafill(Sched *s, u8 *buf, iz len)
+{
+    Chacha *c = &s->chacha;
+    if (!c->keyed) {
+        for (i32 i = 0; i < 4; i++) {
+            u64 e = os_entropy(s->os);
+            c->key[2*i+0] = (u32)e;
+            c->key[2*i+1] = (u32)(e >> 32);
+        }
+        c->block = 0;
+        c->used  = 64;
+        c->keyed = 1;
+    }
+    for (iz i = 0; i < len;) {
+        if (c->used == 64) {
+            chachablock(c->out, c->key, c->block++, 0, 8);
+            c->used = 0;
+        }
+        iz n = 64 - c->used;
+        n = n<len-i ? n : len-i;
+        copybytes(buf+i, c->out+c->used, n);
+        __builtin_memset(c->out+c->used, 0, (uz)n);  // given once only
+        c->used += (i32)n;
+        i += n;
+    }
+}
+
+enum : i32 { GEN_ZERO, GEN_RANDOM };  // PUMP_GEN: what it writes
 
 enum : i32 {
     PUMP_TOHANDLE, PUMP_FROMHANDLE, PUMP_TEXT, PUMP_TOBUF,
     PUMP_SERVE,  // a named pipe's client reads: peer into h
     PUMP_TAKE,   // its client writes: h into peer, or else into pipe
+    PUMP_GEN,    // endless zeros or random bytes into h (/dev/zero ...)
 };
 
 struct Pump {
@@ -886,6 +956,8 @@ struct Pump {
     b32     connected;  // a client is being served
     b32     ending;     // the program exited: no client is to come
     u8     *data;       // PUMPBUF bytes in transit, kept across reuse
+    i32     gen;        // PUMP_GEN: GEN_*
+    u8     *gendata;    // PUMP_GEN: GENBUF bytes, once used so, kept
 };
 
 // A Pump that outlives the arena of whoever starts it, pooled.
@@ -895,8 +967,10 @@ static Pump *newpump(Sched *s)
     if (p) {
         s->freepumps = p->next;
         u8 *data = p->data;
+        u8 *gen  = p->gendata;
         *p = {};
-        p->data = data;
+        p->data    = data;
+        p->gendata = gen;
     } else {
         p = alloc<Pump>(&s->a);
         p->data = allocbytes(&s->a, PUMPBUF);
@@ -939,6 +1013,18 @@ static void pumpmain(Task *t)
     Sched *s = t->s;
     u8    *buf = p->data;
     switch (p->kind) {
+    case PUMP_GEN: {
+        // Until the readers go, or the shell exits (joinorphans), in
+        // writes as large as the pipe for speed
+        if (!p->gendata) p->gendata = allocbytes(&s->a, GENBUF);
+        u8 *g = p->gendata;
+        if (p->gen == GEN_ZERO) __builtin_memset(g, 0, GENBUF);
+        for (;;) {
+            if (p->gen == GEN_RANDOM) chachafill(s, g, GENBUF);
+            if (t->cancel || taskwrite(s, p->h, g, GENBUF)) break;
+        }
+        if (p->gen == GEN_RANDOM) __builtin_memset(g, 0, GENBUF);
+    } break;
     case PUMP_TOHANDLE:
         for (;;) {
             iz n = pipereadraw(s, p->pipe, buf, PUMPBUF);

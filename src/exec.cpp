@@ -47,6 +47,7 @@ static void     notifyprompt(Shell *, Arena, Job *only);
 static void     polljobs(Shell *);
 static void     cleanupjobs(Shell *);
 static void     orphanjobs(Shell *);
+static void     reaporphans(Sched *);
 static void     coprocfdclosed(Shell *, i32 fd);
 static void     hidecoproc(Shell *, Arena *);
 
@@ -866,6 +867,32 @@ static i32 devfdnum(Str name)
 
 static Str  procfile(Shell *, Arena *, PathRes);
 
+// /dev/zero and /dev/full (zeros), /dev/random and /dev/urandom (the
+// process's ChaCha8 stream) opened for reading: an OS pipe fed by an
+// endless pump, so that builtins and programs read it alike. The pump
+// ends once every read end is closed, reaped by the next one, or is
+// abandoned as the shell exits (joinorphans).
+static File *genfile(Shell *sh, i32 gen, i32 flags, i32 *err)
+{
+    Sched *s = sh->sched;
+    reaporphans(s);
+    OsPipe p = os_pipe(sh->os);
+    if (p.err) {
+        *err = p.err;
+        return 0;
+    }
+    Pump *pp = newpump(s);
+    pp->kind = PUMP_GEN;
+    pp->gen  = gen;
+    pp->h    = p.w;
+    Task *t  = spawnpump(s, pp);
+    t->sib     = s->orphans;
+    s->orphans = t;
+    File *f = newfile(sh, F_OS, flags);
+    f->h = p.r;
+    return f;
+}
+
 // openfile in the Windows modes, where the shell resolves the virtual
 // files: /dev/fd/N and /proc/self/fd/N are its own descriptors, /dev/tty
 // the console, and the /proc files it knows are text.
@@ -887,10 +914,32 @@ static File *openwin(Shell *sh, Arena *a, Str name, i32 flags)
     } else if (r.kind == PK_TTY) {
         path = flags==OF_READ ? Str("//./CONIN$") : Str("//./CONOUT$");
     } else if (r.kind == PK_DEV) {
-        // zero, random and the like: only a sink here
-        b32 dir = !r.sub.len || r.sub=="fd";
-        err  = dir ? E_ISDIR : flags&OF_WRITE ? 0 : E_NOENT;
+        // zero, full, random and urandom read from a pump, the rest
+        // (clipboard) not at all; written, all are sinks but full
+        b32 dir  = !r.sub.len || r.sub=="fd";
+        b32 full = r.sub == "full";
+        i32 gen  = r.sub=="zero" || full ? GEN_ZERO
+                 : r.sub=="random" || r.sub=="urandom" ? GEN_RANDOM : -1;
+        err  = dir ? E_ISDIR : flags&OF_WRITE || gen>=0 ? 0 : E_NOENT;
         path = "//./NUL";
+        if (!err && (flags & OF_READ) && gen>=0) {
+            File *f = genfile(sh, gen, flags, &err);
+            if (f) {
+                f->full = full;
+                return f;
+            }
+        } else if (!err && full) {
+            // Writes fail: the shell's with ENOSPC, a program's on a
+            // handle opened only for reading
+            Opened o = os_open(sh->os, *a, path, OF_READ, 0);
+            err = o.err;
+            if (!err) {
+                File *f = newfile(sh, F_OS, flags);
+                f->h    = o.h;
+                f->full = 1;
+                return f;
+            }
+        }
     } else if (r.kind == PK_PROC) {
         Str text = procfile(sh, a, r);
         if (text.data && !(flags & OF_WRITE)) {
@@ -2019,7 +2068,9 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         if (err!=E_NOSYS && !(err && jobtail)) {
             for (i32 i = 0; i < nclose; i++) os_close(sh->os, closeafter[i]);
             if (!err) {
-                // The copy: its tasks finish, joined as the shell exits.
+                // The copy: its tasks finish, joined as the shell exits,
+                // and it rekeys its /dev/urandom stream on next use
+                s->chacha = {};
                 // A pump feeding the program's pipe runs to its end
                 // rather than with the shell's references (pipeclose),
                 // and only the program holds that pipe's read end.
@@ -3137,7 +3188,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             sh->bout = saved;
             b32 failed = (b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed;
             if (failed && !sh->nowriteerr) {
-                Str why = sh->writeerr==E_PIPE ? errtext(E_PIPE) : errtext(E_BADF);
+                i32 e   = sh->writeerr;
+                Str why = errtext(e==E_PIPE || e==E_NOSPC ? e : E_BADF);
                 builtinerror(sh, scratch, name, concat(&scratch, "write error: ", why));
                 sh->status = 1;
             }

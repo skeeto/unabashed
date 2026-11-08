@@ -288,7 +288,8 @@ static File *copyfile(Shell *c, File *f)
     File *r = newfile(c, f->kind, f->flags);
     switch (f->kind) {
     case F_OS:
-        r->h = os_dup(c->os, f->h);
+        r->h    = os_dup(c->os, f->h);
+        r->full = f->full;
         break;
     case F_CAPTURE:
         r->cap = f->cap;
