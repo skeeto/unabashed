@@ -867,6 +867,14 @@ static i32 devfdnum(Str name)
 
 static Str  procfile(Shell *, Arena *, PathRes);
 
+// Does path name /dev/clipboard, the Windows clipboard's text?
+static b32 isclipboard(Shell *sh, Arena scratch, Str path)
+{
+    if (sh->pathmode == PM_POSIX) return 0;
+    PathRes r = resolve(sh, &scratch, path.len ? path : Str("."));
+    return r.ok && r.kind==PK_DEV && r.sub=="clipboard";
+}
+
 // /dev/zero and /dev/full (zeros), /dev/random and /dev/urandom (the
 // process's ChaCha8 stream) opened for reading: an OS pipe fed by an
 // endless pump, so that builtins and programs read it alike. The pump
@@ -913,9 +921,20 @@ static File *openwin(Shell *sh, Arena *a, Str name, i32 flags)
         return f;
     } else if (r.kind == PK_TTY) {
         path = flags==OF_READ ? Str("//./CONIN$") : Str("//./CONOUT$");
+    } else if (r.kind==PK_DEV && r.sub=="clipboard" && !(flags&OF_WRITE)) {
+        // A snapshot of its text as it is now, CRLF kept, empty (not an
+        // error) when it holds none
+        ClipText c = os_clipget(sh->os, a);
+        err = c.err;
+        if (!err) {
+            File *f = newfile(sh, F_MEM, OF_READ);
+            f->mem    = sclone(sh->store, c.text);
+            f->ownmem = 1;
+            return f;
+        }
     } else if (r.kind == PK_DEV) {
-        // zero, full, random and urandom read from a pump, the rest
-        // (clipboard) not at all; written, all are sinks but full
+        // zero, full, random and urandom read from a pump; written, all
+        // are sinks but full
         b32 dir  = !r.sub.len || r.sub=="fd";
         b32 full = r.sub == "full";
         i32 gen  = r.sub=="zero" || full ? GEN_ZERO
@@ -2297,6 +2316,11 @@ static Str readwholefile(Shell *sh, Arena *a, Str path, i32 *err)
             b.len += n;
         }
         return finish(&b);
+    }
+    if (isclipboard(sh, *a, path)) {
+        ClipText c = os_clipget(sh->os, a);
+        *err = c.err;
+        return c.text;
     }
     Opened o = os_open(sh->os, *a, absolute(sh, a, path), OF_READ, 0);
     *err = o.err;

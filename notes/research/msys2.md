@@ -343,7 +343,7 @@ Pitfalls:
 - Text is CF_UNICODETEXT plus Cygwin's private format, which round-trips bytes between Cygwin programs. `printf 'a\0b'` reaches Windows as `a` but reads back as `a\0b`, and a lone 0xFF byte reaches Windows as U+00FF but reads back as the byte. Non-BMP characters become surrogate pairs.
 - An empty clipboard, or one holding only an image, reads as empty output with status 0.
 - `[ -e -r -w -c -s ]` are all true, `-f` false. `ls -l` gives `crw-rw-rw-` 13, 254, and stat reports size 2.
-- While another process held the clipboard open (PowerShell OpenClipboard(NULL) then a sleep), a write and a read both still succeeded at once with status 0, and the text landed.
+- A process that opens the clipboard with OpenClipboard(NULL), as PowerShell's P/Invoke or a plain C program, does not keep others out: a write and a read both succeed at once. One that opens it with a window (even a message-only one) does. Then Git Bash waits about half a second and gives up silently: a read is empty and a write is dropped, both with status 0.
 
 Sources:
 - https://raw.githubusercontent.com/msys2/msys2-runtime/msys2-3.6.5/winsup/cygwin/msys2_path_conv.cc
