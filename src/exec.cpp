@@ -581,7 +581,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
         out->cap = cap;
         fdset(sh, 1, out, 0, &scratch);
     }
-    if (!__builtin_setjmp(e.jmp)) {
+    if (!jmpset(e.jmp)) {
         runjob(sh, j, scratch);
     } else if (e.why==ESC_ABORT && (j->kind==SUB_SOURCE || sh->cflag)) {
         // As bash, whose comsub (and -c) text is abandoned with status
@@ -1085,7 +1085,7 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
     sh->esc = &e;
     b32 ok = 0;
     sh->redirfail = 1;
-    if (!__builtin_setjmp(e.jmp)) {
+    if (!jmpset(e.jmp)) {
         ok = applyredirs(sh, list, a, keep);
         sh->esc = e.up;
         return ok;
@@ -1374,7 +1374,7 @@ static Str traceprefix(Shell *sh, Arena *a)
     sh->opt[O_XTRACE] = 0;
     i32 kind = sh->promptkind;
     sh->promptkind = 4;  // a prompt for \! and \#
-    if (!__builtin_setjmp(e.jmp)) {
+    if (!jmpset(e.jmp)) {
         ps4 = expandstring(sh, a, "${PS4@P}");
     } else {
         unwind(sh, e.undo);
@@ -2160,7 +2160,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         e.frame = sh->frame;
         e.bout  = sh->bout;
         sh->esc = &e;
-        if (__builtin_setjmp(e.jmp)) {
+        if (jmpset(e.jmp)) {
             sh->esc = e.up;
             for (i32 i = 0; i < npumps; i++) {
                 pumps[i]->sib = s->orphans;
@@ -2545,7 +2545,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->bashpid = newvpid(sh);
         Sigproc sig;
         sigenter(sh, &sig, sh->bashpid, sh->sched->cur);
-        if (!__builtin_setjmp(e.jmp)) {
+        if (!jmpset(e.jmp)) {
             runsource(sh, src, name, *scratchat(sh, sh->capdepth), 1);
         }
         if (!sh->execed && !sh->killsig && sh->traps) {
@@ -2702,7 +2702,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     e.undo  = sh->undo;
     e.frame = sh->frame;
     sh->esc = &e;
-    b32 escaped = __builtin_setjmp(e.jmp);
+    b32 escaped = jmpset(e.jmp);
     if (!escaped) {
         // As bash, DEBUG runs as the function starts, at its body's
         // line, where it applies (a traced function, set -T, extdebug)
@@ -2788,7 +2788,7 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
     b32 verbose = sh->opt[O_VERBOSE];
     if (!sh->shopt[S_INHERIT_ERREXIT]) sh->opt[O_ERREXIT] = 0;
     sh->opt[O_VERBOSE] = 0;
-    b32 escaped = __builtin_setjmp(e.jmp);
+    b32 escaped = jmpset(e.jmp);
     if (!escaped) {
         if (valsub) makelocal(sh, &scratch, "REPLY");
         runsource(sh, src, sh->iname, scratch, 0, sh->line, 0, 0, 1);
@@ -4451,7 +4451,7 @@ static void runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
     i32    srcdepth  = sh->sourcedepth;
     i32    capdepth  = sh->capdepth;
     sh->esc = &e;
-    if (!__builtin_setjmp(e.jmp)) {
+    if (!jmpset(e.jmp)) {
         execute(sh, cmd, scratch);
         sh->esc = e.up;
         return;

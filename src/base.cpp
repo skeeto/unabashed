@@ -17,6 +17,69 @@ using byte = decltype('0');
 template<typename T>
 void *operator new(uz, T *p) noexcept { return p; }
 
+// Non-local exits: jmpset(b) returns 0, then 1 again when jmpback(b)
+// unwinds to it. Callers keep to __builtin_setjmp's rules: jmpback only
+// from a deeper frame, never from the function that called jmpset.
+//
+// GCC has __builtin_setjmp on every target, clang only on some, not
+// including arm64, so for clang on macOS arm64 a minimal pair in
+// assembly stands in. It saves just the AAPCS64 callee-saved registers,
+// x19-x30, sp, and d8-d15, so x18, Apple's platform register, stays
+// untouched. Plain arm64 Darwin code does not sign return addresses
+// (that is arm64e), and BTI and guarded control stacks are Linux
+// matters, which is why Linux arm64 keeps GCC's builtin. Unlike the
+// builtin, this setjmp restores registers rather than reloading locals,
+// so a non-volatile local changed after jmpset holds an indeterminate
+// value after jmpback (C11 7.13.2.1p3): call sites must not depend on
+// one.
+#if __APPLE__ && __aarch64__ && __clang__
+struct JmpBuf { void *r[21]; };
+extern "C" [[gnu::returns_twice]] i32 jmpsetasm(JmpBuf *) asm("jmpsetasm");
+extern "C" [[noreturn]] void jmpbackasm(JmpBuf *) asm("jmpbackasm");
+asm (
+    "        .text\n"
+    "        .p2align 2\n"
+    "        .globl jmpsetasm\n"
+    "jmpsetasm:\n"
+    "        stp   x19, x20, [x0, #0]\n"
+    "        stp   x21, x22, [x0, #16]\n"
+    "        stp   x23, x24, [x0, #32]\n"
+    "        stp   x25, x26, [x0, #48]\n"
+    "        stp   x27, x28, [x0, #64]\n"
+    "        stp   x29, x30, [x0, #80]\n"
+    "        mov   x16, sp\n"
+    "        str   x16, [x0, #96]\n"
+    "        stp   d8,  d9,  [x0, #104]\n"
+    "        stp   d10, d11, [x0, #120]\n"
+    "        stp   d12, d13, [x0, #136]\n"
+    "        stp   d14, d15, [x0, #152]\n"
+    "        mov   w0, #0\n"
+    "        ret\n"
+    "        .globl jmpbackasm\n"
+    "jmpbackasm:\n"
+    "        ldp   x19, x20, [x0, #0]\n"
+    "        ldp   x21, x22, [x0, #16]\n"
+    "        ldp   x23, x24, [x0, #32]\n"
+    "        ldp   x25, x26, [x0, #48]\n"
+    "        ldp   x27, x28, [x0, #64]\n"
+    "        ldp   x29, x30, [x0, #80]\n"
+    "        ldr   x16, [x0, #96]\n"
+    "        mov   sp, x16\n"
+    "        ldp   d8,  d9,  [x0, #104]\n"
+    "        ldp   d10, d11, [x0, #120]\n"
+    "        ldp   d12, d13, [x0, #136]\n"
+    "        ldp   d14, d15, [x0, #152]\n"
+    "        mov   w0, #1\n"
+    "        ret\n"  // into jmpsetasm's caller, as its second return
+);
+#define jmpset(b)   jmpsetasm(&(b))
+#define jmpback(b)  jmpbackasm(&(b))
+#else
+struct JmpBuf { void *r[5]; };
+#define jmpset(b)   __builtin_setjmp((b).r)
+#define jmpback(b)  __builtin_longjmp((b).r, 1)
+#endif
+
 struct Os;
 struct Mem;
 

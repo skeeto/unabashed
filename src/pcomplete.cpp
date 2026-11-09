@@ -1519,7 +1519,7 @@ static PcLive pclivesafe(Editor *ed, Shell *sh, Comp *c, b32 *cmdpos)
     u8  pstat[countof(sh->pstat)];
     copybytes(pstat, sh->pstat, countof(pstat));
     PcLive r = {};
-    if (!__builtin_setjmp(e.jmp)) {
+    if (!jmpset(e.jmp)) {
         r = pclive(ed, sh, c, cmdpos);
     } else {
         unwind(sh, e.undo);

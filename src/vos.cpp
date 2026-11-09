@@ -2868,6 +2868,8 @@ static void os_imagefree(Os *os, ImageRef im)
 
 #if _WIN32
 extern "C" char __ImageBase;
+#elif __APPLE__
+extern "C" char _mh_execute_header;
 #else
 extern "C" char __executable_start, _end;
 #endif
@@ -2885,6 +2887,21 @@ static iz vimageescape(Os *os, ImageRef im)
     byte *exe    = (byte *)&__ImageBase;
     i32   pe     = *(i32 *)(exe + 0x3c);
     byte *exeend = exe + *(u32 *)(exe + pe + 24 + 56);  // SizeOfImage
+#elif __APPLE__
+    // Mach-O has no _end: the image ends with its last LC_SEGMENT_64,
+    // slid as __TEXT (vmaddr at offset 24, vmsize at 32) was. __PAGEZERO
+    // is the one segment at vmaddr 0, and not part of the mapping.
+    byte *exe    = (byte *)&_mh_execute_header;
+    u32   ncmds  = *(u32 *)(exe + 16);
+    byte *lc     = exe + 32;  // after the mach_header_64
+    u64   text   = 0, last = 0;
+    for (u32 i = 0; i < ncmds; i++, lc += *(u32 *)(lc + 4)) {
+        u64 vmaddr = *(u64 *)(lc + 24), vmsize = *(u64 *)(lc + 32);
+        if (*(u32 *)lc!=0x19 || !vmaddr) continue;  // LC_SEGMENT_64
+        if (!text) text = vmaddr;
+        last = vmaddr+vmsize>last ? vmaddr+vmsize : last;
+    }
+    byte *exeend = exe + (last - text);
 #else
     byte *exe    = (byte *)&__executable_start;
     byte *exeend = (byte *)&_end;

@@ -671,7 +671,7 @@ static void runexittrap(Shell *sh, Arena)
     pushtemp(sh, scratch, "BASH_TRAPSIG", "0");
     Value *v = lookup(sh, "BASH_TRAPSIG");
     if (v) v->attrs &= ~V_EXPORT;
-    if (!__builtin_setjmp(e.jmp)) {
+    if (!jmpset(e.jmp)) {
         runsource(sh, cmd, sh->iname, scratch, 0, 1);  // as bash: line 1
         sh->status = status;
     }

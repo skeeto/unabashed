@@ -383,7 +383,7 @@ struct Lexer {
     // Diagnostics
     Message *msgs;
     Message **msgtail;
-    void    *jmp[5];     // where syntax errors escape to
+    JmpBuf   jmp;        // where syntax errors escape to
 
     // Recursion limit: bash has none and crashes on absurd nesting
     byte    *stacktop;   // stack position at entry to the parse
@@ -409,7 +409,7 @@ static void message(Lexer *L, i32 line, Str text, i32 kind = MSG_ERROR)
 // Unwind to the parser's entry point after a syntax error.
 [[noreturn]] static void parsefail(Lexer *L)
 {
-    __builtin_longjmp(L->jmp, 1);
+    jmpback(L->jmp);
 }
 
 // Give up on nesting deep enough to exhaust the stack, where bash would
@@ -3217,7 +3217,7 @@ static iz skipexpansion(Lexer *outer, Str s, iz i, b32 dquote, b32 *ended = 0)
     L->utf8     = outer->utf8;
     L->stacktop = outer->stacktop;
     L->stackmax = outer->stackmax;
-    if (__builtin_setjmp(L->jmp)) {
+    if (jmpset(L->jmp)) {
         if (L->overflow) {
             outer->overflow = 1;
             parsefail(outer);
@@ -3615,10 +3615,9 @@ static Matched parsecomsub(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
     L->current = '\n';
     L->toread  = open=='(' ? T_DOLPAREN : T_DOLBRACE;
 
-    void *outer[5];
-    for (i32 i = 0; i < 5; i++) outer[i] = L->jmp[i];
-    if (__builtin_setjmp(L->jmp)) {
-        for (i32 i = 0; i < 5; i++) L->jmp[i] = outer[i];
+    JmpBuf outer = L->jmp;
+    if (jmpset(L->jmp)) {
+        L->jmp = outer;
         if (!L->eofreached) {
             parsefail(L);  // fatal: unwind the whole parse
         }
@@ -3638,7 +3637,7 @@ static Matched parsecomsub(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
     if (peek(&p) != close) {
         syntaxerror(&p);
     }
-    for (i32 i = 0; i < 5; i++) L->jmp[i] = outer[i];
+    L->jmp = outer;
     b32 wassemi = 0, wasnewline = 0, wasword = 0;
     if (open == '{') {
         wassemi    = L->last == ';';
@@ -3725,8 +3724,9 @@ static void resumeaftereof(Lexer *L)
 static Parsed parseunit(Lexer *L)
 {
     Parsed r = {};
-    if (__builtin_setjmp(L->jmp)) {
+    if (jmpset(L->jmp)) {
         // bash's reset_parser: resynchronize at the next line
+        r.cmd    = 0;  // may hold a list parsed before the error
         r.status = L->discard ? PARSE_DISCARD : PARSE_ERROR;
         if (L->discard) {
             L->comsuberr = 0;  // the discard skipped parse_comsub's exit

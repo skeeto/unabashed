@@ -152,7 +152,7 @@ static byte *osheap(Os *os, iz *len)
 }
 
 // Out of memory ends the run, from whichever fiber it happens on
-static void *oomjmp[5];
+static JmpBuf oomjmp;
 
 [[noreturn]] static void os_oom()
 {
@@ -161,7 +161,7 @@ static void *oomjmp[5];
     fprintf(stderr, "  out of memory\n");
     exit(0);
     #endif
-    __builtin_longjmp(oomjmp, 1);
+    jmpback(oomjmp);
 }
 
 static byte *os_reserve(Os *os, iz len)
@@ -784,7 +784,7 @@ int main(int argc, char **argv)
         os.pinned   = 0;
         os.shells   = 0;
         os.fibers.current = &os.fibers.main;
-        if (__builtin_setjmp(oomjmp)) {
+        if (jmpset(oomjmp)) {
             #if FUZZ_REPLAY
             fprintf(stderr, "  out of memory\n");
             #endif

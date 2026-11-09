@@ -2868,7 +2868,7 @@ static void edshellexpand(Editor *ed, Shell *sh)
     sh->esc = &e;
     i32  status = sh->status;
     b32  ok     = 0;
-    if (!__builtin_setjmp(e.jmp)) {
+    if (!jmpset(e.jmp)) {
         fields = expandwords(sh, &a, &w, XW_NOBRACE|XW_NOGLOB);
         ok = 1;
     } else {

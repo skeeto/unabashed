@@ -722,7 +722,7 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
     e.frame = sh->frame;
     sh->esc = &e;
     i32 status = 0;
-    if (__builtin_setjmp(e.jmp)) {
+    if (jmpset(e.jmp)) {
         sh->esc = e.up;
         sh->srcframes = sf.up;
         sh->retsrc    = 0;
@@ -2907,7 +2907,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             te.undo  = sh->undo;
             te.frame = sh->frame;
             sh->esc  = &te;
-            if (__builtin_setjmp(te.jmp)) {
+            if (jmpset(te.jmp)) {
                 sh->esc = te.up;
                 os_tty(sh->os, in->h, ttyout, TTY_RESTORE);
                 escape(sh, te.why);

@@ -982,7 +982,7 @@ static Str promptstr(Shell *sh, Arena *a, Str expr)
     // \! and \# differ by prompt, and HISTCMD while a prompt shows
     sh->promptkind = find(expr, "PS1")>=0 ? 1 : find(expr, "PS2")>=0 ? 2 : 3;
     Str ps = {};
-    if (!__builtin_setjmp(e.jmp)) {
+    if (!jmpset(e.jmp)) {
         ps = expandstring(sh, a, expr);
     } else {
         unwind(sh, e.undo);
@@ -1016,7 +1016,7 @@ static iz readstdin(Shell *sh, File *f, u8 *buf, iz len)
     e.undo  = sh->undo;
     e.frame = sh->frame;
     sh->esc = &e;
-    if (__builtin_setjmp(e.jmp)) {
+    if (jmpset(e.jmp)) {
         sh->esc = e.up;
         if (e.why != ESC_INTR) escape(sh, e.why);
         return -2;
@@ -1507,7 +1507,7 @@ static i32 imagemain(Os *os, OsInfo *info)
     startfds(sh, info);
 
     Arena scratch = newarena(os, info->reserve);
-    if (!__builtin_setjmp(top.jmp)) {
+    if (!jmpset(top.jmp)) {
         checksigs(sh, scratch);
         execute(sh, h->node, scratch);
     }
@@ -1515,7 +1515,7 @@ static i32 imagemain(Os *os, OsInfo *info)
         // Its own EXIT trap, set in the background job
         sh->esc = &top;
         if (sh->errexited) unwind(sh, 0);
-        if (!__builtin_setjmp(top.jmp)) {
+        if (!jmpset(top.jmp)) {
             sh->exiting = 1;
             runexittrap(sh, scratch);
         }
@@ -1593,7 +1593,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
 
     defaultoptions(sh, 0);
 
-    if (!__builtin_setjmp(top.jmp)) {
+    if (!jmpset(top.jmp)) {
         pathsetup(sh, info, &perm, scratch);
         sh->rshell = startsrestricted(info);
         initvars(sh, info, scratch);
@@ -1942,10 +1942,10 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     if (!sh->execed && !sh->killsig) {
         // A login shell's logout files, signals still pending, then the
         // EXIT trap
-        if (sh->interactive && !__builtin_setjmp(top.jmp)) {
+        if (sh->interactive && !jmpset(top.jmp)) {
             logoutfiles(sh, scratch);
         }
-        if (!__builtin_setjmp(top.jmp)) {
+        if (!jmpset(top.jmp)) {
             sh->exiting = 0;
             checksigs(sh, scratch);
             sh->exiting = 1;

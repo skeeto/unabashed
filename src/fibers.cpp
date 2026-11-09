@@ -1,8 +1,17 @@
 // Fibers for the platform layers: Win32 fibers (XP and later), a small
-// x86-64 System V context switch, or ucontext elsewhere. The including
-// layer stores a Fibers in its struct Os and defines osfibers() to
-// return it.
+// context switch for x86-64 System V and for Apple arm64, or ucontext
+// elsewhere. The including layer stores a Fibers in its struct Os and
+// defines osfibers() to return it.
+//
+// Apple arm64 has its own switch because macOS's ucontext is deprecated
+// and crashes there. Linux arm64 keeps ucontext: glibc's swapcontext
+// knows about guarded control stacks, which a hand-rolled switch would
+// break (see JmpBuf in base.cpp for the rest of the ABI reasoning).
 // This is free and unencumbered software released into the public domain.
+
+#if !_WIN32 && !FIBER_UCONTEXT && (__x86_64__ || (__APPLE__ && __aarch64__))
+#define FIBER_ASM 1
+#endif
 
 #if _WIN32
 #define FIBERAPI(r, p) extern "C" __declspec(dllimport) r __stdcall p noexcept
@@ -18,7 +27,7 @@ struct Fiber {
     void  *arg;
 };
 
-#elif __x86_64__ && !FIBER_UCONTEXT
+#elif FIBER_ASM
 struct Fiber {
     void  *sp;     // saved stack pointer while suspended
     byte  *stack;  // 0 for the thread's own fiber
@@ -31,6 +40,7 @@ struct Fiber {
 // Labels pin the symbol names, which otherwise vary by platform.
 extern "C" void fiberswap(void **save, void *sp) asm("fiberswap");
 extern "C" void fiberstart() asm("fiberstart");
+#if __x86_64__
 asm (
     "        .text\n"
     "        .globl fiberswap\n"
@@ -56,6 +66,48 @@ asm (
     "        call  fiberentry\n"
     "        ud2\n"
 );
+#else
+// AAPCS64: the frame holds x19-x30 then d8-d15, 160 bytes, so sp stays
+// 16-byte aligned. Control moves only by ret, never by br.
+asm (
+    "        .text\n"
+    "        .p2align 2\n"
+    "        .globl fiberswap\n"
+    "fiberswap:\n"
+    "        sub   sp, sp, #160\n"
+    "        stp   x19, x20, [sp, #0]\n"
+    "        stp   x21, x22, [sp, #16]\n"
+    "        stp   x23, x24, [sp, #32]\n"
+    "        stp   x25, x26, [sp, #48]\n"
+    "        stp   x27, x28, [sp, #64]\n"
+    "        stp   x29, x30, [sp, #80]\n"
+    "        stp   d8,  d9,  [sp, #96]\n"
+    "        stp   d10, d11, [sp, #112]\n"
+    "        stp   d12, d13, [sp, #128]\n"
+    "        stp   d14, d15, [sp, #144]\n"
+    "        mov   x16, sp\n"
+    "        str   x16, [x0]\n"
+    "        mov   sp, x1\n"
+    "        ldp   x19, x20, [sp, #0]\n"
+    "        ldp   x21, x22, [sp, #16]\n"
+    "        ldp   x23, x24, [sp, #32]\n"
+    "        ldp   x25, x26, [sp, #48]\n"
+    "        ldp   x27, x28, [sp, #64]\n"
+    "        ldp   x29, x30, [sp, #80]\n"
+    "        ldp   d8,  d9,  [sp, #96]\n"
+    "        ldp   d10, d11, [sp, #112]\n"
+    "        ldp   d12, d13, [sp, #128]\n"
+    "        ldp   d14, d15, [sp, #144]\n"
+    "        add   sp, sp, #160\n"
+    "        ret\n"
+    "        .globl fiberstart\n"
+    "        .p2align 2\n"
+    "fiberstart:\n"
+    "        mov   x0, x19\n"
+    "        bl    fiberentry\n"
+    "        brk   #1\n"
+);
+#endif
 
 #else
 #include <ucontext.h>
@@ -143,7 +195,7 @@ static Fiber *os_self(Os *os)
     return fs->current;
 }
 
-#if !__x86_64__ || FIBER_UCONTEXT
+#if !FIBER_ASM
 static void fiberbounce(u32 hi, u32 lo)
 {
     fiberentry((Fiber *)((uz)hi<<16<<16 | lo));
@@ -160,7 +212,7 @@ static Fiber *os_fiber(Os *os, Arena *a, iz stack, void (*fn)(Os *, void *), voi
     f->size  = stack;
     f->stack = fiberstack(os, stack);
 
-    #if __x86_64__ && !FIBER_UCONTEXT
+    #if FIBER_ASM && __x86_64__
     // Initial frame popped by fiberswap: r15 r14 r13 r12 rbx rbp, then
     // "return" into fiberstart with r12 = f and a 16-byte aligned stack.
     uz  *top = (uz *)((uz)(f->stack + stack) & -(uz)16);
@@ -168,6 +220,16 @@ static Fiber *os_fiber(Os *os, Arena *a, iz stack, void (*fn)(Os *, void *), voi
     for (i32 i = 0; i < 7; i++) sp[i] = 0;
     sp[3] = (uz)f;
     sp[6] = (uz)fiberstart;
+    f->sp = sp;
+    #elif FIBER_ASM
+    // Initial frame loaded by fiberswap: x19-x30, d8-d15. It "returns"
+    // via x30 into fiberstart with x19 = f, a zero frame pointer ending
+    // the frame chain, and sp back at the 16-byte aligned top.
+    uz  *top = (uz *)((uz)(f->stack + stack) & -(uz)16);
+    uz  *sp  = top - 20;
+    for (i32 i = 0; i < 20; i++) sp[i] = 0;
+    sp[0]  = (uz)f;
+    sp[11] = (uz)fiberstart;
     f->sp = sp;
     #else
     getcontext(&f->ctx);
@@ -184,7 +246,7 @@ static void os_switch(Os *os, Fiber *f)
 {
     Fiber *from = osfibers(os)->current;
     osfibers(os)->current = f;
-    #if __x86_64__ && !FIBER_UCONTEXT
+    #if FIBER_ASM
     fiberswap(&from->sp, f->sp);
     #else
     swapcontext(&from->ctx, &f->ctx);

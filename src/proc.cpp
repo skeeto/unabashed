@@ -559,7 +559,7 @@ static void vprocmain(Task *t)
     iz room = t->stack - ((iz)1<<16);  // the parent's limit, if smaller
     sh->stackmax = sh->stackmax<room ? sh->stackmax : room;
     m->sig.task = t;
-    if (__builtin_setjmp(top.jmp)) {
+    if (jmpset(top.jmp)) {
         // escaped
     } else if (m->sig.pending && (checksigs(sh, *scratchat(sh, 0)), sh->exiting)) {
         // killed before it ran
@@ -575,7 +575,7 @@ static void vprocmain(Task *t)
         // Its own EXIT trap, set in the vproc
         sh->esc = &top;
         if (sh->errexited) unwind(sh, 0);
-        if (!__builtin_setjmp(top.jmp)) {
+        if (!jmpset(top.jmp)) {
             runexittrap(sh, *scratchat(sh, 0));
         }
     }
@@ -1149,7 +1149,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         e.frame     = sh->frame;
         e.loopdepth = sh->loopdepth;
         sh->esc = &e;
-        if (!__builtin_setjmp(e.jmp)) {
+        if (!jmpset(e.jmp)) {
             execute(sh, stage, child);
         } else {
             escaped = 1;

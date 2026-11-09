@@ -334,7 +334,7 @@ struct BOut {         // output of the running builtin
 };
 
 struct Escape {
-    void   *jmp[5];
+    JmpBuf  jmp;
     i32     why;      // ESC_*
     Escape *up;
     Undo   *undo;     // redirections to keep
@@ -1232,5 +1232,5 @@ static iz fdread(Shell *sh, i32 fd, u8 *buf, iz len)
     // A builtin's output buffer lives in its frame, which is now gone
     sh->bout     = sh->esc->bout;
     sh->esc->why = why;
-    __builtin_longjmp(sh->esc->jmp, 1);
+    jmpback(sh->esc->jmp);
 }

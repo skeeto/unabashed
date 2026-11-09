@@ -273,7 +273,7 @@ static Str compexpdir(Shell *sh, Arena *a, Str dir)
     sh->esc = &e;
     i32 status = sh->status;
     Str r = {};
-    if (!__builtin_setjmp(e.jmp)) {
+    if (!jmpset(e.jmp)) {
         r = expandstring(sh, a, dir, XC_NOPSUB);
     } else {
         unwind(sh, e.undo);
