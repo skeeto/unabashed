@@ -82,13 +82,6 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
 - A shell that dies of SIGINT exits 0xC000013A, so a parent that keeps
   only the low byte sees 58, not 130 (Git Bash maps the code to 130).
 
-Found while benchmarking against dash (2026-11-08, shellbench.md), not
-yet fixed:
-
-- In POSIX mode an arithmetic expansion error inside a `( )` subshell
-  ends the subshell with status 127; bash 5.3 ends it with 1, and uses
-  127 only when the error ends the shell itself.
-
 
 ## Test infrastructure
 

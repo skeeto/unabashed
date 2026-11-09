@@ -649,6 +649,9 @@ struct Shell {
                            // subshell other than a command substitution
     b32      incomsub;     // in a command substitution: fg and bg find
                            // no job of their own
+    b32      catchfatal;   // a fatal POSIX-mode expansion error ends it
+                           // with 1, not 127: bash's child for a ( ),
+                           // comsub or compound command catches it
     b32      forked;       // the next simple command is a stage or job
                            // bash forks first: %N is no command there
     b32      asyncpct;     // the next simple command is "%N &", so bg

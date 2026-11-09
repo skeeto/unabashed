@@ -420,8 +420,9 @@ static Arith evalarith(Shell *sh, Arena *a, Str expr)
     Arith r = arithraw(sh, a, expr);
     if (!r.ok && sh->opt[O_POSIX] && !sh->interactive) {
         // as bash: fatal in a POSIX non-interactive shell, status 127
+        // (1 in a subshell that catches it)
         shellerror(sh, *a, r.err);
-        sh->status = 127;
+        sh->status = sh->catchfatal ? 1 : 127;
         escape(sh, ESC_FATAL);
     } else if (!r.ok) {
         expansionerror(sh, *a, r.err);
@@ -555,6 +556,10 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sh->errexited = 0;
     sh->jobctl   &= j->comsub;  // as bash, which keeps it in a comsub
     sh->incomsub |= j->comsub;
+    // a simple command (a stage, a job) is transparent, as bash's child
+    // for it goes on with the shell's own point of return
+    sh->catchfatal |= j->kind==SUB_SOURCE || j->nojobs ||
+                      (j->kind==SUB_NODE && j->node->kind!=N_SIMPLE);
     subshelltraps(sh);
     Sigproc *up = sh->sig;
     up->comsub = j->comsub;
@@ -1091,7 +1096,8 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
     }
     sh->bout      = e.bout;
     sh->loopdepth = e.loopdepth;
-    sh->redirfail = e.why==ESC_FATAL ? 127 : 1;  // as the shell would exit
+    // as the shell, or the subshell that catches it, would exit
+    sh->redirfail = e.why!=ESC_FATAL ? 1 : sh->catchfatal ? 1 : 127;
     return 0;
 }
 
@@ -2533,6 +2539,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->hardign  |= ignoredsigs(sh);
         sh->killsig   = 0;
         sh->errexited = 0;
+        sh->catchfatal = 1;
         subshelltraps(sh);
         sh->shown   = 0;
         sh->bashpid = newvpid(sh);

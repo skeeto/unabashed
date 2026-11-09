@@ -169,5 +169,5 @@ assigns across runs, and the two shells stay within 3% of each other.
 - Rows that run a program are bound by fork and exec and stay level
   with dash. Subshells and command substitutions run in vprocs, two
   orders of magnitude faster than dash's forks.
-- In POSIX mode an arithmetic error ends a `( )` subshell with 127,
-  where bash uses 1 (issues.md, M9).
+- Found on the way: in POSIX mode an arithmetic error ended a `( )`
+  subshell with 127, where bash uses 1 (fixed, t/exec/954).

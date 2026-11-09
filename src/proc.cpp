@@ -536,6 +536,7 @@ static Image imagebuild(Shell *sh, Node *n, ImageRef im, b32 keepjobs = 0)
     st->base  = im.base;
 
     Shell *c = shellcopy(sh, &st->a, st, 1);
+    c->catchfatal |= n->kind != N_SIMPLE;
     img.head->magic = IMAGEMAGIC;
     img.head->build = imagebuild_();
     img.head->sh    = c;
@@ -630,6 +631,7 @@ static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops
     if (node->kind != N_SIMPLE) {
         c->jobs = 0;  // as bash's subshell for a compound stage
         c->curjob = c->prevjob = 0;
+        c->catchfatal = 1;
     }
     c->simplestages += node->kind == N_SIMPLE;
     m->node = copynode(&m->perm, node);
