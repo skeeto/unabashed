@@ -1,7 +1,10 @@
 // Tests: a virtual OS layer, so no test touches real files or processes
-// $ g++ -std=c++20 -g3 -fsanitize=undefined -fsanitize-trap -o tests main_test.cpp
+// $ g++ -std=c++20 -g3 -Og -fsanitize=undefined -fsanitize-trap -o tests main_test.cpp
 // On Windows, add -Wl,--stack,0x2000000 so that oracle runs, which nest
-// shells on one stack, have room for bash's recursion depths.
+// shells on one stack, have room for bash's recursion depths. -Og keeps
+// frames near their real size: specs like t/exec/945 nest subshells to
+// the vos's 1 MiB stack budget, which clang's -O0 frames, with UBSan
+// several times larger, exhaust before bash would.
 //
 // The shell runs repeatedly in one process. Memory comes from a fixed
 // heap that is poisoned and reset between runs, and output is captured.

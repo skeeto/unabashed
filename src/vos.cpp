@@ -2866,10 +2866,12 @@ static void os_imagefree(Os *os, ImageRef im)
     }
 }
 
+// Arrays of unknown size, as the headers are read past their first byte:
+// a char would trip UBSan's object-size check in optimized builds.
 #if _WIN32
-extern "C" char __ImageBase;
+extern "C" char __ImageBase[];
 #elif __APPLE__
-extern "C" char _mh_execute_header;
+extern "C" char _mh_execute_header[];
 #else
 extern "C" char __executable_start, _end;
 #endif
@@ -2884,14 +2886,14 @@ static iz vimageescape(Os *os, ImageRef im)
     iz    heaplen = 0;
     byte *heap    = osheap(os, &heaplen);
 #if _WIN32
-    byte *exe    = (byte *)&__ImageBase;
+    byte *exe    = (byte *)__ImageBase;
     i32   pe     = *(i32 *)(exe + 0x3c);
     byte *exeend = exe + *(u32 *)(exe + pe + 24 + 56);  // SizeOfImage
 #elif __APPLE__
     // Mach-O has no _end: the image ends with its last LC_SEGMENT_64,
     // slid as __TEXT (vmaddr at offset 24, vmsize at 32) was. __PAGEZERO
     // is the one segment at vmaddr 0, and not part of the mapping.
-    byte *exe    = (byte *)&_mh_execute_header;
+    byte *exe    = (byte *)_mh_execute_header;
     u32   ncmds  = *(u32 *)(exe + 16);
     byte *lc     = exe + 32;  // after the mach_header_64
     u64   text   = 0, last = 0;

@@ -34,7 +34,7 @@ debug.exe: main_win32.cpp $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) $(DEBUG) $(WIN32) -o $@ main_win32.cpp
 
 tests.exe: main_test.cpp $(SOURCES)
-	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -Wl,--stack,0x2000000 -o $@ main_test.cpp
+	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -Og -Wl,--stack,0x2000000 -o $@ main_test.cpp
 
 # tools/argv.cpp keeps the CRT startup on purpose: it shows how msvcrt.dll
 # splits a command line (tools/README.md).
@@ -51,7 +51,7 @@ debug: main_posix.cpp $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -o $@ main_posix.cpp
 
 tests: main_test.cpp $(SOURCES)
-	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -o $@ main_test.cpp
+	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -Og -o $@ main_test.cpp
 
 fuzz: main_fuzz.cpp $(SOURCES)
 	$(AFLCXX) $(FLAGS) $(DEBUG) -o $@ main_fuzz.cpp
