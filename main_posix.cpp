@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <poll.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
@@ -590,11 +591,6 @@ static void closefds(i32 lo, i32 hi)
     for (i32 fd = lo; fd <= (hi<0 ? 1023 : hi); fd++) close(fd);
 }
 
-// Started with vfork: the child borrows the parent's memory until it
-// execs, so it only makes system calls on what was prepared before, and
-// reports a failed exec through err. Signals stay blocked until the
-// child has reset its dispositions, so no handler of the shell's runs
-// in it.
 static Spawned forkimage(Os *, Arena, Spawn *);
 static i32     rlres(i32);
 static rlim_t  torlim(i64);
@@ -611,82 +607,276 @@ static void joingroup(pid_t pid, i64 pgid, b32 fg, i32 tty)
     if (fg) tcsetpgrp(tty, group);
 }
 
+// What a program's process starts out with, worked out before it
+// exists. Signals stay blocked from before it is made until it has its
+// dispositions, so no handler of the shell's runs in it.
+struct SpawnPlan {
+    char    *path;
+    char    *cwd;
+    char   **argv;
+    char   **envp;
+    i32     *src;      // dst[i] gets src[i] (none if negative)
+    i32     *dst;
+    i32      nfds;
+    u64      ign;      // signals it starts out ignoring
+    u64      dfl;      // and with their default action
+    Rlimit  *rlimits;  // or null to keep the shell's
+    i64      pgid;
+    b32      fg;
+    i32      tty;
+    sigset_t mask;     // its signal mask (the shell's)
+};
+
+static b32 sigin(u64 set, i32 sig)
+{
+    return sig<=64 && set>>(sig-1) & 1;
+}
+
+// With a fork: the child has its own memory, and reports a failed exec
+// through a close-on-exec pipe, which a successful exec closes. For
+// what posix_spawn cannot set up (trispawn).
+static i32 forkspawn(SpawnPlan *p, pid_t *out)
+{
+    i32 sync[2];
+    if (pipe(sync)) return errno;
+    for (i32 i = 0; i < 2; i++) sync[i] = highfd(sync[i]);
+    if (sync[0]<0 || sync[1]<0) {
+        if (sync[0] >= 0) close(sync[0]);
+        if (sync[1] >= 0) close(sync[1]);
+        return E_MFILE;
+    }
+    pid_t pid = fork();
+    if (!pid) {
+        close(sync[0]);
+        joingroup(0, p->pgid, p->fg, p->tty);
+        // Move the pipe and the sources out of the way first, then
+        // install the map
+        i32 base = fdbase(p->dst, p->nfds);
+        i32 w = fcntl(sync[1], F_DUPFD_CLOEXEC, base);
+        for (i32 i = 0; i < p->nfds; i++) {
+            if (p->src[i] < base) p->src[i] = fcntl(p->src[i], F_DUPFD, base);
+        }
+        closefds(0, base-1);
+        for (i32 i = 0; i < p->nfds; i++) dup2(p->src[i], p->dst[i]);
+        if (w < 0) {
+            closefds(base, -1);
+        } else {
+            closefds(base, w-1);
+            closefds(w+1, -1);
+        }
+        if (chdir(p->cwd)) {
+            // run anyway: bash reports nothing here
+        }
+        // Every handler of the shell's goes too, as an exec would take
+        // them, so that none runs here before it
+        for (i32 sig = 1; sig < NSIG; sig++) {
+            struct sigaction sa = {};
+            if (sig==SIGKILL || sig==SIGSTOP || sigaction(sig, 0, &sa)) continue;
+            b32 caught = sa.sa_handler!=SIG_DFL && sa.sa_handler!=SIG_IGN;
+            if (sigin(p->ign, sig)) {
+                signal(sig, SIG_IGN);
+            } else if (caught || sigin(p->dfl, sig)) {
+                signal(sig, SIG_DFL);
+            }
+        }
+        for (i32 i = 0; p->rlimits && i<RL_COUNT; i++) {
+            i32 n = rlres(i);
+            if (n<0 || p->rlimits[i].err) continue;
+            rlimit l = {torlim(p->rlimits[i].soft), torlim(p->rlimits[i].hard)};
+            setrlimit(n, &l);  // as bash's forked subshell had them
+        }
+        sigprocmask(SIG_SETMASK, &p->mask, 0);
+        execve(p->path, p->argv, p->envp);
+        i32 err = errno ? errno : E_NOEXEC;
+        if (w>=0 && write(w, &err, sizeof(err))) {}
+        _exit(127);
+    }
+    i32 err = pid<0 ? errno : 0;
+    close(sync[1]);
+    if (pid > 0) {
+        i32 got = 0;
+        iz  n;
+        do {
+            n = read(sync[0], &got, sizeof(got));
+        } while (n<0 && errno==EINTR);
+        if (n == sizeof(got)) {
+            err = got;
+            while (waitpid(pid, 0, 0)<0 && errno==EINTR) {}
+        }
+    }
+    close(sync[0]);
+    *out = pid;
+    return err;
+}
+
+// Where the C library's posix_spawn can change directory (glibc 2.29,
+// macOS 10.15), it makes the process: glibc runs the child on a stack
+// of its own in the shell's memory, macOS has a system call, either way
+// no copy of the shell's memory. Returns -1, having done nothing, where
+// it cannot set up the plan:
+// - limits, which no attribute sets;
+// - a signal to ignore that the shell does not: the child may only
+//   reset signals to their default, and ignoring it in the shell for
+//   the while would throw away one pending;
+// - the terminal for a foreground group, without glibc 2.35's
+//   attribute (the parent hands it over too, but only after the
+//   program may already have run into the terminal);
+// - a directory it cannot enter, where bash runs the program anyway.
+#if __APPLE__
+#  define SPAWN_CHDIR 1
+#  if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 260000
+#    define posix_spawn_file_actions_addchdir_np posix_spawn_file_actions_addchdir
+#  endif
+#elif defined(__GLIBC_PREREQ)
+#  if __GLIBC_PREREQ(2, 29)
+#    define SPAWN_CHDIR 1
+#  endif
+#  if __GLIBC_PREREQ(2, 34)
+#    define SPAWN_CLOSEFROM 1
+#  endif
+#endif
+
+#if SPAWN_CHDIR
+static b32 dirok(char *path)
+{
+    struct stat st;
+    return !stat(path, &st) && S_ISDIR(st.st_mode) && !access(path, X_OK);
+}
+
+static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
+{
+    if (p->rlimits) return -1;
+    #ifndef POSIX_SPAWN_TCSETPGROUP
+    if (p->pgid && p->fg) return -1;
+    #endif
+    for (i32 sig = 1; sig < NSIG; sig++) {
+        if (!sigin(p->ign, sig) || sig==SIGKILL || sig==SIGSTOP) continue;
+        struct sigaction sa = {};
+        if (sigaction(sig, 0, &sa) || sa.sa_handler!=SIG_IGN) return -1;
+    }
+
+    // Sources below a target move above them all first, in the shell,
+    // as close-on-exec copies
+    i32  base = fdbase(p->dst, p->nfds);
+    i32 *src  = alloc<i32>(&scratch, p->nfds ? p->nfds : 1);
+    i32  err  = 0;
+    for (i32 i = 0; i < p->nfds; i++) {
+        src[i] = p->src[i];
+        if (src[i]<0 || src[i]>=base || err) continue;
+        src[i] = fcntl(p->src[i], F_DUPFD_CLOEXEC, base);
+        if (src[i] < 0) err = errno;
+    }
+
+    posix_spawnattr_t at;
+    posix_spawn_file_actions_t fa;
+    if (!err) {
+        posix_spawnattr_init(&at);
+        posix_spawn_file_actions_init(&fa);
+        short flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
+        posix_spawnattr_setsigmask(&at, &p->mask);
+        sigset_t dfl;
+        sigemptyset(&dfl);
+        for (i32 sig = 1; sig < NSIG; sig++) {
+            if (sig==SIGKILL || sig==SIGSTOP) continue;
+            if (sigin(p->dfl, sig)) sigaddset(&dfl, sig);
+        }
+        posix_spawnattr_setsigdefault(&at, &dfl);
+        if (p->pgid) {
+            flags |= POSIX_SPAWN_SETPGROUP;
+            posix_spawnattr_setpgroup(&at, p->pgid<0 ? 0 : (pid_t)p->pgid);
+            #ifdef POSIX_SPAWN_TCSETPGROUP
+            if (p->fg) {
+                flags |= POSIX_SPAWN_TCSETPGROUP;
+                posix_spawnattr_tcsetpgrp_np(&at, p->tty);
+            }
+            #endif
+        }
+
+        // Nothing but the map: the shell's own descriptors are all
+        // close-on-exec, but for the standard three it was given
+        #if __APPLE__
+        flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
+        #else
+        for (i32 fd = 0; fd < base; fd++) {
+            b32 target = 0;
+            for (i32 i = 0; i < p->nfds; i++) {
+                target |= p->dst[i]==fd && src[i]>=0;
+            }
+            i32 fl = target ? -1 : fcntl(fd, F_GETFD);
+            if (fl>=0 && !(fl&FD_CLOEXEC)) {
+                posix_spawn_file_actions_addclose(&fa, fd);
+            }
+        }
+        #endif
+        for (i32 i = 0; i < p->nfds; i++) {
+            if (src[i] >= 0) posix_spawn_file_actions_adddup2(&fa, src[i], p->dst[i]);
+        }
+        #if SPAWN_CLOSEFROM
+        posix_spawn_file_actions_addclosefrom_np(&fa, base);
+        #endif
+        posix_spawn_file_actions_addchdir_np(&fa, p->cwd);
+        posix_spawnattr_setflags(&at, flags);
+
+        err = posix_spawn(out, p->path, &fa, &at, p->argv, p->envp);
+        posix_spawn_file_actions_destroy(&fa);
+        posix_spawnattr_destroy(&at);
+        if (err && !dirok(p->cwd)) err = -1;
+    }
+
+    for (i32 i = 0; i < p->nfds; i++) {
+        if (src[i]>=0 && src[i]!=p->src[i]) close(src[i]);
+    }
+    return err;
+}
+#else
+static i32 trispawn(SpawnPlan *, Arena, pid_t *)
+{
+    return -1;
+}
+#endif
+
 static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 {
     flushw(os);
     if (s->image.base) return forkimage(os, scratch, s);
     Spawned r = {};
     r.proc = BADHANDLE;
-    char *path = cpath(&scratch, s->path);
-    char *cwd  = cpath(&scratch, s->cwd);
-    char **argv = alloc<char *>(&scratch, s->argc+1);
-    for (iz i = 0; i < s->argc; i++) argv[i] = cpath(&scratch, s->argv[i]);
-    char **envp = alloc<char *>(&scratch, s->nenv+1);
-    for (iz i = 0; i < s->nenv; i++) envp[i] = cpath(&scratch, s->env[i]);
-    i32 *src = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
-    i32 *dst = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
+    SpawnPlan p = {};
+    p.path = cpath(&scratch, s->path);
+    p.cwd  = cpath(&scratch, s->cwd);
+    p.argv = alloc<char *>(&scratch, s->argc+1);
+    for (iz i = 0; i < s->argc; i++) p.argv[i] = cpath(&scratch, s->argv[i]);
+    p.envp = alloc<char *>(&scratch, s->nenv+1);
+    for (iz i = 0; i < s->nenv; i++) p.envp[i] = cpath(&scratch, s->env[i]);
+    p.src = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
+    p.dst = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
     for (iz i = 0; i < s->nfds; i++) {
-        src[i] = (i32)s->fds[i].h;
-        dst[i] = s->fds[i].fd;
+        p.src[i] = (i32)s->fds[i].h;
+        p.dst[i] = s->fds[i].fd;
     }
-    i32 nfds = (i32)s->nfds;
-    b32 pipedfl = !sigos || !sigos->pipeign;
+    p.nfds = (i32)s->nfds;
+    // The shell ignores SIGPIPE for its in-process subshells, and
+    // catches or ignores what its traps say: the child starts with
+    // defaults, except what it was told to ignore (trap '' in the
+    // spawning subshell) and what was ignored on entry
     u64 changed = sigos ? sigos->changed : 0;
-    u64 ign     = s->sigign | (sigos ? sigos->entryign : 0);
-    Rlimit *rlimits = s->rlimits;
-    i64  pgid = s->pgid;
-    b32  fg   = s->fg;
-    i32  tty  = (i32)s->tty;
+    if (!sigos || !sigos->pipeign) changed |= (u64)1 << (SIGPIPE-1);
+    changed |= (u64)1 << (SIGCHLD-1);
+    p.ign     = s->sigign | (sigos ? sigos->entryign : 0);
+    p.dfl     = changed & ~p.ign;
+    p.rlimits = s->rlimits;
+    p.pgid    = s->pgid;
+    p.fg      = s->fg;
+    p.tty     = (i32)s->tty;
 
-    sigset_t all, old;
+    sigset_t all;
     sigfillset(&all);
-    sigprocmask(SIG_SETMASK, &all, &old);
-    i32 volatile err = 0;
-    pid_t pid = vfork();
-    if (!pid) {
-        joingroup(0, pgid, fg, tty);
-        // Move sources out of the way first, then install the map
-        i32 base = fdbase(dst, nfds);
-        for (i32 i = 0; i < nfds; i++) {
-            if (src[i] < base) src[i] = fcntl(src[i], F_DUPFD, base);
-        }
-        closefds(0, base-1);
-        for (i32 i = 0; i < nfds; i++) dup2(src[i], dst[i]);
-        closefds(base, -1);
-        if (chdir(cwd)) {
-            // run anyway: bash reports nothing here
-        }
-        // The shell ignores SIGPIPE for its in-process subshells, and
-        // catches or ignores what its traps say: the child starts with
-        // defaults, except what it was told to ignore (trap '' in the
-        // spawning subshell) and what was ignored on entry
-        if (pipedfl) signal(SIGPIPE, SIG_DFL);
-        signal(SIGCHLD, SIG_DFL);
-        for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
-            u64 bit = (u64)1 << (sig-1);
-            if (ign & bit) {
-                signal(sig, SIG_IGN);
-            } else if (changed & bit) {
-                signal(sig, SIG_DFL);
-            }
-        }
-        for (i32 i = 0; rlimits && i<RL_COUNT; i++) {
-            i32 n = rlres(i);
-            if (n<0 || rlimits[i].err) continue;
-            rlimit l = {torlim(rlimits[i].soft), torlim(rlimits[i].hard)};
-            setrlimit(n, &l);  // as bash's forked subshell had them
-        }
-        sigprocmask(SIG_SETMASK, &old, 0);
-        execve(path, argv, envp);
-        err = errno ? errno : E_NOEXEC;
-        _exit(127);
-    }
-    i32 e = pid<0 ? errno : err;
-    if (pid > 0) joingroup(pid, pgid, fg, tty);
-    sigprocmask(SIG_SETMASK, &old, 0);
-    if (pid>=0 && e) {
-        waitpid(pid, 0, 0);
-    }
+    sigprocmask(SIG_SETMASK, &all, &p.mask);
+    pid_t pid = -1;
+    i32 e = trispawn(&p, scratch, &pid);
+    if (e < 0) e = forkspawn(&p, &pid);
+    if (!e) joingroup(pid, p.pgid, p.fg, p.tty);
+    sigprocmask(SIG_SETMASK, &p.mask, 0);
     if (e) {
         r.err = e;
         return r;
