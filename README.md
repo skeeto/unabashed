@@ -1,41 +1,29 @@
-# unabashed
+# unabashed: bash features at dash speeds
 
-A from-scratch, faithful clone of GNU bash 5.3, written for w64devkit:
-Windows first class (CRT-free, Windows XP and later), with POSIX and
-fully virtual platform layers for testing. Work in progress; see
-`notes/plan.md` for the design and milestones.
+A from-scratch, faithful clone of GNU Bash 5.3 with first-class native
+Windows support (CRT-free, supports Windows XP), while maintaining full
+support for POSIX systems. Substantially faster than Bash, especially on
+Windows, with performance matching or exceeding dash. The architecture
+uses platform layers, and tests run against a virtual operating system.
+
+The shell has two modes depending on its invocation name:
+
+* `sh`/`ash`/`lash`: *native* mode with native paths, like [busybox-w32][]
+* `bash` or any other name: *msys* mode with unix paths
+
+unabashed is written in a C++20 subset without the C++ standard library.
+Line editing is built in and it has no dependencies.
 
 ## Build
 
-Each build is a single command (see the header of each `main_*.cpp`);
-the Makefile is only a convenience.
+No `configure` script, no build system. On [w64devkit][]:
 
-    $ g++ -std=c++20 -O2 -s -nostartfiles -static-libgcc -o unabashed.exe main_win32.cpp
-    $ g++ -std=c++20 -O2 -o unabashed main_posix.cpp
-    $ make tests.exe && ./tests.exe     # Windows host, virtual OS
-    $ make tests && ./tests             # Linux host, virtual OS
-    $ make fuzz                         # AFL++, virtual OS only
+    $ cc -nostartfiles -fno-exceptions -O2 -o bash.exe main_win32.cpp
 
-## Layout
+On POSIX systems:
 
-| File                 | Purpose                                         |
-|----------------------|-------------------------------------------------|
-| `main_win32.cpp`     | Win32 layer                                     |
-| `main_posix.cpp`     | POSIX layer                                     |
-| `main_test.cpp`      | virtual OS and unit tests                       |
-| `main_fuzz.cpp`      | AFL++ harness on the virtual OS                 |
-| `main_fakes.cpp`     | the fake programs as one Linux binary (oracle)  |
-| `src/`               | everything the platform layers include:         |
-| `src/base.cpp`       | types, arenas, strings, slices, maps            |
-| `src/unabashed.cpp`  | platform API table and the shell core           |
-| `src/wide.cpp`       | UTF-16/WTF-8, command lines, CRT fds, PE sniff  |
-| `src/fibers.cpp`     | fibers for the platform layers                  |
-| `src/vos.cpp`        | the virtual OS, with `fakes.cpp` and `vterm.cpp` |
-| `unabashed.1`        | the manual page, in w64devkit's man style       |
-| `t/`, `tools/`       | tests, and the tools that record and run them   |
-| `notes/`             | research, design reviews, and the plan          |
+    $ cc -std=c++20 -fno-exceptions -O2 -o bash main_posix.cpp
 
-Bash's source and test suite are used only as an external reference and
-oracle. None of it is copied here: `bash-5.3.tar.gz` is ignored by git.
 
-This is free and unencumbered software released into the public domain.
+[busybox-w32]: https://frippery.org/busybox/
+[w64devkit]: https://github.com/skeeto/w64devkit
