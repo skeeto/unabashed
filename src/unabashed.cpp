@@ -1759,7 +1759,6 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                 sh->traps[2] = {};
             }
             updatesigmode(sh, 2);
-            updatesigmode(sh, 3);
             updatesigmode(sh, 15);
             if (os_isatty(os, info->std[0]) || os_isatty(os, info->std[2])) {
                 sh->opt[O_MONITOR] = 1;  // job control, as bash
@@ -1785,6 +1784,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                 fdwrite(sh, 2, finish(&b));
             }
         }
+        updatesigmode(sh, 3);  // every shell ignores QUIT itself, as bash
 
         for (iz k = 0; k < shopts.len; k += 2) {
             startoption(sh, scratch, 'O', shopts[k]=="-", &shopts[k+1]);

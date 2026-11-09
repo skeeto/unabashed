@@ -85,9 +85,6 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
 Found while profiling under gprof (2026-11-08), not yet fixed; real
 signals sent by another process, on Linux, against bash 5.3:
 
-- bash ignores SIGQUIT in every shell, interactive or not (sig.c,
-  initialize_shell_signals); a non-interactive shell of ours dies of it
-  (status 131), with or without an EXIT trap.
 - SIGINT that arrives while a foreground program runs: bash waits for
   the program and dies only if the program died of SIGINT too, so
   `/bin/kill -INT $$` from a script goes on; ours dies at once (with an

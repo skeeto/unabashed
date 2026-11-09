@@ -148,6 +148,7 @@ static b32 trapignored(Shell *sh, i32 sig)
     return sig>0 && sig<NSIGNAL && (sh->asyncign & sigbit(sig));
 }
 
+static b32 shelltop(Shell *);
 static b32 interactivetop(Shell *);
 
 // How the process should handle a real signal, per the table of its
@@ -160,7 +161,9 @@ static void updatesigmode(Shell *sh, i32 sig)
         mode = SIGM_IGNORE;
     } else if (trapset(sh, sig)) {
         mode = SIGM_CATCH;
-    } else if (interactivetop(sh) && (sig==2 || sig==3 || sig==15)) {
+    } else if (sig==3 && shelltop(sh)) {
+        mode = SIGM_CATCH;  // ignored here (signoop), not by its programs
+    } else if (interactivetop(sh) && (sig==2 || sig==15)) {
         mode = SIGM_CATCH;  // acted on here (signoop, sigdefault)
     } else if (interactivetop(sh) && sh->shellpgid && sig>=20 && sig<=22) {
         mode = SIGM_IGNORE;  // TSTP TTIN TTOU: under job control
@@ -323,17 +326,26 @@ static i32 runtrap(Shell *sh, i32 idx)
     return own;
 }
 
+// The outermost level, the shell itself rather than a subshell or a
+// background job: there QUIT does nothing, as bash ignores it in every
+// shell (its programs and subshells take the default).
+static b32 shelltop(Shell *sh)
+{
+    return !sh->subshell && sh->sig==sh->sched->top;
+}
+
 // The outermost level of an interactive shell: there INT abandons the
-// command for the next prompt, and TERM and QUIT do nothing, as bash.
+// command for the next prompt, and TERM does nothing, as bash.
 static b32 interactivetop(Shell *sh)
 {
-    return sh->interactive && !sh->subshell && sh->sig==sh->sched->top;
+    return sh->interactive && shelltop(sh);
 }
 
 // Does the default action of sig do nothing at this level?
 static b32 signoop(Shell *sh, i32 sig)
 {
-    return sigharmless(sig) || ((sig==3 || sig==15) && interactivetop(sh));
+    return sigharmless(sig) || (sig==3 && shelltop(sh)) ||
+           (sig==15 && interactivetop(sh));
 }
 
 // Die by a signal: the EXIT trap runs first, except for KILL and the
