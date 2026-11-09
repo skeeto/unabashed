@@ -2813,15 +2813,30 @@ static SimpleParam simpleparam(Str s)
     return r;
 }
 
-// Expand a simple parameter word without the general machinery, when
-// the result is plainly at most one field: quoted, or unquoted with no
-// byte that splitting or globbing would act on. Returns 0 to decline.
-static b32 simpleexpand(Shell *sh, Arena *a, Str text, Slice<Str> *out)
+// Might simpleparam take the word? A quick test for callers that would
+// otherwise pay a failed call on every word, as for $((n+1)).
+static b32 maybesimple(Str s)
 {
+    iz i = s.len && s[0]=='"';
+    return s.len>i+1 && s[i]=='$' && (s[i+1]=='{' || identstart(s[i+1]));
+}
+
+// The value of a word simpleparam takes, its operator applied. Not ok
+// for a nameref, or unbound under set -u: the full path handles those.
+struct SimpleValue {
+    Str value;
+    b32 set;
+    b32 quoted;
+    b32 ok;
+};
+
+static SimpleValue simplevalue(Shell *sh, Arena *a, Str text)
+{
+    SimpleValue r = {};
     SimpleParam p = simpleparam(text);
-    if (!p.ok) return 0;
+    if (!p.ok) return r;
     Value *v = rawlookup(sh, p.name);
-    if (v && (v->attrs & V_NAMEREF)) return 0;
+    if (v && (v->attrs & V_NAMEREF)) return r;
     Got g = getvalue(sh, a, v);
     if (p.op) {
         b32 has = g.set && (!p.colon || g.value.len);
@@ -2830,26 +2845,41 @@ static b32 simpleexpand(Shell *sh, Arena *a, Str text, Slice<Str> *out)
         }
         g.set = 1;  // neither form is ever unbound
     }
-    if (!g.set) {
-        if (sh->opt[O_NOUNSET]) return 0;  // full path reports it
-        if (p.quoted) *out = push(a, *out, Str(""));
+    if (!g.set && sh->opt[O_NOUNSET]) return r;
+    r.value  = g.value;
+    r.set    = g.set;
+    r.quoted = p.quoted;
+    r.ok     = 1;
+    return r;
+}
+
+// Expand a simple parameter word without the general machinery, when
+// the result is plainly at most one field: quoted, or unquoted with no
+// byte that splitting or globbing would act on. Returns 0 to decline.
+static b32 simpleexpand(Shell *sh, Arena *a, Str text, Slice<Str> *out)
+{
+    SimpleValue s = simplevalue(sh, a, text);
+    if (!s.ok) {
+        return 0;
+    } else if (!s.set) {
+        if (s.quoted) *out = push(a, *out, Str(""));
         return 1;
     }
-    if (!p.quoted) {
-        if (!g.value.len) return 1;  // unquoted empty: removed
+    if (!s.quoted) {
+        if (!s.value.len) return 1;  // unquoted empty: removed
         b32 ifsset;
         Str ifs = ifsvalue(sh, &ifsset);
         u8  stop[256] = {};
         for (iz i = 0; i < ifs.len; i++) stop[ifs[i]] = 1;
         stop['*'] = stop['?'] = stop['['] = stop['('] = 1;
         stop['\\'] = stop['\r'] = stop[0] = 1;
-        for (iz i = 0; i < g.value.len; i++) {
-            if (stop[g.value[i]]) return 0;
+        for (iz i = 0; i < s.value.len; i++) {
+            if (stop[s.value[i]]) return 0;
         }
     }
     // Copy: a later statement may release the variable's buffer while
     // the fields live on (a for loop's word list)
-    *out = push(a, *out, clone(a, g.value));
+    *out = push(a, *out, clone(a, s.value));
     return 1;
 }
 
@@ -2953,7 +2983,9 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
             out = push(a, out, lit);
             continue;
         }
-        if (simpleexpand(sh, a, w->text, &out)) continue;
+        if (maybesimple(w->text) && simpleexpand(sh, a, w->text, &out)) {
+            continue;
+        }
         Slice<Str> texts = {};
         if (braces && !(w->flags & W_NOBRACE) && hasbrace(w->text)) {
             texts = braceexpand(a, w->text);
@@ -3037,6 +3069,12 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
 static Str expandstring(Shell *sh, Arena *a, Str text, i32 ctx = 0)
 {
     if (literalword(text)) return text;  // in any context
+    if (!(ctx & ~(XC_ASSIGN|XC_ASSIGNW|XC_NOPSUB)) && maybesimple(text)) {
+        // Where quotes are quotes, a simple parameter is its value
+        // (copied, as the variable may change while it is in use)
+        SimpleValue s = simplevalue(sh, a, text);
+        if (s.ok) return clone(a, s.value);
+    }
     X *x = newx(sh, a);
     x->nosplit = 1;
     expandinto(x, text, ctx);
