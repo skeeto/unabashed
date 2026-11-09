@@ -1190,13 +1190,17 @@ static LevelSig os_levelsig(Os *)
     return r;
 }
 
+// Polled between commands: a plain load first spares the common case a
+// locked exchange, and a bit set meanwhile waits for the next poll.
 static u64 os_sigpending(Os *)
 {
+    if (!__atomic_load_n(&sigbits, __ATOMIC_RELAXED)) return 0;
     return __atomic_exchange_n(&sigbits, (u64)0, __ATOMIC_RELAXED);
 }
 
 static u64 os_siggroup(Os *)
 {
+    if (!__atomic_load_n(&grpbits, __ATOMIC_RELAXED)) return 0;
     return __atomic_exchange_n(&grpbits, (u64)0, __ATOMIC_RELAXED);
 }
 
