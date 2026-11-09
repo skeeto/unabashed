@@ -649,13 +649,13 @@ enum : i32 {  // setvar flags
 
 static void varchanged(Shell *, Str name);
 
-// The binding an assignment to name modifies, owned by the current
+// The binding an assignment to v modifies, owned by the current
 // subshell level and created unset if needed. Reports and returns null
 // for a readonly variable.
-static Value *assignslot(Shell *sh, Arena scratch, Str name, i32 flags)
+static Value *assignvar(Shell *sh, Arena scratch, Var *v, i32 flags)
 {
-    Store *st = sh->store;
-    Var   *v  = upsertvar(sh, name);
+    Store  *st   = sh->store;
+    Str     name = v->name;
     Value **slot = &v->top;
     if (flags & SV_GLOBAL) {
         while (*slot && (*slot)->depth) slot = &(*slot)->below;
@@ -676,6 +676,12 @@ static Value *assignslot(Shell *sh, Arena scratch, Str name, i32 flags)
         jset(st, slot, n);
     }
     return ownvalue(sh, slot);
+}
+
+// assignvar by name, entering a new name in the table.
+static Value *assignslot(Shell *sh, Arena scratch, Str name, i32 flags)
+{
+    return assignvar(sh, scratch, upsertvar(sh, name), flags);
 }
 
 // The string an assignment stores, given the binding's attributes and
@@ -1185,7 +1191,8 @@ static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str val
 static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
 {
     Store *st  = sh->store;
-    Value *top = rawlookup(sh, name);
+    Var   *var = findvar(sh, name);  // entries stay put: kept while name does
+    Value *top = var ? var->top : 0;
     if ((flags & SV_GLOBAL) && !(flags & SV_NOREF)) {
         // declare -g: only global namerefs count
         Value *g = globalvalue(sh, name);
@@ -1197,6 +1204,7 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
             }
             if (!r.name.data) return 0;
             name = r.name;
+            var  = 0;
         }
         flags |= SV_NOREF;
     }
@@ -1227,10 +1235,11 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
             return 0;
         }
         name   = b.name;
+        var    = 0;
         flags |= SV_NOREF | (b.global ? SV_GLOBAL : 0);
         flags |= b.depth ? SV_ATDEPTH|b.depth<<16 : 0;
     }
-    Value *val = assignslot(sh, scratch, name, flags);
+    Value *val = assignvar(sh, scratch, var ? var : upsertvar(sh, name), flags);
     if (!val) return 0;
     if (val->attrs & V_NOASSIGN) return 1;
     if (val->arr) {
