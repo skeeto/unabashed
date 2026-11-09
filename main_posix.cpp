@@ -991,12 +991,34 @@ static void onsigchld(int)
     errno = saved;
 }
 
+// A fault of the shell's own (a bad address, a trapped assertion) as
+// opposed to a signal sent to it: the kernel's fault codes are small
+// and positive, while kill's and sigqueue's are zero or negative
+// (Linux, OpenBSD) or from 0x10001 (FreeBSD, macOS).
+static b32 faulted(int sig, siginfo_t *info)
+{
+    switch (sig) {
+    case SIGILL: case SIGTRAP: case SIGBUS: case SIGFPE: case SIGSEGV:
+    case SIGSYS:
+        return info && info->si_code>0 && info->si_code<0x10000;
+    }
+    return 0;
+}
+
 // A trapped signal: note it and wake os_wait. The terminal's INT, QUIT
 // and TSTP, which the kernel sends to its whole foreground group, are
 // told apart from those sent to this process (kill): every level of
 // the shell gets them, as every process of bash's foreground job would.
+// A fault kills the shell as if it were never caught.
 static void onsignal(int sig, siginfo_t *info, void *)
 {
+    if (faulted(sig, info)) {
+        struct sigaction sa = {};
+        sa.sa_handler = SIG_DFL;
+        sigaction(sig, &sa, 0);
+        raise(sig);  // delivered on return, if returning does not fault again
+        return;
+    }
     i32 saved = errno;
     b32 tty   = sig==SIGINT || sig==SIGQUIT || sig==SIGTSTP;
     #ifdef SI_KERNEL

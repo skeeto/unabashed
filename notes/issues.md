@@ -90,9 +90,9 @@ signals sent by another process, on Linux, against bash 5.3:
   `/bin/kill -INT $$` from a script goes on; ours dies at once (with an
   EXIT trap: runs it, then dies). The terminal's INT, sent to the whole
   group, is already handled as bash does.
-- With an EXIT trap set, SIGSYS kills ours without running it; bash
-  runs the trap first. SIGPIPE is ignored by our shell (m3a), where
-  bash runs the trap and dies with 141.
+- SIGPIPE sent by another process is ignored by our shell (m3a, so
+  that in-process subshells survive writes to a closed pipe), where
+  bash, with an EXIT trap set, runs the trap and dies with 141.
 
 Found while benchmarking against dash (2026-11-08, shellbench.md), not
 yet fixed:

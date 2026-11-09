@@ -169,8 +169,9 @@ static void updatesigmode(Shell *sh, i32 sig)
         mode = SIGM_IGNORE;  // TSTP TTIN TTOU: under job control
     } else if (trapset(sh, TRAP_EXIT)) {
         switch (sig) {
-        case 1: case 2: case 3: case 10: case 12: case 14: case 15:
-        case 24: case 25: case 26:  // not PROF: a profiler's, as bash
+        case 1: case 2: case 3: case 4: case 5: case 6: case 7: case 8:
+        case 10: case 11: case 12: case 14: case 15: case 24: case 25:
+        case 26: case 31:  // not PROF: a profiler's, as bash
             mode = SIGM_CATCH;  // run the EXIT trap, then die
         }
     }
