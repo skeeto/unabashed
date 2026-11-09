@@ -32,3 +32,4 @@ rm .bash_login
 bash -l -c 'logout'
 logout
 echo "status $?"
+(unset PS1; bash --norc -i -c 'echo "PS1=$PS1"' 2>/dev/null)

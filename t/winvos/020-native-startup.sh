@@ -7,6 +7,8 @@
 # tilde, missing files are skipped quietly, a return in a profile leaves
 # its status. An interactive shell reads $ENV, expanded. BASH_ENV is
 # not read. --noprofile and --norc are accepted (busybox rejects them).
+# An interactive shell's PS1 defaults to busybox-w32's \w \$ (an
+# inherited one stays).
 mkdir -p C:/etc C:/w64/etc
 echo 'echo sys "$0" "$1"' >C:/etc/profile
 echo 'echo exe "$#"' >C:/w64/etc/profile
@@ -25,3 +27,5 @@ mkdir "$HOME/.profile"
 sh -l -c 'echo dir'
 (exec -a -sh sh -c 'echo dash')
 (unset HOME; sh -l -c 'echo nohome')
+(unset PS1; sh -i -c 'echo "PS1=$PS1"')
+(PS1='> ' sh -i -c 'echo "PS1=$PS1"')

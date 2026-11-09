@@ -1780,7 +1780,9 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             }
             sh->shopt[S_EXPAND_ALIASES] = 1;
             if (!st.noediting && !sh->opt[O_VI]) sh->opt[O_EMACS] = 1;
-            if (!getvar(sh, &scratch, "PS1").set) setvar(sh, scratch, "PS1", "\\s-\\v\\$ ");
+            // Native mode takes busybox-w32 ash's prompt, as "~ $ "
+            Str ps1 = st.busybox ? Str("\\w \\$ ") : Str("\\s-\\v\\$ ");
+            if (!getvar(sh, &scratch, "PS1").set) setvar(sh, scratch, "PS1", ps1);
             if (!getvar(sh, &scratch, "PS2").set) setvar(sh, scratch, "PS2", "> ");
             b32 tty = os_isatty(os, info->std[0]) || os_isatty(os, info->std[2]);
             if (!st.busybox && !tty) {

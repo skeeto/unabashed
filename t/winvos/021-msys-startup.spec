@@ -1,4 +1,4 @@
-== stdout 350
+== stdout 363
 etc-profile zero one
 bash_login
 login
@@ -34,11 +34,12 @@ profile
 logout
 etc-logout
 status 1
+PS1=\s-\v\$ 
 
 == stderr 51
 bash: line 33: logout: not login shell: use `exit'
 
-== merged 401
+== merged 414
 etc-profile zero one
 bash_login
 login
@@ -75,5 +76,6 @@ logout
 etc-logout
 bash: line 33: logout: not login shell: use `exit'
 status 1
+PS1=\s-\v\$ 
 
 == status 0

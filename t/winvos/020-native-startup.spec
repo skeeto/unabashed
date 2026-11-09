@@ -1,4 +1,4 @@
-== stdout 169
+== stdout 187
 sys zero one
 exe 1
 home
@@ -23,10 +23,12 @@ sys -sh
 dash
 sys sh 
 nohome
+PS1=\w \$ 
+PS1=> 
 
 == stderr 0
 
-== merged 169
+== merged 187
 sys zero one
 exe 1
 home
@@ -51,5 +53,7 @@ sys -sh
 dash
 sys sh 
 nohome
+PS1=\w \$ 
+PS1=> 
 
 == status 0
