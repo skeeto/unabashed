@@ -21,6 +21,7 @@
 #include <time.h>
 #include <unistd.h>
 #if __APPLE__
+#include <libproc.h>
 #include <sys/random.h>  // getentropy
 #endif
 extern "C" int rename(char const *, char const *);  // stdio.h, whose macros collide
@@ -1785,10 +1786,23 @@ static Str machtype(Arena *a)
     return r;
 }
 
-// The descriptors above 2 the shell inherited, found with one poll of
-// them all (POLLNVAL marks a closed one) before the shell opens any,
-// each moved out of the way as the shell's own: at 10 and up, and
-// close-on-exec.
+static Slice<InheritFd> pushinherit(Arena *a, Slice<InheritFd> r, i32 fd)
+{
+    i32 fl = fcntl(fd, F_GETFL);
+    if (fl < 0) return r;
+    InheritFd e = {};
+    e.fd    = fd;
+    e.flags = (fl&O_ACCMODE)==O_RDONLY ? OF_READ :
+              (fl&O_ACCMODE)==O_WRONLY ? OF_WRITE : OF_READ|OF_WRITE;
+    return push(a, r, e);
+}
+
+// The descriptors above 2 the shell inherited, found before the shell
+// opens any, each moved out of the way as the shell's own: at 10 and
+// up, and close-on-exec. Linux finds them with one poll of them all
+// (POLLNVAL marks a closed one). macOS's poll cannot tell: asked for no
+// events it reports nothing for a closed descriptor, and asked for any
+// it reports POLLNVAL for an open device, so the kernel lists them.
 static Slice<InheritFd> inherited(Arena *a)
 {
     Slice<InheritFd> r = {};
@@ -1798,6 +1812,17 @@ static Slice<InheritFd> inherited(Arena *a)
         max = (i32)rl.rlim_cur;
     }
     if (max <= 3) return r;
+    #if __APPLE__
+    i32 size = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, 0, 0);
+    if (size <= 0) return r;
+    iz cap = size / (iz)sizeof(proc_fdinfo);
+    proc_fdinfo *list = alloc<proc_fdinfo>(a, cap ? cap : 1);
+    size = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, list, (i32)(cap*(iz)sizeof(*list)));
+    for (iz i = 0; size>0 && i<size/(iz)sizeof(*list); i++) {
+        i32 fd = list[i].proc_fd;
+        if (fd>=3 && fd<max) r = pushinherit(a, r, fd);
+    }
+    #else
     struct pollfd *fds = alloc<struct pollfd>(a, max-3);
     for (i32 fd = 3; fd < max; fd++) {
         fds[fd-3].fd = fd;
@@ -1808,14 +1833,9 @@ static Slice<InheritFd> inherited(Arena *a)
     } while (ready<0 && errno==EINTR);
     if (ready < 0) return r;
     for (i32 i = 0; i < max-3; i++) {
-        if (fds[i].revents & POLLNVAL) continue;
-        i32 fl = fcntl(fds[i].fd, F_GETFL);
-        InheritFd e = {};
-        e.fd    = fds[i].fd;
-        e.flags = (fl&O_ACCMODE)==O_RDONLY ? OF_READ :
-                  (fl&O_ACCMODE)==O_WRONLY ? OF_WRITE : OF_READ|OF_WRITE;
-        r = push(a, r, e);
+        if (!(fds[i].revents & POLLNVAL)) r = pushinherit(a, r, fds[i].fd);
     }
+    #endif
     // All found first: a duplicate may land on a number not yet seen
     iz n = 0;
     for (iz i = 0; i < r.len; i++) {
