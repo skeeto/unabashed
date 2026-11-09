@@ -810,9 +810,12 @@ static void sigfatal(Shell *);
 static u64  sigbit(i32);
 static void runsigs(Shell *, Arena);
 static void runexittrap(Shell *, Arena);
+[[noreturn]] static void sigdie(Shell *, i32, Arena);
+static Arena *scratchat(Shell *, i32);
 
 // A write to a pipe without readers: as a process killed by SIGPIPE,
-// the vproc ends silently with status 141. With a trap the write fails
+// the vproc ends silently with status 141, after its EXIT trap, if
+// any (as bash catches SIGPIPE to run it). With a trap the write fails
 // (EPIPE) and the trap runs at the next safe point; ignored, it fails.
 // But a signal already sent to this level that would end it wins: a
 // stage takes Ctrl-C only at a safe point, and its reader may die of
@@ -827,10 +830,7 @@ static void sigpipe(Shell *sh)
         return;
     }
     if (sh->hardign & ((u64)1 << 12)) return;
-    sh->status  = 128 + 13;
-    sh->exiting = 1;
-    sh->killsig = 13;
-    escape(sh, ESC_EXIT);
+    sigdie(sh, 13, *scratchat(sh, sh->capdepth+1));
 }
 
 static b32 fileistty(Shell *, File *);

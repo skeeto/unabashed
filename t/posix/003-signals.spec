@@ -1,4 +1,4 @@
-== stdout 248
+== stdout 314
 QUIT ignored
 QUIT ignored, EXIT trap set
 exit trap
@@ -21,10 +21,19 @@ exit trap
 SEGV 139
 exit trap
 SYS 159
+PIPE 141
+exit trap
+PIPE 141
+y
+141 0
+y
+exit trap
+broken stdout 141
 
-== stderr 0
+== stderr 19
+subshell exit trap
 
-== merged 248
+== merged 333
 QUIT ignored
 QUIT ignored, EXIT trap set
 exit trap
@@ -47,5 +56,14 @@ exit trap
 SEGV 139
 exit trap
 SYS 159
+PIPE 141
+exit trap
+PIPE 141
+y
+141 0
+y
+subshell exit trap
+exit trap
+broken stdout 141
 
 == status 0

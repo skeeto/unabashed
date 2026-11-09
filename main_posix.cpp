@@ -472,6 +472,7 @@ static Stat os_fstat(Os *os, Handle h)
 }
 
 static void onsignal(int, siginfo_t *, void *);
+static void quietpipe(Os *);
 
 static b32 os_con(Os *os, Handle, ConOp *)
 {
@@ -772,8 +773,10 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
             if (sig==SIGKILL || sig==SIGSTOP || sig==SIGCHLD) continue;
             if ((s->sigign | os->entryign) & bit) {
                 signal(sig, SIG_IGN);
+            } else if (sig == SIGPIPE) {
+                quietpipe(os);
             } else if (os->changed & bit) {
-                signal(sig, sig==SIGPIPE ? SIG_IGN : SIG_DFL);
+                signal(sig, SIG_DFL);
             }
         }
         os->changed = s->sigign & ~os->entryign;
@@ -1010,6 +1013,10 @@ static b32 faulted(int sig, siginfo_t *info)
 // told apart from those sent to this process (kill): every level of
 // the shell gets them, as every process of bash's foreground job would.
 // A fault kills the shell as if it were never caught.
+// A SIGPIPE of the shell's own making (a write to a broken pipe: the
+// kernel's, naming no sender or the shell itself) is only EPIPE, as if
+// ignored; the level that wrote acts on it (sigpipe), so that a broken
+// pipe in an in-process subshell ends only the subshell.
 static void onsignal(int sig, siginfo_t *info, void *)
 {
     if (faulted(sig, info)) {
@@ -1017,6 +1024,9 @@ static void onsignal(int sig, siginfo_t *info, void *)
         sa.sa_handler = SIG_DFL;
         sigaction(sig, &sa, 0);
         raise(sig);  // delivered on return, if returning does not fault again
+        return;
+    }
+    if (sig==SIGPIPE && (!info || !info->si_pid || info->si_pid==getpid())) {
         return;
     }
     i32 saved = errno;
@@ -1234,6 +1244,17 @@ static void os_racy(Os *)
 {
 }
 
+// SIGPIPE's action when untrapped: caught all the same (see onsignal),
+// so that one from another process has its default action.
+static void quietpipe(Os *)
+{
+    struct sigaction sa = {};
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags     = SA_RESTART | SA_SIGINFO;
+    sa.sa_sigaction = onsignal;
+    sigaction(SIGPIPE, &sa, 0);
+}
+
 static void os_sigmode(Os *os, i32 sig, i32 mode)
 {
     flushw(os);
@@ -1244,13 +1265,17 @@ static void os_sigmode(Os *os, i32 sig, i32 mode)
     if (mode==SIGM_DEFAULT && !(os->changed & bit)) {
         return;  // still as on entry, which may be a profiler's SIGPROF
     }
+    os->changed |= bit;
+    if (mode==SIGM_DEFAULT && sig==SIGPIPE) {
+        quietpipe(os);  // its in-process subshells' broken pipes
+        return;
+    }
     struct sigaction sa = {};
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
     switch (mode) {
     case SIGM_DEFAULT:
-        // the shell keeps ignoring SIGPIPE for its in-process subshells
-        sa.sa_handler = sig==SIGPIPE ? SIG_IGN : SIG_DFL;
+        sa.sa_handler = SIG_DFL;
         break;
     case SIGM_IGNORE:
         sa.sa_handler = SIG_IGN;
@@ -1262,7 +1287,6 @@ static void os_sigmode(Os *os, i32 sig, i32 mode)
         break;
     }
     sigaction(sig, &sa, 0);
-    os->changed |= bit;
 }
 
 static void initasync(Os *os)
@@ -1276,7 +1300,7 @@ static void initasync(Os *os)
             os->entryign |= (u64)1 << (sig-1);
         }
     }
-    signal(SIGPIPE, SIG_IGN);
+    if (!os->pipeign) quietpipe(os);  // else it stays ignored
     if (pipe(os->wakefd)) {
         os->wakefd[0] = os->wakefd[1] = -1;
         return;

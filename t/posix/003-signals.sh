@@ -13,3 +13,11 @@ for sig in ILL TRAP ABRT BUS FPE SEGV SYS; do
     bash -c 'trap "echo exit trap" EXIT; bash -c "kill -'$sig' $$"; echo "no"'
     echo "$sig $?"
 done 2>/dev/null
+# PIPE from another process has its default action, after the EXIT
+# trap; the shell's own broken pipes end only the level that wrote,
+# after its EXIT trap
+bash -c 'bash -c "kill -PIPE $$"; echo no'; echo "PIPE $?"
+bash -c 'trap "echo exit trap" EXIT; bash -c "kill -PIPE $$"; echo no'; echo "PIPE $?"
+bash -c 'trap "echo trapped PIPE" PIPE; (while :; do echo y; done) | head -1; echo "${PIPESTATUS[*]}"'
+bash -c '(trap "echo subshell exit trap >&2" EXIT; while :; do echo y; done) | head -1'
+bash -c 'trap "echo exit trap >&3" EXIT; exec 3>&1 1> >(:); sleep 1; echo x'; echo "broken stdout $?"
