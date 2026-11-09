@@ -1155,6 +1155,13 @@ static i32 checkreserved(Lexer *L, Str s, b32 dollar, b32 quoted)
     if (dollar || quoted || !reservedok(L, L->last)) {
         return 0;
     }
+    switch (s.len ? s[0] : 0) {  // where the reserved words start
+    case 'c': case 'd': case 'e': case 'f': case 'i': case 's': case 't':
+    case 'u': case 'w': case '{': case '}': case '!': case '[': case ']':
+        break;
+    default:
+        return 0;
+    }
     for (iz i = 0; i < countof(reserved); i++) {
         if (!(reserved[i].word == s)) continue;
         i32 t = reserved[i].token;
