@@ -4730,22 +4730,35 @@ static i32 runbuiltin(Shell *sh, Builtin *b, Str *args, iz nargs, Arena scratch)
 }
 
 // A builtin by name, enabled or not (enable's own lookup)
-static Builtin *anybuiltin(Shell *sh, Str name)
+// The registry's entry for name, whether or not this mode has it.
+static Builtin *tablebuiltin(Str name)
 {
     iz lo = 0, hi = countof(builtins);
     while (lo < hi) {
         iz  mid = lo + (hi - lo)/2;
         i32 c   = compare(builtins[mid].name, name);
-        if (!c) return hasbuiltin(sh, builtins+mid) ? builtins+mid : 0;
+        if (!c) return builtins+mid;
         if (c < 0) lo = mid + 1; else hi = mid;
     }
     return 0;
 }
 
+static Builtin *anybuiltin(Shell *sh, Str name)
+{
+    Builtin *b = tablebuiltin(name);
+    return b && hasbuiltin(sh, b) ? b : 0;
+}
+
+// A tablebuiltin entry as findbuiltin would take it now: null if this
+// mode lacks it or it is disabled.
+static Builtin *usablebuiltin(Shell *sh, Builtin *b)
+{
+    return b && hasbuiltin(sh, b) && !isdisabled(sh, b) ? b : 0;
+}
+
 static Builtin *findbuiltin(Shell *sh, Str name)
 {
-    Builtin *b = anybuiltin(sh, name);
-    return b && !isdisabled(sh, b) ? b : 0;
+    return usablebuiltin(sh, tablebuiltin(name));
 }
 
 // enable [-a] [-dnps] [-f file] [name ...]: there are no loadable

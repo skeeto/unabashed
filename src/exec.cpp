@@ -20,6 +20,8 @@ enum : i32 {
 };
 
 static Builtin *findbuiltin(Shell *, Str name);
+static Builtin *tablebuiltin(Str name);
+static Builtin *usablebuiltin(Shell *, Builtin *);
 static Rlimit   nofilelimit(Shell *);  // builtins.cpp
 static i32      runbuiltin(Shell *, Builtin *, Str *, iz, Arena);
 static b32      parsei64(Str, i64 *);
@@ -2999,12 +3001,18 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     Slice<Str> argv = {};
     Slice<u8>  compargs = {};
     b32 decl = 0;
+    // The registry entry for argv[0], found once for the declaration
+    // check and for running it, when the first word expands to argv[0]
+    Builtin *entry = 0;
+    b32      named = 0;
     if (rest) {
         Slice<Str> first = {};
         Word one = *rest;
         one.next = 0;
         first = expandwords(sh, a, &one, 0);
-        Builtin *b = first.len ? findbuiltin(sh, first[0]) : 0;
+        named = first.len > 0;
+        entry = named ? tablebuiltin(first[0]) : 0;
+        Builtin *b = usablebuiltin(sh, entry);
         decl = b && (b->flags & B_DECL);
         argv = first;
         for (Word *w = rest->next; w; w = w->next) {
@@ -3122,6 +3130,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         for (iz i = 0; i < argv.len; i++) v = push(a, v, argv[i]);
         argv     = v;
         name     = argv[0];
+        named    = 0;
         compargs = {};
     }
 
@@ -3163,8 +3172,9 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         mark = sh->undo;
     }
 
+    // Checked again: an expansion since may have run enable or shopt
     Func    *fn = 0;
-    Builtin *bi = findbuiltin(sh, name);
+    Builtin *bi = named ? usablebuiltin(sh, entry) : findbuiltin(sh, name);
     b32 special = bi && (bi->flags & B_SPECIAL);
     if (!(special && sh->opt[O_POSIX]) && !jobspec) {
         // as bash, a name with a slash too, outside POSIX mode
