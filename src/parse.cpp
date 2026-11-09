@@ -3803,8 +3803,7 @@ static Redir *copyredirs(Arena *a, Redir *r)
     Redir  *head = 0;
     Redir **tail = &head;
     for (; r; r = r->next) {
-        Redir *c = alloc<Redir>(a);
-        *c = *r;
+        Redir *c = alloccopy(a, r);
         c->next   = 0;
         c->srcvar = copyword(a, r->srcvar);
         c->word   = copyword(a, r->word);
@@ -3819,8 +3818,7 @@ static Redir *copyredirs(Arena *a, Redir *r)
 static Cond *copycond(Arena *a, Cond *c)
 {
     if (!c) return 0;
-    Cond *r = alloc<Cond>(a);
-    *r = *c;
+    Cond *r = alloccopy(a, c);
     r->op    = copyword(a, c->op);
     r->left  = copycond(a, c->left);
     r->right = copycond(a, c->right);
@@ -3869,8 +3867,7 @@ static iz nodebytes(Node *n)
 static Node *copynode(Arena *a, Node *n)
 {
     if (!n) return 0;
-    Node *r = alloc<Node>(a);
-    *r = *n;
+    Node *r = alloccopy(a, n);
     r->a      = copynode(a, n->a);
     r->b      = copynode(a, n->b);
     r->c      = copynode(a, n->c);

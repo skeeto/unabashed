@@ -76,6 +76,20 @@ static T *alloc(Arena *a, iz count = 1)
     return r;
 }
 
+// Like alloc<T>, but a copy of *p rather than zeroed.
+template<typename T>
+static T *alloccopy(Arena *a, T *p)
+{
+    iz size = sizeof(T);
+    iz pad  = -(uz)a->beg & (alignof(T) - 1);
+    if (1 >= (a->end - a->beg - pad)/size) {
+        arenagrow(a, size, pad, 1);
+    }
+    T *r = (T *)(a->beg + pad);
+    a->beg += pad + size;
+    return new (r) T(*p);
+}
+
 // Like alloc<u8>, but does not zero the memory.
 static u8 *allocbytes(Arena *a, iz count)
 {
