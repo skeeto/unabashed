@@ -216,8 +216,10 @@ static void checkwinsize(Shell *sh)
     Tty    t = os_tty(sh->os, h, h, TTY_QUERY);
     if (t.err || t.rows<1 || t.cols<1) return;
     Arena a = *scratchat(sh, sh->capdepth+1);
-    setvar(sh, a, "LINES",   fmti64(&a, t.rows));
-    setvar(sh, a, "COLUMNS", fmti64(&a, t.cols));
+    Str num = fmti64(&a, t.rows);
+    setvar(sh, a, "LINES",   num);
+    Str num2 = fmti64(&a, t.cols);
+    setvar(sh, a, "COLUMNS", num2);
 }
 
 // Before memory holding the BASH_COMMAND node is reused, keep its text
@@ -456,7 +458,8 @@ static Arith evalarithcmd(Shell *sh, Arena *a, Str expr, Str who)
         shellerror(sh, *a, r.err);  // bash reports these with no prefix
     } else if (!r.ok) {
         // a shell error, not a builtin's: no line below 1, as bash
-        shellerror(sh, *a, concat3(a, who, ": ", r.err));
+        Str msg = concat3(a, who, ": ", r.err);
+        shellerror(sh, *a, msg);
     }
     return r;
 }
@@ -759,7 +762,8 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
             i32 err;
             Str data = readwholefile(sh, a, name, &err);
             if (err) {
-                shellerror(sh, *a, concat3(a, name, Str(": "), errtext(err)));
+                Str msg = concat3(a, name, Str(": "), errtext(err));
+                shellerror(sh, *a, msg);
                 sh->status = 1;
                 return {};
             }
@@ -848,7 +852,8 @@ static Str redirtarget(Shell *sh, Arena *a, Word *w, b32 *ok)
     i32 flags = (posix ? XW_NOSPLIT : 0) | (posix && !sh->interactive ? XW_NOGLOB : 0);
     Slice<Str> r = expandwords(sh, a, w, flags);
     if (r.len != 1) {
-        shellerror(sh, *a, concat(a, w->text, ": ambiguous redirect"));
+        Str msg = concat(a, w->text, ": ambiguous redirect");
+        shellerror(sh, *a, msg);
         return {};
     }
     *ok = 1;
@@ -924,7 +929,8 @@ static File *openwin(Shell *sh, Arena *a, Str name, i32 flags)
     } else if (r.kind == PK_FD) {
         File *f = r.num<FDMAX ? sh->fds->fd[r.num] : 0;
         if (!f) {
-            shellerror(sh, *a, concat(a, name, ": Bad file descriptor"));
+            Str msg = concat(a, name, ": Bad file descriptor");
+            shellerror(sh, *a, msg);
             return 0;
         }
         f->refs++;
@@ -989,12 +995,14 @@ static File *openwin(Shell *sh, Arena *a, Str name, i32 flags)
         err = E_ISDIR;
     }
     if (err) {
-        shellerror(sh, *a, concat3(a, name, Str(": "), errtext(err)));
+        Str msg = concat3(a, name, Str(": "), errtext(err));
+        shellerror(sh, *a, msg);
         return 0;
     }
     Opened o = os_open(sh->os, *a, path, flags, 0666);
     if (o.err) {
-        shellerror(sh, *a, concat3(a, name, Str(": "), errtext(o.err)));
+        Str msg = concat3(a, name, Str(": "), errtext(o.err));
+        shellerror(sh, *a, msg);
         return 0;
     }
     File *f = newfile(sh, F_OS, flags);
@@ -1009,7 +1017,8 @@ static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
     if ((flags & OF_WRITE) && restrictedwrite(sh, a, name)) return 0;
     if (!name.len) {
         // absolute() would turn it into the working directory
-        shellerror(sh, *a, concat(a, name, ": No such file or directory"));
+        Str msg = concat(a, name, ": No such file or directory");
+        shellerror(sh, *a, msg);
         return 0;
     }
     if (sh->pathmode != PM_POSIX) return openwin(sh, a, name, flags);
@@ -1018,7 +1027,8 @@ static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
     if (dupfd >= 0) {
         File *f = dupfd<FDMAX ? sh->fds->fd[dupfd] : 0;
         if (!f) {
-            shellerror(sh, *a, concat(a, name, ": Bad file descriptor"));
+            Str msg = concat(a, name, ": Bad file descriptor");
+            shellerror(sh, *a, msg);
             return 0;
         }
         f->refs++;
@@ -1026,7 +1036,8 @@ static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
     }
     Opened o = os_open(sh->os, *a, path, flags, 0666);
     if (o.err) {
-        shellerror(sh, *a, concat3(a, name, Str(": "), errtext(o.err)));
+        Str msg = concat3(a, name, Str(": "), errtext(o.err));
+        shellerror(sh, *a, msg);
         return 0;
     }
     File *f = newfile(sh, F_OS, flags);
@@ -1050,7 +1061,8 @@ static i32 parsefd(Str s)
 static b32 restrictedwrite(Shell *sh, Arena *a, Str name)
 {
     if (!sh->restricted) return 0;
-    shellerror(sh, *a, concat(a, name, ": restricted: cannot redirect output"));
+    Str msg = concat(a, name, ": restricted: cannot redirect output");
+    shellerror(sh, *a, msg);
     return 1;
 }
 
@@ -1061,7 +1073,8 @@ static b32 clobbers(Shell *sh, Arena *a, Str name)
     if (!sh->opt[O_NOCLOBBER]) return 0;
     Stat st = pathstat(sh, *a, name, 1);
     if (!st.err && st.type==FT_FILE) {
-        shellerror(sh, *a, concat(a, name, ": cannot overwrite existing file"));
+        Str msg = concat(a, name, ": cannot overwrite existing file");
+        shellerror(sh, *a, msg);
         return 1;
     }
     return 0;
@@ -1129,7 +1142,8 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                 flushbout(sh);
                 fdwrite(sh, 2, finish(&b));
                 Str what = r->word ? r->word->text : fmti64(a, r->dst);
-                shellerror(sh, *a, concat3(a, what, ": ", errtext(E_INVAL)));
+                Str msg = concat3(a, what, ": ", errtext(E_INVAL));
+                shellerror(sh, *a, msg);
                 return 0;
             }
             Str var = r->srcvar->text;
@@ -1139,7 +1153,8 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                                : getvar(sh, a, var).value;
                 fd = parsefd(val);
                 if (fd < 0) {
-                    shellerror(sh, *a, concat(a, r->srcvar->text, ": ambiguous redirect"));
+                    Str msg = concat(a, r->srcvar->text, ": ambiguous redirect");
+                    shellerror(sh, *a, msg);
                     return 0;
                 }
             } else {
@@ -1149,7 +1164,8 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
             }
         }
         if (fd<0 || fd>=FDMAX) {
-            shellerror(sh, *a, concat(a, fmti64(a, fd), ": Bad file descriptor"));
+            Str msg = concat(a, fmti64(a, fd), ": Bad file descriptor");
+            shellerror(sh, *a, msg);
             return 0;
         }
 
@@ -1242,7 +1258,8 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                         fdset(sh, 2, f, kept, a);
                         break;
                     }
-                    shellerror(sh, *a, concat(a, w, ": ambiguous redirect"));
+                    Str msg = concat(a, w, ": ambiguous redirect");
+                    shellerror(sh, *a, msg);
                     return 0;
                 }
                 b32 dflt = fd == (r->op==R_DUPOUTWORD || r->op==R_MOVEOUTWORD);
@@ -1259,7 +1276,8 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                     flushbout(sh);
                     fdwrite(sh, 2, finish(&b));
                 }
-                shellerror(sh, *a, concat(a, bad, ": Bad file descriptor"));
+                Str msg = concat(a, bad, ": Bad file descriptor");
+                shellerror(sh, *a, msg);
                 return 0;
             }
             b32 wasopen = !!t->fd[fd];
@@ -1299,10 +1317,12 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
         }
         if (setfdvar) {
             Str var = r->srcvar->text;
-            b32 ok  = find(var, "[")>=0 ? assignto(sh, *a, var, fmti64(a, fd))
-                                        : setvar(sh, *a, var, fmti64(a, fd));
+            Str num = fmti64(a, fd);
+            b32 ok  = find(var, "[")>=0 ? assignto(sh, *a, var, num)
+                                        : setvar(sh, *a, var, num);
             if (!ok) {
-                shellerror(sh, *a, concat(a, var, ": cannot assign fd to variable"));
+                Str msg = concat(a, var, ": cannot assign fd to variable");
+                shellerror(sh, *a, msg);
                 fdset(sh, fd, 0, kept, a);
                 return 0;
             }
@@ -1610,7 +1630,8 @@ static Stat dirstat(Shell *sh)
 static Stat pathstat(Shell *sh, Arena a, Str path, b32 follow)
 {
     if (sh->pathmode == PM_POSIX) {
-        return os_stat(sh->os, a, absolute(sh, &a, path), follow);
+        Str full = absolute(sh, &a, path);
+        return os_stat(sh->os, a, full, follow);
     }
     Stat    s = {};
     PathRes r = resolve(sh, &a, path.len ? path : Str("."));
@@ -2302,7 +2323,8 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
 
 static b32 isshellscript(Shell *sh, Arena a, Str path)
 {
-    Opened o = os_open(sh->os, a, absolute(sh, &a, path), OF_READ, 0);
+    Str full = absolute(sh, &a, path);
+    Opened o = os_open(sh->os, a, full, OF_READ, 0);
     if (o.err) return 0;
     u8 buf[80];
     iz n = os_read(sh->os, o.h, buf, countof(buf));
@@ -2318,7 +2340,8 @@ static b32 isshellscript(Shell *sh, Arena a, Str path)
 // with a trailing CR shown as ^M. Null without a #! line.
 static Str scriptinterp(Shell *sh, Arena *a, Str path)
 {
-    Opened o = os_open(sh->os, *a, absolute(sh, a, path), OF_READ, 0);
+    Str full = absolute(sh, a, path);
+    Opened o = os_open(sh->os, *a, full, OF_READ, 0);
     if (o.err) return {};
     u8 buf[128];
     iz n = os_read(sh->os, o.h, buf, countof(buf));
@@ -2369,7 +2392,8 @@ static Str readwholefile(Shell *sh, Arena *a, Str path, i32 *err)
         *err = c.err;
         return c.text;
     }
-    Opened o = os_open(sh->os, *a, absolute(sh, a, path), OF_READ, 0);
+    Str full = absolute(sh, a, path);
+    Opened o = os_open(sh->os, *a, full, OF_READ, 0);
     *err = o.err;
     if (o.err) return {};
     Buf b(a, 4096);
@@ -2445,7 +2469,8 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
     Str path = found;
     b32 slash = haspath(sh, name);
     if (sh->restricted && slash) {
-        shellerror(sh, a, concat3(&a, name, Str(": restricted: "), "cannot specify `/' in command names"));
+        Str msg = concat3(&a, name, Str(": restricted: "), "cannot specify `/' in command names");
+        shellerror(sh, a, msg);
         return 1;
     }
     if (found.data) {
@@ -2473,7 +2498,8 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         if (!path.data && !getvar(sh, &a, "PATH").set) {
             // bash tries the bare name, in the working directory
             undotemps(sh, argv);
-            shellerror(sh, a, concat(&a, name, ": No such file or directory"));
+            Str msg = concat(&a, name, ": No such file or directory");
+            shellerror(sh, a, msg);
             return 127;
         } else if (!path.data) {
             Str shown = name;
@@ -2483,7 +2509,8 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
                 shown = finish(&b);
             }
             undotemps(sh, argv);
-            shellerror(sh, a, concat(&a, shown, ": command not found"));
+            Str msg = concat(&a, shown, ": command not found");
+            shellerror(sh, a, msg);
             return 127;
         }
     }
@@ -2585,16 +2612,19 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
             syserror(sh, a, finish(&b));
             return 126;
         } else if (err == E_NOENT) {
-            shellerror(sh, a, concat(&a, path, ": cannot execute: required file not found"));
+            Str msg = concat(&a, path, ": cannot execute: required file not found");
+            shellerror(sh, a, msg);
             return 127;
         }
     }
     if (err == E_NOENT) {
         // a stale remembered path is reported as such
-        shellerror(sh, a, concat(&a, path, ": No such file or directory"));
+        Str msg = concat(&a, path, ": No such file or directory");
+        shellerror(sh, a, msg);
         return 127;
     }
-    shellerror(sh, a, concat3(&a, path, Str(": "), errtext(err)));
+    Str msg = concat3(&a, path, Str(": "), errtext(err));
+    shellerror(sh, a, msg);
     return err==E_NOENT ? 127 : 126;
 }
 
@@ -2655,9 +2685,10 @@ static void checkfuncnest(Shell *sh, Str name, Arena scratch)
     Got nest = getvar(sh, &scratch, "FUNCNEST");
     i64 limit = 0;
     if (nest.set && parsei64(nest.value, &limit) && limit>0 && sh->funcdepth>=limit) {
-        shellerror(sh, scratch, concat3(&scratch, name,
+        Str msg = concat3(&scratch, name,
                    Str(": maximum function nesting level exceeded ("),
-                   concat(&scratch, nest.value, ")")));
+                   concat(&scratch, nest.value, ")"));
+        shellerror(sh, scratch, msg);
         sh->status = 1;
         escape(sh, ESC_ABORT);
     }
@@ -2876,7 +2907,8 @@ static b32 doassignments(Shell *sh, Arena *a, Word *w, iz n)
             Str base, sub;
             if (splitref(name, &base, &sub)) {
                 Arena t = *a;
-                shellerror(sh, t, concat(&t, name, ": cannot assign list to array member"));
+                Str msg = concat(&t, name, ": cannot assign list to array member");
+                shellerror(sh, t, msg);
                 return 0;
             }
             if (!assigncompound(sh, *a, name, body, append ? SV_APPEND : 0)) {
@@ -3100,7 +3132,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             }
             Value *cur = lookup(sh, as[i].name);
             if (later && !(cur && (cur->attrs & V_READONLY)) && validvarname(as[i].name)) {
-                pushed[i] = pushtemp(sh, *a, as[i].name, tempvalue(sh, a, as[i]));
+                Str value = tempvalue(sh, a, as[i]);
+                pushed[i] = pushtemp(sh, *a, as[i].name, value);
             }
         }
         for (iz i = nassign-1; i >= 0; i--) {
@@ -3116,7 +3149,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             if (validvarname(as[i].name)) {
                 as[kept++] = as[i];
             } else {
-                shellerror(sh, scratch, concat3(&scratch, "`", as[i].name, "': not a valid identifier"));
+                Str msg = concat3(&scratch, "`", as[i].name, "': not a valid identifier");
+                shellerror(sh, scratch, msg);
             }
         }
         nassign = kept;
@@ -3197,7 +3231,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         for (iz i = 0; i < nassign; i++) {
             Value *cur = lookup(sh, as[i].name);
             if (cur && (cur->attrs & V_READONLY)) {
-                shellerror(sh, scratch, concat(&scratch, as[i].name, ": readonly variable"));
+                Str msg = concat(&scratch, as[i].name, ": readonly variable");
+                shellerror(sh, scratch, msg);
                 unwind(sh, mark);
                 sh->status = 1;
                 escape(sh, special&&!fn ? ESC_FATAL : ESC_DISCARD);
@@ -3229,7 +3264,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
                     }
                 }
             } else {
-                pushtemp(sh, scratch, as[i].name, tempvalue(sh, &scratch, as[i]));
+                Str value = tempvalue(sh, &scratch, as[i]);
+                pushtemp(sh, scratch, as[i].name, value);
             }
         }
         if (fn) {
@@ -3280,7 +3316,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
                 i32 e   = sh->writeerr;
                 b32 keep = e==E_PIPE || e==E_NOSPC || e==E_ACCES || e==E_NOMEM;
                 Str why  = errtext(keep ? e : E_BADF);
-                builtinerror(sh, scratch, name, concat(&scratch, "write error: ", why));
+                Str msg = concat(&scratch, "write error: ", why);
+                builtinerror(sh, scratch, name, msg);
                 sh->status = 1;
             }
         }
@@ -3311,7 +3348,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         // (no setlocale warning: bash sets the locale only in the child)
         sh->nolocwarn = 1;
         for (iz i = 0; i < nassign; i++) {
-            pushtemp(sh, scratch, as[i].name, tempvalue(sh, &scratch, as[i]));
+            Str value = tempvalue(sh, &scratch, as[i]);
+            pushtemp(sh, scratch, as[i].name, value);
         }
         sh->nolocwarn = 0;
         // As bash, a program finds its own path in $_
@@ -3550,7 +3588,8 @@ static i32 condregex(Shell *sh, Arena a, Str s, Str re)
     RxComp rc = rxcompile(re, flags, &a);
     if (!rc.re) {
         Str msg = concat3(&a, "invalid regular expression `", re, "': ");
-        builtinerror(sh, a, "[[", concat(&a, msg, rxerrors[rc.err]));
+        Str msg2 = concat(&a, msg, rxerrors[rc.err]);
+        builtinerror(sh, a, "[[", msg2);
         return 2;
     }
     i32      ng = rc.re->nsub + 1;
@@ -3566,7 +3605,8 @@ static i32 condregex(Shell *sh, Arena a, Str s, Str re)
     Value *val = assignslot(sh, a, name, aflags & ~SV_FORCE);
     if (!val || (val->attrs & V_NOASSIGN)) return !ok;
     if (val->arr && val->arr->bucket) {
-        builtinerror(sh, a, "[[", concat(&a, name, ": not an indexed array"));
+        Str msg = concat(&a, name, ": not an indexed array");
+        builtinerror(sh, a, "[[", msg);
         return !ok;
     }
     toarray(sh, val);
@@ -3685,7 +3725,8 @@ static b32 arithpart(Shell *sh, Arena scratch, Word *w, Arith *r = 0)
     if (w) e = trimleft(expandstring(sh, &scratch, w->text, XC_ARITH|XC_DQUOTE));
     if (!e.len) e = "1";
     if (sh->opt[O_XTRACE]) {
-        traceline(sh, scratch, concat3(&scratch, "(( ", e, " ))"));
+        Str msg = concat3(&scratch, "(( ", e, " ))");
+        traceline(sh, scratch, msg);
     }
     Arith t = evalarithcmd(sh, &scratch, e, "((");
     if (r) *r = t;
@@ -3763,7 +3804,8 @@ static void timereport(Shell *sh, Arena scratch, i64 real, b32 posix)
         default: {
             // As bash: an error instead of the whole report
             Str bad = {&fmt.data[j], 1};
-            shellerror(sh, scratch, concat3(&scratch, "TIMEFORMAT: `", bad, "': invalid format character"));
+            Str msg = concat3(&scratch, "TIMEFORMAT: `", bad, "': invalid format character");
+            shellerror(sh, scratch, msg);
             return;
         }
         }
@@ -3799,13 +3841,15 @@ static void execfuncdef(Shell *sh, Node *n, Arena scratch)
     Str name = n->name->text;
     sh->line = sh->funcdepth || !sh->lexer ? n->line : sh->lexer->lineno;
     if (n->name->flags & (W_HASDOLLAR|W_QUOTED)) {
-        shellerror(sh, scratch, concat3(&scratch, "`", name, "': not a valid identifier"));
+        Str msg = concat3(&scratch, "`", name, "': not a valid identifier");
+        shellerror(sh, scratch, msg);
         sh->status = 1;
         return;
     }
     Builtin *special = sh->opt[O_POSIX] ? findbuiltin(sh, name) : 0;
     if (special && (special->flags & B_SPECIAL)) {
-        shellerror(sh, scratch, concat3(&scratch, "`", name, "': is a special builtin"));
+        Str msg = concat3(&scratch, "`", name, "': is a special builtin");
+        shellerror(sh, scratch, msg);
         sh->status = 2;
         if (!sh->interactive) {
             sh->exiting = 1;
@@ -3828,7 +3872,8 @@ static void execfuncdef(Shell *sh, Node *n, Arena scratch)
     Func *old = findfunc(sh, name);
     if (old && (old->attrs & V_READONLY)) {
         sh->line = errline;  // as bash: where the parser got to
-        shellerror(sh, scratch, concat(&scratch, name, ": readonly function"));
+        Str msg = concat(&scratch, name, ": readonly function");
+        shellerror(sh, scratch, msg);
         sh->status = 1;
         return;
     }
@@ -3883,7 +3928,8 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
     }
     Str var = n->name->text;
     if (!validvarname(var)) {
-        shellerror(sh, scratch, concat3(&scratch, "`", var, "': not a valid identifier"));
+        Str msg = concat3(&scratch, "`", var, "': not a valid identifier");
+        shellerror(sh, scratch, msg);
         sh->status = 1;
         posixbadvar(sh);
         return;
@@ -4014,7 +4060,8 @@ static void execcase(Shell *sh, Node *n, Arena scratch)
         return;
     }
     if (sh->opt[O_XTRACE]) {
-        traceline(sh, scratch, concat3(&scratch, "case ", n->words->text, " in"));
+        Str msg = concat3(&scratch, "case ", n->words->text, " in");
+        traceline(sh, scratch, msg);
     }
     Str word = expandstring(sh, &scratch, n->words->text, wordctx(sh, n->words));
     b32 ran  = 0;
@@ -4051,7 +4098,8 @@ static void execarith(Shell *sh, Node *n, Arena scratch)
     if (sh->traps && debugcompound(sh, n, scratch)) return;
     Str text = expandstring(sh, &scratch, n->arith->text, XC_ARITH|XC_DQUOTE);
     if (sh->opt[O_XTRACE]) {
-        traceline(sh, scratch, concat3(&scratch, "(( ", text, " ))"));
+        Str msg = concat3(&scratch, "(( ", text, " ))");
+        traceline(sh, scratch, msg);
     }
     Arith r = evalarithcmd(sh, &scratch, text, "((");
     sh->status = r.ok ? !r.value : 1;
@@ -4381,7 +4429,8 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
         // As bash, which checks before it sets its line: the error cites
         // the line of the enclosing for, case, call or top-level command
         sh->line = sh->ctlline;
-        shellerror(sh, scratch, concat3(&scratch, "`", var, "': not a valid identifier"));
+        Str msg = concat3(&scratch, "`", var, "': not a valid identifier");
+        shellerror(sh, scratch, msg);
         sh->line = n->line;
         sh->status = 1;
         posixbadvar(sh);

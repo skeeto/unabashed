@@ -2179,7 +2179,8 @@ static PatSpan probespan(Str pat, Str s, i32 mode, i32 flags, b32 wide, Arena sc
         return r;
     }
 
-    if (!patmatch(anypat(&scratch, pat, mode, flags, wide), s, flags, scratch)) {
+    Str pattern = anypat(&scratch, pat, mode, flags, wide);
+    if (!patmatch(pattern, s, flags, scratch)) {
         return r;
     }
     iz mlen = bashmatchlen(pat, wide);

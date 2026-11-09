@@ -1038,7 +1038,8 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         if (ext[k] || ext[k+1] || grouped) {
             OsPipe p = os_pipe(sh->os);
             if (p.err) {
-                shellerror(sh, scratch, concat(&scratch, "pipe error: ", errtext(p.err)));
+                Str msg = concat(&scratch, "pipe error: ", errtext(p.err));
+                shellerror(sh, scratch, msg);
                 for (i32 j = 0; j < k; j++) {
                     fileunref(sh, in[j+1]);
                     fileunref(sh, out[j]);

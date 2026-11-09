@@ -314,7 +314,8 @@ static PcOpts pcparse(Shell *sh, Arena *a, Str name, Str *args, iz nargs)
                     opt = args[++i];
                 } else {
                     u8 o[2] = {'-', c};
-                    builtinerror(sh, *a, name, concat(a, clone(a, Str{o, 2}), ": option requires an argument"));
+                    Str msg = concat(a, clone(a, Str{o, 2}), ": option requires an argument");
+                    builtinerror(sh, *a, name, msg);
                     usageerror(sh, *a, name);
                     r.status = 2;
                     return r;
@@ -346,7 +347,8 @@ static PcOpts pcparse(Shell *sh, Arena *a, Str name, Str *args, iz nargs)
                     if (pactions[j].name == opt) act = j;
                 }
                 if (act < 0) {
-                    builtinerror(sh, *a, name, concat(a, opt, ": invalid action name"));
+                    Str msg = concat(a, opt, ": invalid action name");
+                    builtinerror(sh, *a, name, msg);
                     r.status = 2;
                     return r;
                 }
@@ -357,7 +359,8 @@ static PcOpts pcparse(Shell *sh, Arena *a, Str name, Str *args, iz nargs)
                     if (poptions[j] == opt) o = j;
                 }
                 if (o < 0) {
-                    builtinerror(sh, *a, name, concat(a, opt, ": invalid option name"));
+                    Str msg = concat(a, opt, ": invalid option name");
+                    builtinerror(sh, *a, name, msg);
                     r.status = 2;
                     return r;
                 }
@@ -384,7 +387,8 @@ static PcOpts pcparse(Shell *sh, Arena *a, Str name, Str *args, iz nargs)
             } continue;
             default: {
                 u8 o[2] = {'-', c};
-                invalidoption(sh, *a, name, clone(a, Str{o, 2}));
+                Str copy = clone(a, Str{o, 2});
+                invalidoption(sh, *a, name, copy);
                 r.status = 2;
                 return r;
             }
@@ -824,9 +828,12 @@ static Str const pcvarnames[6] = {
 static void pcbind(Shell *sh, Arena a, PcCtx *x, PcWords *w, b32 exported)
 {
     setvar(sh, a, pcvarnames[0], x->line);
-    setvar(sh, a, pcvarnames[1], fmti64(&a, pccharcount(takehead(x->line, x->point))));
-    setvar(sh, a, pcvarnames[2], fmti64(&a, sh->comptype));
-    setvar(sh, a, pcvarnames[3], fmti64(&a, sh->compkey));
+    Str num = fmti64(&a, pccharcount(takehead(x->line, x->point)));
+    setvar(sh, a, pcvarnames[1], num);
+    Str num2 = fmti64(&a, sh->comptype);
+    setvar(sh, a, pcvarnames[2], num2);
+    Str num3 = fmti64(&a, sh->compkey);
+    setvar(sh, a, pcvarnames[3], num3);
     if (exported) {
         for (i32 i = 0; i < 4; i++) setattrs(sh, pcvarnames[i], V_EXPORT, 0);
         return;
@@ -842,7 +849,8 @@ static void pcbind(Shell *sh, Arena a, PcCtx *x, PcWords *w, b32 exported)
     for (iz i = 0; v && i < w->w.len; i++) {
         setelem(sh, a, pcvarnames[4], i, {}, w->w[i]);
     }
-    setvar(sh, a, pcvarnames[5], fmti64(&a, w->cword));
+    Str num4 = fmti64(&a, w->cword);
+    setvar(sh, a, pcvarnames[5], num4);
 }
 
 static void pcunbind(Shell *sh)
@@ -856,7 +864,8 @@ static Slice<Str> pcfunction(Shell *sh, Arena *a, CompSpec *cs, PcCtx *x,
     Str   name = cs->str[PS_FUNC];
     Func *fn   = findfunc(sh, name);
     if (!fn || !fn->body) {
-        builtinerror(sh, *a, "completion", concat3(a, "function `", name, "' not found"));
+        Str msg = concat3(a, "function `", name, "' not found");
+        builtinerror(sh, *a, "completion", msg);
         if (sh->editor && x->live) {
             // The message is on the line: the prompt and line again below
             edbell(sh->editor);
@@ -1422,7 +1431,8 @@ static PcLive pcrun(Shell *sh, Arena *a, PcCtx *x)
         return out;
     }
     if (pass == 33) {
-        builtinerror(sh, *a, "", concat3(a, "warning: programmable_completion: ", orig, ": possible retry loop"));
+        Str msg = concat3(a, "warning: programmable_completion: ", orig, ": possible retry loop");
+        builtinerror(sh, *a, "", msg);
     }
     return out;
 }

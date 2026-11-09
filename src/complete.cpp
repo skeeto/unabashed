@@ -410,7 +410,8 @@ static Str compexe(Shell *sh, Arena a, Str path, Str n)
     }
     Str bare = takehead(path, path.len-4);
     // The name exactly, without msys's implied .exe
-    if (os_stat(sh->os, a, absolute(sh, &a, bare), 0).err) n.len -= 4;
+    Str full = absolute(sh, &a, bare);
+    if (os_stat(sh->os, a, full, 0).err) n.len -= 4;
     return n;
 }
 
@@ -431,13 +432,15 @@ static Slice<Str> compcommands(Editor *ed, Shell *sh, Comp *c, Str w)
             }
             c->udir = concat(a, pre, cuthead(c->udir, tpre.len));
             for (iz i = 0; i < m.len; i++) {
-                m[i] = compexe(sh, *a, joinpath(a, c->odir, cuthead(m[i], c->udir.len)), m[i]);
+                Str path = joinpath(a, c->odir, cuthead(m[i], c->udir.len));
+                m[i] = compexe(sh, *a, path, m[i]);
             }
             return m;
         }
         Slice<Str> m = compfiles(ed, sh, c, w, 2);
         for (iz i = 0; i < m.len; i++) {
-            m[i] = compexe(sh, *a, joinpath(a, c->odir, cuthead(m[i], c->udir.len)), m[i]);
+            Str path = joinpath(a, c->odir, cuthead(m[i], c->udir.len));
+            m[i] = compexe(sh, *a, path, m[i]);
         }
         return m;
     }
@@ -478,9 +481,11 @@ static Slice<Str> compcommands(Editor *ed, Shell *sh, Comp *c, Str w)
         for (Dirent *e = pathlist(sh, a, dir, &err); e; e = e->next) {
             if (e->type == FT_DIR) continue;
             if (!compeq(ed, e->name, w, w.len)) continue;
-            Stat st = pathstat(sh, *a, joinpath(a, dir, e->name), 1);
+            Str path = joinpath(a, dir, e->name);
+            Stat st = pathstat(sh, *a, path, 1);
             if (st.err || st.type==FT_DIR || !canexec(sh, st)) continue;
-            m = compadd(c, m, compexe(sh, *a, joinpath(a, dir, e->name), e->name));
+            Str path2 = joinpath(a, dir, e->name);
+            m = compadd(c, m, compexe(sh, *a, path2, e->name));
         }
     }
     return m;

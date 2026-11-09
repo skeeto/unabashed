@@ -112,7 +112,8 @@ static Str missingdll(Shell *sh, Arena *a, Str native, Slice<Str> env)
         b32 found = 0;
         for (iz d = 0; !found && d < dirs.len; d++) {
             Arena t = *a;
-            Stat  s = os_stat(sh->os, t, concat(&t, dirs[d], dll), 1);
+            Str path = concat(&t, dirs[d], dll);
+            Stat  s = os_stat(sh->os, t, path, 1);
             found = !s.err && s.type==FT_FILE;
         }
         if (!found) return dll;
@@ -406,7 +407,8 @@ static Slice<Str> envexes(Shell *sh, Arena *a, Slice<Str> env)
             Arena t = *a;
             Str   p = slashify(&t, n.tail, '/');
             if (!hasdrive(p) || os_stat(sh->os, t, p, 1).err!=E_NOENT) break;
-            Stat x = os_stat(sh->os, t, concat(&t, p, ".exe"), 1);
+            Str path = concat(&t, p, ".exe");
+            Stat x = os_stat(sh->os, t, path, 1);
             if (!x.err && x.type==FT_FILE) env[i] = concat(a, env[i], ".exe");
             break;
         }
@@ -575,7 +577,8 @@ static Target selftarget(Shell *sh, Arena *a, Str image, i32 width,
                          Slice<Str> argv, Slice<Str> env)
 {
     Target t = {};
-    Stat   f = os_stat(sh->os, *a, concat(a, installroot(image), "/etc/fstab"), 1);
+    Str path2 = concat(a, installroot(image), "/etc/fstab");
+    Stat   f = os_stat(sh->os, *a, path2, 1);
     b32    msys = personaof(argv[0], !f.err) == PM_MSYS;
     t.path    = image;
     t.cmdline = cmdline(a, argv, msys ? SPLIT_CYGWIN : SPLIT_MSVCRT);

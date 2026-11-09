@@ -982,12 +982,14 @@ static b32 bindcommand(Editor *ed, Shell *sh, Str arg, Arena a)
             if (s[i]=='\\' && i+1<s.len) i++;
         }
         if (i == s.len) {
-            builtinerror(sh, a, "bind", concat(&a, "no closing `\"' in ", arg));
+            Str msg = concat(&a, "no closing `\"' in ", arg);
+            builtinerror(sh, a, "bind", msg);
             return 0;
         }
     }
     if (!s.len || s[0]!='"' || i+1>=s.len || s[i+1]!=':') {
-        builtinerror(sh, a, "bind", concat(&a, arg, ": first non-whitespace character is not `\"'"));
+        Str msg = concat(&a, arg, ": first non-whitespace character is not `\"'");
+        builtinerror(sh, a, "bind", msg);
         return 0;
     }
     Str seq = rlkeyseq(&a, span(s.data+1, s.data+i));

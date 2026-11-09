@@ -75,7 +75,8 @@ static void usageerror(Shell *sh, Arena a, Str name)
 
 static void invalidoption(Shell *sh, Arena a, Str name, Str opt)
 {
-    builtinerror(sh, a, name, concat(&a, opt, ": invalid option"));
+    Str msg = concat(&a, opt, ": invalid option");
+    builtinerror(sh, a, name, msg);
     usageerror(sh, a, name);
 }
 
@@ -97,7 +98,8 @@ static iz scanopts(Shell *sh, Arena a, Str name, Str *args, iz nargs,
             for (; at<opts.len && opts[at]!=w[k]; at++) {}
             if (at == opts.len) {
                 u8 opt[2] = {'-', w[k]};
-                invalidoption(sh, a, name, clone(&a, Str{opt, 2}));
+                Str copy = clone(&a, Str{opt, 2});
+                invalidoption(sh, a, name, copy);
                 return -1;
             }
             *flags |= (u32)1 << at;
@@ -109,7 +111,8 @@ static iz scanopts(Shell *sh, Arena a, Str name, Str *args, iz nargs,
 static void notident(Shell *sh, Arena a, Str name, Str word)
 {
     sh->bifatal = 1;
-    builtinerror(sh, a, name, concat3(&a, "`", word, "': not a valid identifier"));
+    Str msg = concat3(&a, "`", word, "': not a valid identifier");
+    builtinerror(sh, a, name, msg);
 }
 
 static b32 parsei64(Str s, i64 *out)
@@ -311,7 +314,8 @@ static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
         i64 v;
         if (!parsei64(args[i], &v)) {
             // bash 5.3 reports it and carries on without exiting
-            builtinerror(sh, scratch, "exit", concat(&scratch, args[i], ": numeric argument required"));
+            Str msg = concat(&scratch, args[i], ": numeric argument required");
+            builtinerror(sh, scratch, "exit", msg);
             sh->bifatal = 1;
             return 2;
         } else if (i+1 < nargs) {
@@ -376,7 +380,8 @@ static i32 b_caller(Shell *sh, Str *args, iz nargs, Arena scratch)
     if (!arrayelem(sh, &scratch, "FUNCNAME", 0).data) return 1;
     i64 n = 0;
     if (!parsei64(args[i], &n)) {
-        builtinerror(sh, scratch, "caller", concat(&scratch, args[i], ": invalid number"));
+        Str msg = concat(&scratch, args[i], ": invalid number");
+        builtinerror(sh, scratch, "caller", msg);
         usageerror(sh, scratch, "caller");
         return 2;
     }
@@ -403,7 +408,8 @@ static i32 b_return(Shell *sh, Str *args, iz nargs, Arena scratch)
     i64 v   = 0;
     if (i < nargs) {
         if (!parsei64(args[i], &v)) {
-            builtinerror(sh, scratch, "return", concat(&scratch, args[i], ": numeric argument required"));
+            Str msg = concat(&scratch, args[i], ": numeric argument required");
+            builtinerror(sh, scratch, "return", msg);
             sh->bifatal = 1;
             bad = 1;
         } else if (i+1 < nargs) {
@@ -446,7 +452,8 @@ static i32 loopcontrol(Shell *sh, Str *args, iz nargs, Arena scratch, i32 flow)
     if (i < nargs) {
         if (!parsei64(args[i], &n)) {
             // Fatal in a non-interactive shell
-            builtinerror(sh, scratch, name, concat(&scratch, args[i], ": numeric argument required"));
+            Str msg = concat(&scratch, args[i], ": numeric argument required");
+            builtinerror(sh, scratch, name, msg);
             sh->status  = 2;
             sh->exiting = 1;
             escape(sh, ESC_EXIT);
@@ -458,7 +465,8 @@ static i32 loopcontrol(Shell *sh, Str *args, iz nargs, Arena scratch, i32 flow)
             escape(sh, ESC_ABORT);
         }
         if (n < 1) {
-            builtinerror(sh, scratch, name, concat(&scratch, args[i], ": loop count out of range"));
+            Str msg = concat(&scratch, args[i], ": loop count out of range");
+            builtinerror(sh, scratch, name, msg);
             sh->flow = FLOW_BREAK;
             sh->flowcount = sh->loopdepth;
             return 1;
@@ -527,7 +535,8 @@ static Str printablename(Shell *sh, Arena *a, Str s, b32 portable)
 static i32 sourcenotfound(Shell *sh, Arena scratch, Str name, Str file, b32 cmd)
 {
     file = printablename(sh, &scratch, file, 0);
-    builtinerror(sh, scratch, name, concat(&scratch, file, ": file not found"));
+    Str msg = concat(&scratch, file, ": file not found");
+    builtinerror(sh, scratch, name, msg);
     if (sh->opt[O_POSIX] && !sh->interactive && !cmd) {
         sh->status  = 1;
         sh->exiting = 1;
@@ -553,7 +562,8 @@ static b32 restrictedhash(Shell *sh, Arena scratch, Str cmd, Str path)
         if (cmd.data) {
             restricted(sh, scratch, cmd, path);
         } else {
-            shellerror(sh, scratch, concat(&scratch, path, ": restricted"));
+            Str msg = concat(&scratch, path, ": restricted");
+            shellerror(sh, scratch, msg);
         }
         return 0;
     }
@@ -647,13 +657,15 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     Stat st = pathstat(sh, scratch, path, 1);
     if (!st.err && st.type==FT_DIR) {
-        builtinerror(sh, scratch, name, concat(&scratch, file, ": is a directory"));
+        Str msg = concat(&scratch, file, ": is a directory");
+        builtinerror(sh, scratch, name, msg);
         return 1;
     }
     i32 err;
     Str src = readwholefile(sh, &scratch, path, &err);
     if (err) {
-        shellerror(sh, scratch, concat3(&scratch, file, Str(": "), errtext(err)));
+        Str msg = concat3(&scratch, file, Str(": "), errtext(err));
+        shellerror(sh, scratch, msg);
         if (sh->opt[O_POSIX] && !sh->interactive && !cmd) {
             sh->status  = 1;  // as a file not found
             sh->exiting = 1;
@@ -669,7 +681,8 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     src.len -= nnul;
     if (nnul > 512) {
-        builtinerror(sh, scratch, name, concat(&scratch, file, ": cannot execute binary file"));
+        Str msg = concat(&scratch, file, ": cannot execute binary file");
+        builtinerror(sh, scratch, name, msg);
         return 126;
     }
     args[i] = path;  // the name it goes by: "./f" when . found it
@@ -1001,7 +1014,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             Str opt[] = {"-i", "-n", "-a", "-A"};
             for (i32 k = 0; k < countof(bad); k++) {
                 if (on & bad[k]) {
-                    builtinerror(sh, scratch, name, concat(&scratch, opt[k], ": invalid option"));
+                    Str msg = concat(&scratch, opt[k], ": invalid option");
+                    builtinerror(sh, scratch, name, msg);
                     return 1;
                 }
             }
@@ -1024,9 +1038,11 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             Func *f = findfunc(sh, args[i]);
             if (!f) {
                 if (name=="export" || name=="readonly") {
-                    builtinerror(sh, scratch, name, concat(&scratch, args[i], ": not a function"));
+                    Str msg = concat(&scratch, args[i], ": not a function");
+                    builtinerror(sh, scratch, name, msg);
                 } else if (print && !funcnames) {
-                    builtinerror(sh, scratch, name, concat(&scratch, args[i], ": not found"));
+                    Str msg = concat(&scratch, args[i], ": not found");
+                    builtinerror(sh, scratch, name, msg);
                 }
                 status = 1;
                 continue;
@@ -1034,10 +1050,12 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             b32 modify = !print && (on|off);  // attributes, not a listing
             if (modify && name=="export" && (on & V_EXPORT) &&
                     !exportablefunc(args[i])) {
-                builtinerror(sh, scratch, name, concat(&scratch, args[i], ": cannot export"));
+                Str msg = concat(&scratch, args[i], ": cannot export");
+                builtinerror(sh, scratch, name, msg);
                 status = 1;
             } else if (modify && (off & V_READONLY) && (f->attrs & V_READONLY)) {
-                builtinerror(sh, scratch, name, concat(&scratch, args[i], ": readonly function"));
+                Str msg = concat(&scratch, args[i], ": readonly function");
+                builtinerror(sh, scratch, name, msg);
                 status = 1;
             } else if (modify) {
                 uz attrs = (f->attrs | (on & fattrs)) & ~(uz)(off & fattrs);
@@ -1125,7 +1143,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 v = 0;  // local -p shows this function's own only
             }
             if (!v) {
-                builtinerror(sh, scratch, name, concat(&scratch, a, ": not found"));
+                Str msg = concat(&scratch, a, ": not found");
+                builtinerror(sh, scratch, name, msg);
                 status = 1;
                 continue;
             }
@@ -1204,7 +1223,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 // ref+=x appends to the name, which may come back to ref
                 Str nv = concat(&scratch, old->str, val);
                 if (nv==vname || (splitref(nv, &sn, &ss) && sn==vname)) {
-                    shellerror(sh, scratch, concat(&scratch, vname, ": nameref variable self references not allowed"));
+                    Str msg = concat(&scratch, vname, ": nameref variable self references not allowed");
+                    shellerror(sh, scratch, msg);
                     status = 1;
                     continue;
                 }
@@ -1220,7 +1240,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         Value *raw = global ? globalvalue(sh, vname) : rawlookup(sh, vname);
         if (raw && (raw->attrs & V_NAMEREF) && hassub && eq<a.len) {
             // declare -n r; declare r[1]=x: r stops being a nameref
-            shellerror(sh, scratch, concat3(&scratch, "warning: ", vname, ": removing nameref attribute"));
+            Str msg = concat3(&scratch, "warning: ", vname, ": removing nameref attribute");
+            shellerror(sh, scratch, msg);
             Value *nv = setattrs(sh, vname, 0, V_NAMEREF);
             nv->str = {};
             raw = nv;
@@ -1233,7 +1254,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             Ref r = resolveref(sh, vname, global);
             b32 offref = !!(off & V_NAMEREF);
             if (offref && r.last && r.last->str.data && (r.last->attrs & V_READONLY)) {
-                builtinerror(sh, scratch, name, concat(&scratch, vname, ": readonly variable"));
+                Str msg = concat(&scratch, vname, ": readonly variable");
+                builtinerror(sh, scratch, name, msg);
                 status = 1;
                 continue;
             }
@@ -1258,7 +1280,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             }
             raw = rawlookup(sh, vname);
             if (raw && (raw->attrs & V_NAMEREF) && hassub && eq<a.len) {
-                shellerror(sh, scratch, concat3(&scratch, "warning: ", vname, ": removing nameref attribute"));
+                Str msg = concat3(&scratch, "warning: ", vname, ": removing nameref attribute");
+                shellerror(sh, scratch, msg);
                 Value *nv = setattrs(sh, vname, 0, V_NAMEREF);
                 nv->str = {};
             }
@@ -1359,13 +1382,15 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             continue;
         }
         if ((off & (V_ARRAY|V_ASSOC)) && (isarr || isassoc)) {
-            builtinerror(sh, scratch, name, concat(&scratch, vname, ": cannot destroy array variables in this way"));
+            Str msg = concat(&scratch, vname, ": cannot destroy array variables in this way");
+            builtinerror(sh, scratch, name, msg);
             status = 1;
             continue;
         }
         Value *self = global ? globalvalue(sh, vname) : rawlookup(sh, vname);
         if (onref && (isarr || isassoc)) {
-            builtinerror(sh, scratch, name, concat(&scratch, vname, ": reference variable cannot be an array"));
+            Str msg = concat(&scratch, vname, ": reference variable cannot be an array");
+            builtinerror(sh, scratch, name, msg);
             status = 1;
             continue;
         }
@@ -1396,7 +1421,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             isref = 0;
         }
         if (onref && self && (self->attrs & V_READONLY)) {
-            builtinerror(sh, scratch, name, concat(&scratch, vname, ": readonly variable"));
+            Str msg = concat(&scratch, vname, ": readonly variable");
+            builtinerror(sh, scratch, name, msg);
             status = 1;
             continue;
         }
@@ -1430,7 +1456,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             // a quoted name='(...)' is a list only for an array, and
             // name[sub]='(...)' for a new one is an element, as bash
             if (!exists && !creating) {
-                shellerror(sh, scratch, concat3(&scratch, "warning: ", a, ": quoted compound array assignment deprecated"));
+                Str msg = concat3(&scratch, "warning: ", a, ": quoted compound array assignment deprecated");
+                shellerror(sh, scratch, msg);
             }
             compound = exists || creating;
             if (compound) hassub = 0;
@@ -1517,7 +1544,8 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
     if (!v || !v->top) return 0;
     Value *cur = v->top;
     if (cur->attrs & V_READONLY) {
-        builtinerror(sh, scratch, "unset", concat(&scratch, name, ": cannot unset: readonly variable"));
+        Str msg = concat(&scratch, name, ": cannot unset: readonly variable");
+        builtinerror(sh, scratch, "unset", msg);
         sh->bifatal = 1;
         return 1;
     }
@@ -1555,14 +1583,16 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
         if (idx && quiet) {
             return 0;
         } else if (idx) {
-            builtinerror(sh, scratch, "unset", concat(&scratch, name, ": not an array variable"));
+            Str msg = concat(&scratch, name, ": not an array variable");
+            builtinerror(sh, scratch, "unset", msg);
             return 1;
         }
         return unsetvar(sh, name) ? 0 : 1;
     }
     if (idx < 0) idx = (i64)((u64)idx + (u64)amax(cur->arr) + 1);  // wraps, as bash
     if (idx < 0) {
-        builtinerror(sh, scratch, "unset", concat3(&scratch, "[", sub, "]: bad array subscript"));
+        Str msg = concat3(&scratch, "[", sub, "]: bad array subscript");
+        builtinerror(sh, scratch, "unset", msg);
         return 1;
     }
     Value *val = ownvalue(sh, &v->top);
@@ -1619,7 +1649,8 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (funcs || (!vars && (!valid || !rawlookup(sh, base)))) {
             Func *f = findfunc(sh, name);
             if (f && (f->attrs & V_READONLY)) {
-                builtinerror(sh, scratch, "unset", concat(&scratch, name, ": cannot unset: readonly function"));
+                Str msg = concat(&scratch, name, ": cannot unset: readonly function");
+                builtinerror(sh, scratch, "unset", msg);
                 sh->bifatal = 1;
                 status = 1;
             } else if (f) {
@@ -1653,11 +1684,13 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (dyn==DYN_BASH_LINENO || dyn==DYN_BASH_SOURCE ||
                 dyn==DYN_BASH_ARGV || dyn==DYN_BASH_ARGC) {
             // As bash, the call stack's arrays are not unsettable
-            builtinerror(sh, scratch, "unset", concat(&scratch, base, ": cannot unset"));
+            Str msg = concat(&scratch, base, ": cannot unset");
+            builtinerror(sh, scratch, "unset", msg);
             sh->bifatal = 1;
             status = 1;
         } else if (!unsetvar(sh, base)) {
-            builtinerror(sh, scratch, "unset", concat(&scratch, base, ": cannot unset: readonly variable"));
+            Str msg = concat(&scratch, base, ": cannot unset: readonly variable");
+            builtinerror(sh, scratch, "unset", msg);
             sh->bifatal = 1;
             status = 1;
         }
@@ -1671,7 +1704,8 @@ static i32 b_shift(Shell *sh, Str *args, iz nargs, Arena scratch)
     iz  i = skipdashdash(args, nargs, 1);
     if (i < nargs) {
         if (!parsei64(args[i], &n)) {
-            builtinerror(sh, scratch, "shift", concat(&scratch, args[i], ": numeric argument required"));
+            Str msg = concat(&scratch, args[i], ": numeric argument required");
+            builtinerror(sh, scratch, "shift", msg);
             sh->bifatal = 1;
             return 2;
         }
@@ -1828,7 +1862,8 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
                 }
                 Str oname = args[++i];
                 if (!setoptionbyname(sh, oname, on)) {
-                    builtinerror(sh, scratch, "set", concat(&scratch, oname, ": invalid option name"));
+                    Str msg = concat(&scratch, oname, ": invalid option name");
+                    builtinerror(sh, scratch, "set", msg);
                     sh->bifatal = 1;
                     return 2;
                 }
@@ -1959,7 +1994,8 @@ static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (has && (oflag ? setoptions[k].name : shoptnames[k])==args[i]) idx = k;
         }
         if (idx<0 && !hidden) {
-            builtinerror(sh, scratch, "shopt", concat(&scratch, args[i], oflag ? Str(": invalid option name") : Str(": invalid shell option name")));
+            Str msg = concat(&scratch, args[i], oflag ? Str(": invalid option name") : Str(": invalid shell option name"));
+            builtinerror(sh, scratch, "shopt", msg);
             status = 1;
             continue;
         }
@@ -2189,7 +2225,8 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
     }
     if (r < 0) {
         Str shown = printablename(sh, &scratch, dir, 0);
-        builtinerror(sh, scratch, name, concat3(&scratch, shown, Str(": "), errtext(err)));
+        Str msg = concat3(&scratch, shown, Str(": "), errtext(err));
+        builtinerror(sh, scratch, name, msg);
         return 1;
     }
     return r;
@@ -2263,7 +2300,8 @@ static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
             if (cand.len) {
                 if (msys) cand = msysdir(sh, &scratch, cand);
                 Str abs = isabsolute(sh, cand) || native ? cand : joinpath(&scratch, base, cand);
-                Stat st = pathstat(sh, scratch, cdcanon(sh, &scratch, abs), 1);
+                Str full = cdcanon(sh, &scratch, abs);
+                Stat st = pathstat(sh, scratch, full, 1);
                 if (!st.err && st.type==FT_DIR) {
                     target = abs;
                     printdir = 1;
@@ -2403,13 +2441,15 @@ static void direrror(Shell *sh, Arena a, Str name, Str arg)
     if (!sh->ndirs) {
         builtinerror(sh, a, name, "directory stack empty");
     } else {
-        builtinerror(sh, a, name, concat(&a, arg, ": directory stack index out of range"));
+        Str msg = concat(&a, arg, ": directory stack index out of range");
+        builtinerror(sh, a, name, msg);
     }
 }
 
 static i32 badnumber(Shell *sh, Arena a, Str name, Str word)
 {
-    builtinerror(sh, a, name, concat(&a, word, ": invalid number"));
+    Str msg = concat(&a, word, ": invalid number");
+    builtinerror(sh, a, name, msg);
     usageerror(sh, a, name);
     return 2;
 }
@@ -2571,7 +2611,8 @@ static i32 b_popd(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (!parsei64(cuthead(a, 1), &which)) return badnumber(sh, scratch, "popd", a);
             word = a;
         } else if (a.len) {
-            builtinerror(sh, scratch, "popd", concat(&scratch, a, ": invalid argument"));
+            Str msg = concat(&scratch, a, ": invalid argument");
+            builtinerror(sh, scratch, "popd", msg);
             usageerror(sh, scratch, "popd");
             return 2;
         } else {
@@ -2803,7 +2844,8 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                 } else if (i+1 < nargs) {
                     val = args[++i];
                 } else {
-                    builtinerror(sh, scratch, "read", concat3(&scratch, "-", Str{&a.data[k], 1}, ": option requires an argument"));
+                    Str msg = concat3(&scratch, "-", Str{&a.data[k], 1}, ": option requires an argument");
+                    builtinerror(sh, scratch, "read", msg);
                     usageerror(sh, scratch, "read");
                     return 2;
                 }
@@ -2818,14 +2860,16 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             case 'n':
             case 'N':
                 if (!parsei64(val, &nchars) || nchars < 0 || nchars > 0x7fffffff) {
-                    builtinerror(sh, scratch, "read", concat(&scratch, val, ": invalid number"));
+                    Str msg = concat(&scratch, val, ": invalid number");
+                    builtinerror(sh, scratch, "read", msg);
                     return 1;
                 }
                 exact = c == 'N';
                 break;
             case 't':
                 if (!parsetimeout(val, &timeout)) {
-                    builtinerror(sh, scratch, "read", concat(&scratch, val, ": invalid timeout specification"));
+                    Str msg = concat(&scratch, val, ": invalid timeout specification");
+                    builtinerror(sh, scratch, "read", msg);
                     return 1;
                 }
                 timed = 1;
@@ -2833,7 +2877,8 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             case 'u': {
                 i64 v;
                 if (!parsei64(val, &v) || v<0 || v>0x7fffffff) {
-                    builtinerror(sh, scratch, "read", concat(&scratch, val, ": invalid file descriptor specification"));
+                    Str msg = concat(&scratch, val, ": invalid file descriptor specification");
+                    builtinerror(sh, scratch, "read", msg);
                     return 1;
                 } else if (v>=FDMAX || !sh->fds->fd[v]) {
                     Str msg = concat(&scratch, fmti64(&scratch, v), ": invalid file descriptor: Bad file descriptor");
@@ -3187,7 +3232,8 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         Value *val = assignslot(sh, scratch, arrname, aflags & ~SV_FORCE);
         if (!val) return 1;
         if (val->arr && val->arr->bucket) {
-            builtinerror(sh, scratch, "read", concat(&scratch, arrname, ": not an indexed array"));
+            Str msg = concat(&scratch, arrname, ": not an indexed array");
+            builtinerror(sh, scratch, "read", msg);
             return 1;
         }
         toarray(sh, val);
@@ -3393,7 +3439,8 @@ static Str mfline(MfIn *in, Arena *a)
 static b32 mfcount(Shell *sh, Arena scratch, Str name, Str arg, i64 min, Str what, i64 *v)
 {
     if (!parsei64(arg, v) || *v<min || *v>0xffffffffll) {
-        builtinerror(sh, scratch, name, concat3(&scratch, arg, ": invalid ", what));
+        Str msg = concat3(&scratch, arg, ": invalid ", what);
+        builtinerror(sh, scratch, name, msg);
         return 0;
     }
     return 1;
@@ -3428,7 +3475,8 @@ static i32 b_mapfile(Shell *sh, Str *args, iz nargs, Arena scratch)
                     val = args[++i];
                 } else {
                     Str opt = span(a.data+k-1, a.data+k+1);
-                    builtinerror(sh, scratch, name, concat(&scratch, opt, ": option requires an argument"));
+                    Str msg = concat(&scratch, opt, ": option requires an argument");
+                    builtinerror(sh, scratch, name, msg);
                     usageerror(sh, scratch, name);
                     return 2;
                 }
@@ -3443,7 +3491,8 @@ static i32 b_mapfile(Shell *sh, Str *args, iz nargs, Arena scratch)
                 break;
             case 'O':
                 if (!parsei64(val, &origin) || origin<0 || origin>0xffffffffll) {
-                    builtinerror(sh, scratch, name, concat(&scratch, val, ": invalid array origin"));
+                    Str msg = concat(&scratch, val, ": invalid array origin");
+                    builtinerror(sh, scratch, name, msg);
                     return 1;
                 }
                 isorigin = 1;
@@ -3457,7 +3506,8 @@ static i32 b_mapfile(Shell *sh, Str *args, iz nargs, Arena scratch)
             case 'u': {
                 i64 v;
                 if (!parsei64(val, &v) || v<0 || v>0x7fffffff) {
-                    builtinerror(sh, scratch, name, concat(&scratch, val, ": invalid file descriptor specification"));
+                    Str msg = concat(&scratch, val, ": invalid file descriptor specification");
+                    builtinerror(sh, scratch, name, msg);
                     return 1;
                 } else if (v>=FDMAX || !sh->fds->fd[v]) {
                     Str msg = concat(&scratch, fmti64(&scratch, v), ": invalid file descriptor: Bad file descriptor");
@@ -3494,7 +3544,8 @@ static i32 b_mapfile(Shell *sh, Str *args, iz nargs, Arena scratch)
     Value *val = assignslot(sh, scratch, arrname, aflags);
     if (!val) return 1;
     if (val->arr && val->arr->bucket) {
-        builtinerror(sh, scratch, name, concat(&scratch, arrname, ": not an indexed array"));
+        Str msg = concat(&scratch, arrname, ": not an indexed array");
+        builtinerror(sh, scratch, name, msg);
         return 1;
     }
     toarray(sh, val);
@@ -3713,7 +3764,8 @@ static i32 b_type(Shell *sh, Str *args, iz nargs, Arena scratch)
     for (; i < nargs; i++) {
         if (!describe(sh, &scratch, args[i], mode, all, nofuncs)) {
             if (mode != 't' && mode != 'p' && mode != 'P') {
-                builtinerror(sh, scratch, "type", concat(&scratch, args[i], ": not found"));
+                Str msg = concat(&scratch, args[i], ": not found");
+                builtinerror(sh, scratch, "type", msg);
             }
             status = 1;
         }
@@ -3746,7 +3798,8 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
         for (; i < nargs; i++) {
             if (!describe(sh, &scratch, args[i], mode=='v' ? 'v' : 0, 0, 0, std)) {
                 if (mode == 'V') {
-                    builtinerror(sh, scratch, "command", concat(&scratch, args[i], ": not found"));
+                    Str msg = concat(&scratch, args[i], ": not found");
+                    builtinerror(sh, scratch, "command", msg);
                 }
                 status = 1;
             }
@@ -3767,7 +3820,8 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
         // -p: the standard utilities, whatever PATH holds
         found = pathsearch(sh, &scratch, stdpath(sh), args[i]);
         if (!found.data) {
-            shellerror(sh, scratch, concat(&scratch, args[i], ": command not found"));
+            Str msg = concat(&scratch, args[i], ": command not found");
+            shellerror(sh, scratch, msg);
             return 127;
         }
     }
@@ -3784,7 +3838,8 @@ static i32 b_builtin(Shell *sh, Str *args, iz nargs, Arena scratch)
     if (i == nargs) return 0;
     Builtin *b = findbuiltin(sh, args[i]);
     if (!b) {
-        builtinerror(sh, scratch, "builtin", concat(&scratch, args[i], ": not a shell builtin"));
+        Str msg = concat(&scratch, args[i], ": not a shell builtin");
+        builtinerror(sh, scratch, "builtin", msg);
         return 1;
     }
     return runbuiltin(sh, b, args+i, nargs-i, scratch);
@@ -3841,10 +3896,12 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
     if (!haspath(sh, name) && !(found = pathlookup(sh, &scratch, name)).data) {
         Stat st = pathstat(sh, scratch, name, 1);
         if (!st.err && st.type==FT_DIR) {
-            builtinerror(sh, scratch, "exec", concat(&scratch, name, ": cannot execute: Is a directory"));
+            Str msg = concat(&scratch, name, ": cannot execute: Is a directory");
+            builtinerror(sh, scratch, "exec", msg);
             status = 126;
         } else {
-            builtinerror(sh, scratch, "exec", concat(&scratch, name, ": not found"));
+            Str msg = concat(&scratch, name, ": not found");
+            builtinerror(sh, scratch, "exec", msg);
         }
     } else {
         if (!found.data) found = name;
@@ -3854,7 +3911,8 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
         failed = !canexec(sh, st);
         if (!st.err && st.type==FT_DIR) {
             // bash names the directory in full here
-            shellerror(sh, scratch, concat(&scratch, canonpath(&scratch, full), ": Is a directory"));
+            Str msg = concat(&scratch, canonpath(&scratch, full), ": Is a directory");
+            shellerror(sh, scratch, msg);
             status = 126;
         } else {
             // Replacing the process keeps $$ for the program, as bash;
@@ -3935,14 +3993,16 @@ static i32 b_alias(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (a && a->value.data) {
                 printalias(sh, scratch, a, reusable);
             } else {
-                builtinerror(sh, scratch, "alias", concat(&scratch, args[i], ": not found"));
+                Str msg = concat(&scratch, args[i], ": not found");
+                builtinerror(sh, scratch, "alias", msg);
                 status = 1;
             }
             continue;
         }
         if (!c.head.len || !validaliasname(c.head)) {
             Str name = c.head.len ? c.head : args[i];
-            builtinerror(sh, scratch, "alias", concat3(&scratch, "`", name, "': invalid alias name"));
+            Str msg = concat3(&scratch, "`", name, "': invalid alias name");
+            builtinerror(sh, scratch, "alias", msg);
             status = 1;
             continue;
         }
@@ -3968,7 +4028,8 @@ static i32 b_unalias(Shell *sh, Str *args, iz nargs, Arena scratch)
     for (; i < nargs; i++) {
         Alias *a = findalias(sh->aliases, args[i]);
         if (!a || !a->value.data) {
-            builtinerror(sh, scratch, "unalias", concat(&scratch, args[i], ": not found"));
+            Str msg = concat(&scratch, args[i], ": not found");
+            builtinerror(sh, scratch, "unalias", msg);
             status = 1;
             continue;
         }
@@ -4037,7 +4098,8 @@ static i32 getopts(Shell *sh, Str *args, iz nargs, Arena scratch)
     if (optind > ac) {
         optvar(sh, scratch, var, "?");
         unsetvar(sh, "OPTARG", 1);
-        setvar(sh, scratch, "OPTIND", fmti64(&scratch, ac+1));
+        Str num = fmti64(&scratch, ac+1);
+        setvar(sh, scratch, "OPTIND", num);
         return 1;
     }
     Str arg = av[optind-1];
@@ -4045,7 +4107,8 @@ static i32 getopts(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (arg.len<2 || arg[0]!='-' || arg=="--") {
             if (arg == "--") {
                 optind++;
-                setvar(sh, scratch, "OPTIND", fmti64(&scratch, optind));
+                Str num = fmti64(&scratch, optind);
+                setvar(sh, scratch, "OPTIND", num);
             }
             optvar(sh, scratch, var, "?");
             unsetvar(sh, "OPTARG", 1);
@@ -4109,7 +4172,8 @@ static i32 getopts(Shell *sh, Str *args, iz nargs, Arena scratch)
         optind++;
         sh->optchar = 1;
     }
-    setvar(sh, scratch, "OPTIND", fmti64(&scratch, optind));
+    Str num = fmti64(&scratch, optind);
+    setvar(sh, scratch, "OPTIND", num);
     return status;
 }
 
@@ -4286,7 +4350,8 @@ static i32 b_ulimit(Shell *sh, Str *args, iz nargs, Arena scratch)
             for (iz j = 0; j < arg.len; j++) digits &= arg[j]>='0' && arg[j]<='9';
             if (!digits) {
                 Str why = startswith(arg, "0x") ? Str(": invalid hex number") : ": invalid number";
-                builtinerror(sh, scratch, "ulimit", concat(&scratch, arg, why));
+                Str msg = concat(&scratch, arg, why);
+                builtinerror(sh, scratch, "ulimit", msg);
                 return 1;
             }
             for (iz j = 0; j < arg.len; j++) {
@@ -4294,7 +4359,8 @@ static i32 b_ulimit(Shell *sh, Str *args, iz nargs, Arena scratch)
                 v = v > (0x7fffffffffffffff-d)/10 ? 0x7fffffffffffffff : v*10 + d;
             }
             if (v > 0x7fffffffffffffff/ulimits[u].scale) {
-                builtinerror(sh, scratch, "ulimit", concat(&scratch, arg, ": limit out of range"));
+                Str msg = concat(&scratch, arg, ": limit out of range");
+                builtinerror(sh, scratch, "ulimit", msg);
                 return 1;
             }
             v *= ulimits[u].scale;
@@ -4417,7 +4483,8 @@ static i32 b_umask(Shell *sh, Str *args, iz nargs, Arena scratch)
         for (iz k = 0; k < s.len; k++) {
             if (s[k]>='0' && s[k]<='7') m = m*8 + (s[k] - '0');
             if (s[k]<'0' || s[k]>'7' || m>07777) {
-                builtinerror(sh, scratch, "umask", concat(&scratch, s, ": octal number out of range"));
+                Str msg = concat(&scratch, s, ": octal number out of range");
+                builtinerror(sh, scratch, "umask", msg);
                 return 1;
             }
         }
@@ -4537,13 +4604,15 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
             hashenter(sh, name, path, 0);
         } else if (del) {
             if (!hashremove(sh, name)) {
-                builtinerror(sh, scratch, "hash", concat(&scratch, name, ": not found"));
+                Str msg = concat(&scratch, name, ": not found");
+                builtinerror(sh, scratch, "hash", msg);
                 status = 1;
             }
         } else if (show) {  // -l alone with names hashes them, as bash
             HashCmd *h = hashfind(sh, name);
             if (!h) {
-                builtinerror(sh, scratch, "hash", concat(&scratch, name, ": not found"));
+                Str msg = concat(&scratch, name, ": not found");
+                builtinerror(sh, scratch, "hash", msg);
                 status = 1;
                 continue;
             }
@@ -4565,7 +4634,8 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
             hashremove(sh, name);  // looked up afresh, gone if not found
             Str found = pathlookup(sh, &scratch, name);
             if (!found.data) {
-                builtinerror(sh, scratch, "hash", concat(&scratch, name, ": not found"));
+                Str msg = concat(&scratch, name, ": not found");
+                builtinerror(sh, scratch, "hash", msg);
                 status = 1;
             } else {
                 hashenter(sh, name, found, 0);
@@ -4822,10 +4892,12 @@ static i32 b_enable(Shell *sh, Str *args, iz nargs, Arena scratch)
     for (; i < nargs; i++) {
         Builtin *b = anybuiltin(sh, args[i]);
         if (!b) {
-            builtinerror(sh, scratch, "enable", concat(&scratch, args[i], ": not a shell builtin"));
+            Str msg = concat(&scratch, args[i], ": not a shell builtin");
+            builtinerror(sh, scratch, "enable", msg);
             status = 1;
         } else if (flags & D) {
-            builtinerror(sh, scratch, "enable", concat(&scratch, args[i], ": not dynamically loaded"));
+            Str msg = concat(&scratch, args[i], ": not dynamically loaded");
+            builtinerror(sh, scratch, "enable", msg);
             status = 1;
         } else {
             iz  k   = b - builtins;

@@ -297,7 +297,8 @@ static i32 runtrap(Shell *sh, i32 idx)
     i32   busy  = sh->trapbusy;
     if (idx >= TRAP_DEBUG) sh->trapbusy |= 1 << (idx-TRAP_DEBUG);
     // BASH_TRAPSIG: the trap's number, while it runs
-    pushtemp(sh, a, "BASH_TRAPSIG", fmti64(&a, idx));
+    Str num = fmti64(&a, idx);
+    pushtemp(sh, a, "BASH_TRAPSIG", num);
     Value *v = lookup(sh, "BASH_TRAPSIG");
     if (v) v->attrs &= ~V_EXPORT;
     sh->evaldepth++;
@@ -864,7 +865,8 @@ static i32 b_trap(Shell *sh, Str *args, iz nargs, Arena scratch)
         for (; i < nargs; i++) {
             i32 idx = parsesig(args[i], 1);
             if (idx < 0) {
-                builtinerror(sh, scratch, "trap", concat(&scratch, args[i], ": invalid signal specification"));
+                Str msg = concat(&scratch, args[i], ": invalid signal specification");
+                builtinerror(sh, scratch, "trap", msg);
                 status = 1;
             } else if (t && t[idx].data) {
                 if (action) {
@@ -898,7 +900,8 @@ static i32 b_trap(Shell *sh, Str *args, iz nargs, Arena scratch)
     for (; i < nargs; i++) {
         i32 idx = parsesig(args[i], 1);
         if (idx < 0) {
-            builtinerror(sh, scratch, "trap", concat(&scratch, args[i], ": invalid signal specification"));
+            Str msg = concat(&scratch, args[i], ": invalid signal specification");
+            builtinerror(sh, scratch, "trap", msg);
             status = 1;
             continue;
         }
@@ -928,7 +931,8 @@ static i32 killlist(Shell *sh, Arena scratch, Str *args, iz nargs)
             }
             if (ok && n>128) n -= 128;
             if (!ok || n>=NSIGNAL) {
-                builtinerror(sh, scratch, "kill", concat(&scratch, a, ": invalid signal specification"));
+                Str msg = concat(&scratch, a, ": invalid signal specification");
+                builtinerror(sh, scratch, "kill", msg);
                 status = 1;
                 continue;
             }
@@ -941,7 +945,8 @@ static i32 killlist(Shell *sh, Arena scratch, Str *args, iz nargs)
         }
         i32 sig = parsesig(a, 0);
         if (sig < 0) {
-            builtinerror(sh, scratch, "kill", concat(&scratch, a, ": invalid signal specification"));
+            Str msg = concat(&scratch, a, ": invalid signal specification");
+            builtinerror(sh, scratch, "kill", msg);
             status = 1;
             continue;
         }
@@ -996,7 +1001,8 @@ static i32 b_kill(Shell *sh, Str *args, iz nargs, Arena scratch)
         Str spec = {};
         if (a=="-s" || a=="-n") {
             if (i+1 == nargs) {
-                builtinerror(sh, scratch, "kill", concat(&scratch, a, ": option requires an argument"));
+                Str msg = concat(&scratch, a, ": option requires an argument");
+                builtinerror(sh, scratch, "kill", msg);
                 return 1;
             }
             spec = args[++i];
@@ -1007,7 +1013,8 @@ static i32 b_kill(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         sig = parsesig(spec, 0);
         if (sig < 0) {
-            builtinerror(sh, scratch, "kill", concat(&scratch, spec, ": invalid signal specification"));
+            Str msg = concat(&scratch, spec, ": invalid signal specification");
+            builtinerror(sh, scratch, "kill", msg);
             return 1;
         }
         i++;
@@ -1026,7 +1033,8 @@ static i32 b_kill(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (err < 0) {
                 status = 1;
             } else if (err) {
-                builtinerror(sh, scratch, "kill", concat3(&scratch, a, Str(": "), errtext(err)));
+                Str msg = concat3(&scratch, a, Str(": "), errtext(err));
+                builtinerror(sh, scratch, "kill", msg);
                 status = 1;
             }
             continue;
@@ -1035,7 +1043,8 @@ static i32 b_kill(Shell *sh, Str *args, iz nargs, Arena scratch)
         b32 ok = digits.len>0;
         for (iz k = 0; k < digits.len; k++) ok &= digit(digits[k]);
         if (!ok || !parsei64(a, &pid)) {
-            builtinerror(sh, scratch, "kill", concat3(&scratch, "`", a, "': not a pid or valid job spec"));
+            Str msg = concat3(&scratch, "`", a, "': not a pid or valid job spec");
+            builtinerror(sh, scratch, "kill", msg);
             status = 1;
             continue;
         }

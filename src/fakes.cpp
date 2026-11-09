@@ -9538,7 +9538,8 @@ static i32 fake_sed(Os *os, FakeCtx *ctx)
             fksedload(&s, data, name);
             FkOut file = {};
             if (inplace && suffix.len) {
-                Opened b = os_open(os, *p.a, concat(p.a, path, suffix),
+                Str path2 = concat(p.a, path, suffix);
+                Opened b = os_open(os, *p.a, path2,
                                    OF_WRITE|OF_CREATE|OF_TRUNC, st.mode & 0777);
                 if (!b.err) {
                     os_write(os, b.h, data.data, data.len);

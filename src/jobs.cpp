@@ -669,7 +669,8 @@ static Job *findjob(Shell *sh, Arena scratch, Str who, Str spec, b32 *ambiguous)
         }
         if (!match) continue;
         if (found) {
-            builtinerror(sh, scratch, who, concat(&scratch, w, ": ambiguous job spec"));
+            Str msg = concat(&scratch, w, ": ambiguous job spec");
+            builtinerror(sh, scratch, who, msg);
             *ambiguous = 1;
             return 0;
         }
@@ -1226,7 +1227,10 @@ static i32 jobkill(Shell *sh, Arena scratch, Str spec, i32 sig)
     b32  amb;
     Job *j = findjob(sh, scratch, "kill", spec, &amb);
     if (!j) {
-        if (!amb) builtinerror(sh, scratch, "kill", concat(&scratch, spec, ": no such job"));
+        if (!amb) {
+            Str msg = concat(&scratch, spec, ": no such job");
+            builtinerror(sh, scratch, "kill", msg);
+        }
         return -1;
     }
     if (!j->pgid) return killpid(sh, j->pid, sig);
@@ -1243,9 +1247,13 @@ static void setcoprocvars(Shell *sh, Arena scratch, Coproc *c)
     Value *v = assignslot(sh, scratch, name, flags);
     if (!v) return;
     toarray(sh, v);
-    setelem(sh, scratch, name, 0, {}, fmti64(&scratch, c->rfd), flags);
-    setelem(sh, scratch, name, 1, {}, fmti64(&scratch, c->wfd), flags);
-    setvar(sh, scratch, concat(&scratch, c->name, "_PID"), fmti64(&scratch, c->pid));
+    Str num = fmti64(&scratch, c->rfd);
+    setelem(sh, scratch, name, 0, {}, num, flags);
+    Str num2 = fmti64(&scratch, c->wfd);
+    setelem(sh, scratch, name, 1, {}, num2, flags);
+    Str name2 = concat(&scratch, c->name, "_PID");
+    Str num3 = fmti64(&scratch, c->pid);
+    setvar(sh, scratch, name2, num3);
 }
 
 // A coprocess ended and the shell noticed: drop its variables and
@@ -1263,7 +1271,8 @@ static void disposecoproc(Shell *sh, Coproc *c)
     Str    name = tempname(sh, c->name);  // what a nameref names
     Value *v    = lookup(sh, name);
     if (v && (v->attrs & V_READONLY)) {
-        shellerror(sh, scratch, concat(&scratch, c->name, ": cannot unset: readonly variable"));
+        Str msg = concat(&scratch, c->name, ": cannot unset: readonly variable");
+        shellerror(sh, scratch, msg);
     } else {
         unsetvar(sh, name);
     }
@@ -1301,7 +1310,8 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
     Sched *s = sh->sched;
     Str name = expandstring(sh, &scratch, n->name->text);
     if (!validvarname(name)) {
-        shellerror(sh, scratch, concat3(&scratch, "`", name, "': not a valid identifier"));
+        Str msg = concat3(&scratch, "`", name, "': not a valid identifier");
+        shellerror(sh, scratch, msg);
         sh->status = 1;
         return;
     }
@@ -1317,7 +1327,8 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
             os_close(sh->os, p1.r);
             os_close(sh->os, p1.w);
         }
-        shellerror(sh, scratch, concat(&scratch, "cannot make pipe for coprocess: ", errtext(p2.err)));
+        Str msg = concat(&scratch, "cannot make pipe for coprocess: ", errtext(p2.err));
+        shellerror(sh, scratch, msg);
         sh->status = 1;
         return;
     }
@@ -1475,7 +1486,8 @@ static i32 b_jobs(Shell *sh, Str *args, iz nargs, Arena scratch)
         b32  amb;
         Job *j = findjob(sh, scratch, "jobs", args[i], &amb);
         if (!j) {
-            builtinerror(sh, scratch, "jobs", concat(&scratch, args[i], ": no such job"));
+            Str msg = concat(&scratch, args[i], ": no such job");
+            builtinerror(sh, scratch, "jobs", msg);
             status = 1;
             continue;
         }
@@ -1488,7 +1500,10 @@ static i32 b_jobs(Shell *sh, Str *args, iz nargs, Arena scratch)
 // Set wait -p's variable.
 static void waitvar(Shell *sh, Arena scratch, Str var, i64 pid)
 {
-    if (var.len) assignto(sh, scratch, var, fmti64(&scratch, pid));
+    if (var.len) {
+        Str num = fmti64(&scratch, pid);
+        assignto(sh, scratch, var, num);
+    }
 }
 
 // wait -n: the first of the jobs (or of the given ones) to end.
@@ -1522,9 +1537,13 @@ static i32 waitany(Shell *sh, Arena scratch, Str *ids, iz nids, Str var)
         if (j && !ownjob(sh, j)) j = 0;
         if (!j) {
             if (ids[i].len && ids[i][0]=='%') {
-                if (!amb) builtinerror(sh, scratch, "wait", concat(&scratch, ids[i], ": no such job"));
+                if (!amb) {
+                    Str msg = concat(&scratch, ids[i], ": no such job");
+                    builtinerror(sh, scratch, "wait", msg);
+                }
             } else {
-                builtinerror(sh, scratch, "wait", concat3(&scratch, "`", ids[i], "': not a pid or valid job spec"));
+                Str msg = concat3(&scratch, "`", ids[i], "': not a pid or valid job spec");
+                builtinerror(sh, scratch, "wait", msg);
             }
             continue;
         }
@@ -1609,7 +1628,8 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
             return 1;
         }
         if (validvarname(var) && !unsetvar(sh, var)) {
-            builtinerror(sh, scratch, "wait", concat(&scratch, var, ": cannot unset: readonly variable"));
+            Str msg = concat(&scratch, var, ": cannot unset: readonly variable");
+            builtinerror(sh, scratch, "wait", msg);
             return 1;
         }
     }
@@ -1668,7 +1688,8 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
             b32 num = 1;
             for (iz k = 0; k < a.len; k++) num &= digit(a[k]);
             if (!num || !parsei64(a, &pid)) {
-                builtinerror(sh, scratch, "wait", concat3(&scratch, "`", a, "': not a pid or valid job spec"));
+                Str msg = concat3(&scratch, "`", a, "': not a pid or valid job spec");
+                builtinerror(sh, scratch, "wait", msg);
                 return 1;
             }
             polljobs(sh);
@@ -1703,7 +1724,8 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
                 if (sh->sched->cur->intr || (st>128 && sh->sig->pending)) return st;
                 continue;
             }
-            builtinerror(sh, scratch, "wait", concat3(&scratch, "pid ", a, " is not a child of this shell"));
+            Str msg = concat3(&scratch, "pid ", a, " is not a child of this shell");
+            builtinerror(sh, scratch, "wait", msg);
             status  = 127;
             lastpid = -1;
         } else if (a.len && a[0]=='%') {
@@ -1712,7 +1734,10 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
             Job *j = findjob(sh, scratch, "wait", a, &amb);
             if (j && !ownjob(sh, j)) j = 0;
             if (!j) {
-                if (!amb) builtinerror(sh, scratch, "wait", concat(&scratch, a, ": no such job"));
+                if (!amb) {
+                    Str msg = concat(&scratch, a, ": no such job");
+                    builtinerror(sh, scratch, "wait", msg);
+                }
                 status  = 127;
                 lastpid = -1;
                 continue;
@@ -1727,7 +1752,8 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
             collected(sh, scratch, j);
             if (sh->opt[O_POSIX]) cleanupjobs(sh);
         } else {
-            builtinerror(sh, scratch, "wait", concat3(&scratch, "`", a, "': not a pid or valid job spec"));
+            Str msg = concat3(&scratch, "`", a, "': not a pid or valid job spec");
+            builtinerror(sh, scratch, "wait", msg);
             status  = 1;
             lastpid = -1;
         }
@@ -1798,7 +1824,8 @@ static i32 b_disown(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (j && !ownjob(sh, j)) j = 0;
         if (!j) {
             Str shown = i<nargs ? a : Str("current");
-            builtinerror(sh, scratch, "disown", concat(&scratch, shown, ": no such job"));
+            Str msg = concat(&scratch, shown, ": no such job");
+            builtinerror(sh, scratch, "disown", msg);
             status = 1;
         } else if (nohup) {
             j->nohup = 1;
@@ -1820,7 +1847,8 @@ static Job *fgbgjob(Shell *sh, Arena scratch, Str who, Str *spec)
     if (!j) {
         if (!amb) {
             Str name = spec ? *spec : Str("current");
-            builtinerror(sh, scratch, who, concat(&scratch, name, ": no such job"));
+            Str msg = concat(&scratch, name, ": no such job");
+            builtinerror(sh, scratch, who, msg);
         }
         return 0;
     }

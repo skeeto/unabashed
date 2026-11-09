@@ -3106,11 +3106,14 @@ static void edshellcmd(Editor *ed, Shell *sh, Str cmd)
     Str   names[] = {"READLINE_LINE", "READLINE_POINT", "READLINE_MARK",
                      "READLINE_ARGUMENT"};
     setvar(sh, a, names[0], edtext(ed));
-    setvar(sh, a, names[1], fmti64(&a, edcharoff(ed, sh, ed->point)));
-    setvar(sh, a, names[2], fmti64(&a, edcharoff(ed, sh, ed->mark)));
+    Str num = fmti64(&a, edcharoff(ed, sh, ed->point));
+    setvar(sh, a, names[1], num);
+    Str num2 = fmti64(&a, edcharoff(ed, sh, ed->mark));
+    setvar(sh, a, names[2], num2);
     i32 nvars = 3;
     if (ed->argset || ed->count!=1) {
-        setvar(sh, a, names[3], fmti64(&a, ed->count));
+        Str num = fmti64(&a, ed->count);
+        setvar(sh, a, names[3], num);
         nvars = 4;
     }
     for (i32 i = 0; i < nvars; i++) setattrs(sh, names[i], V_EXPORT, 0);
@@ -5352,8 +5355,10 @@ static void edsize(Editor *ed, Shell *sh, Tty t)
     ed->setrows = t.rows;
     ed->setcols = t.cols;
     Arena a = *scratchat(sh, sh->capdepth+1);
-    setvar(sh, a, "LINES",   fmti64(&a, t.rows));
-    setvar(sh, a, "COLUMNS", fmti64(&a, t.cols));
+    Str num = fmti64(&a, t.rows);
+    setvar(sh, a, "LINES",   num);
+    Str num2 = fmti64(&a, t.cols);
+    setvar(sh, a, "COLUMNS", num2);
 }
 
 // The number of characters in the line, for read -n.

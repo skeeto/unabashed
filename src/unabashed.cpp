@@ -356,8 +356,9 @@ static void varchanged(Shell *sh, Str name)
             byte  mem[512];
             Arena scratch = {mem, mem+sizeof(mem)};
             if (g.value.len > 256) g.value = takehead(g.value, 256);
-            shellerror(sh, scratch, concat3(&scratch, "BASH_XTRACEFD: ", g.value,
-                                            Str(": invalid value for trace file descriptor")));
+            Str msg = concat3(&scratch, "BASH_XTRACEFD: ", g.value,
+                                            Str(": invalid value for trace file descriptor"));
+            shellerror(sh, scratch, msg);
         }
     } else if (name == "IGNOREEOF") {
         sh->opt[O_IGNOREEOF] = !!lookup(sh, name);  // set or not
@@ -534,12 +535,15 @@ static void startup(Shell *sh, Arena scratch, Str argv0, Startup *s)
         if (login && !s->noprofile) {
             Str windir = sh->paths->windir;
             Str drive  = windir.len>1 && windir[1]==':' ? takehead(windir, 2) : Str("C:");
-            startupfile(sh, scratch, concat(&scratch, drive, "/etc/profile"), s);
+            Str path = concat(&scratch, drive, "/etc/profile");
+            startupfile(sh, scratch, path, s);
             Str dir = takehead(sh->exe, sh->exe.len - lastpart(sh->exe).len);
-            startupfile(sh, scratch, concat(&scratch, dir, "../etc/profile"), s);
+            Str path2 = concat(&scratch, dir, "../etc/profile");
+            startupfile(sh, scratch, path2, s);
             Got home = getvar(sh, &scratch, "HOME");
             if (home.set) {
-                startupfile(sh, scratch, concat(&scratch, home.value, "/.profile"), s);
+                Str path = concat(&scratch, home.value, "/.profile");
+                startupfile(sh, scratch, path, s);
             }
         }
         if (sh->interactive) envfile(sh, scratch, "ENV", s);
@@ -660,7 +664,8 @@ static void pathsetup(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
 
     // fstab, read whole if it is there
     Str    fstab = {};
-    Opened o     = os_open(sh->os, scratch, concat(&scratch, root, "/etc/fstab"), OF_READ, 0);
+    Str path = concat(&scratch, root, "/etc/fstab");
+    Opened o     = os_open(sh->os, scratch, path, OF_READ, 0);
     if (!o.err) {
         Buf b(&scratch, 4096);
         for (;;) {
@@ -1362,7 +1367,8 @@ static void startoption(Shell *sh, Arena scratch, u8 c, b32 on, Str *name)
         Str msg = c=='o' ? Str(": invalid option name") : Str(": invalid shell option name");
         // bash names itself, as the builtin, for -o only
         Str cmd = c=='o' ? sh->name : Str{};
-        builtinerror(sh, scratch, cmd, concat(&scratch, *name, msg));
+        Str msg2 = concat(&scratch, *name, msg);
+        builtinerror(sh, scratch, cmd, msg2);
         sh->status = 2;
         escape(sh, ESC_EXIT);
     }
@@ -1754,7 +1760,8 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             if (!getvar(sh, &scratch, "HISTFILE").set) {
                 Str home = getvar(sh, &scratch, "HOME").value;
                 Str name = sh->opt[O_POSIX] ? Str("/.sh_history") : "/.bash_history";
-                setvar(sh, scratch, "HISTFILE", concat(&scratch, home, name));
+                Str name2 = concat(&scratch, home, name);
+                setvar(sh, scratch, "HISTFILE", name2);
             }
             histvarchanged(sh, "HISTCONTROL");
             histvarchanged(sh, "histchars");

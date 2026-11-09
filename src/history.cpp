@@ -660,7 +660,8 @@ static i32 b_history(Shell *sh, Str *args, iz nargs, Arena scratch)
             i32   r = 0;
             Str   x = histexpandarg(sh, &a, args[i], &r);
             if (r < 0) {
-                builtinerror(sh, a, "history", concat(&a, args[i], ": history expansion failed"));
+                Str msg = concat(&a, args[i], ": history expansion failed");
+                builtinerror(sh, a, "history", msg);
                 status = 1;
                 continue;
             }
@@ -681,7 +682,8 @@ static i32 b_history(Shell *sh, Str *args, iz nargs, Arena scratch)
             Str s = takehead(del, dash), e = cuthead(del, dash+1);
             i64 from = 0, to = 0;
             if (!histnum(s, &from) || !histnum(e, &to)) {
-                builtinerror(sh, scratch, "history", concat(&scratch, del, ": history position out of range"));
+                Str msg = concat(&scratch, del, ": history position out of range");
+                builtinerror(sh, scratch, "history", msg);
                 return 1;
             }
             Str which[2] = {s, e};
@@ -694,7 +696,8 @@ static i32 b_history(Shell *sh, Str *args, iz nargs, Arena scratch)
                     v -= h->base;
                 }
                 if (v<0 || v>=h->len) {
-                    builtinerror(sh, scratch, "history", concat(&scratch, which[k], ": history position out of range"));
+                    Str msg = concat(&scratch, which[k], ": history position out of range");
+                    builtinerror(sh, scratch, "history", msg);
                     return 1;
                 }
                 *vals[k] = v;
@@ -709,19 +712,22 @@ static i32 b_history(Shell *sh, Str *args, iz nargs, Arena scratch)
             Str what = ": invalid number";
             if (del.len>1 && del[0]=='0' && digit(del[1])) what = ": invalid octal number";
             if (del.len>1 && del[0]=='0' && (del[1]=='x' || del[1]=='X')) what = ": invalid hex number";
-            builtinerror(sh, scratch, "history", concat(&scratch, del, what));
+            Str msg = concat(&scratch, del, what);
+            builtinerror(sh, scratch, "history", msg);
             return 1;
         }
         i64 idx = 0;
         if (del.len && del[0]=='-') {
             idx = h->len + v;
             if (idx < 0) {
-                builtinerror(sh, scratch, "history", concat(&scratch, del, ": history position out of range"));
+                Str msg = concat(&scratch, del, ": history position out of range");
+                builtinerror(sh, scratch, "history", msg);
                 return 1;
             }
         } else {
             if (v<h->base || v>=h->base+h->len) {
-                builtinerror(sh, scratch, "history", concat(&scratch, del, ": history position out of range"));
+                Str msg = concat(&scratch, del, ": history position out of range");
+                builtinerror(sh, scratch, "history", msg);
                 return 1;
             }
             idx = v - h->base;
@@ -740,7 +746,8 @@ static i32 b_history(Shell *sh, Str *args, iz nargs, Arena scratch)
             }
             i64 n = 0;
             if (!parsei64(args[i], &n)) {
-                builtinerror(sh, scratch, "history", concat(&scratch, args[i], ": numeric argument required"));
+                Str msg = concat(&scratch, args[i], ": numeric argument required");
+                builtinerror(sh, scratch, "history", msg);
                 return 2;
             }
             if (n < 0) n = -n;
@@ -1750,7 +1757,8 @@ static void histfilesize(Shell *sh)
     Got   g = getvar(sh, &a, "HISTFILESIZE");
     i64   n = 0;
     if (!g.value.len || !histnum(g.value, &n) || n<0) return;
-    histtruncate(sh, histfile(sh, &a), n, a);
+    Str file = histfile(sh, &a);
+    histtruncate(sh, file, n, a);
     if (n < h->infile) h->infile = n;
 }
 
@@ -1799,7 +1807,8 @@ static i32 histfileop(Shell *sh, i32 op, Str *args, iz nargs, iz i, Arena scratc
         return !sh->interactive;
     }
     if (sh->restricted && find(file, "/")>=0) {
-        builtinerror(sh, scratch, "history", concat(&scratch, file, ": restricted"));
+        Str msg = concat(&scratch, file, ": restricted");
+        builtinerror(sh, scratch, "history", msg);
         return 1;
     }
     i32 err = 0;
@@ -1937,7 +1946,8 @@ static Opened fctemp(Shell *sh, Arena *a, Str *name)
         }
         *name = finish(&b);
         Arena t = *a;
-        o = os_open(sh->os, t, absolute(sh, &t, *name), OF_WRITE|OF_CREATE|OF_EXCL, 0600);
+        Str full = absolute(sh, &t, *name);
+        o = os_open(sh->os, t, full, OF_WRITE|OF_CREATE|OF_EXCL, 0600);
         if (o.err != E_EXIST) break;
     }
     return o;
@@ -2024,7 +2034,8 @@ static i32 b_fc(Shell *sh, Str *args, iz nargs, Arena scratch)
                 h->session -= h->session > 0;
             }
             Arena t = scratch;
-            checkadd(sh, 0, clone(&t, add), 1, t);
+            Str copy = clone(&t, add);
+            checkadd(sh, 0, copy, 1, t);
         }
         return fcrun(sh, cmd, scratch);
     }
@@ -2137,6 +2148,7 @@ static i32 b_fc(Shell *sh, Str *args, iz nargs, Arena scratch)
     } else {
         status = 1;
     }
-    os_unlink(sh->os, scratch, absolute(sh, &scratch, file));
+    Str full = absolute(sh, &scratch, file);
+    os_unlink(sh->os, scratch, full);
     return status;
 }

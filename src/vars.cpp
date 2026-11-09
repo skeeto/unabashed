@@ -166,7 +166,8 @@ static void refwarning(Shell *sh, Str name, Str msg)
     byte  mem[1024];
     Arena a = {mem, mem+sizeof(mem)};
     if (name.len > 256) name = takehead(name, 256);
-    shellerror(sh, a, concat3(&a, "warning: ", name, msg));
+    Str msg2 = concat3(&a, "warning: ", name, msg);
+    shellerror(sh, a, msg2);
 }
 
 // Follow the namerefs from name, as bash does: a chain may not come
@@ -667,7 +668,8 @@ static Value *assignvar(Shell *sh, Arena scratch, Var *v, i32 flags)
     }
     if (*slot && ((*slot)->attrs & V_READONLY) && !(flags & SV_FORCE)) {
         if (!(flags & SV_QUIET)) {
-            shellerror(sh, scratch, concat(&scratch, name, ": readonly variable"));
+            Str msg = concat(&scratch, name, ": readonly variable");
+            shellerror(sh, scratch, msg);
         }
         return 0;
     }
@@ -1096,7 +1098,8 @@ static Str arraytarget(Shell *sh, Arena scratch, Str name, i32 *flags, b32 list 
         builtinerror(sh, scratch, sh->bltname, msg);
         return {};
     } else if (!r.name.data && r.last && !r.last->str.len && list) {
-        shellerror(sh, scratch, concat3(&scratch, "warning: ", name, ": removing nameref attribute"));
+        Str msg = concat3(&scratch, "warning: ", name, ": removing nameref attribute");
+        shellerror(sh, scratch, msg);
         Value *nv = setattrs(sh, name, 0, V_NAMEREF);
         nv->str = {};
         return name;
@@ -1155,7 +1158,8 @@ static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str val
     switch (val->dyn) {
     case DYN_BASH_ALIASES:
         if (!validaliasname(key)) {
-            shellerror(sh, scratch, concat3(&scratch, "`", key, "': invalid alias name"));
+            Str msg = concat3(&scratch, "`", key, "': invalid alias name");
+            shellerror(sh, scratch, msg);
         } else {
             defalias(sh, key, value);
         }
@@ -1218,7 +1222,8 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
                 return assignelem(sh, scratch, b.name, b.sub, word, value, flags);
             } else if (base && (base->attrs & V_NAMEREF)) {
                 // a nameref cannot be an array
-                shellerror(sh, scratch, concat3(&scratch, "warning: ", b.name, ": removing nameref attribute"));
+                Str msg = concat3(&scratch, "warning: ", b.name, ": removing nameref attribute");
+                shellerror(sh, scratch, msg);
                 Value *nv = setattrs(sh, b.name, 0, V_NAMEREF);
                 nv->str = {};
             }
@@ -1444,7 +1449,8 @@ static b32 pushtemp(Shell *sh, Arena scratch, Str name, Str value)
     name = tempname(sh, name);
     Var   *v  = upsertvar(sh, name);
     if (v->top && (v->top->attrs & V_READONLY)) {
-        shellerror(sh, scratch, concat(&scratch, name, ": readonly variable"));
+        Str msg = concat(&scratch, name, ": readonly variable");
+        shellerror(sh, scratch, msg);
         return 0;
     }
     Value *n = (Value *)salloc(st, sizeof(Value));
