@@ -2853,9 +2853,18 @@ static b32 simpleexpand(Shell *sh, Arena *a, Str text, Slice<Str> *out)
     return 1;
 }
 
-// A word of literal text and quotes, holding no expansion or escape, as
-// "test" or 'a b'c: one field, its text without the quotes. Unquoted
-// text is as literalword allows. Returns 0 to decline.
+// Does a backslash in double quotes escape c, rather than stand for
+// itself?
+static b32 dqescaped(u8 c)
+{
+    return c=='$' || c=='`' || c=='"' || c=='\\';
+}
+
+// A word of literal text, quotes and escapes, holding no expansion, as
+// "test\n" or 'a b'c or a\ b: one field, its text with the quoting
+// removed. Unquoted text is as literalword allows. A backslash before a
+// newline, or before a carriage return outside quotes, declines, as
+// does anything else unusual: returns 0.
 static b32 quotedliteral(Arena *a, Str s, Str *out)
 {
     b32 quotes = 0;
@@ -2868,14 +2877,23 @@ static b32 quotedliteral(Arena *a, Str s, Str *out)
             continue;
         } else if (c == '"') {
             for (i++; i<s.len && s[i]!='"'; i++) {
-                if (s[i]=='$' || s[i]=='`' || s[i]=='\\') return 0;
+                if (s[i]=='$' || s[i]=='`') return 0;
+                if (s[i] == '\\') {
+                    if (i+1==s.len || s[i+1]=='\n') return 0;
+                    i++;  // past what it escapes, perhaps a quote
+                }
             }
             if (i == s.len) return 0;
             quotes = 1;
             continue;
+        } else if (c == '\\') {
+            if (i+1==s.len || s[i+1]=='\n' || s[i+1]=='\r') return 0;
+            i++;
+            quotes = 1;
+            continue;
         }
         switch (c) {
-        case '$': case '`': case '\\': case '~':
+        case '$': case '`': case '~':
         case '*': case '?': case '[': case '{': case '}': case '(':
         case ')': case '\r':
             return 0;
@@ -2885,10 +2903,16 @@ static b32 quotedliteral(Arena *a, Str s, Str *out)
     Buf b(a, s.len);
     for (iz i = 0; i < s.len; i++) {
         u8 c = s[i];
-        if (c=='\'' || c=='"') {
-            for (i++; s[i] != c; i++) putbyte(&b, s[i]);
+        if (c == '\'') {
+            for (i++; s[i] != '\''; i++) putbyte(&b, s[i]);
+        } else if (c == '"') {
+            for (i++; s[i] != '"'; i++) {
+                i += s[i]=='\\' && dqescaped(s[i+1]);
+                putbyte(&b, s[i]);
+            }
         } else {
-            putbyte(&b, c);
+            i += c == '\\';
+            putbyte(&b, s[i]);
         }
     }
     *out = finish(&b);
