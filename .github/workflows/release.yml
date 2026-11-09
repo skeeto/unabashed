@@ -33,7 +33,7 @@ jobs:
           tar -tzf "$name.tar.gz" "$name/unabashed.1" >/dev/null
           echo "TARBALL=$name.tar.gz" >>"$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ env.TARBALL }}
           path: ${{ env.TARBALL }}
@@ -43,6 +43,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # checkout leaves the tag lightweight; fetch the annotated tag
+          # so its message (sans subject and signature) is the notes.
+          git fetch --force origin "+$GITHUB_REF:$GITHUB_REF"
+          git tag -l --format='%(contents:body)' "$GITHUB_REF_NAME" >notes.md
           gh release create "$GITHUB_REF_NAME" "$TARBALL" \
-              --verify-tag --notes-from-tag \
+              --verify-tag --notes-file notes.md \
               --title "unabashed ${GITHUB_REF_NAME#v}"
