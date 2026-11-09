@@ -819,12 +819,16 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     Arena *a = &scratch;
     Got g;
 
-    // Identity: Linux as the oracle's, msys as Git Bash's, native as a
-    // MinGW build's
+    // Identity: POSIX as the build target (the platform layer's triple)
+    // or else the oracle's, msys as Git Bash's, native as a MinGW
+    // build's. HOSTTYPE and OSTYPE are the triple's cpu and os, as bash
+    // takes them from its configure triple.
     Str host = sizeof(void *)==4 ? Str("i686") : Str("x86_64");
-    Str mach = "x86_64-pc-linux-gnu";
+    Str mach = info->machtype.len ? info->machtype : Str("x86_64-pc-linux-gnu");
     Str bash = info->args && info->nargs ? Str("/usr/local/bin/bash") : Str("bash");
-    Str os   = "linux-gnu";
+    Cut cpu  = cut(mach, '-');
+    Str os   = cut(cpu.tail, '-').tail;
+    Str posixhost = cpu.head;
     Str shell = "/usr/local/bin/bash";
     if (sh->pathmode == PM_MSYS) {
         PathCtx c = pathctx(sh, a, {});
@@ -841,7 +845,7 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     }
     setvar(sh, scratch, "BASH", bash);
     setvar(sh, scratch, "BASH_VERSION", "5.3.0(1)-release");
-    setvar(sh, scratch, "HOSTTYPE", sh->pathmode==PM_POSIX ? Str("x86_64") : host);
+    setvar(sh, scratch, "HOSTTYPE", sh->pathmode==PM_POSIX ? posixhost : host);
     setvar(sh, scratch, "MACHTYPE", mach);
     setvar(sh, scratch, "OSTYPE", os);
     setvar(sh, scratch, "OPTERR", "1");

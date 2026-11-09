@@ -43,6 +43,9 @@ struct OsInfo {
     i64    gid;
     i64    egid;
     Str    host;
+    Str    machtype; // POSIX: cpu-vendor-os, as bash's configure triple,
+                     // for MACHTYPE, HOSTTYPE, OSTYPE; empty for the
+                     // test oracle's x86_64-pc-linux-gnu
     Handle std[3];
     InheritFd *inherit;  // descriptors above 2 from the parent: those open
     iz     ninherit;     // (POSIX), or the CRT's lpReserved2 blob (Windows)

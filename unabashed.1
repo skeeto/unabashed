@@ -804,6 +804,16 @@ A 32-bit build has
 .B i686
 in place of
 .BR x86_64 .
+On other systems they name the build's target as bash's configure
+would, such as
+.B linux\-gnu
+and
+.BR aarch64\-unknown\-linux\-gnu ,
+or on macOS
+.B darwin
+and
+.B aarch64\-apple\-darwin
+with the kernel release appended.
 .TP
 POSIX mode
 In msys mode a shell named

@@ -14,6 +14,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <time.h>
@@ -1531,6 +1532,69 @@ static Str fromcstr(char *s)
     return r;
 }
 
+// The build target as a configure triple, cpu-vendor-os, for MACHTYPE
+// (and through it HOSTTYPE and OSTYPE), with the names config.guess
+// gives. On macOS and the BSDs the os carries the kernel release, as
+// config.guess appends it (darwin24.4.0, freebsd14.1).
+static Str machtype(Arena *a)
+{
+    #if __aarch64__
+    Str cpu = "aarch64";
+    #elif __x86_64__
+    Str cpu = "x86_64";
+    #elif __i386__
+    Str cpu = "i686";
+    #elif __arm__
+    Str cpu = "arm";
+    #elif __powerpc64__ && __LITTLE_ENDIAN__
+    Str cpu = "powerpc64le";
+    #elif __powerpc64__
+    Str cpu = "powerpc64";
+    #elif __powerpc__
+    Str cpu = "powerpc";
+    #elif __riscv && __riscv_xlen==64
+    Str cpu = "riscv64";
+    #else
+    Str cpu = "unknown";
+    #endif
+
+    Str vendor = "unknown";
+    b32 release = 1;
+    #if __APPLE__
+    vendor = "apple";
+    Str os = "darwin";
+    #elif __FreeBSD__
+    Str os = "freebsd";
+    #elif __OpenBSD__
+    Str os = "openbsd";
+    #elif __NetBSD__
+    Str os = "netbsd";
+    #elif __linux__
+    #if __x86_64__ || __i386__
+    vendor = "pc";
+    #endif
+    #if __ANDROID__
+    Str os = "linux-android";
+    #elif __GLIBC__
+    Str os = "linux-gnu";
+    #else
+    Str os = "linux-musl";
+    #endif
+    release = 0;
+    #else
+    Str os = "unknown";
+    release = 0;
+    #endif
+
+    Str r = concat3(a, cpu, "-", vendor);
+    r = concat3(a, r, "-", os);
+    struct utsname u;
+    if (release && !uname(&u)) {
+        r = concat(a, r, cut(fromcstr(u.release), '-').head);  // 14.1-RELEASE
+    }
+    return r;
+}
+
 // The descriptors above 2 the shell inherited, found with one poll of
 // them all (POLLNVAL marks a closed one) before the shell opens any,
 // each moved out of the way as the shell's own: at 10 and up, and
@@ -1615,6 +1679,7 @@ int main(int argc, char **argv)
         host[255] = 0;
         info.host = fromcstr(host);
     }
+    info.machtype = machtype(&a);
     struct rlimit rl;
     if (!getrlimit(RLIMIT_STACK, &rl) && rl.rlim_cur!=RLIM_INFINITY) {
         info.stack = (iz)rl.rlim_cur;
