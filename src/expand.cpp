@@ -521,10 +521,25 @@ static Str expandword(X *x, Str word, i32 ctx)
     return expandfield(x, word, ctx).data;
 }
 
+// Does a pattern word unquoted expand to itself? As literalword, but
+// with pattern characters, which stay as they are.
+static b32 literalpatword(Str s)
+{
+    for (iz i = 0; i < s.len; i++) {
+        switch (s[i]) {
+        case '$': case '`': case '\'': case '"': case '\\': case '~':
+        case '{': case '}': case '(': case ')': case '\r':
+            return 0;
+        }
+    }
+    return 1;
+}
+
 // Expand a pattern: quoted characters are backslash-escaped.
 static Str expandpat(X *x, Str word, i32 ctx)
 {
     if (literalword(word)) return word;  // nothing quoted to escape
+    if (!(ctx & (XC_DQUOTE|XC_HEREDOC)) && literalpatword(word)) return word;
     X *y = newx(x->sh, x->a);
     y->nosplit = 1;
     expandinto(y, word, ctx | XC_PATTERN);
