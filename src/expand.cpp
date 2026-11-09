@@ -2759,10 +2759,29 @@ static Str fieldstr(XField f)
 // "${name}", with a valid identifier (not a special or positional).
 struct SimpleParam {
     Str name;
+    Str word;    // after the operator
+    u8  op;      // 0, '-' or '+'
+    b32 colon;   // :- or :+, where empty counts as unset
     b32 quoted;
     b32 ok;
 };
 
+// Does the word of ${x:-word} stand for itself: no expansion, quote,
+// escape, tilde or brace?
+static b32 plainopword(Str s)
+{
+    for (iz i = 0; i < s.len; i++) {
+        u8 c = s[i];
+        if (c<' ' || c=='$' || c=='`' || c=='\\' || c=='\'' || c=='"' ||
+                c=='~' || c=='{' || c=='}') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+// $name or ${name}, perhaps double-quoted, or ${name-word} with any of
+// - :- + :+ and a plain word.
 static SimpleParam simpleparam(Str s)
 {
     SimpleParam r = {};
@@ -2775,6 +2794,18 @@ static SimpleParam simpleparam(Str s)
     if (s[0] == '{') {
         if (s.len<3 || s[s.len-1]!='}') return r;
         s = takehead(cuthead(s, 1), s.len-2);
+        iz n = 0;
+        for (; n<s.len && identchar(s[n]); n++) {}
+        Str rest = cuthead(s, n);
+        s = takehead(s, n);
+        if (rest.len) {
+            r.colon = rest[0] == ':';
+            rest    = cuthead(rest, r.colon);
+            if (!rest.len || (rest[0]!='-' && rest[0]!='+')) return r;
+            r.op   = rest[0];
+            r.word = cuthead(rest, 1);
+            if (!plainopword(r.word)) return r;
+        }
     }
     if (!validident(s)) return r;
     r.name = s;
@@ -2792,6 +2823,13 @@ static b32 simpleexpand(Shell *sh, Arena *a, Str text, Slice<Str> *out)
     Value *v = rawlookup(sh, p.name);
     if (v && (v->attrs & V_NAMEREF)) return 0;
     Got g = getvalue(sh, a, v);
+    if (p.op) {
+        b32 has = g.set && (!p.colon || g.value.len);
+        if (p.op=='+' || !has) {
+            g.value = p.op=='-' || has ? p.word : Str("");
+        }
+        g.set = 1;  // neither form is ever unbound
+    }
     if (!g.set) {
         if (sh->opt[O_NOUNSET]) return 0;  // full path reports it
         if (p.quoted) *out = push(a, *out, Str(""));
