@@ -5,6 +5,13 @@
 // os_* API. Design notes are in notes/, starting with notes/plan.md.
 //
 // This is free and unencumbered software released into the public domain.
+
+// The release of unabashed itself, shown by --version. It is not the
+// bash it clones: BASH_VERSION, BASH_VERSINFO, the prompt's \v and \V,
+// and the first line of --version and help say 5.3.0, for scripts that
+// sniff them.
+#define VERSION "0.1.0"
+
 #include "base.cpp"
 
 
@@ -1679,7 +1686,8 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                 print(&b, " -c help' for more information about shell builtin commands.\n");
             } else {
                 print(&b, helpversion(sh, &scratch));
-                print(&b, "\nThis is free and unencumbered software released into the public domain.\n");
+                print(&b, "\nunabashed " VERSION "\n");
+                print(&b, "This is free and unencumbered software released into the public domain.\n");
             }
             fdwrite(sh, 1, finish(&b));
             sh->status = 0;
