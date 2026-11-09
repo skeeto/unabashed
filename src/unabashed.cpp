@@ -1784,7 +1784,9 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                 fdwrite(sh, 2, finish(&b));
             }
         }
-        updatesigmode(sh, 3);  // every shell ignores QUIT itself, as bash
+        // Every shell ignores QUIT itself, and takes INT itself, as bash
+        updatesigmode(sh, 2);
+        updatesigmode(sh, 3);
 
         for (iz k = 0; k < shopts.len; k += 2) {
             startoption(sh, scratch, 'O', shopts[k]=="-", &shopts[k+1]);

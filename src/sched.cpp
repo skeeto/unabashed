@@ -113,6 +113,7 @@ struct Sigproc {
     u64      waitsig;  // terminal signals that came while it waited
                        // for a foreground child (see waitdone)
     b32      fgwait;   // waiting for a foreground program or stages
+    b32      comsub;   // its synchronous subshell is a comsub
     u64      bydefault;  // pending ones to act on by default, trap or
                          // not (an interactive loop's job died of INT)
     i64      execpid;  // the program in its place, which bash would have

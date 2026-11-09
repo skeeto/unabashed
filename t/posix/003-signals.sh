@@ -21,3 +21,15 @@ bash -c 'trap "echo exit trap" EXIT; bash -c "kill -PIPE $$"; echo no'; echo "PI
 bash -c 'trap "echo trapped PIPE" PIPE; (while :; do echo y; done) | head -1; echo "${PIPESTATUS[*]}"'
 bash -c '(trap "echo subshell exit trap >&2" EXIT; while :; do echo y; done) | head -1'
 bash -c 'trap "echo exit trap >&3" EXIT; exec 3>&1 1> >(:); sleep 1; echo x'; echo "broken stdout $?"
+# INT from another process while the shell waits for a foreground child
+# other than a comsub: it waits on, and dies only if the child died of
+# INT too; otherwise it dies at once
+bash -c '(sleep 1; bash -c "kill -INT $$") & sleep 2; echo "program $?"'
+bash -c 'trap "echo exit trap" EXIT; (sleep 1; bash -c "kill -INT $$") & sleep 2; echo "program, EXIT trap set $?"'
+bash -c 'trap "echo trapped INT" INT; (sleep 1; bash -c "kill -INT $$") & sleep 2; echo "program, INT trapped $?"'
+bash -c '(sleep 1; bash -c "kill -INT $$") & (sleep 2; echo in); echo "subshell $?"'
+bash -c '(sleep 1; bash -c "kill -INT $$") & sleep 2 | cat; echo "pipeline $?"'
+bash -c '(while [ ! -s pid ]; do sleep 1; done; bash -c "kill -INT $$"; sleep 1; kill -INT $(<pid)) & bash -c "echo \$\$ >pid; exec sleep 5"; echo no'; echo "program died too $?"; rm -f pid
+bash -c '(sleep 1; bash -c "kill -INT $$") & x=$(sleep 2; echo in); echo "no: $x"'; echo "comsub $?"
+bash -c '(sleep 1; bash -c "kill -INT $$") & while :; do :; done'; echo "busy $?"
+bash -c 'trap "echo exit trap" EXIT; (sleep 1; bash -c "kill -INT $$") & while :; do :; done'; echo "busy, EXIT trap set $?"

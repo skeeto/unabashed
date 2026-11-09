@@ -82,15 +82,6 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
 - A shell that dies of SIGINT exits 0xC000013A, so a parent that keeps
   only the low byte sees 58, not 130 (Git Bash maps the code to 130).
 
-Found while profiling under gprof (2026-11-08), not yet fixed; real
-signals sent by another process, on Linux, against bash 5.3:
-
-- SIGINT that arrives while a foreground program runs: bash waits for
-  the program and dies only if the program died of SIGINT too, so
-  `/bin/kill -INT $$` from a script goes on; ours dies at once (with an
-  EXIT trap: runs it, then dies). The terminal's INT, sent to the whole
-  group, is already handled as bash does.
-
 Found while benchmarking against dash (2026-11-08, shellbench.md), not
 yet fixed:
 

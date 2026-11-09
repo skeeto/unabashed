@@ -161,10 +161,12 @@ static void updatesigmode(Shell *sh, i32 sig)
         mode = SIGM_IGNORE;
     } else if (trapset(sh, sig)) {
         mode = SIGM_CATCH;
-    } else if (sig==3 && shelltop(sh)) {
-        mode = SIGM_CATCH;  // ignored here (signoop), not by its programs
-    } else if (interactivetop(sh) && (sig==2 || sig==15)) {
-        mode = SIGM_CATCH;  // acted on here (signoop, sigdefault)
+    } else if ((sig==2 || sig==3) && shelltop(sh)) {
+        // acted on here, not by its programs: QUIT ignored (signoop),
+        // INT perhaps only noted while a foreground child runs
+        mode = SIGM_CATCH;
+    } else if (interactivetop(sh) && sig==15) {
+        mode = SIGM_CATCH;  // acted on here (signoop)
     } else if (interactivetop(sh) && sh->shellpgid && sig>=20 && sig<=22) {
         mode = SIGM_IGNORE;  // TSTP TTIN TTOU: under job control
     } else if (trapset(sh, TRAP_EXIT)) {
@@ -460,12 +462,25 @@ static i64 vpidowner(Shell *sh, i64 pid)
 // to the process belong to its outermost level. Those the terminal
 // sent to its foreground group (Ctrl-C) go to every level that runs,
 // as to every process of bash's foreground job, while a level waiting
-// for a foreground child only notes them (see waitdone). True if any
+// for a foreground child only notes them (see waitdone). An INT sent
+// to the process while its outermost level waits for a foreground
+// child, other than a comsub, is noted likewise, as bash waits for the
+// child and acts on it only if the child died of INT too. True if any
 // arrived.
 static b32 ossignals(Sched *s)
 {
     u64 own = os_sigpending(s->os);
     u64 grp = os_siggroup(s->os);
+    b32 any = own || grp;
+    if ((own & sigbit(2)) && s->top && !s->top->execpid) {
+        Sigproc *p  = s->top;
+        Shell   *sh = p->sh;
+        if (((sh->sig!=p && !p->comsub) || p->fgwait) && !trapignored(sh, 2) &&
+                !trapset(sh, 2) && !signoop(sh, 2)) {
+            p->waitsig |= sigbit(2);
+            own &= ~sigbit(2);
+        }
+    }
     if (own && s->top && s->top->execpid) {
         // the process is its program, as bash would have exec'd it
         for (u64 m = own; m; m &= m-1) {
@@ -500,7 +515,7 @@ static b32 ossignals(Sched *s)
             }
         }
     }
-    return own || grp || levels;
+    return any || levels;
 }
 
 static void takeossigs(Shell *sh)

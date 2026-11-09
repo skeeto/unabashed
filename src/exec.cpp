@@ -556,6 +556,8 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sh->jobctl   &= j->comsub;  // as bash, which keeps it in a comsub
     sh->incomsub |= j->comsub;
     subshelltraps(sh);
+    Sigproc *up = sh->sig;
+    up->comsub = j->comsub;
     Sigproc sig;
     sigenter(sh, &sig, sh->bashpid, sh->sched->cur);
     // The frame is not in the store, so local's changes to its list of
@@ -594,6 +596,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
         pid    = sh->childpid;
     }
     sigleave(sh, &sig);
+    up->comsub = 0;
     if (sh->jobs) orphanjobs(sh);  // its jobs run on
     unwind(sh, saved->undo);
     restorefds(sh, fds);

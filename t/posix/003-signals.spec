@@ -1,4 +1,4 @@
-== stdout 314
+== stdout 494
 QUIT ignored
 QUIT ignored, EXIT trap set
 exit trap
@@ -29,11 +29,24 @@ y
 y
 exit trap
 broken stdout 141
+program 0
+program, EXIT trap set 0
+exit trap
+trapped INT
+program, INT trapped 0
+in
+subshell 0
+pipeline 0
+program died too 130
+comsub 130
+busy 130
+exit trap
+busy, EXIT trap set 130
 
 == stderr 19
 subshell exit trap
 
-== merged 333
+== merged 513
 QUIT ignored
 QUIT ignored, EXIT trap set
 exit trap
@@ -65,5 +78,18 @@ y
 subshell exit trap
 exit trap
 broken stdout 141
+program 0
+program, EXIT trap set 0
+exit trap
+trapped INT
+program, INT trapped 0
+in
+subshell 0
+pipeline 0
+program died too 130
+comsub 130
+busy 130
+exit trap
+busy, EXIT trap set 130
 
 == status 0
