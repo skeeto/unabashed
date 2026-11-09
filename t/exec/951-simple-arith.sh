@@ -1,0 +1,50 @@
+# Words that are exactly $((...)): with and without $name inside, nested
+# and unbalanced parentheses, every kind of variable, set -u, errors,
+# and the same text where it is not the whole word
+n=4 m=-2 e= s='1+2' z=0
+x=$((1+2)); echo "a $x"
+x=$(($n+1)); echo "b $x"
+x=$((n+1)); echo "c $x"
+x=$(($s*2)); echo "d $x"
+x=$((s*2)); echo "e $x"
+x=$(($n$z)); echo "f $x"
+x=$(( )); echo "g <$x>"
+x=$(((1+2)*3)); echo "h $x"
+x=$(((n))); echo "i $x"
+x=$((0x10+2#101+010)); echo "j $x"
+x=$((-9223372036854775807-1)); echo "k $x"
+x=$((m*m*m)); echo "l $x"
+x=$((y=5)); echo "m $x $y"
+c=1; x=$((++c)); echo "n $x $c"
+x=$((${n}+1)); echo "o $x"
+arr=(7 8); x=$((arr[1]+1)); echo "p $x"
+x=$(('1'+1)) 2>/dev/null; echo "q $x"
+x=$((u+1)); echo "r $x"
+x=$(($u+1)); echo "s $x"
+x=$(($e)); echo "t <$x>"
+declare -n ref=n; x=$(($ref+1)); echo "u $x"; x=$((ref+1)); echo "v $x"
+f() { local n=10; x=$((n*2)); echo "w $x"; }; f
+case $((1+1)) in 2) echo "x two";; *) echo "x other";; esac
+[[ $((n*2)) == 8 ]] && echo "y eight"
+IFS=1; x=$((10+1)); echo "z $x"; unset IFS
+x=$((n)); echo "aa $x"
+x=$((n>3?n:3)); echo "ab $x"
+x=$(( n += 1 )); echo "ac $x $n"
+x=$((a)+(b)) 2>/dev/null; echo "ad <$x> $?"
+declare -i i; i=$((n+1)); echo "ae $i"
+x=$((1)); echo "af $x"
+export x=$((n*3)); echo "ag $x"
+local_test() { local v=$((n+100)); echo "ah $v"; }; local_test
+readonly ro=1
+(x=$((ro=2)); echo "ai not reached $x") 2>&1; echo "ai status $?"
+(x=$((1/0)); echo "aj not reached") 2>&1; echo "aj status $?"
+(x=$((1+)); echo "ak not reached") 2>&1; echo "ak status $?"
+(set -u; x=$((u+1)); echo "al $x") 2>&1; echo "al status $?"
+(set -u; x=$(($u+1)); echo "am not reached") 2>&1; echo "am status $?"
+x=$(((1)+(2))); echo "ao $x"
+(x=$((1)+((2))); echo "ap <$x>") 2>&1; echo "ap status $?"
+x=$((n))$((n)); echo "aq $x"
+x="$((n+1))"; echo "ar $x"
+x=$((n+1))x; echo "as $x"
+for k in 1 2 3; do t=$(($t+k)); done; echo "at $t"
+__count=0; while __count=$(($__count+1)) && [ $__count -lt 5 ]; do :; done; echo "au $__count"

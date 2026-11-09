@@ -2054,9 +2054,8 @@ static iz arithsubscript(X *x, Str s, iz i)
 // as $((i+1)) or $(($n*2)), without the general machinery: no quotes,
 // escapes, command substitutions, subscripts (arithsubscript) or other
 // parameters. A null string declines.
-static Str arithtext(X *x, Str body)
+static Str arithtext(Shell *sh, Arena *a, Str body)
 {
-    Shell *sh = x->sh;
     b32 dollars = 0;
     for (iz i = 0; i < body.len; i++) {
         switch (body[i]) {
@@ -2068,7 +2067,7 @@ static Str arithtext(X *x, Str body)
         }
     }
     if (!dollars) return body;
-    Buf b(x->a, body.len + 16);
+    Buf b(a, body.len + 16);
     for (iz i = 0; i < body.len;) {
         if (body[i] != '$') {
             putbyte(&b, body[i++]);
@@ -2078,7 +2077,7 @@ static Str arithtext(X *x, Str body)
         for (; e<body.len && identchar(body[e]); e++) {}
         Value *v = rawlookup(sh, span(body.data+i+1, body.data+e));
         if (v && (v->attrs & V_NAMEREF)) return {};
-        Got g = getvalue(sh, x->a, v);
+        Got g = getvalue(sh, a, v);
         if (!g.set && sh->opt[O_NOUNSET]) return {};  // full path reports it
         print(&b, g.value);
         i = e;
@@ -2290,7 +2289,7 @@ static void expandinto(X *x, Str s, i32 ctx)
                 }
                 if (isarith(s, i, e)) {
                     Str body = span(s.data+i+3, s.data+(e>=i+5 ? e-2 : e));
-                    Str text = arithtext(x, body);
+                    Str text = arithtext(sh, x->a, body);
                     if (!text.data) text = expandword(x, body, XC_ARITH|XC_DQUOTE);
                     Arith r  = evalarith(sh, x->a, text);
                     if (r.ok) putvalue(x, fmti64(x->a, r.value), ctx);
@@ -3080,15 +3079,42 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
     return out;
 }
 
+// The value of a word that is exactly $((...)), when arithtext takes
+// its text and the parentheses inside balance, as in $(($n+1)). Then
+// expandinto would find the same body. A null string declines.
+static Str simplearith(Shell *sh, Arena *a, Str s)
+{
+    if (s.len<6 || s[0]!='$' || s[1]!='(' || s[2]!='(' ||
+            s[s.len-2]!=')' || s[s.len-1]!=')') {
+        return {};
+    }
+    Str body  = takehead(cuthead(s, 3), s.len-5);
+    i32 depth = 0;
+    for (iz i = 0; i < body.len; i++) {
+        depth += body[i] == '(';
+        if (body[i]==')' && --depth<0) return {};
+    }
+    if (depth) return {};
+    Str text = arithtext(sh, a, body);
+    if (!text.data) return {};
+    Arith r = evalarith(sh, a, text);  // returns only when ok
+    return fmti64(a, r.value);
+}
+
 // Expand a word to a single string, without splitting or globbing.
 static Str expandstring(Shell *sh, Arena *a, Str text, i32 ctx = 0)
 {
     if (literalword(text)) return text;  // in any context
-    if (!(ctx & ~(XC_ASSIGN|XC_ASSIGNW|XC_NOPSUB)) && maybesimple(text)) {
-        // Where quotes are quotes, a simple parameter is its value
-        // (copied, as the variable may change while it is in use)
-        SimpleValue s = simplevalue(sh, a, text);
-        if (s.ok) return clone(a, s.value);
+    if (!(ctx & ~(XC_ASSIGN|XC_ASSIGNW|XC_NOPSUB))) {
+        // Where quotes are quotes, a simple arithmetic expansion or
+        // parameter is its value (a variable's copied, as the variable
+        // may change while the value is in use)
+        Str r = simplearith(sh, a, text);
+        if (r.data) return r;
+        if (maybesimple(text)) {
+            SimpleValue s = simplevalue(sh, a, text);
+            if (s.ok) return clone(a, s.value);
+        }
     }
     X *x = newx(sh, a);
     x->nosplit = 1;
