@@ -1037,6 +1037,9 @@ static Editor *editor(Shell *sh)
         ed->vars.emacsstr     = "@";
         ed->vars.vicmdstr     = "(cmd)";
         ed->vars.viinsstr     = "(ins)";
+        // On in readline's native Windows builds (inputrc.md §7); the mode
+        // in effect when the editor is first used
+        ed->vars.ignorecase   = sh->pathmode == PM_NATIVE;
         ed->getnext    = -1;
         ed->vars.vimode  = sh->opt[O_VI];
         ed->vars.keymap  = sh->opt[O_VI] ? KM_VIINS : KM_EMACS;
