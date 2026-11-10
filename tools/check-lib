@@ -1,0 +1,27 @@
+#!/bin/sh
+# check-lib OBJ...: each library object exports only ub_*, has no static
+# constructors, and needs no C++ runtime. NM and OBJDUMP may name the
+# tools for another target (x86_64-w64-mingw32-nm).
+# This is free and unencumbered software released into the public domain.
+set -e
+NM=${NM:-nm}
+OBJDUMP=${OBJDUMP:-objdump}
+status=0
+for obj in "$@"; do
+    syms=$($NM -g "$obj")
+    bad=$(printf '%s\n' "$syms" | awk 'NF==3 && $2!~/^[Uw]$/ && $3!~/^_?ub_[a-z]+$/')
+    if [ -n "$bad" ]; then
+        printf '%s: exports more than ub_*:\n%s\n' "$obj" "$bad"
+        status=1
+    fi
+    cxx=$(printf '%s\n' "$syms" | awk '$1=="U" && $2~/^_*(Z|cxa_|gxx_|Unwind)/')
+    if [ -n "$cxx" ]; then
+        printf '%s: needs the C++ runtime:\n%s\n' "$obj" "$cxx"
+        status=1
+    fi
+    if $OBJDUMP -h "$obj" | grep -qE 'init_array|\.ctors|mod_init_func'; then
+        printf '%s: has static constructors\n' "$obj"
+        status=1
+    fi
+done
+exit $status

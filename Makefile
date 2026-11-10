@@ -4,10 +4,12 @@
 # Windows (w64devkit):  make unabashed.exe unabashed32.exe debug.exe tests.exe
 #                       argv.exe argv32.exe (tools/argv.cpp, for t/msys)
 # Linux:                make unabashed debug tests
+# Library (POSIX):      make libunabashed.o ubhost check-lib
 # Fuzzing (AFL++):      make fuzz
 # Source tarball:       make dist (HEAD as unabashed-YYYYMMDD-HASH.tar.gz)
 
 CXX     = g++
+CC      = cc
 CXX32   = i686-w64-mingw32-g++
 AFLCXX  = afl-clang-fast++
 FLAGS   = -std=c++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
@@ -56,6 +58,23 @@ tests: main_test.cpp $(SOURCES)
 fuzz: main_fuzz.cpp $(SOURCES)
 	$(AFLCXX) $(FLAGS) $(DEBUG) -o $@ main_fuzz.cpp
 
+libunabashed.o: libunabashed.cpp unabashed.h $(SOURCES)
+	$(CXX) $(FLAGS) $(WARN) -O2 -c -o $@ libunabashed.cpp
+
+libunabashed-O0.o: libunabashed.cpp unabashed.h $(SOURCES)
+	$(CXX) $(FLAGS) $(WARN) -O0 -c -o $@ libunabashed.cpp
+
+ubhost: tools/ubhost.c unabashed.h libunabashed.o
+	$(CC) -O2 -Wall -Wextra -o $@ tools/ubhost.c libunabashed.o -lpthread
+
+ubcollide: tools/ubcollide.cpp unabashed.h libunabashed-O0.o
+	$(CXX) $(FLAGS) -nostdlib++ -o $@ tools/ubcollide.cpp libunabashed-O0.o -lpthread
+
+check-lib: libunabashed.o libunabashed-O0.o ubhost ubcollide
+	tools/check-lib libunabashed.o libunabashed-O0.o
+	./ubcollide
+	./ubhost -c 'echo $$((6*7)) | grep -q 42'
+
 # What w64devkit's Dockerfile takes: the committed tree, named after the
 # commit's date and hash.
 dist:
@@ -68,6 +87,7 @@ check: tests
 
 clean:
 	rm -f unabashed unabashed.exe unabashed32.exe debug debug.exe \
-	      tests tests.exe fuzz argv.exe argv32.exe
+	      tests tests.exe fuzz argv.exe argv32.exe \
+	      libunabashed.o libunabashed-O0.o ubhost ubcollide
 
-.PHONY: default check clean
+.PHONY: default check check-lib clean

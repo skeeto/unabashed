@@ -78,6 +78,52 @@ static void flushw(Os *os)
 
 static Os *sigos;  // for the signal handler, os_oom and exits
 
+// Signal masks, set by a handler (or by another thread, in the library)
+// and taken by the shell. Where a 64-bit atomic would take a lock
+// (32-bit PowerPC), each 32-bit half is atomic on its own, which is all
+// a mask of independent bits needs.
+static void bitsor(u64 volatile *p, u64 bits)
+{
+    if constexpr (__atomic_always_lock_free(8, 0)) {
+        __atomic_fetch_or(p, bits, __ATOMIC_RELAXED);
+    } else {
+        u32 volatile *h = (u32 volatile *)p;
+        if ((u32)bits) __atomic_fetch_or(h+0, (u32)bits, __ATOMIC_RELAXED);
+        if (bits>>32) __atomic_fetch_or(h+1, (u32)(bits>>32), __ATOMIC_RELAXED);
+    }
+}
+
+// A plain load first spares the common case a locked exchange, and a
+// bit set meanwhile waits for the next call.
+static u64 bitstake(u64 volatile *p)
+{
+    if constexpr (__atomic_always_lock_free(8, 0)) {
+        if (!__atomic_load_n(p, __ATOMIC_RELAXED)) return 0;
+        return __atomic_exchange_n(p, (u64)0, __ATOMIC_RELAXED);
+    } else {
+        u32 volatile *h = (u32 volatile *)p;
+        u64 r = 0;
+        for (i32 i = 0; i < 2; i++) {
+            if (__atomic_load_n(h+i, __ATOMIC_RELAXED)) {
+                r |= (u64)__atomic_exchange_n(h+i, 0u, __ATOMIC_RELAXED) << (32*i);
+            }
+        }
+        return r;
+    }
+}
+
+// The library's own (library.cpp), named only in "if constexpr
+// (LIBMODE)" branches: its fiber stacks are among the run's
+// reservations, spawnlock brackets descriptors not yet close-on-exec,
+// lib_reaped tracks the run's programs, lib_dir the directory plt_list
+// holds open, and lib_tmpdir is TMPDIR from the run's environment.
+static byte *lib_fiberstack(Os *, iz size);
+static void  lib_fiberunstack(Os *, byte *, iz size);
+static void  lib_spawnlock(b32 lock);
+static void  lib_reaped(i64 pid);
+static void  lib_dir(Os *, DIR *);
+static char *lib_tmpdir(Os *);
+
 
 static byte *plt_reserve(Os *, iz len)
 {
@@ -190,6 +236,27 @@ static i32 highfd(i32 fd)
     return r;
 }
 
+// A pipe. In the library both ends are close-on-exec from the start,
+// since another thread of the host may spawn a program at any moment.
+static i32 cloexecpipe(i32 fds[2])
+{
+    if constexpr (LIBMODE) {
+        #if __linux__
+        return pipe2(fds, O_CLOEXEC);
+        #else
+        lib_spawnlock(1);
+        i32 r = pipe(fds);
+        if (!r) {
+            fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+            fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+        }
+        lib_spawnlock(0);
+        return r;
+        #endif
+    }
+    return pipe(fds);
+}
+
 static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
     flushw(os);
@@ -235,7 +302,12 @@ static Opened plt_tempfile(Os *os, Arena scratch)
     // As bash: created in TMPDIR (or /tmp), then unlinked, readable
     // only by the user
     Str dir = {};
-    char *t = getenv("TMPDIR");
+    char *t;
+    if constexpr (LIBMODE) {
+        t = lib_tmpdir(os);
+    } else {
+        t = getenv("TMPDIR");
+    }
     if (t && *t) {
         dir.data = (u8 *)t;
         for (; t[dir.len]; dir.len++) {}
@@ -316,7 +388,7 @@ static OsPipe plt_pipe(Os *os)
     flushw(os);
     OsPipe r = {};
     i32 fds[2];
-    if (pipe(fds)) {
+    if (cloexecpipe(fds)) {
         r.err = errno;
         r.r = r.w = BADHANDLE;
         return r;
@@ -339,7 +411,7 @@ static iz plt_peek(Os *os, Handle h, u8 *buf, iz len)
     }
     if (!os->peekfd[1]) {
         i32 fds[2];
-        if (pipe(fds)) {
+        if (cloexecpipe(fds)) {
             return -1;
         }
         os->peekfd[0] = highfd(fds[0]);
@@ -531,6 +603,7 @@ static Dirent *plt_list(Os *os, Arena *a, Str dir, i32 *err)
     DIR *d = opendir(cpath(&tmp, dir));
     *err = d ? 0 : errno;
     if (!d) return 0;
+    if constexpr (LIBMODE) lib_dir(os, d);  // closed if the run ends here
     Dirent  *head = 0;
     Dirent **tail = &head;
     for (struct dirent *e; (e = readdir(d));) {
@@ -547,6 +620,7 @@ static Dirent *plt_list(Os *os, Arena *a, Str dir, i32 *err)
         *tail = n;
         tail  = &n->next;
     }
+    if constexpr (LIBMODE) lib_dir(os, 0);
     closedir(d);
     return head;
 }
@@ -654,7 +728,7 @@ static b32 hostin(u64 set, i32 sig)
 static i32 forkspawn(SpawnPlan *p, pid_t *out)
 {
     i32 sync[2];
-    if (pipe(sync)) return errno;
+    if (cloexecpipe(sync)) return errno;
     for (i32 i = 0; i < 2; i++) sync[i] = highfd(sync[i]);
     if (sync[0]<0 || sync[1]<0) {
         if (sync[0] >= 0) close(sync[0]);
@@ -664,6 +738,7 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
     pid_t pid = fork();
     if (!pid) {
         close(sync[0]);
+        if constexpr (LIBMODE) setsid();  // away from the host's terminal
         joingroup(0, p->pgid, p->fg, p->tty);
         // Move the pipe and the sources out of the way first, then
         // install the map
@@ -701,7 +776,13 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
             rlimit l = {torlim(p->rlimits[i].soft), torlim(p->rlimits[i].hard)};
             setrlimit(n, &l);  // as bash's forked subshell had them
         }
-        sigprocmask(SIG_SETMASK, &p->mask, 0);
+        sigset_t *mask = &p->mask;
+        sigset_t  none;
+        if constexpr (LIBMODE) {
+            sigemptyset(&none);  // not the host thread's
+            mask = &none;
+        }
+        sigprocmask(SIG_SETMASK, mask, 0);
         execve(p->path, p->argv, p->envp);
         i32 err = errno ? errno : E_NOEXEC;
         if (w>=0 && write(w, &err, sizeof(err))) {}
@@ -789,7 +870,14 @@ static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
         posix_spawnattr_init(&at);
         posix_spawn_file_actions_init(&fa);
         short flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
-        posix_spawnattr_setsigmask(&at, &p->mask);
+        sigset_t *mask = &p->mask;
+        sigset_t  none;
+        if constexpr (LIBMODE) {
+            sigemptyset(&none);  // not the host thread's
+            mask = &none;
+            flags |= POSIX_SPAWN_SETSID;
+        }
+        posix_spawnattr_setsigmask(&at, mask);
         sigset_t dfl;
         sigemptyset(&dfl);
         for (i32 sig = 1; sig < NSIG; sig++) {
@@ -884,6 +972,10 @@ static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
     p.pgid    = s->pgid;
     p.fg      = s->fg;
     p.tty     = (i32)s->tty;
+    if constexpr (LIBMODE) {
+        p.dfl  = ~p.ign;  // whatever the host does with them
+        p.pgid = 0;       // a session of its own instead
+    }
 
     sigset_t all;
     sigfillset(&all);
@@ -1245,7 +1337,7 @@ static void onsignal(int sig, siginfo_t *info, void *)
     (void)tty;
     (void)info;
     #endif
-    __atomic_fetch_or(grp ? &sigos->grpbits : &sigos->sigbits, corebit(sig), __ATOMIC_RELAXED);
+    bitsor(grp ? &sigos->grpbits : &sigos->sigbits, corebit(sig));
     u8 c = 0;
     if (write(sigos->wakefd[1], &c, 1)) {}
     errno = saved;
@@ -1431,18 +1523,15 @@ static LevelSig plt_levelsig(Os *)
     return r;
 }
 
-// Polled between commands: a plain load first spares the common case a
-// locked exchange, and a bit set meanwhile waits for the next poll.
+// Polled between commands
 static u64 plt_sigpending(Os *os)
 {
-    if (!__atomic_load_n(&os->sigbits, __ATOMIC_RELAXED)) return 0;
-    return __atomic_exchange_n(&os->sigbits, (u64)0, __ATOMIC_RELAXED);
+    return bitstake(&os->sigbits);
 }
 
 static u64 plt_siggroup(Os *os)
 {
-    if (!__atomic_load_n(&os->grpbits, __ATOMIC_RELAXED)) return 0;
-    return __atomic_exchange_n(&os->grpbits, (u64)0, __ATOMIC_RELAXED);
+    return bitstake(&os->grpbits);
 }
 
 static void plt_tasktag(Os *, u64, iz, u64)
@@ -1576,6 +1665,11 @@ static b32 tryio(Io *io, i32 revents)
             r = waitpid((pid_t)io->h, &status, flags);
         } while (r<0 && errno==EINTR);
         if (!r) return 0;
+        if constexpr (LIBMODE) {
+            if (r<0 || WIFEXITED(status) || WIFSIGNALED(status)) {
+                lib_reaped((pid_t)io->h);
+            }
+        }
         io->n   = r<0 ? 127 : waitstatus(status);
         io->err = 0;
     } return 1;
@@ -1774,8 +1868,9 @@ static constexpr OsVtable pltvtable = {
 };
 
 
-static byte *fiberstack(Os *, iz size)
+static byte *fiberstack(Os *os, iz size)
 {
+    if constexpr (LIBMODE) return lib_fiberstack(os, size);
     void *p = mmap(0, (uz)size, PROT_READ|PROT_WRITE,
                    MAP_PRIVATE|MAP_ANON|MAP_NORESERVE, -1, 0);
     if (p == MAP_FAILED) {
@@ -1785,8 +1880,12 @@ static byte *fiberstack(Os *, iz size)
     return (byte *)p;
 }
 
-static void fiberunstack(Os *, byte *p, iz size)
+static void fiberunstack(Os *os, byte *p, iz size)
 {
+    if constexpr (LIBMODE) {
+        lib_fiberunstack(os, p, size);
+        return;
+    }
     munmap(p, (uz)size);
 }
 
