@@ -236,13 +236,14 @@ Still uninterruptible:
 - a stuck kernel call;
 - a long builtin other than a loop or a match.
 
-**Speed.** The library always submits reads and writes that may block,
-so each one costs a poll. `read` on a pipe takes a byte at a time, as in
-bash, so a read loop over a pipe runs about 3x slower than the
-executable's (whose own direct path covers that case); it matches the
-executable's speed reading a procsub, where it submits too. bench/b6
-takes 18.6 s through ubhost and 12.5 s through the executable; the
-other benchmarks are equal.
+**Speed.** The library always submits reads and writes that may block.
+`read` takes a pipe a byte at a time, as in bash. While data is waiting,
+a submitted pipe read is a FIONREAD and a read, so a read loop over a
+pipe costs about 1.5x the executable's direct read (bench/b6: 9.3 s
+through ubhost, 12.5 s through the executable, whose procsub reads
+still poll first). A count of waiting bytes is never kept across reads:
+another reader (a task, a program, the host) could empty the pipe in
+between and leave a read blocked where a cancel cannot reach it.
 
 **POSIX:**
 - A program that calls `setsid` itself escapes the final kill. Hosts

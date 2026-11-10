@@ -596,6 +596,22 @@ static void libsubmit(Os *os, Io *io)
             }
             return;
         }
+        if (io->op==IO_READ && io->len && fdkind(os, (i32)io->h)==FK_FIFO) {
+            // read takes a pipe a byte at a time. While data is waiting,
+            // skip plt_submit's poll: FIONREAD then read, as in tryio,
+            // and nothing between them in which another reader could
+            // empty the pipe (pending writes go out first)
+            flushw(os);
+            i32 avail = 0;
+            if (!ioctl((i32)io->h, FIONREAD, &avail) && avail>0) {
+                iz n     = plt_read(os, io->h, io->buf, io->len<avail ? io->len : avail);
+                io->done = 1;
+                io->next = 0;
+                io->n    = n<0 ? 0 : n;
+                io->err  = n<0 ? errno : 0;
+                return;
+            }
+        }
     }
     plt_submit(os, io);
 }
