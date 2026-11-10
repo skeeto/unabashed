@@ -1010,7 +1010,7 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     os->freepwait = 0;
     os->freeip    = 0;
     os->pwaits    = 0;
-    os->starved   = 0;
+    os->hungry    = 0;
     os->findh     = 0;
     os->nulh      = 0;
     os->inwindow  = 0;

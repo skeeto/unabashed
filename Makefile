@@ -76,8 +76,8 @@ libunabashed-O0.obj: libunabashed.cpp unabashed.h $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) -O0 -c -o $@ libunabashed.cpp
 
 # No C runtime: ubhostw.c brings the mem* and strlen the library needs
-ubhost.exe: tools/ubhost.c tools/ubhostw.c unabashed.h libunabashed.obj
-	$(CC) -O2 -Wall -Wextra -nostartfiles -nostdlib \
+ubhost.exe: tools/ubhost.c tools/ubhostw.c tools/ubcheckw.c unabashed.h libunabashed.obj
+	$(CC) -O2 -Wall -Wextra -Wno-missing-field-initializers -nostartfiles -nostdlib \
 	    -o $@ tools/ubhost.c libunabashed.obj -lkernel32 -lgcc
 
 ubcollide: tools/ubcollide.cpp unabashed.h libunabashed-O0.o

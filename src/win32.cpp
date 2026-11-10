@@ -711,7 +711,7 @@ struct Os {
     void (__stdcall *attrdelete)(void *);
     iz         attrsize;   // a list of one attribute
     b32        inwindow;   // inside the spawn lock
-    b32        starved;    // an Io waits for a helper (runqueue)
+    Hent      *hungry;     // objects whose Ios wait for a helper (starve)
     uz         findh;      // plt_list's, while open
     uz         advapi;     // advapi32, once loaded for entropy
     Helper    *helpers[64];  // every helper made (nhelpers)
@@ -1459,7 +1459,8 @@ static void readahead(Wobj *w, uz h, Io *io)
 }
 
 // The library: an Io that found no helper waits at the head of its
-// object's queue until one is free (helperdone).
+// object's queue until one is free (helperdone). The object is listed
+// as hungry, since it may already be closed, out of the table.
 static b32 starve(Os *os, Wobj *w, Io *io)
 {
     io->next   = w->queue;
@@ -1467,7 +1468,18 @@ static b32 starve(Os *os, Wobj *w, Io *io)
     io->plt[0] = S_QUEUED;
     io->plt[1] = (uz)w;
     os->nwait++;
-    os->starved = 1;
+    for (Hent *e = os->hungry; e; e = e->next) {
+        if (e->obj == w) return 0;
+    }
+    Hent *e = os->freehent;
+    if (e) {
+        os->freehent = e->next;
+    } else {
+        e = alloc<Hent>(&os->perm);
+    }
+    e->obj = w;
+    e->next = os->hungry;
+    os->hungry = e;
     return 0;
 }
 
@@ -1636,13 +1648,17 @@ static void helperdone(Os *os, Helper *hp)
         os->idle = hp;
     }
     runqueue(os, w);
-    if (LIBMODE && os->starved && os->idle) {
-        // Ios that found no helper: their objects are all registered
-        os->starved = 0;
-        for (i32 i = 0; i<countof(os->htab) && os->idle; i++) {
-            for (Hent *e = os->htab[i]; e && os->idle; e = e->next) {
-                if (e->obj->queue && !busy(e->obj)) runqueue(os, e->obj);
-            }
+    if constexpr (LIBMODE) {
+        // Ios that found no helper. One that starves again lists its
+        // object anew, and only once no helper is idle; a busy object
+        // runs its queue when its own helper is done.
+        while (os->hungry && os->idle) {
+            Hent *e = os->hungry;
+            Wobj *w = e->obj;
+            os->hungry   = e->next;
+            e->next      = os->freehent;
+            os->freehent = e;
+            if (w->queue && !busy(w)) runqueue(os, w);
         }
     }
 }

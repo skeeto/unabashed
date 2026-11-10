@@ -7,6 +7,10 @@
 // host's console (UB_SHARECONSOLE), and the install is the host's own
 // directory, the host itself its shell (root and self).
 //
+// "ubhost --check [--quick]" checks the host contract instead
+// (ubcheckw.c), and "ubhost --fds" exits with 100 plus the number of
+// inheritable handles it has, or 0 for none (the check's probe).
+//
 // $ cc -O2 -nostartfiles -nostdlib -o ubhost.exe tools/ubhost.c
 //       libunabashed.obj -lkernel32 -lgcc
 // Included by ubhost.c.
@@ -216,11 +220,37 @@ static void say(char const *s)
     WriteFile(GetStdHandle(-12), s, (int)strlen(s), &n, 0);
 }
 
+#include "ubcheckw.c"
+
+// The command line's arguments after the program name, as written.
+static uint16_t *arguments(uint16_t *s)
+{
+    if (*s == '"') {
+        for (s++; *s && *s!='"'; s++) {}
+        s += *s=='"';
+    } else {
+        for (; *s && *s!=' ' && *s!='\t'; s++) {}
+    }
+    for (; *s==' ' || *s=='\t'; s++) {}
+    return s;
+}
+
+static int argsare(uint16_t const *a, char const *s)
+{
+    for (; *s && *a==(uint16_t)*s; a++, s++) {}
+    for (; *a==' ' || *a=='\t'; a++) {}
+    return !*s && !*a;
+}
+
 __attribute((force_align_arg_pointer))
 void mainCRTStartup(void)
 {
     static char line[3*32768];
     uint16_t *wl = GetCommandLineW();
+    uint16_t *args = arguments(wl);
+    if (argsare(args, "--check")) ExitProcess((unsigned)check(0));
+    if (argsare(args, "--check --quick")) ExitProcess((unsigned)check(1));
+    if (argsare(args, "--fds")) ExitProcess((unsigned)inheritedfds());
     ptrdiff_t n = 0;
     for (; wl[n]; n++) {}
     cmd.cmdline = wtf8(line, wl, n);
