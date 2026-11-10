@@ -10,7 +10,7 @@
 // bash it clones: BASH_VERSION, BASH_VERSINFO, the prompt's \v and \V,
 // and the first line of --version and help say 5.3.0, for scripts that
 // sniff them.
-#define VERSION "0.1.1"
+#define VERSION "0.2.0"
 
 #include "base.cpp"
 
