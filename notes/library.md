@@ -236,6 +236,14 @@ Still uninterruptible:
 - a stuck kernel call;
 - a long builtin other than a loop or a match.
 
+**Speed.** The library always submits reads and writes that may block,
+so each one costs a poll. `read` on a pipe takes a byte at a time, as in
+bash, so a read loop over a pipe runs about 3x slower than the
+executable's (whose own direct path covers that case); it matches the
+executable's speed reading a procsub, where it submits too. bench/b6
+takes 18.6 s through ubhost and 12.5 s through the executable; the
+other benchmarks are equal.
+
 **POSIX:**
 - A program that calls `setsid` itself escapes the final kill. Hosts
   that care use the `child` hook.
