@@ -59,6 +59,7 @@ struct Os {
     HeapBlock spare[1024];   // of ended ones, below heapused
     i32       nspare;
     u64      chaos;    // seed for the next run, 0 for none
+    OsVtable const *vt;  // a test's platform table, else the vos's
     Vos      vos;
 };
 
@@ -78,9 +79,11 @@ static byte *osheap(Os *os, iz *len)
     return os->heap;
 }
 
-static OsVtable const *osvtable(Os *)
+// Read at every call, so that the whole suite runs through a table that
+// is not a constant
+static OsVtable const *osvtable(Os *os)
 {
-    return &vosvtable;
+    return os->vt ? os->vt : &vosvtable;
 }
 
 static jmp_buf *oomjmp;  // test-only: where os_oom lands
@@ -706,6 +709,40 @@ static void test_plainbrace(Test *t)
     }
     expectint(t, "plainbrace decides", decided > 10000, 1);
     expectint(t, "plainbrace agrees", bad, 0);
+}
+
+// The vos's open, refusing one file, for test_vtable
+static Opened refuseopen(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
+{
+    if (path == "/home/oracle/secret") {
+        Opened r = {};
+        r.h   = BADHANDLE;
+        r.err = E_ACCES;
+        return r;
+    }
+    return vosvtable.open(os, scratch, path, flags, mode);
+}
+
+// A copy of a platform table with an entry wrapped: the shell and the
+// programs it runs see the filter, and then the table comes back.
+static void test_vtable(Test *t)
+{
+    Os *os = t->os;
+    static OsVtable filter;
+    filter      = vosvtable;
+    filter.open = refuseopen;
+    os->vt = &filter;
+    Result r = runc(t, "echo hi >secret; echo $?; cat secret; "
+                       "echo ok >other; cat other");
+    os->vt = 0;
+    expect(t, "vtable filter", r.out, "1\nok\n");
+    expect(t, "vtable filter err", r.err,
+        "bash: line 1: secret: Permission denied\n"
+        "cat: secret: Permission denied\n");
+
+    r = runc(t, "echo hi >secret; cat secret");
+    expect(t, "vtable restored", r.out, "hi\n");
+    expect(t, "vtable restored err", r.err, "");
 }
 
 static void test_arena(Test *t)
@@ -1946,6 +1983,7 @@ int main(int argc, char **argv)
     test_jobctl(&t);
     test_pathmodes(&t);
     test_plainbrace(&t);
+    test_vtable(&t);
 
     if (argc>3 && (!strcmp(argv[1], "--oracle") || !strcmp(argv[1], "--oracle-v"))) {
         // --oracle SUITEDIR NAME...: bash test suite runs on the vos
