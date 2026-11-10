@@ -972,9 +972,10 @@ static i32 killpid(Shell *sh, i64 pid, i32 sig)
 {
     Sched *s = sh->sched;
     Sigproc *p = findsigproc(s, pid);
-    if (p && pid==s->pid && (sig==19 || (sig>=20 && sig<=22))) {
-        // A stop signal to the process itself: the kernel's to act on
-        // (stop it, or a trap or ignored mode takes it)
+    if (p && pid==s->pid && (sig==19 || (sig>=20 && sig<=22)) &&
+            (sig==19 || (!trapignored(p->sh, sig) && !trapset(p->sh, sig)))) {
+        // A stop signal to the process itself that stops it: the
+        // kernel's to act on. A trapped or ignored one is the shell's.
         return os_kill(sh->os, pid, sig);
     }
     if (p) {
