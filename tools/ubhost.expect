@@ -37,7 +37,7 @@ t/posix/003-signals.sh              QUIT and INT to an exec'd shell's pid
 # refused (the host's pid), where bash's parent process runs its trap
 t/exec/955-trap-stop-self.sh        ( kill -TTOU $$ ) under a parent's trap
 t/win32/017-signals.sh              no signal channel between shells
-t/win32/012-ctrlc-young.sh          no Ctrl-C judging (Windows 7 and later)
+t/win32/012-ctrlc-young.sh          no Ctrl-C judging (Windows 7 and later; XP when the Ctrl-C wins the race)
 
 # The core: fails under tests --fibers too
 t/exec/954-posix-arith-status.sh    arithmetic error status apart
