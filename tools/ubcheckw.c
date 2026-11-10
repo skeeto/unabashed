@@ -341,14 +341,17 @@ static int hasline(Snap *s, char const *l, ptrdiff_t n)
 // Every line of one snapshot missing from the other, up to a few.
 // A handle of the thread pool's, which may close by itself: the host's
 // own are checked as sentinels instead.
-static int poolhandle(char const *p, ptrdiff_t n)
+static int poolhandle(char const *p, ptrdiff_t n, int gone)
 {
+    // The library makes events, but none of the others itself: a wait it
+    // leaked would add packets, which the whole check counts (packets)
     static char const *const types[] = {
-        " Event", " Thread ntdll", " WaitCompletionPacket", " IRTimer",
-        " TpWorkerFactory", " IoCompletion",
+        " Thread ntdll", " WaitCompletionPacket", " IRTimer",
+        " TpWorkerFactory", " IoCompletion", " Event",
     };
+    int ntypes = (int)(sizeof(types)/sizeof(*types)) - !gone;
     if (n<7 || memcmp(p, "handle ", 7)) return 0;
-    for (int i = 0; i < (int)(sizeof(types)/sizeof(*types)); i++) {
+    for (int i = 0; i < ntypes; i++) {
         ptrdiff_t len = (ptrdiff_t)strlen(types[i]);
         if (n>len && !memcmp(p+n-len, types[i], (size_t)len)) return 1;
     }
@@ -376,7 +379,7 @@ static int linesgone(Snap *from, Snap *in, char const *mark, Snap *why, int show
     int gone = *mark == 'g';
     for (char *p = from->buf, *e; *p; p = e+1) {
         for (e = p; *e!='\n'; e++) {}
-        if (!hasline(in, p, e-p) && !(gone && poolhandle(p, e-p)) && !lockevent(p, e-p) && !protected_(p, e-p)) {
+        if (!hasline(in, p, e-p) && !poolhandle(p, e-p, gone) && !lockevent(p, e-p) && !protected_(p, e-p)) {
             if (shown++ < 8) {
                 sput(why, shown>1 ? "; " : "host changed: ");
                 sput(why, mark);
@@ -411,6 +414,14 @@ static int samestate(State *a, State *b, Snap *why)
     return 1;
 }
 
+
+// The thread pool's wait packets: it keeps a few more as load peaks.
+static int packets(State *st)
+{
+    int n = 0;
+    for (char *p = st->text.buf; (p = strstr_(p, " WaitCompletionPacket")); p++) n++;
+    return n;
+}
 
 // Programs: every descendant of the host's, started after it, is gone
 
@@ -568,6 +579,7 @@ static int runcase(Case const *c, char *out, int outlen, double *secs)
 }
 
 static State before, after;
+static int   packets0;
 static Snap  report;
 
 static void line(Snap *s)
@@ -887,6 +899,7 @@ static int check(int quick)
     for (int i = 0; i < (int)(sizeof(cases)/sizeof(*cases)); i++) {
         Case const *c = cases + i;
         fails += !checkcase(c, c->stopms || c->maxsec>=1 ? 1 : reps);
+        if (!packets0) packets0 = packets(&after);  // once the pool exists
     }
 
     // An out-of-memory sweep: aborts land everywhere, and the host is
@@ -921,6 +934,17 @@ static int check(int quick)
     unsigned evflags = 0;
     if (!GetHandleInformation(sentev, &evflags) || WaitForSingleObject(sentev, 0)) {
         sput(&report, "FAIL host event was closed or reset\n");
+        line(&report);
+        fails++;
+    }
+    // Hundreds of runs: a leaked wait would leave a packet each
+    snapshot(&after);
+    if (packets(&after) > packets0+8) {
+        sput(&report, "FAIL the pool's wait packets grew from ");
+        sputd(&report, packets0);
+        sput(&report, " to ");
+        sputd(&report, packets(&after));
+        sput(&report, "\n");
         line(&report);
         fails++;
     }
