@@ -1373,6 +1373,7 @@ static b32 issue(Os *os, Wobj *w, uz h, i32 op, Io *io, uz iw = 0)
         uz self = GetCurrentProcess();
         if (!DuplicateHandle(self, h, self, &w->own, 0, 0, DUPLICATE_SAME_ACCESS)) {
             w->own = 0;
+            if constexpr (LIBMODE) lib_abort(os, E_NOMEM);  // never a helper
             return 0;
         }
         if constexpr (LIBMODE) {
@@ -1383,7 +1384,14 @@ static b32 issue(Os *os, Wobj *w, uz h, i32 op, Io *io, uz iw = 0)
         }
     }
     Helper *hp = gethelper(os);
-    if (!hp) return 0;
+    if (!hp) {
+        // The library waits for a helper only when all are busy: one will
+        // come free (starve). One that could not be made never will.
+        if constexpr (LIBMODE) {
+            if (os->nhelpers < MAXHELPERS) lib_abort(os, E_NOMEM);
+        }
+        return 0;
+    }
     hp->obj    = w;
     hp->own    = w->own;
     hp->kind   = w->kind;
@@ -1461,15 +1469,10 @@ static void readahead(Wobj *w, uz h, Io *io)
 // The library: an Io that found no helper waits at the head of its
 // object's queue until one is free (helperdone). The object is listed
 // as hungry, since it may already be closed, out of the table.
-static b32 starve(Os *os, Wobj *w, Io *io)
+static void listhungry(Os *os, Wobj *w)
 {
-    io->next   = w->queue;
-    w->queue   = io;
-    io->plt[0] = S_QUEUED;
-    io->plt[1] = (uz)w;
-    os->nwait++;
     for (Hent *e = os->hungry; e; e = e->next) {
-        if (e->obj == w) return 0;
+        if (e->obj == w) return;
     }
     Hent *e = os->freehent;
     if (e) {
@@ -1480,6 +1483,16 @@ static b32 starve(Os *os, Wobj *w, Io *io)
     e->obj = w;
     e->next = os->hungry;
     os->hungry = e;
+}
+
+static b32 starve(Os *os, Wobj *w, Io *io)
+{
+    io->next   = w->queue;
+    w->queue   = io;
+    io->plt[0] = S_QUEUED;
+    io->plt[1] = (uz)w;
+    os->nwait++;
+    listhungry(os, w);
     return 0;
 }
 
@@ -1658,6 +1671,15 @@ static void helperdone(Os *os, Helper *hp)
             os->hungry   = e->next;
             e->next      = os->freehent;
             os->freehent = e;
+            Interpose *ip = w->ip;
+            if (ip && !ip->started && ip->iw && !w->helper && w->own) {
+                if (issue(os, w, w->own, H_PUMP, 0, ip->iw)) {
+                    ip->iw = 0;
+                    ip->started = 1;
+                } else {
+                    listhungry(os, w);  // no helper idle after all
+                }
+            }
             if (w->queue && !busy(w)) runqueue(os, w);
         }
     }
@@ -1898,6 +1920,8 @@ static uz lend(Os *os, uz h, Wobj **out, b32 *viaip)
             if (issue(os, w, h, H_PUMP, 0, iw)) {
                 ip->iw = 0;
                 ip->started = 1;
+            } else if constexpr (LIBMODE) {
+                listhungry(os, w);  // all helpers busy: helperdone starts it
             }
         }
         // else the pump starts once the read in flight ends (helperdone)

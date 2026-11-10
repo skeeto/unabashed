@@ -329,6 +329,7 @@ static void lib_unhandle(Os *os, uz h)
     Lib *l = (Lib *)os;
     i32  i = hfind(l, h);
     if (i < 0) return;
+    if (h == l->errh) l->errh = 0;  // closed: never the OOM message's
     l->nfds -= l->hcount[i];
     l->nset--;
     // Backward-shift deletion: no tombstones
@@ -393,6 +394,15 @@ static void lib_spawned(Os *os, uz proc, i64 pid, u64 sigign, b32 shared, b32 in
     k->injob     = injob;
     k->announced = 0;
     k->reaped    = 0;
+    // A reused pid: the job a program of that pid had is not this one's,
+    // and terminating it (empty now) must not pass for ending this one
+    for (i32 i = 0; i < countof(os->bgjobs); i++) {
+        BgJob *b = os->bgjobs + i;
+        if (b->job && b->pid==pid) {
+            closeh(os, b->job);
+            b->job = 0;
+        }
+    }
 }
 
 static void lib_reaped(Os *os, uz proc)
@@ -754,6 +764,7 @@ static void runmain(Os *os, void *arg)
 
     if (cmd->cwd) {
         info.cwd = nativeform(libclone(a, cmd->cwd));
+        for (; info.cwd.len>3 && info.cwd[info.cwd.len-1]=='/'; info.cwd.len--) {}
     } else {
         for (i32 cap = 260;; cap *= 2) {
             c16 *buf = alloc<c16>(a, cap);
@@ -970,6 +981,21 @@ static void teardown(Lib *l)
     l->committed = 0;
     os->perm     = {};
     os->wlen     = 0;
+    // Nothing left pointing into what was released, nor this run's abort,
+    // for a later run's early return (-UB_EINVAL) to find
+    for (i32 i = 0; i < countof(os->htab); i++) os->htab[i] = 0;
+    os->freehent  = 0;
+    os->freeobj   = 0;
+    os->lends     = 0;
+    os->freelend  = 0;
+    os->freepwait = 0;
+    os->freeip    = 0;
+    os->hungry    = 0;
+    os->done      = 0;
+    os->donetail  = &os->done;
+    os->zero      = 0;
+    l->why  = 0;
+    l->errh = 0;
     __atomic_and_fetch(&l->req, ~REQ_HARD, __ATOMIC_RELEASE);
 }
 
@@ -1111,9 +1137,9 @@ static Lib *libnew(ub_config const *c)
     if (!l->memlimit) {
         MemStatus m = {};
         m.len = sizeof(m);
-        iz ram = GlobalMemoryStatusEx(&m) ? (iz)(m.totalphys>>2<(u64)1<<62 ? m.totalphys : 0) : 0;
-        iz max = wide ? (iz)1<<30 : (iz)1<<28;
-        l->memlimit = ram>0 && ram/4<max ? ram/4 : max;
+        u64 quarter = GlobalMemoryStatusEx(&m) ? m.totalphys/4 : 0;  // in 64 bits
+        u64 max     = wide ? (u64)1<<30 : (u64)1<<28;
+        l->memlimit = (iz)(quarter && quarter<max ? quarter : max);
     } else if (l->memlimit < 0) {
         l->memlimit = -1;
     }
