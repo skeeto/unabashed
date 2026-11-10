@@ -6,12 +6,14 @@
 # Linux:                make unabashed debug tests
 # Library (POSIX):      make libunabashed.o ubhost check-lib
 # Library (Windows):    make libunabashed.obj ubhost.exe check-lib-win
+#                       ubhost32.exe ubtiny.exe (32-bit, XP)
 # Fuzzing (AFL++):      make fuzz
 # Source tarball:       make dist (HEAD as unabashed-YYYYMMDD-HASH.tar.gz)
 
 CXX     = g++
 CC      = cc
 CXX32   = i686-w64-mingw32-g++
+CC32    = i686-w64-mingw32-gcc
 AFLCXX  = afl-clang-fast++
 FLAGS   = -std=c++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
           -fno-asynchronous-unwind-tables
@@ -80,6 +82,20 @@ ubhost.exe: tools/ubhost.c tools/ubhostw.c tools/ubcheckw.c unabashed.h libunaba
 	$(CC) -O2 -Wall -Wextra -Wno-missing-field-initializers -nostartfiles -nostdlib \
 	    -o $@ tools/ubhost.c libunabashed.obj -lkernel32 -lgcc
 
+libunabashed32.obj: libunabashed.cpp unabashed.h $(SOURCES)
+	$(CXX32) $(FLAGS) $(WARN) -O2 -c -o $@ libunabashed.cpp
+
+# 32-bit hosts load on XP: subsystem 5.1, kernel32 only
+ubhost32.exe: tools/ubhost.c tools/ubhostw.c tools/ubcheckw.c unabashed.h libunabashed32.obj
+	$(CC32) -O2 -Wall -Wextra -Wno-missing-field-initializers -nostartfiles -nostdlib \
+	    -Wl,--major-subsystem-version=5,--minor-subsystem-version=1 \
+	    -Wl,--large-address-aware -o $@ tools/ubhost.c libunabashed32.obj -lkernel32 -lgcc
+
+ubtiny.exe: tools/ubtiny.c unabashed.h libunabashed32.obj
+	$(CC32) -O2 -Wall -Wextra -nostartfiles -nostdlib \
+	    -Wl,--major-subsystem-version=5,--minor-subsystem-version=1 \
+	    -o $@ tools/ubtiny.c libunabashed32.obj -lkernel32 -lgcc
+
 ubcollide: tools/ubcollide.cpp unabashed.h libunabashed-O0.o
 	$(CXX) $(FLAGS) -nostdlib++ -o $@ tools/ubcollide.cpp libunabashed-O0.o -lpthread
 
@@ -88,8 +104,9 @@ check-lib: libunabashed.o libunabashed-O0.o ubhost ubcollide
 	./ubcollide
 	./ubhost -c 'echo $$((6*7)) | grep -q 42'
 
-check-lib-win: libunabashed.obj libunabashed-O0.obj ubhost.exe
-	tools/check-lib libunabashed.obj libunabashed-O0.obj
+check-lib-win: libunabashed.obj libunabashed-O0.obj libunabashed32.obj ubhost.exe \
+               ubhost32.exe ubtiny.exe
+	tools/check-lib libunabashed.obj libunabashed-O0.obj libunabashed32.obj
 
 # What w64devkit's Dockerfile takes: the committed tree, named after the
 # commit's date and hash.
@@ -105,6 +122,7 @@ clean:
 	rm -f unabashed unabashed.exe unabashed32.exe debug debug.exe \
 	      tests tests.exe fuzz argv.exe argv32.exe \
 	      libunabashed.o libunabashed-O0.o ubhost ubcollide \
-	      libunabashed.obj libunabashed-O0.obj ubhost.exe
+	      libunabashed.obj libunabashed-O0.obj ubhost.exe \
+	      libunabashed32.obj ubhost32.exe ubtiny.exe
 
 .PHONY: default check check-lib check-lib-win clean

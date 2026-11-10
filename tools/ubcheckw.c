@@ -78,6 +78,7 @@ W32(void *,    ConvertThreadToFiber(void *));
 W32(int,       ConvertFiberToThread(void));
 W32(int,       GetProcessHandleCount(uintptr_t, unsigned *));
 W32(int,       PeekNamedPipe(uintptr_t, void *, int, int *, int *, int *));
+W32(int,       ReadProcessMemory(uintptr_t, void const *, void *, size_t, size_t *));
 W32(uintptr_t, CreateEventW(void *, int, int, void *));
 W32(int,       SetEvent(uintptr_t));
 
@@ -212,8 +213,35 @@ static double nowsec(void)
     return (double)t / (double)freq;
 }
 
+static CriticalSection hostcs;  // the host's spawn lock, shared with runs
+
+// Critical sections' lock events, which XP creates the first time each
+// is contended: through the process's list of them (RTL_CRITICAL_SECTION
+// and its DEBUG), from the host's own, read so a bad pointer is safe.
+static int locksems(uintptr_t *sems, int cap)
+{
+    enum { P = sizeof(void *) };
+    uintptr_t self = GetCurrentProcess(), dbg = (uintptr_t)hostcs.a, start, cur, n = 0;
+    if (!dbg || dbg==(uintptr_t)-1) return 0;  // none kept (Windows 8)
+    start = cur = dbg + 2*P;  // its ProcessLocksList
+    for (int i = 0; i<100000 && n<(uintptr_t)cap; i++) {
+        uintptr_t next = 0, cs = 0, back = 0, sem = 0;
+        uintptr_t d = cur - 2*P;  // the list head (in ntdll) fails back==d
+        if (ReadProcessMemory(self, (void *)(d+P), &cs, P, 0) &&
+            ReadProcessMemory(self, (void *)cs, &back, P, 0) && back==d &&
+            ReadProcessMemory(self, (void *)(cs+2*P+8), &sem, P, 0) && sem) {
+            sems[n++] = sem;
+        }
+        if (!ReadProcessMemory(self, (void *)cur, &next, P, 0) || next==start) break;
+        cur = next;
+    }
+    return (int)n;
+}
+
 static void snapshot(State *st)
 {
+    static uintptr_t sems[4096];
+    int nsems = locksems(sems, 4096);
     Snap *s = &st->text;
     s->len = 0;
     st->private_ = 0;
@@ -249,6 +277,9 @@ static void snapshot(State *st)
             sputd(s, flags);
             sput(s, " ");
             sputtype(s, h);
+            for (int i = 0; i < nsems; i++) {
+                if (sems[i] == h) sput(s, " lock");
+            }
             sput(s, "\n");
         }
     }
@@ -324,12 +355,28 @@ static int poolhandle(char const *p, ptrdiff_t n)
     return 0;
 }
 
+// A critical section's, which XP makes and keeps by itself
+static int lockevent(char const *p, ptrdiff_t n)
+{
+    return n>11 && !memcmp(p+n-11, " Event lock", 11);
+}
+
+// Protected from closing (flag 2): the system's, as XP's, which fill a
+// cache once under load. The library never sets the flag.
+static int protected_(char const *p, ptrdiff_t n)
+{
+    if (n<7 || memcmp(p, "handle ", 7)) return 0;
+    char const *f = p + 7;
+    while (f<p+n && *f!=' ') f++;
+    return f+1<p+n && (f[1]=='2' || f[1]=='3') && f+2<p+n && f[2]==' ';
+}
+
 static int linesgone(Snap *from, Snap *in, char const *mark, Snap *why, int shown)
 {
     int gone = *mark == 'g';
     for (char *p = from->buf, *e; *p; p = e+1) {
         for (e = p; *e!='\n'; e++) {}
-        if (!hasline(in, p, e-p) && !(gone && poolhandle(p, e-p))) {
+        if (!hasline(in, p, e-p) && !(gone && poolhandle(p, e-p)) && !lockevent(p, e-p) && !protected_(p, e-p)) {
             if (shown++ < 8) {
                 sput(why, shown>1 ? "; " : "host changed: ");
                 sput(why, mark);
@@ -413,7 +460,6 @@ static int kidsgone(Snap *why)
 
 // Cases
 
-static CriticalSection hostcs;  // the host's spawn lock, shared with runs
 
 static void hostlock(void *user, int lock)
 {
@@ -436,6 +482,7 @@ typedef struct {
     int         fds;
     int64_t     pid;
     int         fiber;      // the host's thread is a fiber already
+    int         hostpipe;   // stdin: a host pipe, written once the run ends
 } Case;
 
 typedef struct {
@@ -472,7 +519,9 @@ static int runcase(Case const *c, char *out, int outlen, double *secs)
     ub_cmd cmd = {0};
     cmd.argc   = 3;
     cmd.argv   = argv;
-    cmd.std[0] = -1;
+    uintptr_t pr = 0, pw = 0;
+    if (c->hostpipe) CreatePipe(&pr, &pw, 0, 0);
+    cmd.std[0] = c->hostpipe ? (intptr_t)pr : -1;
     cmd.std[1] = (intptr_t)f;
     cmd.std[2] = (intptr_t)f;
     cmd.pid    = c->pid;
@@ -499,6 +548,15 @@ static int runcase(Case const *c, char *out, int outlen, double *secs)
         WaitForSingleObject(t, -1);
         CloseHandle(t);
         CloseHandle(s.done);
+    }
+    if (c->hostpipe) {
+        // The peer's next operation: an XP helper orphaned in the read
+        // takes it, then frees itself
+        int w = 0;
+        WriteFile(pw, "x\n", 2, &w, 0);
+        CloseHandle(pw);
+        CloseHandle(pr);
+        Sleep(200);
     }
     ub_free(os);
     int n = 0;
@@ -685,14 +743,9 @@ static int inheritedfds(void)
     return n ? 100+n : 0;
 }
 
-static int checkconcurrent(int threads, int reps)
+// One round: threads of reps runs each, beside the host spawner.
+static void concround(int threads, int reps)
 {
-    Snap why;
-    snapinit(&why, 1<<12);
-    concfails = 0;
-    snapshot(&before);
-    basefds = hostspawn();
-    double t0 = nowsec();
     int stop = 0;
     uintptr_t sp = CreateThread(0, 1<<16, hostspawner, &stop, 0, 0), t[64];
     for (int i = 0; i < threads; i++) t[i] = CreateThread(0, 1<<16, concworker, &reps, 0, 0);
@@ -703,6 +756,22 @@ static int checkconcurrent(int threads, int reps)
     __atomic_store_n(&stop, 1, __ATOMIC_RELEASE);
     WaitForSingleObject(sp, -1);
     CloseHandle(sp);
+}
+
+static int checkconcurrent(int threads, int reps)
+{
+    Snap why;
+    snapinit(&why, 1<<12);
+    // A warm-up round: on XP the host's first spawn loads a DLL, and
+    // contended locks get their events
+    basefds = hostspawn();
+    concround(threads, 1);
+    for (double until = nowsec()+2; !kidsgone(&why) && nowsec()<until;) Sleep(1);
+    why.len = 0;
+    concfails = 0;
+    snapshot(&before);
+    double t0 = nowsec();
+    concround(threads, reps);
     double secs = nowsec() - t0;
     Sleep(100);
     snapshot(&after);
@@ -793,6 +862,8 @@ static int check(int quick)
         {"hard: sleep", "sleep 100", -UB_ECANCELED, 0, 0.6, 100},
         {"hard: read", "read x < <(sleep 100)", -UB_ECANCELED, 0, 0.6, 100},
         {"hard: pipeline", "yes | cat >/dev/null", -UB_ECANCELED, 0, 0.6, 100},
+        {"hard: read a host pipe", "read x", -UB_ECANCELED, 0, 0.35, 100,
+         0, 0, 0, 0, 0, 1},
         {"hard: trapped loop", "trap 'echo t' TERM; while :; do :; done",
          -UB_ECANCELED, 0, 0.35, 100},
         {"soft: busy loop", "while :; do :; done", UB_SIGNALED|(128+15), 0, 1, 100,
@@ -838,7 +909,8 @@ static int check(int quick)
     Case again = {"a run after the sweep", "echo ok", 0, "ok"};
     fails += !checkcase(&again, 1);
 
-    fails += !checkconcurrent(8, quick ? 5 : 20);
+    // 32-bit: four runs fit in 2 GiB of address space, beside the host's
+    fails += !checkconcurrent(sizeof(void *)==8 ? 8 : 4, quick ? 5 : 20);
 
     int avail = 0;
     if (!PeekNamedPipe(sentr, 0, 0, 0, &avail, 0) || avail) {

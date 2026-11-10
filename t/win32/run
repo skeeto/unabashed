@@ -79,7 +79,11 @@ if [ ! -e "$bin/nodll.exe" ]; then
     dlltool -d "$bin/nosuch.def" -l "$bin/libnosuch.a" &&
     cc -o "$bin/nodll.exe" "$bin/nodll.c" "$bin/libnosuch.a" || exit 2
 fi
-U32=$(dirname "$shell")/unabashed32.exe
+# The shell's 32-bit build beside it, X32.exe for X.exe (unabashed32.exe,
+# ubhost32.exe), or the shell itself when it is one
+U32=${shell%.exe}
+case $U32 in *32) ;; *) U32=${U32}32 ;; esac
+U32=$U32.exe
 [ -f "$U32" ] && cp "$U32" "$bin/unabashed32.exe"
 BIN=$bin
 BB=$(command -v busybox)
