@@ -50,10 +50,9 @@ struct Os {
     u8     wkind[256];  // per descriptor: FK_* (fdkind)
     u8     wbuf[1<<14];
     u64    entropyn;    // os_entropy's fallback counter
+    u64 volatile sigbits;  // caught signals not yet taken
+    u64 volatile grpbits;  // the terminal's, sent to its foreground group
 };
-
-static u64 volatile sigbits;  // caught signals not yet taken
-static u64 volatile grpbits;  // the terminal's, sent to its foreground group
 
 // Level signals from another of our shells (os_siglevel), queued by
 // the handler of a real-time signal: one producer (the handler, which
@@ -284,7 +283,7 @@ static Opened plt_tempfile(Os *os, Arena scratch)
         print(&b, "/sh-thd.");
         print(&b, (i64)getpid());
         print(&b, ".");
-        print(&b, (i64)(++counter ^ (u32)plt_now(os)));
+        print(&b, (i64)(__atomic_add_fetch(&counter, 1u, __ATOMIC_RELAXED) ^ (u32)plt_now(os)));
         char *path = cpath(&scratch, finish(&b));
         i32 fd = open(path, O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0600);
         if (fd < 0 && errno==EEXIST) continue;
@@ -910,10 +909,10 @@ static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
     // catches or ignores what its traps say: the child starts with
     // defaults, except what it was told to ignore (trap '' in the
     // spawning subshell) and what was ignored on entry
-    u64 changed = sigos ? sigos->changed : 0;
-    if (!sigos || !sigos->pipeign) changed |= corebit(SIGPIPE);
+    u64 changed = os->changed;
+    if (!os->pipeign) changed |= corebit(SIGPIPE);
     changed |= corebit(SIGCHLD);
-    p.ign     = s->sigign | (sigos ? sigos->entryign : 0);
+    p.ign     = s->sigign | os->entryign;
     p.dfl     = changed & ~p.ign;
     p.rlimits = s->rlimits;
     p.pgid    = s->pgid;
@@ -1024,8 +1023,8 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         os->changed = s->sigign & ~os->entryign;
         os->pending = 0;
         os->peekfd[0] = os->peekfd[1] = 0;
-        sigbits = 0;
-        grpbits = 0;
+        os->sigbits = 0;
+        os->grpbits = 0;
         levelhead = 0;
         leveltail = 0;
         constinit static OsInfo info = {};  // in .bss, no guard
@@ -1090,8 +1089,8 @@ static i32 plt_forkexec(Os *os, Arena scratch, Spawn *s)
         } while (n<0 && errno==EINTR);
         if (n) _exit(0);  // the original carries on
         close(sync[0]);
-        sigbits = 0;  // signals were for the original's pid
-        grpbits = 0;
+        os->sigbits = 0;  // signals were for the original's pid
+        os->grpbits = 0;
         levelhead = 0;
         leveltail = 0;
         sigprocmask(SIG_SETMASK, &old, 0);
@@ -1163,9 +1162,9 @@ static i32 plt_exec(Os *os, Arena scratch, Spawn *s)
     // Signal actions as os_spawn's child gets them
     struct sigaction old[NSIGNAL] = {};
     u64 touched = 0;
-    u64 changed = sigos ? sigos->changed : 0;
-    u64 ign     = s->sigign | (sigos ? sigos->entryign : 0);
-    if (!sigos || !sigos->pipeign) changed |= corebit(SIGPIPE);
+    u64 changed = os->changed;
+    u64 ign     = s->sigign | os->entryign;
+    if (!os->pipeign) changed |= corebit(SIGPIPE);
     changed |= corebit(SIGCHLD);
     for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
         u64 bit = corebit(sig);
@@ -1280,7 +1279,7 @@ static void onsignal(int sig, siginfo_t *info, void *)
     (void)tty;
     (void)info;
     #endif
-    __atomic_fetch_or(grp ? &grpbits : &sigbits, corebit(sig), __ATOMIC_RELAXED);
+    __atomic_fetch_or(grp ? &sigos->grpbits : &sigos->sigbits, corebit(sig), __ATOMIC_RELAXED);
     u8 c = 0;
     if (write(sigos->wakefd[1], &c, 1)) {}
     errno = saved;
@@ -1468,16 +1467,16 @@ static LevelSig plt_levelsig(Os *)
 
 // Polled between commands: a plain load first spares the common case a
 // locked exchange, and a bit set meanwhile waits for the next poll.
-static u64 plt_sigpending(Os *)
+static u64 plt_sigpending(Os *os)
 {
-    if (!__atomic_load_n(&sigbits, __ATOMIC_RELAXED)) return 0;
-    return __atomic_exchange_n(&sigbits, (u64)0, __ATOMIC_RELAXED);
+    if (!__atomic_load_n(&os->sigbits, __ATOMIC_RELAXED)) return 0;
+    return __atomic_exchange_n(&os->sigbits, (u64)0, __ATOMIC_RELAXED);
 }
 
-static u64 plt_siggroup(Os *)
+static u64 plt_siggroup(Os *os)
 {
-    if (!__atomic_load_n(&grpbits, __ATOMIC_RELAXED)) return 0;
-    return __atomic_exchange_n(&grpbits, (u64)0, __ATOMIC_RELAXED);
+    if (!__atomic_load_n(&os->grpbits, __ATOMIC_RELAXED)) return 0;
+    return __atomic_exchange_n(&os->grpbits, (u64)0, __ATOMIC_RELAXED);
 }
 
 static void plt_tasktag(Os *, u64, iz, u64)
@@ -1683,7 +1682,7 @@ static Io *plt_wait(Os *os, i64 deadline)
             u8 buf[64];
             while (read(os->wakefd[0], buf, sizeof(buf)) > 0) {}
         }
-        if (sigbits || grpbits || levelhead!=leveltail) return 0;  // the core first
+        if (os->sigbits || os->grpbits || levelhead!=leveltail) return 0;  // the core first
         i32 k = 1;
         for (Io **p = &os->pending; *p; p = &(*p)->next) {
             Io *io = *p;
