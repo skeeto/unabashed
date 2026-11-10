@@ -7,7 +7,7 @@ declare -cu cu=mixed; declare -p cu
 declare -i i; i+=2; declare -p i
 declare +i i; i=a+b; declare -p i
 declare -p -- i
-declare -a; declare -A; declare -ar | grep -v BASH
+declare -a | sed "s/${BASH_VERSINFO[5]}/HOST/"; declare -A; declare -ar | grep -v BASH
 declare -i | grep -v -E 'BASHPID|RANDOM|SRANDOM|SECONDS|HISTCMD|OPTIND|EUID|PPID|UID|LINENO'
 declare -x | grep -E ' (x|ilx)='
 declare -t

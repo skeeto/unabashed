@@ -1,4 +1,4 @@
-== stdout 1189
+== stdout 1174
 declare -i i="7"
 declare -l l="abc"
 declare -u u="ABC"
@@ -16,7 +16,7 @@ declare -a BASH_ARGC=()
 declare -a BASH_ARGV=()
 declare -a BASH_LINENO=()
 declare -a BASH_SOURCE=()
-declare -ar BASH_VERSINFO=([0]="5" [1]="3" [2]="0" [3]="1" [4]="release" [5]="x86_64-pc-linux-gnu")
+declare -ar BASH_VERSINFO=([0]="5" [1]="3" [2]="0" [3]="1" [4]="release" [5]="HOST")
 declare -a DIRSTACK=()
 declare -a FUNCNAME
 declare -a GROUPS=()
@@ -58,7 +58,7 @@ r r r
 == stderr 46
 bash: line 23: declare: ro: readonly variable
 
-== merged 1235
+== merged 1220
 declare -i i="7"
 declare -l l="abc"
 declare -u u="ABC"
@@ -76,7 +76,7 @@ declare -a BASH_ARGC=()
 declare -a BASH_ARGV=()
 declare -a BASH_LINENO=()
 declare -a BASH_SOURCE=()
-declare -ar BASH_VERSINFO=([0]="5" [1]="3" [2]="0" [3]="1" [4]="release" [5]="x86_64-pc-linux-gnu")
+declare -ar BASH_VERSINFO=([0]="5" [1]="3" [2]="0" [3]="1" [4]="release" [5]="HOST")
 declare -a DIRSTACK=()
 declare -a FUNCNAME
 declare -a GROUPS=()

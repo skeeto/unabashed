@@ -10,7 +10,7 @@ readonly -p | grep -v -E 'BASH|EUID|PPID|UID'
 export -p | grep -E ' (e1|e2|rx)'
 set -o posix
 readonly -p | grep -v -E 'BASH|EUID|PPID|UID'
-readonly -a
+readonly -a | sed "s/${BASH_VERSINFO[5]}/HOST/"
 export -p | grep -E ' (e1|e2|rx)'
 f() { local -r lr=1; local; readonly -p | grep lr; }; f
 set +o posix

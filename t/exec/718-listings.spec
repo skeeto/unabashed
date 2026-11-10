@@ -1,4 +1,4 @@
-== stdout 1130
+== stdout 1115
 declare -i BASHPID
 declare -i RANDOM
 declare -- LINENO
@@ -37,7 +37,7 @@ readonly r1="1"
 readonly r2
 readonly -a ra=([0]="x" [1]="y")
 readonly rx="2"
-readonly -a BASH_VERSINFO=([0]="5" [1]="3" [2]="0" [3]="1" [4]="release" [5]="x86_64-pc-linux-gnu")
+readonly -a BASH_VERSINFO=([0]="5" [1]="3" [2]="0" [3]="1" [4]="release" [5]="HOST")
 readonly -a ra=([0]="x" [1]="y")
 export e1="1"
 export e2
@@ -53,7 +53,7 @@ bash: line 17: readonly: `q[1]': not a valid identifier
 bash: line 18: declare: ra: readonly variable
 bash: line 19: declare: nosuch: not found
 
-== merged 1274
+== merged 1259
 declare -i BASHPID
 declare -i RANDOM
 declare -- LINENO
@@ -92,7 +92,7 @@ readonly r1="1"
 readonly r2
 readonly -a ra=([0]="x" [1]="y")
 readonly rx="2"
-readonly -a BASH_VERSINFO=([0]="5" [1]="3" [2]="0" [3]="1" [4]="release" [5]="x86_64-pc-linux-gnu")
+readonly -a BASH_VERSINFO=([0]="5" [1]="3" [2]="0" [3]="1" [4]="release" [5]="HOST")
 readonly -a ra=([0]="x" [1]="y")
 export e1="1"
 export e2
