@@ -881,6 +881,7 @@ static Target wintarget(Shell *sh, Arena *a, Str path, Str *argv, iz argc, Slice
                 t.err = E_NOEXEC;
                 return t;
             }
+            if (noself && !b.interp.len) b.interp = Str("sh");  // a .sh without #!
         }
         Slice<Str> next = {};
         if ((!LIBMODE || !noself) && (sh_ || selfinterp(b))) {

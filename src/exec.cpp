@@ -2322,6 +2322,22 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     return status;
 }
 
+// The library with no self runs a #! script for sh in-process: the
+// options on its #! line apply as they would to "sh -e script".
+static void shebangoptions(Shell *sh, Str src)
+{
+    if (src.len<2 || src[0]!='#' || src[1]!='!') return;
+    iz end = 2;
+    for (; end<src.len && src[end]!='\n' && src[end]!='\r'; end++) {}
+    Str o = parseshebang(span(src.data+2, src.data+end)).arg;
+    if (o.len<2 || (o[0]!='-' && o[0]!='+')) return;
+    for (iz i = 1; i < o.len; i++) {
+        for (i32 k = 0; k < O_COUNT; k++) {
+            if (setoptions[k].letter == o[i]) sh->opt[k] = o[0]=='-';
+        }
+    }
+}
+
 static b32 isshellscript(Shell *sh, Arena a, Str path)
 {
     Str full = absolute(sh, &a, path);
@@ -2562,6 +2578,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->restricted  = 0;  // as bash, the script runs unrestricted
         sh->noerrexit   = 0;  // a new shell: no condition is pending
         defaultoptions(sh, 1);
+        if constexpr (LIBMODE) shebangoptions(sh, src);
         sh->capdepth++;
         // As a new shell: what was ignored is ignored on entry, caught
         // signals are reset, and only its own traps are listed

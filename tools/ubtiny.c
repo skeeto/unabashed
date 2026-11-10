@@ -133,6 +133,17 @@ static char const script[] =
     "./ubtiny.sh a b || exit 1\n"
     "sh -c 'echo sh ok' || exit 2\n"
     "rm ubtiny.sh\n"
+    "printf '#!/bin/sh -e\\nfalse\\necho no\\n' >ubtiny2.sh\n"
+    "chmod +x ubtiny2.sh\n"
+    "./ubtiny2.sh >ubtiny2.out && exit 4\n"
+    "[ -s ubtiny2.out ] && exit 5\n"
+    "echo script -e ok\n"
+    "printf 'echo via $#\\n' >ubtiny3.sh\n"
+    "chmod +x ubtiny3.sh\n"
+    "[ \"$(./ubtiny3.sh a)\" = 'via 1' ] || exit 6\n"
+    "case $PWD in */) exit 7 ;; esac\n"
+    "echo plain script ok\n"
+    "rm ubtiny2.sh ubtiny2.out ubtiny3.sh\n"
     "case $BASH in *[Uu][Bb][Tt][Ii][Nn][Yy].[Ee][Xx][Ee]) exit 3 ;; esac\n"
     "exit 0\n";
 
@@ -171,7 +182,14 @@ void mainCRTStartup(void)
 
     int fails = 0;
     if (status) {
-        say("ubtiny: FAIL the run's status is not 0\n");
+        char num[16], *e = num+sizeof(num), *q = e;
+        *--q = 0;
+        unsigned u = status<0 ? -(unsigned)status : (unsigned)status;
+        do *--q = (char)('0' + u%10); while (u /= 10);
+        if (status < 0) *--q = '-';
+        say("ubtiny: FAIL the run's status is ");
+        say(q);
+        say(", not 0\n");
         fails++;
     }
     if (sys) {
