@@ -64,8 +64,9 @@ libunabashed.o: libunabashed.cpp unabashed.h $(SOURCES)
 libunabashed-O0.o: libunabashed.cpp unabashed.h $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) -O0 -c -o $@ libunabashed.cpp
 
-ubhost: tools/ubhost.c unabashed.h libunabashed.o
-	$(CC) -O2 -Wall -Wextra -o $@ tools/ubhost.c libunabashed.o -lpthread
+ubhost: tools/ubhost.c tools/ubcheck.c unabashed.h libunabashed.o
+	$(CC) -O2 -Wall -Wextra -Wno-missing-field-initializers \
+	    -o $@ tools/ubhost.c libunabashed.o -lpthread
 
 ubcollide: tools/ubcollide.cpp unabashed.h libunabashed-O0.o
 	$(CXX) $(FLAGS) -nostdlib++ -o $@ tools/ubcollide.cpp libunabashed-O0.o -lpthread

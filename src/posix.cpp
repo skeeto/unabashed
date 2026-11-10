@@ -947,6 +947,18 @@ static i32 trispawn(SpawnPlan *, Arena, pid_t *)
 }
 #endif
 
+// The calling thread's signal mask. The executable has one thread; the
+// library runs beside the host's, and macOS's sigprocmask, racing in
+// several threads, leaves others' masks changed.
+static void threadmask(i32 how, sigset_t *set, sigset_t *old)
+{
+    if constexpr (LIBMODE) {
+        pthread_sigmask(how, set, old);
+    } else {
+        sigprocmask(how, set, old);
+    }
+}
+
 static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
 {
     flushw(os);
@@ -987,12 +999,12 @@ static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
 
     sigset_t all;
     sigfillset(&all);
-    sigprocmask(SIG_SETMASK, &all, &p.mask);
+    threadmask(SIG_SETMASK, &all, &p.mask);
     pid_t pid = -1;
     i32 e = trispawn(&p, scratch, &pid);
     if (e < 0) e = forkspawn(&p, &pid);
     if (!e) joingroup(pid, p.pgid, p.fg, p.tty);
-    sigprocmask(SIG_SETMASK, &p.mask, 0);
+    threadmask(SIG_SETMASK, &p.mask, 0);
     if (e) {
         r.err = e;
         return r;

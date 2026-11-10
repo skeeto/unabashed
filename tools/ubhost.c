@@ -5,6 +5,8 @@
 // descriptors and pid, a signal thread forwards the signals it gets,
 // and it exits as the shell did, dying of the same signal.
 //
+// "ubhost --check [--quick]" checks the host contract (ubcheck.c).
+//
 // $ cc -O2 -o ubhost tools/ubhost.c libunabashed.o -lpthread
 // This is free and unencumbered software released into the public domain.
 #define _GNU_SOURCE
@@ -17,26 +19,29 @@
 #include <string.h>
 #include <unistd.h>
 #include "../unabashed.h"
+#include "ubcheck.c"
 
 static ub_os *runos;
 
-// A synchronous fault in this thread is the host's own, never waited
-// for: blocking it would hang or kill without a core.
-static int faultsig(int sig)
-{
-    switch (sig) {
-    case SIGILL: case SIGTRAP: case SIGBUS: case SIGFPE: case SIGSEGV:
-    case SIGSYS: case SIGKILL: case SIGSTOP: case SIGCHLD:
-        return 1;
-    }
-    return 0;
-}
-
+// The signals the forwarder waits for. On Linux a fault of the host's
+// own kills it even while blocked, so the faults another process sends
+// with kill are forwarded too, as the executable takes them. SIGPIPE
+// and SIGXFSZ the run raises on itself stay pending on its own thread,
+// unseen here; on macOS the host ignores them.
 static void waitset(sigset_t *set)
 {
     sigemptyset(set);
     for (int sig = 1; sig < 32; sig++) {
-        if (!faultsig(sig)) sigaddset(set, sig);
+        switch (sig) {
+        case SIGKILL: case SIGSTOP: case SIGCHLD:
+            continue;
+        #if !__linux__
+        case SIGILL: case SIGTRAP: case SIGBUS: case SIGFPE: case SIGSEGV:
+        case SIGSYS:
+            continue;
+        #endif
+        }
+        sigaddset(set, sig);
     }
 }
 
@@ -60,7 +65,6 @@ static void *forwarder(void *arg)
         int sig;
         if (sigwait(&set, &sig)) continue;
         #endif
-        if (sig==SIGPIPE || sig==SIGXFSZ) continue;  // the run's own
         ub_signal(runos, sig | (group ? UB_GROUP : 0));
     }
     return 0;
@@ -88,6 +92,16 @@ static void exitwith(int status)
 
 int main(int argc, char **argv)
 {
+    if (argc>1 && !strcmp(argv[1], "--check")) {
+        #if __APPLE__
+        signal(SIGPIPE, SIG_IGN);  // as every macOS host must
+        signal(SIGXFSZ, SIG_IGN);
+        #endif
+        return check(argv[0], argc>2 && !strcmp(argv[2], "--quick"));
+    }
+    if (argc>1 && !strcmp(argv[1], "--fds")) {
+        return inheritedfds();
+    }
     ub_cmd cmd = {0};
     cmd.argc = argc;
     cmd.argv = (char const *const *)argv;

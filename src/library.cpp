@@ -399,9 +399,17 @@ static void drainwatch(Lib *l)
         if (k && !procpending(&l->os, k->pid)) unwatchkid(l, k);
     }
     #else
+    // XNU posts NOTE_EXIT before the program can be reaped, and the
+    // event is one-shot: its program is polled, backing off, until then
     struct kevent e[64];
     struct timespec zero = {};
-    while (kevent(l->waitfd, 0, 0, e, countof(e), &zero) == countof(e)) {}
+    for (i32 n = countof(e); n == countof(e);) {
+        n = kevent(l->waitfd, 0, 0, e, countof(e), &zero);
+        for (i32 i = 0; i < n; i++) {
+            LibKid *k = findkid(l, (i64)e[i].ident);
+            if (k) unwatchkid(l, k);
+        }
+    }
     #endif
 }
 
@@ -987,7 +995,7 @@ static void teardown(Lib *l)
         struct timespec zero = {};
         while (sigtimedwait(&set, 0, &zero) > 0) {}
         #endif
-        sigprocmask(SIG_SETMASK, &l->mask, 0);
+        pthread_sigmask(SIG_SETMASK, &l->mask, 0);
         l->masked = 0;
     }
     curlib = 0;
@@ -1025,7 +1033,7 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     sigemptyset(&block);
     sigaddset(&block, SIGPIPE);
     sigaddset(&block, SIGXFSZ);
-    sigprocmask(SIG_BLOCK, &block, &l->mask);
+    pthread_sigmask(SIG_BLOCK, &block, &l->mask);
     l->masked = 1;
     #endif
     curlib = l;
