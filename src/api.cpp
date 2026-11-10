@@ -487,8 +487,12 @@ static Str     lib_root(Os *);
 // The platform as a table. The shell calls each entry above through its
 // Os's table (dispatch.cpp), which the platform layer's osvtable names.
 // src/posix.cpp and src/win32.cpp fill one with the real OS
-// (pltvtable), vos.cpp with a virtual one (vosvtable). An embedder may
-// fill its own, or copy one and replace entries to hook or filter them.
+// (pltvtable), vos.cpp with a virtual one (vosvtable). The library's
+// modules (src/libposix.cpp, src/libwin32.cpp) copy pltvtable and
+// replace entries (libvtable): refusals for what would change the host
+// process, and records around what creates a resource (notes/library.md).
+// An embedder may likewise fill its own, or copy one and replace
+// entries to hook or filter them.
 // The fibers, os_oom, sh_main, and fakes.cpp's own calls into the vos
 // (os_mkdir and the rest) are not in it.
 //

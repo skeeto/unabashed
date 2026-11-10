@@ -83,6 +83,20 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
   only the low byte sees 58, not 130 (Git Bash maps the code to 130).
 
 
+## The library
+
+Its deviations by design are in library.md (Known deviations and
+limits) and tools/ubhost.expect. Found in its review (2026-11-10), not
+yet fixed:
+
+- The executable on Windows 8 and later keeps a background program's
+  job in os->bgjobs until the 64-entry ring evicts it. A later program
+  given the same pid then finds the old, empty job, so `kill -- -PID`
+  terminates that job, reports success, and leaves the program running.
+  The library drops the stale entry when a pid is reused
+  (lib_spawned); the executable's plt_kill has no equivalent.
+
+
 ## Test infrastructure
 
 - t/exec/634-coproc races, in bash as in ours: the first coprocess
