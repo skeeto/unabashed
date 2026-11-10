@@ -25,8 +25,8 @@
 #include <sys/random.h>  // getentropy
 #endif
 extern "C" int rename(char const *, char const *);  // stdio.h, whose macros collide
-#include "src/unabashed.cpp"
-#include "src/fibers.cpp"
+#include "unabashed.cpp"
+#include "fibers.cpp"
 
 extern char **environ;
 
