@@ -555,7 +555,7 @@ static void vprocmain(Task *t)
     Escape top = {};
     sh->esc = &top;
     byte stackmark = 0;
-    sh->stacktop = &stackmark;
+    sh->stacktop = STACKAT(stackmark);
     iz room = t->stack - ((iz)1<<16);  // the parent's limit, if smaller
     sh->stackmax = sh->stackmax<room ? sh->stackmax : room;
     m->sig.task = t;

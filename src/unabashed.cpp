@@ -1530,7 +1530,7 @@ static i32 imagemain(Os *os, OsInfo *info)
     sigenter(sh, sig, sh->bashpid, sh->sched->cur);
     sh->sched->top = sig;
     byte stackmark = 0;
-    sh->stacktop = &stackmark;
+    sh->stacktop = STACKAT(stackmark);
     sh->stackmax = info->stack ? info->stack - ((iz)1<<16) : (iz)1<<19;
     startfds(sh, info);
 
@@ -1619,7 +1619,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     sh->hardign  = info->sigign;
     sh->entryign = info->sigign;
     byte stackmark = 0;
-    sh->stacktop = &stackmark;
+    sh->stacktop = STACKAT(stackmark);
     sh->stackmax = info->stack ? info->stack - ((iz)1<<16) : (iz)1<<19;
 
     startfds(sh, info);

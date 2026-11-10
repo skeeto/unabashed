@@ -2668,7 +2668,7 @@ static void checkerrexit(Shell *sh)
 static void checkstack(Shell *sh)
 {
     byte here = 0;
-    if (sh->stackmax && sh->stacktop-&here > sh->stackmax) {
+    if (sh->stackmax && sh->stacktop-STACKAT(here) > sh->stackmax) {
         sh->status  = 139;
         sh->killsig = 11;
         sh->exiting = 1;

@@ -28,6 +28,22 @@ template<typename T>
 void *operator new(uz, T *p) noexcept { return p; }
 #endif
 
+// The stack's depth here, given a local: its address, except under
+// AddressSanitizer, which may move a local to a "fake stack" elsewhere
+// (detect_stack_use_after_return), where the frame's address counts.
+#if __SANITIZE_ADDRESS__
+#  define UB_ASAN 1
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define UB_ASAN 1
+#  endif
+#endif
+#if UB_ASAN
+#  define STACKAT(local)  ((void)(local), (byte *)__builtin_frame_address(0))
+#else
+#  define STACKAT(local)  (&(local))
+#endif
+
 // Non-local exits: jmpset(b) returns 0, then 1 again when jmpback(b)
 // unwinds to it. Callers keep to __builtin_setjmp's rules: jmpback only
 // from a deeper frame, never from the function that called jmpset.

@@ -417,7 +417,7 @@ static void message(Lexer *L, i32 line, Str text, i32 kind = MSG_ERROR)
 static void checkstack(Lexer *L)
 {
     byte here = 0;
-    if (L->stackmax && L->stacktop-&here > L->stackmax) {
+    if (L->stackmax && L->stacktop-STACKAT(here) > L->stackmax) {
         L->overflow = 1;
         parsefail(L);
     }
@@ -3750,7 +3750,7 @@ static Parsed parseunit(Lexer *L)
 
     L->reported = 0;
     byte top = 0;
-    L->stacktop = &top;
+    L->stacktop = STACKAT(top);
     Parser p = {};
     p.L = L;
     i32 t = peek(&p);
