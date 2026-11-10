@@ -2560,6 +2560,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->aliases     = 0;
         sh->cflag       = 0;
         sh->restricted  = 0;  // as bash, the script runs unrestricted
+        sh->noerrexit   = 0;  // a new shell: no condition is pending
         defaultoptions(sh, 1);
         sh->capdepth++;
         // As a new shell: what was ignored is ignored on entry, caught
