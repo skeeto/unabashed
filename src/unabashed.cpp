@@ -540,8 +540,11 @@ static void startup(Shell *sh, Arena scratch, Str argv0, Startup *s)
             Str path = concat(&scratch, drive, "/etc/profile");
             startupfile(sh, scratch, path, s);
             Str dir = takehead(sh->exe, sh->exe.len - lastpart(sh->exe).len);
-            Str path2 = concat(&scratch, dir, "../etc/profile");
-            startupfile(sh, scratch, path2, s);
+            if constexpr (LIBMODE) dir = selfdir(sh);
+            if (!LIBMODE || dir.len) {  // the library with no root: none
+                Str path2 = concat(&scratch, dir, "../etc/profile");
+                startupfile(sh, scratch, path2, s);
+            }
             Got home = getvar(sh, &scratch, "HOME");
             if (home.set) {
                 Str path = concat(&scratch, home.value, "/.profile");
@@ -632,6 +635,14 @@ static void addbadenv(Shell *sh, Str entry)
 // On Windows the persona comes from argv[0] and whether the install
 // root (the shell's directory, less usr/bin or bin) has an etc/fstab,
 // which also gives the mounts (paths.cpp's personaof and initmounts).
+// An open that found nothing
+static Opened unopened()
+{
+    Opened o = {};
+    o.err = E_NOENT;
+    return o;
+}
+
 static void pathsetup(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
 {
     PathCtx *c = alloc<PathCtx>(perm);
@@ -653,6 +664,8 @@ static void pathsetup(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
     c->temp = temp.data ? winnorm(perm, temp, c->cwd) : Str{};
 
     Str root = takehead(sh->exe, sh->exe.len-lastpart(sh->exe).len);
+    if constexpr (LIBMODE) root = selfdir(sh);
+    b32 none = LIBMODE && !root.len;  // the library with no root or self
     for (; root.len>3 && root[root.len-1]=='/'; root.len--) {}
     Str bindir = {};  // the shell's directory when it is root/bin
     if (root.len>8 && equalfold(taketail(root, 8), "/usr/bin")) {
@@ -667,7 +680,7 @@ static void pathsetup(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
     // fstab, read whole if it is there
     Str    fstab = {};
     Str path = concat(&scratch, root, "/etc/fstab");
-    Opened o     = os_open(sh->os, scratch, path, OF_READ, 0);
+    Opened o     = !LIBMODE || !none ? os_open(sh->os, scratch, path, OF_READ, 0) : unopened();
     if (!o.err) {
         Buf b(&scratch, 4096);
         for (;;) {
@@ -793,7 +806,10 @@ static void initwinvars(Shell *sh, Arena scratch)
     }
     if (!getvar(sh, a, "PATH").set) {
         Str dir = takehead(sh->exe, sh->exe.len-lastpart(sh->exe).len);
-        setvar(sh, scratch, "PATH", dir.len>3 ? cuttail(dir, 1) : dir);
+        if constexpr (LIBMODE) dir = selfdir(sh);
+        if (!LIBMODE || dir.len) {  // the library with no root: none
+            setvar(sh, scratch, "PATH", dir.len>3 ? cuttail(dir, 1) : dir);
+        }
     }
 }
 

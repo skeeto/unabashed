@@ -16,6 +16,7 @@
 #if _WIN32
 #define FIBERAPI(r, p) extern "C" __declspec(dllimport) r __stdcall p noexcept
 FIBERAPI(void *, ConvertThreadToFiber(void *));
+FIBERAPI(b32,    ConvertFiberToThread());
 FIBERAPI(void *, CreateFiberEx(uz, uz, i32, void (__stdcall *)(void *), void *));
 FIBERAPI(void,   DeleteFiber(void *));
 FIBERAPI(void,   SwitchToFiber(void *));
@@ -26,6 +27,10 @@ struct Fiber {
     void (*fn)(Os *, void *);
     void  *arg;
 };
+
+// The library's (libwin32.cpp): the run's fibers, made and deleted
+static void lib_fiber(Os *, void *handle);
+static void lib_unfiber(Os *, void *handle);
 
 #elif FIBER_ASM
 struct Fiber {
@@ -142,6 +147,7 @@ static Fiber *os_self(Os *os)
 {
     Fibers *fs = osfibers(os);
     if (!fs->current) {
+        if constexpr (LIBMODE) __builtin_trap();  // the run's setup made it
         fs->main.handle = ConvertThreadToFiber(0);
         fs->main.os     = os;
         fs->current     = &fs->main;
@@ -160,6 +166,7 @@ static Fiber *os_fiber(Os *os, Arena *a, iz stack, void (*fn)(Os *, void *), voi
     if (!f->handle) {
         os_oom();
     }
+    if constexpr (LIBMODE) lib_fiber(os, f->handle);  // deleted if the run ends
     return f;
 }
 
@@ -172,6 +179,7 @@ static void os_switch(Os *os, Fiber *f)
 static void os_fiberfree(Os *os, Fiber *f)
 {
     assert(f != osfibers(os)->current);
+    if constexpr (LIBMODE) lib_unfiber(os, f->handle);
     DeleteFiber(f->handle);
 }
 

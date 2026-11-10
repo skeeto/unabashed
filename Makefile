@@ -5,6 +5,7 @@
 #                       argv.exe argv32.exe (tools/argv.cpp, for t/msys)
 # Linux:                make unabashed debug tests
 # Library (POSIX):      make libunabashed.o ubhost check-lib
+# Library (Windows):    make libunabashed.obj ubhost.exe check-lib-win
 # Fuzzing (AFL++):      make fuzz
 # Source tarball:       make dist (HEAD as unabashed-YYYYMMDD-HASH.tar.gz)
 
@@ -68,6 +69,17 @@ ubhost: tools/ubhost.c tools/ubcheck.c unabashed.h libunabashed.o
 	$(CC) -O2 -Wall -Wextra -Wno-missing-field-initializers \
 	    -o $@ tools/ubhost.c libunabashed.o -lpthread
 
+libunabashed.obj: libunabashed.cpp unabashed.h $(SOURCES)
+	$(CXX) $(FLAGS) $(WARN) -O2 -c -o $@ libunabashed.cpp
+
+libunabashed-O0.obj: libunabashed.cpp unabashed.h $(SOURCES)
+	$(CXX) $(FLAGS) $(WARN) -O0 -c -o $@ libunabashed.cpp
+
+# No C runtime: ubhostw.c brings the mem* and strlen the library needs
+ubhost.exe: tools/ubhost.c tools/ubhostw.c unabashed.h libunabashed.obj
+	$(CC) -O2 -Wall -Wextra -nostartfiles -nostdlib \
+	    -o $@ tools/ubhost.c libunabashed.obj -lkernel32 -lgcc
+
 ubcollide: tools/ubcollide.cpp unabashed.h libunabashed-O0.o
 	$(CXX) $(FLAGS) -nostdlib++ -o $@ tools/ubcollide.cpp libunabashed-O0.o -lpthread
 
@@ -75,6 +87,9 @@ check-lib: libunabashed.o libunabashed-O0.o ubhost ubcollide
 	tools/check-lib libunabashed.o libunabashed-O0.o
 	./ubcollide
 	./ubhost -c 'echo $$((6*7)) | grep -q 42'
+
+check-lib-win: libunabashed.obj libunabashed-O0.obj ubhost.exe
+	tools/check-lib libunabashed.obj libunabashed-O0.obj
 
 # What w64devkit's Dockerfile takes: the committed tree, named after the
 # commit's date and hash.
@@ -89,6 +104,7 @@ check: tests
 clean:
 	rm -f unabashed unabashed.exe unabashed32.exe debug debug.exe \
 	      tests tests.exe fuzz argv.exe argv32.exe \
-	      libunabashed.o libunabashed-O0.o ubhost ubcollide
+	      libunabashed.o libunabashed-O0.o ubhost ubcollide \
+	      libunabashed.obj libunabashed-O0.obj ubhost.exe
 
-.PHONY: default check check-lib clean
+.PHONY: default check check-lib check-lib-win clean

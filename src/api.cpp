@@ -473,12 +473,16 @@ static void    os_tasktag(Os *, u64 tag, iz ntasks, u64 group);
 // chaos seeds need not agree.
 static void    os_racy(Os *);
 
-// The library's own (library.cpp), named only in "if constexpr
-// (LIBMODE)" branches, so that no other layer need define them.
+// The library's own (libposix.cpp, libwin32.cpp), named only in
+// "if constexpr (LIBMODE)" branches, so that no other layer need
+// define them.
 // lib_abort ends the run with -err, from any of its fibers; lib_step
 // is called at each step of a long match, and ends a cancelled run.
+// lib_root is the directory the host named as the install's shell
+// directory (Windows), normalized, with its trailing slash, or empty.
 [[noreturn]] static void lib_abort(Os *, i32 err);
 static void    lib_step();
+static Str     lib_root(Os *);
 
 // The platform as a table. The shell calls each entry above through its
 // Os's table (dispatch.cpp), which the platform layer's osvtable names.

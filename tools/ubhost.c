@@ -8,7 +8,12 @@
 // "ubhost --check [--quick]" checks the host contract (ubcheck.c).
 //
 // $ cc -O2 -o ubhost tools/ubhost.c libunabashed.o -lpthread
+// On Windows, see ubhostw.c.
 // This is free and unencumbered software released into the public domain.
+#if _WIN32
+#include "../unabashed.h"
+#include "ubhostw.c"
+#else
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -146,3 +151,4 @@ int main(int argc, char **argv)
     pthread_create(&t, 0, forwarder, 0);
     exitwith(ub_run(runos, &cmd));
 }
+#endif

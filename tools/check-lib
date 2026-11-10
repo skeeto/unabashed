@@ -1,11 +1,22 @@
 #!/bin/sh
 # check-lib OBJ...: each library object exports only ub_*, has no static
-# constructors, and needs no C++ runtime. NM and OBJDUMP may name the
-# tools for another target (x86_64-w64-mingw32-nm).
+# constructors, and needs no C++ runtime. A Windows object (PE) also has
+# no TLS, CRT sections or .unabash marker, and, built optimized (a name
+# without -O0), imports nothing that would change the host process. NM
+# and OBJDUMP may name the tools for another target
+# (x86_64-w64-mingw32-nm).
 # This is free and unencumbered software released into the public domain.
 set -e
 NM=${NM:-nm}
 OBJDUMP=${OBJDUMP:-objdump}
+# Process-wide calls: exit, the console handler and modes, the
+# executable's identity and startup data, Ctrl-C judging, its signal
+# channel, and writing other processes (image self-spawning). An -O0
+# object keeps the executable's code that the library never reaches.
+DENY='ExitProcess SetConsoleCtrlHandler SetConsoleMode SetConsoleTitleW
+GetModuleFileNameW CreateIoCompletionPort GetQueuedCompletionStatus
+CreateFileMappingW SetHandleInformation GetCommandLineW GetStartupInfoW
+WriteProcessMemory VirtualAllocEx'
 status=0
 for obj in "$@"; do
     syms=$($NM -g "$obj")
@@ -19,9 +30,23 @@ for obj in "$@"; do
         printf '%s: needs the C++ runtime:\n%s\n' "$obj" "$cxx"
         status=1
     fi
-    if $OBJDUMP -h "$obj" | grep -qE 'init_array|\.ctors|mod_init_func'; then
+    heads=$($OBJDUMP -h "$obj")
+    if printf '%s\n' "$heads" | grep -qE 'init_array|\.ctors|mod_init_func'; then
         printf '%s: has static constructors\n' "$obj"
         status=1
+    fi
+    if printf '%s\n' "$heads" | grep -q 'file format pe-'; then
+        if printf '%s\n' "$heads" | grep -qE ' \.tls| \.CRT\$| \.unabash'; then
+            printf '%s: has TLS, CRT or .unabash sections\n' "$obj"
+            status=1
+        fi
+        case $obj in *-O0*) continue ;; esac
+        for f in $DENY; do
+            if printf '%s\n' "$syms" | grep -qE " U __imp__?$f(@[0-9]+)?\$"; then
+                printf '%s: imports %s\n' "$obj" "$f"
+                status=1
+            fi
+        done
     fi
 done
 exit $status

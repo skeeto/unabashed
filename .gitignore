@@ -2,6 +2,7 @@ bash-5.3.tar.gz
 third_party/
 *.exe
 *.o
+*.obj
 /bash
 /tests
 /fuzz

@@ -14,11 +14,13 @@
 
 enum : i32 {
     CREATE_BREAKAWAY_FROM_JOB    = 0x01000000,
+    CREATE_NEW_PROCESS_GROUP     = 0x200,
     CREATE_NEW                   = 1,
     CREATE_NO_WINDOW             = 0x08000000,
     CREATE_SUSPENDED             = 4,
     CREATE_UNICODE_ENVIRONMENT   = 0x400,
     DUPLICATE_SAME_ACCESS        = 2,
+    EXTENDED_STARTUPINFO_PRESENT = 0x80000,
     ERROR_ACCESS_DENIED          = 5,
     ERROR_BROKEN_PIPE            = 109,
     ERROR_DIRECTORY              = 267,
@@ -57,6 +59,7 @@ enum : i32 {
     IO_REPARSE_TAG_NAME_SURROGATE = 0x20000000,  // symlinks, junctions
     JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x800,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000,
+    JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x1000,
     JOB_OBJECT_MSG_NEW_PROCESS   = 6,
     JOB_OBJECT_MSG_EXIT_PROCESS  = 7,  // an exit status not an exception's
     JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS = 8,  // 0xC000013A among them
@@ -79,6 +82,7 @@ enum : i32 {
     PIPE_ACCESS_OUTBOUND         = 2,
     PIPE_REJECT_REMOTE_CLIENTS   = 8,
     PIPE_UNLIMITED_INSTANCES     = 255,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x20002,
     STARTF_USESTDHANDLES         = 0x100,
     STD_ERROR_HANDLE             = -12,
 };
@@ -175,6 +179,12 @@ struct StartupInfo {  // STARTUPINFOW
     uz   error;
 };
 static_assert(sizeof(StartupInfo) == (sizeof(void *)==8 ? 104 : 68));
+
+struct StartupInfoEx {  // STARTUPINFOEXW
+    StartupInfo si;
+    void       *attrs;
+};
+static_assert(sizeof(StartupInfoEx) == (sizeof(void *)==8 ? 112 : 72));
 
 struct JobLimits {  // JOBOBJECT_EXTENDED_LIMIT_INFORMATION
     i64 proctime, jobtime;
@@ -282,6 +292,7 @@ W32(b32,    CreateProcessW(c16 *, c16 *, uz, uz, b32, i32, c16 *, c16 *,
 W32(b32,    DuplicateHandle(uz, uz, uz, uz *, i32, b32, i32));
 W32(void,   ExitProcess[[noreturn]](i32));
 W32(b32,    FindClose(uz));
+W32(b32,    FreeLibrary(uz));
 W32(uz,     FindFirstFileExW(c16 *, i32, FindData *, i32, uz, i32));
 W32(b32,    FindNextFileW(uz, FindData *));
 W32(b32,    FreeEnvironmentStringsW(c16 *));
@@ -308,6 +319,7 @@ W32(b32,    GetFileAttributesExW(c16 *, i32, FileAttributes *));
 W32(i32,    GetFileAttributesW(c16 *));
 W32(b32,    GetFileInformationByHandle(uz, FileInfo *));
 W32(i32,    GetFileType(uz));
+W32(b32,    GlobalMemoryStatusEx(void *));
 W32(u32,    GetTickCount());
 W32(i32,    GetFullPathNameW(c16 *, i32, c16 *, c16 **));
 W32(i32,    GetLastError());
@@ -363,6 +375,45 @@ W32(b32,    FillConsoleOutputAttribute(uz, i32, i32, i32, i32 *));
 W32(b32,    WriteFile(uz, u8 *, i32, i32 *, uz));
 
 
+// The library's own (libwin32.cpp), named only in "if constexpr
+// (LIBMODE)" branches. A run records each handle it creates (lib_handle,
+// false if the run may hold no more; counted ones are its descriptors,
+// within its budget), each fiber and read-ahead buffer, each program it
+// starts inside the spawn lock (lib_spawned) and reaps (lib_reaped).
+// lib_hard is a cancel waiting; lib_tmpdir the temporary directory
+// from the run's environment, null-terminated with a trailing
+// backslash, or null.
+struct Os;
+static b32  lib_handle(Os *, uz h, b32 counted);
+static void lib_unhandle(Os *, uz h);
+static b32  lib_hard(Os *);
+static u8  *lib_ahead(Os *, iz cap);
+static void lib_unahead(Os *, u8 *buf, iz cap);
+static void lib_spawnlock(Os *, b32 lock);
+static void lib_spawned(Os *, uz proc, i64 pid, u64 sigign, b32 shared, b32 injob);
+static void lib_reaped(Os *, uz proc);
+static c16 *lib_tmpdir(Os *);
+
+// Record a handle just created, else close it: false then.
+[[gnu::always_inline]] static inline b32 regh(Os *os, uz h, b32 counted)
+{
+    if constexpr (LIBMODE) {
+        if (!lib_handle(os, h, counted)) {
+            CloseHandle(h);
+            return 0;
+        }
+    }
+    (void)os, (void)h, (void)counted;
+    return 1;
+}
+
+[[gnu::always_inline]] static inline void closeh(Os *os, uz h)
+{
+    if constexpr (LIBMODE) lib_unhandle(os, h);
+    (void)os;
+    CloseHandle(h);
+}
+
 #include "fibers.cpp"
 
 // Asynchronous I/O (M3b, notes/m3b.md). Every handle the shell holds
@@ -407,6 +458,7 @@ enum : i32 {  // Helper operations
     H_WRITE,     // the core's bytes
     H_PUMP,      // the object into an Interpose's pipe
     H_CONNECT,   // a named pipe's client (IO_CONNECT)
+    H_QUIT,      // the library's: end the thread
 };
 
 enum : i32 { P_READING = 1, P_WRITING, P_DONE };  // a pump's state
@@ -648,6 +700,23 @@ struct Os {
     u32        wtick;      // GetTickCount when the buffer began
     uz         werrh;      // a flush to this handle failed
     u8         wbuf[1<<14];
+
+    // The library's (libwin32.cpp)
+    b32        nestedjobs; // Windows 8: a program's own job nests in the run's
+    b32        sharecon;   // UB_SHARECONSOLE
+    uz         runjob;     // the handle's kill-on-close job
+    uz         nulh;       // the run's NUL, for an empty handle list
+    b32  (__stdcall *attrinit)(void *, i32, i32, iz *);
+    b32  (__stdcall *attrupdate)(void *, i32, uz, void *, iz, void *, iz *);
+    void (__stdcall *attrdelete)(void *);
+    iz         attrsize;   // a list of one attribute
+    b32        inwindow;   // inside the spawn lock
+    b32        starved;    // an Io waits for a helper (runqueue)
+    uz         findh;      // plt_list's, while open
+    uz         advapi;     // advapi32, once loaded for entropy
+    Helper    *helpers[64];  // every helper made (nhelpers)
+    Pwait     *pwaits;     // registered process waits
+    iz         libstack;   // the run's shell stack
 };
 
 enum : i32 { MAXHELPERS = 64 };
@@ -820,6 +889,9 @@ static void wakepush(Os *os, Wnode *n)
 
 static b32 sigwaiting(Os *os)
 {
+    if constexpr (LIBMODE) {
+        if (lib_hard(os)) return 1;
+    }
     SigChan *c = os->chan;
     return (__atomic_load_n(&os->sigown, __ATOMIC_SEQ_CST) |
             __atomic_load_n(&os->siggrp, __ATOMIC_SEQ_CST)) != 0 ||
@@ -897,7 +969,7 @@ static b32 busy(Wobj *w)
 static void maybefree(Os *os, Wobj *w)
 {
     if (w->refs || busy(w) || w->lent || w->queue || w->freed) return;
-    if (w->own) CloseHandle(w->own);
+    if (w->own) closeh(os, w->own);
     w->own   = 0;
     w->freed = 1;
     w->next  = os->freeobj;
@@ -929,7 +1001,7 @@ static Wobj *track(Os *os, uz h)
     return w;
 }
 
-static void reserveahead(Os *, Wobj *w, iz extra)
+static void reserveahead(Os *os, Wobj *w, iz extra)
 {
     iz len = w->alen - w->aoff;
     if (w->aoff) {
@@ -939,6 +1011,14 @@ static void reserveahead(Os *, Wobj *w, iz extra)
     }
     if (w->acap-len >= extra) return;
     iz cap = (len + extra + 0xffff) & ~(iz)0xffff;
+    if constexpr (LIBMODE) {
+        u8 *buf = lib_ahead(os, cap);  // the run's, released with it
+        copybytes(buf, w->ahead, len);
+        if (w->ahead) lib_unahead(os, w->ahead, w->acap);
+        w->ahead = buf;
+        w->acap  = cap;
+        return;
+    }
     u8 *buf = (u8 *)VirtualAlloc(0, cap, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
     if (!buf) os_oom();
     copybytes(buf, w->ahead, len);
@@ -1017,6 +1097,17 @@ enum : i32 { TK_LINES, TK_VT, TK_EVENTS, TK_SILENT, TK_CHARS };
 static void wakemain(Os *);
 static b32 ctrlevent(Os *, u32 type);
 
+// Ctrl-C typed as a key: the console's signal (the library's own group)
+static void conctrlc(Os *os)
+{
+    if constexpr (LIBMODE) {
+        __atomic_fetch_or(&os->siggrp, (u64)1<<1, __ATOMIC_SEQ_CST);
+        SetEvent(os->wake);
+    } else {
+        ctrlevent(os, 0);
+    }
+}
+
 // Keys from a console in the editor's raw mode, as xterm bytes into
 // out (3*CONUNITS bytes): with VT input the console's own characters,
 // else key events turned into them (conkey). A resize raises SIGWINCH
@@ -1036,7 +1127,11 @@ static iz conkeys(Os *os, uz h, u8 *out, i32 *code, b32 vtin)
             InputRecord *r = recs + i;
             if (r->type == 4) {
                 __atomic_fetch_or(&os->sigown, (u64)1<<27, __ATOMIC_SEQ_CST);
-                wakemain(os);
+                if constexpr (LIBMODE) {
+                    SetEvent(os->wake);
+                } else {
+                    wakemain(os);
+                }
                 continue;
             }
             if (r->type != 1) continue;
@@ -1088,7 +1183,7 @@ static iz conline(Os *os, uz h, u8 *out, i32 *code)
             }
             if (!got) continue;
             if (c == 3) {
-                ctrlevent(os, 0);  // as the console would have
+                conctrlc(os);  // as the console would have
                 *code = ERROR_OPERATION_ABORTED;
                 return -1;
             } else if (c=='\r' || c=='\n') {
@@ -1115,7 +1210,7 @@ static iz conline(Os *os, uz h, u8 *out, i32 *code)
     }
     for (i32 i = 0; keys==TK_CHARS && i<n; i++) {
         if (tmp[i] == 3) {
-            ctrlevent(os, 0);  // the keys with it go, as with line input
+            conctrlc(os);  // the keys with it go, as with line input
             *code = ERROR_OPERATION_ABORTED;
             return -1;
         }
@@ -1194,6 +1289,9 @@ static u32 __stdcall helpermain(void *arg)
     Os     *os = hp->os;
     for (;;) {
         WaitForSingleObject(hp->go, INFINITE);
+        if constexpr (LIBMODE) {
+            if (hp->op == H_QUIT) return 0;  // joined by the run's end
+        }
         hp->n    = 0;
         hp->code = 0;
         hp->eof  = 0;
@@ -1219,6 +1317,21 @@ static u32 __stdcall helpermain(void *arg)
         case H_CONNECT:
             hp->code = connectpipe(hp->own);
             break;
+        }
+        if constexpr (LIBMODE) {
+            i32 one = 1;
+            if (!__atomic_compare_exchange_n(&hp->live, &one, 0, 0,
+                                             __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+                // Orphaned by a run that ended (live 2): its own to free
+                uz own = hp->own;
+                uz go  = hp->go;
+                VirtualFree((byte *)hp, 0, MEM_RELEASE);
+                CloseHandle(own);
+                CloseHandle(go);
+                return 0;
+            }
+            wakepush(os, &hp->node);
+            continue;
         }
         __atomic_store_n(&hp->live, 0, __ATOMIC_SEQ_CST);
         wakepush(os, &hp->node);  // the last use of hp
@@ -1247,6 +1360,7 @@ static Helper *gethelper(Os *os)
         VirtualFree((byte *)hp, 0, MEM_RELEASE);
         return 0;
     }
+    if constexpr (LIBMODE) os->helpers[os->nhelpers] = hp;
     os->nhelpers++;
     return hp;
 }
@@ -1261,6 +1375,12 @@ static b32 issue(Os *os, Wobj *w, uz h, i32 op, Io *io, uz iw = 0)
             w->own = 0;
             return 0;
         }
+        if constexpr (LIBMODE) {
+            if (!regh(os, w->own, 0)) {
+                w->own = 0;
+                lib_abort(os, E_NOMEM);  // the run's handles are spent
+            }
+        }
     }
     Helper *hp = gethelper(os);
     if (!hp) return 0;
@@ -1274,6 +1394,9 @@ static b32 issue(Os *os, Wobj *w, uz h, i32 op, Io *io, uz iw = 0)
     if (io && op==H_WRITE) {
         hp->wlen = io->len<countof(hp->wbuf) ? io->len : countof(hp->wbuf);
         copybytes(hp->wbuf, io->buf, hp->wlen);
+    }
+    if constexpr (LIBMODE) {
+        if (iw) lib_unhandle(os, iw);  // the pump closes it
     }
     w->helper = hp;
     w->active = io;
@@ -1335,6 +1458,19 @@ static void readahead(Wobj *w, uz h, Io *io)
     io->err = 0;
 }
 
+// The library: an Io that found no helper waits at the head of its
+// object's queue until one is free (helperdone).
+static b32 starve(Os *os, Wobj *w, Io *io)
+{
+    io->next   = w->queue;
+    w->queue   = io;
+    io->plt[0] = S_QUEUED;
+    io->plt[1] = (uz)w;
+    os->nwait++;
+    os->starved = 1;
+    return 0;
+}
+
 // Perform a read or write on an idle object, completing it, or start a
 // helper for it. False if it is in flight now.
 static b32 startio(Os *os, Wobj *w, Io *io)
@@ -1342,6 +1478,7 @@ static b32 startio(Os *os, Wobj *w, Io *io)
     uz h = io->h;
     if (io->op == IO_CONNECT) {
         if (issue(os, w, h, H_CONNECT, io)) return 0;
+        if constexpr (LIBMODE) return starve(os, w, io);
         i32 code = connectpipe(h);  // no helper: block
         io->n   = 0;
         io->err = code ? errnum(code) : 0;
@@ -1380,6 +1517,7 @@ static b32 startio(Os *os, Wobj *w, Io *io)
             return 0;
         }
         if (issue(os, w, h, w->kind==K_CONIN ? H_CONREAD : H_READ, io)) return 0;
+        if constexpr (LIBMODE) return starve(os, w, io);
         io->n   = plt_read(os, h, io->buf, io->len);  // no helper: block
         io->err = io->n<0 ? E_IO : 0;
         io->n   = io->n<0 ? 0 : io->n;
@@ -1403,6 +1541,7 @@ static b32 startio(Os *os, Wobj *w, Io *io)
             }
         }
         if (issue(os, w, h, H_WRITE, io)) return 0;
+        if constexpr (LIBMODE) return starve(os, w, io);
     }
     io->n   = io->len;  // a console, or no helper: block
     io->err = plt_write(os, h, io->buf, io->len) ? 0 : E_PIPE;
@@ -1418,6 +1557,7 @@ static void runqueue(Os *os, Wobj *w)
         os->nwait--;
         io->plt[0] = S_NONE;
         if (startio(os, w, io) && io->plt[0]!=S_ZERO) pushdone(os, io);
+        if (LIBMODE && io->plt[0]==S_QUEUED) break;  // starved
     }
     maybefree(os, w);
 }
@@ -1462,6 +1602,7 @@ static void helperdone(Os *os, Helper *hp)
         if (w->ip && !w->ip->started && w->ip->iw) {
             Interpose *ip = w->ip;
             ip->started = 1;
+            if constexpr (LIBMODE) lib_unhandle(os, ip->iw);  // the pump's
             hp->op     = H_PUMP;
             hp->iw     = ip->iw;
             hp->stop   = 0;
@@ -1495,6 +1636,15 @@ static void helperdone(Os *os, Helper *hp)
         os->idle = hp;
     }
     runqueue(os, w);
+    if (LIBMODE && os->starved && os->idle) {
+        // Ios that found no helper: their objects are all registered
+        os->starved = 0;
+        for (i32 i = 0; i<countof(os->htab) && os->idle; i++) {
+            for (Hent *e = os->htab[i]; e && os->idle; e = e->next) {
+                if (e->obj->queue && !busy(e->obj)) runqueue(os, e->obj);
+            }
+        }
+    }
 }
 
 static void releaselends(Os *os, uz proc);
@@ -1520,7 +1670,8 @@ static i32 procexit(Os *os, uz proc)
             }
         }
     }
-    i32 missed = takemissed(os, proc) ? WMISSED : 0;
+    i32 missed = !LIBMODE && takemissed(os, proc) ? WMISSED : 0;
+    if constexpr (LIBMODE) lib_reaped(os, proc);
     CloseHandle(proc);
     releaselends(os, proc);
     return exitstatus((u32)code) | missed;
@@ -1533,9 +1684,23 @@ static void __stdcall procfired(void *arg, u8)
     wakepush(pw->os, &pw->node);
 }
 
+// The library lists registered waits, for the run's end.
+static void unlistwait(Os *os, Pwait *pw)
+{
+    for (Pwait **p = &os->pwaits; *p; p = &(*p)->next) {
+        if (*p == pw) {
+            *p = pw->next;
+            return;
+        }
+    }
+}
+
 static void procwaited(Os *os, Pwait *pw)
 {
-    if (!pw->gone) UnregisterWaitEx(pw->wait, INVALID_HANDLE_VALUE);
+    if (!pw->gone) {
+        UnregisterWaitEx(pw->wait, INVALID_HANDLE_VALUE);
+        if constexpr (LIBMODE) unlistwait(os, pw);
+    }
     Io *io = pw->io;
     if (io) {
         os->nwait--;
@@ -1641,11 +1806,11 @@ static void stopinterpose(Os *os, Wobj *w)
         }
         cancelhelper(os, hp);  // if blocked reading the object
     } else if (ip->iw) {
-        CloseHandle(ip->iw);  // the read in flight is not forwarded
+        closeh(os, ip->iw);  // the read in flight is not forwarded
         ip->iw = 0;
     }
     drainpipe(os, w, ip->ir);
-    CloseHandle(ip->ir);
+    closeh(os, ip->ir);
     w->ip    = 0;
     ip->next = os->freeip;
     os->freeip = ip;
@@ -1685,6 +1850,16 @@ static uz lend(Os *os, uz h, Wobj **out, b32 *viaip)
         if (!CreatePipe(&ir, &iw, 0, (i32)(pending + (1<<16)))) {
             return h;  // as good as it gets
         }
+        if constexpr (LIBMODE) {
+            if (!regh(os, ir, 0)) {
+                CloseHandle(iw);
+                lib_abort(os, E_NOMEM);  // the run's handles are spent
+            }
+            if (!regh(os, iw, 0)) {
+                closeh(os, ir);
+                lib_abort(os, E_NOMEM);
+            }
+        }
         writeall(iw, w->ahead+w->aoff, pending);  // fits the pipe
         w->aoff = w->alen = 0;
         Interpose *ip = os->freeip;
@@ -1700,7 +1875,7 @@ static uz lend(Os *os, uz h, Wobj **out, b32 *viaip)
         if (w->eof) {
             // The children see the end of file the shell would have
             w->eof = 0;
-            CloseHandle(iw);
+            closeh(os, iw);
             ip->iw = 0;
             ip->started = 1;
         } else if (!reading) {
@@ -2504,6 +2679,34 @@ static b32 ctrlevent(Os *os, u32 type)
 
 // Platform API
 
+static void plt_submit(Os *, Io *);
+static b32  plt_cancel(Os *, Io *);
+
+// The library: run io to its end, the run's thread waiting while a
+// helper does any blocking, so that a cancel ends the wait, and with
+// soft a signal too: false then, io abandoned.
+static b32 syncio(Os *os, Io *io, b32 soft)
+{
+    plt_submit(os, io);
+    for (;;) {
+        if (io->done) return 1;
+        drainwake(os);
+        for (Io **p = &os->done; *p; p = &(*p)->next) {
+            if (*p == io) {
+                *p = io->next;
+                if (!*p) os->donetail = p;
+                io->next   = 0;
+                io->plt[0] = S_NONE;
+                io->done   = 1;
+                return 1;
+            }
+        }
+        if constexpr (LIBMODE) lib_step();  // a cancel ends the run here
+        if (soft && sigwaiting(os) && plt_cancel(os, io)) return 0;
+        WaitForSingleObject(os->wake, INFINITE);
+    }
+}
+
 static byte *plt_reserve(Os *, iz len)
 {
     return VirtualAlloc(0, len, MEM_RESERVE, PAGE_NOACCESS);
@@ -2557,6 +2760,22 @@ static b32 plt_write(Os *os, Handle h, u8 *buf, iz len)
         return 1;
     }
     flushw(os);
+    if constexpr (LIBMODE) {
+        if (w && w->kind==K_PIPE) {
+            // The run's thread never blocks in a write: helpers do
+            for (iz off = 0; off < len;) {
+                Io io  = {};
+                io.op  = IO_WRITE;
+                io.h   = h;
+                io.buf = buf + off;
+                io.len = len - off;
+                syncio(os, &io, 0);
+                if (io.err || !io.n) return 0;
+                off += io.n;
+            }
+            return 1;
+        }
+    }
     // Only a character device can be a console: asking a file costs a
     // GetConsoleMode, a third of a write
     if (w ? w->kind!=K_CONOUT : GetFileType(h)!=FILE_TYPE_CHAR || !GetConsoleMode(h, &mode)) {
@@ -2605,6 +2824,18 @@ static iz plt_read(Os *os, Handle h, u8 *buf, iz len)
     if (!w && GetConsoleMode(h, &mode)) w = track(os, h);
     if (!w || w->kind==K_CONOUT || w->kind==K_CHAR) {
         return rawread(h, buf, len);
+    }
+    if constexpr (LIBMODE) {
+        // The run's thread never blocks in a read: a helper does, while
+        // it waits for that, a signal or a cancel
+        if (!len) return 0;
+        Io io  = {};
+        io.op  = IO_READ;
+        io.h   = h;
+        io.buf = buf;
+        io.len = len;
+        if (!syncio(os, &io, 1) || io.err) return -1;
+        return io.n;
     }
     drainwake(os);
     if (w->kind == K_PIPE) {
@@ -2692,7 +2923,14 @@ static Opened plt_tempfile(Os *os, Arena)
     Opened r = {};
     r.h = BADHANDLE;
     c16 path[300];
-    i32 len = GetTempPathW(260, path);
+    i32 len = 0;
+    c16 *dir = 0;
+    if constexpr (LIBMODE) dir = lib_tmpdir(os);
+    if (dir) {
+        for (; dir[len] && len<260; len++) path[len] = dir[len];
+    } else {
+        len = GetTempPathW(260, path);
+    }
     if (len<=0 || len>=260) {
         r.err = E_NOENT;
         return r;
@@ -2711,6 +2949,10 @@ static Opened plt_tempfile(Os *os, Arena)
                            CREATE_NEW,
                            FILE_ATTRIBUTE_TEMPORARY|FILE_FLAG_DELETE_ON_CLOSE, 0);
         if (h != INVALID_HANDLE_VALUE) {
+            if (!regh(os, h, 1)) {
+                r.err = E_MFILE;
+                return r;
+            }
             r.h = (Handle)h;
             return r;
         }
@@ -2747,6 +2989,10 @@ static NamedTemp plt_namedtemp(Os *os, Arena *a, Str dir)
                            CREATE_NEW,
                            FILE_ATTRIBUTE_TEMPORARY|FILE_FLAG_DELETE_ON_CLOSE, 0);
         if (h != INVALID_HANDLE_VALUE) {
+            if (!regh(os, h, 1)) {
+                r.err = E_MFILE;
+                return r;
+            }
             r.h    = (Handle)h;
             r.path = path;
             return r;
@@ -2806,13 +3052,19 @@ static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
         }
         return r;
     }
+    if constexpr (LIBMODE) {
+        if (!regh(os, h, 1)) {
+            r.err = E_MFILE;
+            return r;
+        }
+    }
 
     // Truncate separately: CREATE_ALWAYS would fail on hidden files and
     // replace the file's identity.
     if ((flags&OF_TRUNC) && (flags&OF_WRITE) && GetFileType(h)==FILE_TYPE_DISK) {
         if (!SetEndOfFile(h)) {
             r.err = lasterr();
-            CloseHandle(h);
+            closeh(os, h);
             return r;
         }
     }
@@ -2834,7 +3086,7 @@ static void plt_close(Os *os, Handle h)
         drainwake(os);
         maybefree(os, w);
     }
-    CloseHandle(h);
+    closeh(os, h);
 }
 
 static Handle plt_dup(Os *os, Handle h)
@@ -2845,6 +3097,7 @@ static Handle plt_dup(Os *os, Handle h)
     if (!DuplicateHandle(self, h, self, &r, 0, 0, DUPLICATE_SAME_ACCESS)) {
         return BADHANDLE;
     }
+    if (!regh(os, r, 1)) return BADHANDLE;
     Wobj *w = lookup(os, h);
     if (w) {
         reg(os, r, w);  // the same file object
@@ -2869,6 +3122,18 @@ static OsPipe plt_pipe(Os *os)
     // before anyone reads it.
     if (!CreatePipe(&rd, &wr, 0, 1<<16)) {
         r.err = lasterr();
+        r.r = r.w = BADHANDLE;
+        return r;
+    }
+    if (!regh(os, rd, 1)) {
+        CloseHandle(wr);
+        r.err = E_MFILE;
+        r.r = r.w = BADHANDLE;
+        return r;
+    }
+    if (!regh(os, wr, 1)) {
+        closeh(os, rd);
+        r.err = E_MFILE;
         r.r = r.w = BADHANDLE;
         return r;
     }
@@ -2939,6 +3204,10 @@ static NamedPipe plt_namedpipe(Os *os, Arena *a, Str name, i32 how)
             continue;  // the name is taken
         } else if (code) {
             r.err = errnum(code);
+            return r;
+        }
+        if (!regh(os, h, 1)) {
+            r.err = E_MFILE;
             return r;
         }
         Wobj *w = newobj(os, K_PIPE);
@@ -3208,6 +3477,7 @@ static b32 plt_con(Os *os, Handle out, ConOp *o)
     case CON_ATTR:
         return SetConsoleTextAttribute(out, o->attr);
     case CON_TITLE: {
+        if constexpr (LIBMODE) return 0;  // the host's
         c16 title[512];
         i32 n = 0;
         for (iz i = 0; i<o->text.len && n<countof(title)-3;) {
@@ -3268,6 +3538,7 @@ static Dirent *plt_list(Os *os, Arena *a, Str dir, i32 *err)
         *err = code==ERROR_FILE_NOT_FOUND ? 0 : errnum(code);  // empty
         return 0;
     }
+    if constexpr (LIBMODE) os->findh = h;  // closed if the run ends here
 
     Dirent  *head = 0;
     Dirent **tail = &head;
@@ -3287,6 +3558,7 @@ static Dirent *plt_list(Os *os, Arena *a, Str dir, i32 *err)
         *tail = e;
         tail  = &e->next;
     } while (FindNextFileW(h, &fd));
+    if constexpr (LIBMODE) os->findh = 0;
     FindClose(h);
     return head;
 }
@@ -3340,6 +3612,213 @@ static i32 imagecopy(uz proc, ImageRef im)
         return GetLastError();
     }
     return 0;
+}
+
+// The library's spawn: no Ctrl-C judging, exec or self-spawning. Each
+// program starts suspended in a console process group of its own (and,
+// unless the host shares its console, a hidden console of its own, or
+// the console it is handed), in the run's job. Inheritable handles
+// exist only inside the host's spawn lock, and from Vista on just
+// those are inherited (the handle list); nothing inside the lock
+// allocates or reaches a check point.
+// A handle's type for a spawn, never asking the system about one a
+// helper may be blocked on (a synchronous call would wait behind it):
+// a FILE_TYPE_*, or FT_CONSOLE.
+enum : i32 { FT_CONSOLE = 0x100 };
+static i32 libftype(Os *os, uz h, b32 viaip)
+{
+    if (viaip) return FILE_TYPE_PIPE;
+    if ((h&3) == 3) return FT_CONSOLE;  // a console pseudo-handle
+    Wobj *w = lookup(os, h);
+    if (w) {
+        switch (w->kind) {
+        case K_PIPE:   return FILE_TYPE_PIPE;
+        case K_CONIN:
+        case K_CONOUT: return FT_CONSOLE;
+        }
+        return FILE_TYPE_CHAR;
+    }
+    return GetFileType(h);  // a file, which never blocks
+}
+
+static Spawned libstartproc(Os *os, Arena scratch, Spawn *s, Str16 app,
+                            Str16 line, Str16 wenv, Str16 cwd)
+{
+    Spawned r = {};
+    r.proc = BADHANDLE;
+    assert(!s->image.base);  // levels are fibers
+
+    uz  cur  = GetCurrentProcess();
+    i32 slot = s->crtslot;
+    i32 top  = 3;
+    for (iz i = 0; i<s->nfds && slot; i++) {
+        i32 fd = s->fds[i].fd;
+        top = fd>=top && fd<FDMAX ? fd+1 : top;
+    }
+    uz    *src   = alloc<uz>(&scratch, top);  // what the program gets, or 0
+    uz    *dups  = alloc<uz>(&scratch, top);
+    Wobj **objs  = alloc<Wobj *>(&scratch, top);
+    b32   *viaip = alloc<b32>(&scratch, top);
+    uz    *list  = alloc<uz>(&scratch, top+1);
+    b32    handedcon = 0;
+    for (iz i = 0; i < s->nfds; i++) {
+        i32 fd = s->fds[i].fd;
+        uz  h  = s->fds[i].h;
+        if (fd<0 || fd>=top || h==BADHANDLE || src[fd]) continue;
+        src[fd] = lend(os, h, objs+fd, viaip+fd);
+        handedcon |= libftype(os, src[fd], viaip[fd]) == FT_CONSOLE;
+    }
+
+    // The CRT blob, its handles patched inside the lock
+    Str blob  = {};
+    i32 width = sizeof(void *)==4 ? 4 : slot;
+    if (top > 3) {
+        CrtFd *c = alloc<CrtFd>(&scratch, top);
+        for (i32 fd = 3; fd < top; fd++) {
+            if (!src[fd]) continue;
+            i32 type = libftype(os, src[fd], viaip[fd]);
+            type = type>FILE_TYPE_PIPE ? FILE_TYPE_CHAR : type;
+            c[fd].handle = (i64)src[fd];
+            c[fd].flags  = CRTFD_OPEN | (type==FILE_TYPE_PIPE ? CRTFD_PIPE : 0) |
+                           (type==FILE_TYPE_CHAR ? CRTFD_DEV : 0);
+        }
+        blob = encodecrtfds(&scratch, c, top, width);
+    }
+    iz nblob = 0;
+    for (i32 b = 0; b<4 && blob.len; b++) nblob |= (iz)blob[b] << (8*b);
+
+    // Records the program's holds need, made now (addlend)
+    for (i32 fd = 0; fd < top; fd++) {
+        if (!objs[fd]) continue;
+        Lend *l = alloc<Lend>(&os->perm);
+        l->next = os->freelend;
+        os->freelend = l;
+    }
+    uz *attrs = os->attrinit ? alloc<uz>(&scratch, os->attrsize/(iz)sizeof(uz) + 1) : 0;
+
+    // Before Windows 8 a job does not nest: out of the host's, if it lets
+    // programs go, into the run's
+    b32 breakaway = 0;
+    if (!os->nestedjobs) {
+        JobLimits own = {};
+        i32 info = JobObjectExtendedLimitInformation;
+        if (QueryInformationJobObject(0, info, &own, sizeof(own), 0)) {
+            breakaway = !!(own.flags & JOB_OBJECT_LIMIT_BREAKAWAY_OK);
+        }
+    }
+    b32 noint = s->sigign>>1 & 1;
+    i32 flags = CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED;
+    if (!os->sharecon) {
+        flags |= CREATE_NEW_PROCESS_GROUP | (handedcon ? 0 : CREATE_NO_WINDOW);
+    } else if (noint) {
+        flags |= CREATE_NEW_PROCESS_GROUP;  // Ctrl-C ignored, as the toggle
+    }
+    flags |= breakaway ? CREATE_BREAKAWAY_FROM_JOB : 0;
+
+    if constexpr (LIBMODE) lib_spawnlock(os, 1);
+    os->inwindow = 1;
+    for (i32 fd = 0; fd < top; fd++) {
+        if (src[fd] && !DuplicateHandle(cur, src[fd], cur, dups+fd, 0, 1, DUPLICATE_SAME_ACCESS)) {
+            dups[fd] = 0;
+        }
+        if (fd>=3 && fd<nblob) {
+            u64 h = dups[fd] ? (u64)dups[fd] : (u64)-1;
+            if (!dups[fd]) blob[4+fd] = 0;
+            for (i32 b = 0; b < width; b++) {
+                blob[4 + nblob + fd*width + b] = (u8)(h >> (8*b));
+            }
+        }
+    }
+    StartupInfoEx sx = {};
+    sx.si.flags  = STARTF_USESTDHANDLES;
+    sx.si.input  = dups[0];
+    sx.si.output = dups[1];
+    sx.si.error  = dups[2];
+    sx.si.show   = (i32)(blob.len << 16);  // cbReserved2
+    sx.si.reserved2 = blob.data;
+    if (os->sharecon) {
+        // The host's console, if it has one now (the lock covers a swap)
+        i32 pid = 0;
+        flags |= GetConsoleProcessList(&pid, 1) ? 0 : CREATE_NO_WINDOW;
+    }
+    b32 shared = os->sharecon && !(flags & CREATE_NO_WINDOW);
+
+    // Exactly the program's handles, unique and inheritable, never a
+    // console pseudo-handle, and never none (a null device then)
+    i32 nlist  = 0;
+    uz  filler = 0;
+    for (i32 fd = 0; fd < top; fd++) {
+        if (dups[fd] && (dups[fd]&3)!=3) list[nlist++] = dups[fd];
+    }
+    if (!nlist && DuplicateHandle(cur, os->nulh, cur, &filler, 0, 1, DUPLICATE_SAME_ACCESS)) {
+        list[nlist++] = filler;
+    }
+    b32 inited = 0;
+    b32 listed = 0;
+    if (attrs && nlist) {
+        iz size = os->attrsize;
+        inited = os->attrinit(attrs, 1, 0, &size);
+        listed = inited && os->attrupdate(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                          list, nlist*(iz)sizeof(uz), 0, 0);
+    }
+    sx.attrs = attrs;
+
+    ProcessInfo pi = {};
+    b32 ok   = 0;
+    i32 code = 0;
+    for (;;) {
+        sx.si.cb = listed ? (i32)sizeof(sx) : (i32)sizeof(sx.si);
+        i32 f = flags | (listed ? EXTENDED_STARTUPINFO_PRESENT : 0);
+        ok   = CreateProcessW(app.data, line.data, 0, 0, 1, f, wenv.data, cwd.data, &sx.si, &pi);
+        code = ok ? 0 : GetLastError();
+        if (!ok && code==ERROR_INVALID_PARAMETER && listed) {
+            listed = 0;  // a handle the list refuses: the lock alone
+        } else if (!ok && code==ERROR_DIRECTORY && cwd.data) {
+            cwd = {};  // unusable working directory: run anyway
+        } else {
+            break;
+        }
+    }
+    b32 injob = 0;
+    if (ok) {
+        injob = AssignProcessToJobObject(os->runjob, pi.process);
+        if constexpr (LIBMODE) lib_spawned(os, pi.process, pi.pid, s->sigign, shared, injob);
+    }
+    for (i32 fd = 0; fd < top; fd++) {
+        if (dups[fd]) CloseHandle(dups[fd]);
+    }
+    if (filler) CloseHandle(filler);
+    os->inwindow = 0;
+    if constexpr (LIBMODE) lib_spawnlock(os, 0);
+    if (inited) os->attrdelete(attrs);
+
+    if (ok && os->nestedjobs && injob && noint) {
+        // A background program's own job, inside the run's, so that a
+        // signal to its "group" reaches what it started (plt_kill)
+        uz j = newjob(os, pi.process, 0);
+        if (j && regh(os, j, 0)) {
+            BgJob *b = os->bgjobs + os->nbgjobs%countof(os->bgjobs);
+            if (b->job) closeh(os, b->job);  // the oldest: let it go
+            b->pid = pi.pid;
+            b->job = j;
+            os->nbgjobs++;
+        }
+    }
+    if (ok) {
+        ResumeThread(pi.thread);
+        CloseHandle(pi.thread);
+    }
+    for (i32 fd = 0; fd < top; fd++) {
+        if (objs[fd]) addlend(os, ok ? pi.process : 0, objs[fd], viaip[fd]);
+    }
+    if (!ok) {
+        releaselends(os, 0);
+        r.err = errnum(code);
+        return r;
+    }
+    r.proc = pi.process;
+    r.pid  = (i64)pi.pid;
+    return r;
 }
 
 static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
@@ -3402,6 +3881,10 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
     }
 
     Str16 cwd = s->cwd.len ? widepath(&scratch, s->cwd) : Str16{};
+    if constexpr (LIBMODE) {
+        r = libstartproc(os, scratch, s, app, line, wenv, cwd);
+        return r;  // the same object every return names
+    }
 
     // Inheritable duplicates of the child's descriptors, closed right
     // after creation: 0-2 as the standard handles, and with crtslot the
@@ -3622,7 +4105,7 @@ static Rlimit *rltable(Os *os)
         os->rl[RL_CPU]    = inf;
         os->rl[RL_NPROC]  = {256, 256, 0};
         os->rl[RL_AS]     = inf;
-        os->rl[RL_STACK]  = {SHELLSTACK, RL_INFINITY, 0};
+        os->rl[RL_STACK]  = {LIBMODE ? os->libstack : (iz)SHELLSTACK, RL_INFINITY, 0};
     }
     return os->rl;
 }
@@ -3884,6 +4367,7 @@ static i32 plt_waitproc(Os *os, Handle proc)
         i32 r = WaitForMultipleObjects(2, hs, 0, INFINITE);
         if (r != 1) break;
         drainwake(os);
+        if constexpr (LIBMODE) lib_step();
     }
     return procexit(os, proc);
 }
@@ -3928,6 +4412,9 @@ static void plt_submit(Os *os, Io *io)
             os->freepwait = pw;
             io->n    = plt_waitproc(os, io->h);  // block here
             io->done = 1;
+        } else if (LIBMODE) {
+            pw->next   = os->pwaits;
+            os->pwaits = pw;
         }
         return;
     }
@@ -4046,6 +4533,7 @@ static b32 plt_cancel(Os *os, Io *io)
     case S_PROC: {
         Pwait *pw = (Pwait *)io->plt[1];
         UnregisterWaitEx(pw->wait, INVALID_HANDLE_VALUE);  // after any callback
+        if constexpr (LIBMODE) unlistwait(os, pw);
         os->nwait--;
         io->plt[0] = S_NONE;
         if (__atomic_load_n(&pw->fired, __ATOMIC_SEQ_CST)) {
@@ -4073,6 +4561,7 @@ static u64 plt_entropy(Os *os)
     if (!os->gentried) {
         os->gentried = 1;
         uz m = LoadLibraryW(u"advapi32.dll");
+        if constexpr (LIBMODE) os->advapi = m;  // freed by ub_free
         if (m) {
             void *f = GetProcAddress(m, "SystemFunction036");
             os->genrandom = (u8 (__stdcall *)(void *, u32))f;
@@ -4256,6 +4745,21 @@ static void dynamics(Os *os)
     os->freq       = freq;
     os->youngticks = freq / 10;
     os->cancelsync = (b32 (__stdcall *)(uz))dynamic(u"kernel32.dll", "CancelSynchronousIo");
+    if constexpr (LIBMODE) {
+        os->nestedjobs = !!precise;
+        os->attrinit   = (b32 (__stdcall *)(void *, i32, i32, iz *))
+            dynamic(u"kernel32.dll", "InitializeProcThreadAttributeList");
+        os->attrupdate = (b32 (__stdcall *)(void *, i32, uz, void *, iz, void *, iz *))
+            dynamic(u"kernel32.dll", "UpdateProcThreadAttribute");
+        os->attrdelete = (void (__stdcall *)(void *))
+            dynamic(u"kernel32.dll", "DeleteProcThreadAttributeList");
+        if (os->attrinit && os->attrupdate && os->attrdelete) {
+            iz size = 0;
+            os->attrinit(0, 1, 0, &size);  // fails, giving the size
+            os->attrsize = size;
+        }
+        if (!os->attrupdate || !os->attrdelete || os->attrsize<=0) os->attrinit = 0;
+    }
 }
 
 // What every shell on this host shares: the Windows directory, ids,

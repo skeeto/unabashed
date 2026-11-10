@@ -112,7 +112,7 @@ static u64 bitstake(u64 volatile *p)
     }
 }
 
-// The library's own (library.cpp), named only in "if constexpr
+// The library's own (libposix.cpp), named only in "if constexpr
 // (LIBMODE)" branches: its fiber stacks are among the run's
 // reservations, spawnlock brackets descriptors not yet close-on-exec,
 // lib_reaped tracks the run's programs, lib_dir the directory plt_list

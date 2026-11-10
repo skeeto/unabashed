@@ -1459,6 +1459,7 @@ static Str stdpath(Shell *sh)
     case PM_NATIVE: {
         // the shell's own directory, where w64devkit keeps its tools
         Str dir = takehead(sh->exe, sh->exe.len-lastpart(sh->exe).len);
+        if constexpr (LIBMODE) dir = selfdir(sh);
         return dir.len>3 ? cuttail(dir, 1) : dir;
     }
     }

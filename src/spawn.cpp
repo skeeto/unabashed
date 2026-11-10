@@ -569,6 +569,18 @@ static Str installroot(Str image)
     return root;
 }
 
+// The directory of the shell's executable, where its install keeps its
+// tools, with its trailing slash: in the library the one the host
+// named, else self's, else none.
+static Str selfdir(Shell *sh)
+{
+    if constexpr (LIBMODE) {
+        Str root = lib_root(sh->os);
+        if (root.len) return root;
+    }
+    return takehead(sh->exe, sh->exe.len-lastpart(sh->exe).len);
+}
+
 // Our own shell as a target: it splits its command line as the persona
 // its argv[0] and install give it, Cygwin's way for msys (unabashed.cpp's
 // msysargv) and CommandLineToArgvW's otherwise. In msys mode the
@@ -802,8 +814,9 @@ static Target wintarget(Shell *sh, Arena *a, Str path, Str *argv, iz argc, Slice
         if (l.err==E_NOENT && !depth && unixpath(sh, file)) {
             // busybox-w32: a missing /bin/X, /usr/bin/X, /sbin/X or
             // /usr/sbin/X is X by name (configure's SHELL=/bin/sh)
+            // (the library with no self: the name is looked up)
             Str name = lastpart(file);
-            if (name=="sh" || name=="bash" || name=="ash") {
+            if (!(LIBMODE && !sh->exe.len) && (name=="sh" || name=="bash" || name=="ash")) {
                 t = selftarget(sh, a, sh->exe, (i32)sizeof(void *), v, env);
                 break;
             }
@@ -857,9 +870,20 @@ static Target wintarget(Shell *sh, Arena *a, Str path, Str *argv, iz argc, Slice
             return t;
         }
 
-        // The script becomes an argument of its interpreter
+        // The script becomes an argument of its interpreter. The library
+        // with no self runs a script for sh itself, in-process, as one
+        // without #!, and one whose interpreter is another script names
+        // sh by PATH.
+        b32 noself = 0;
+        if constexpr (LIBMODE) {
+            noself = !sh->exe.len && (sh_ || selfinterp(b));
+            if (noself && !depth) {
+                t.err = E_NOEXEC;
+                return t;
+            }
+        }
         Slice<Str> next = {};
-        if (sh_ || selfinterp(b)) {
+        if ((!LIBMODE || !noself) && (sh_ || selfinterp(b))) {
             // A POSIX shell: this one, in its current path mode
             next = push(a, next, sh->exe);
             next = push(a, next, sh->pathmode==PM_MSYS ? Str("-O") : Str("+O"));
@@ -874,7 +898,7 @@ static Target wintarget(Shell *sh, Arena *a, Str path, Str *argv, iz argc, Slice
         for (iz i = 1; i < v.len; i++) next = push(a, next, v[i]);
         v = next;
 
-        if (sh_ || selfinterp(b)) {
+        if ((!LIBMODE || !noself) && (sh_ || selfinterp(b))) {
             t = selftarget(sh, a, sh->exe, (i32)sizeof(void *), v, env);
             break;
         }

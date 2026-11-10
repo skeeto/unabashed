@@ -35,13 +35,19 @@ typedef struct {
     void      (*child)(void *user, int64_t pid, int live);
     // Optional, Windows: deliver signal sig to program pid, 0 if done.
     int       (*softsig)(void *user, int64_t pid, int sig);
-    char const *root;     // Windows: the install root; 0: none
-    char const *self;     // Windows: an unabashed executable; 0: none
+    // Windows: the directory of the install's shell (its bin, as
+    // C:/w64devkit/bin), for the persona, fstab, profile, default PATH
+    // and command -p; 0: none, built-in defaults
+    char const *root;
+    // Windows: an unabashed executable, for $BASH, $SHELL and sh or
+    // bash scripts; 0: none, and such scripts run in-process
+    char const *self;
     ptrdiff_t   reserve;  // address space per arena; 0: 1<<34, or 1<<26 on 32-bit
     ptrdiff_t   stack;    // the shell fiber; 0: 16 MiB, or 8 MiB on 32-bit
     ptrdiff_t   memlimit; // committed bytes per run; 0: min(1 GiB, RAM/4),
                           // 256 MiB on 32-bit; negative: no limit
-    int         fds;      // descriptors per run; 0: min(256, RLIMIT_NOFILE/4)
+    int         fds;      // descriptors per run; 0: min(256, RLIMIT_NOFILE/4),
+                          // 256 on Windows
     int         flags;    // UB_SHARECONSOLE
 } ub_config;
 
@@ -50,13 +56,16 @@ typedef struct { int fd; intptr_t h; } ub_fd;
 typedef struct {
     int                argc;
     char const *const *argv;    // bash's argv, UTF-8: argv[0] is $0
-    char const        *cmdline; // Windows: a raw command line; replaces argv
+    char const        *cmdline; // Windows: a raw command line, split as
+                                // unabashed.exe splits its own; replaces argv
     char const *const *env;     // "NAME=value", null-terminated; 0: the host's
     char const        *cwd;     // absolute; 0: the host's
-    intptr_t           std[3];  // fd or HANDLE; -1: the null device
+    intptr_t           std[3];  // fd or HANDLE; -1 (Windows also 0): the
+                                // null device
     int                nfds;    // more descriptors, as if inherited
     ub_fd const       *fds;     // (fd 3 and up)
-    int64_t            pid;     // $$; 0: a unique virtual pid
+    int64_t            pid;     // $$; 0: a unique virtual pid; POSIX
+                                // below 2^22, Windows below 2^47
     int64_t            ppid;    // $PPID; 0: the host's pid
     uint64_t           sigign;  // bit n-1: signal n ignored at entry
 } ub_cmd;

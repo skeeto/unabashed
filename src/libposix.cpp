@@ -72,6 +72,11 @@ struct Lib {
 
 static __thread Lib *curlib;  // the run on this thread
 
+static Lib *runlib()
+{
+    return curlib;
+}
+
 
 // Hooks
 
@@ -119,6 +124,11 @@ static void checkhard(Lib *l)
 static void lib_step()
 {
     checkhard(curlib);
+}
+
+static Str lib_root(Os *)
+{
+    return {};  // Windows only
 }
 
 static void wakeup(Lib *l)
