@@ -10,3 +10,4 @@ third_party/
 tools/ptyrun
 tools/unabashed-linux
 /unabashed-*.tar.gz
+*.dSYM/
