@@ -1558,6 +1558,11 @@ static i32 imagemain(Os *os, OsInfo *info)
 
 static i32 sh_main(Os *os, OsInfo *osinfo)
 {
+    if (osvtable(os)->version != OSVTABLE_VERSION) {
+        Str msg = "bash: bad platform table version\n";
+        os_write(os, osinfo->std[2], msg.data, msg.len);
+        return 126;
+    }
     if (osinfo->image.base) return imagemain(os, osinfo);
     OsInfo copy = *osinfo;  // msys mode replaces its arguments
     OsInfo *info = &copy;

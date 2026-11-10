@@ -724,7 +724,8 @@ static Opened refuseopen(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 }
 
 // A copy of a platform table with an entry wrapped: the shell and the
-// programs it runs see the filter, and then the table comes back.
+// programs it runs see the filter, and then the table comes back. A
+// table of another version is refused.
 static void test_vtable(Test *t)
 {
     Os *os = t->os;
@@ -743,6 +744,17 @@ static void test_vtable(Test *t)
     r = runc(t, "echo hi >secret; cat secret");
     expect(t, "vtable restored", r.out, "hi\n");
     expect(t, "vtable restored err", r.err, "");
+
+    // A table of another version is refused before anything runs
+    static OsVtable other;
+    other         = vosvtable;
+    other.version = OSVTABLE_VERSION + 1;
+    os->vt = &other;
+    r = runc(t, "echo hi");
+    os->vt = 0;
+    expect(t, "vtable version", r.out, "");
+    expect(t, "vtable version err", r.err, "bash: bad platform table version\n");
+    expectint(t, "vtable version status", r.status, 126);
 }
 
 static void test_arena(Test *t)

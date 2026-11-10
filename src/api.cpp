@@ -493,8 +493,9 @@ static void    os_racy(Os *);
 //   itself.
 // - Nothing is frozen. A change that an implementation must act on, to
 //   an entry or to what one passes or returns, bumps OSVTABLE_VERSION
-//   with a line below. version and write keep their meaning in every
-//   version, so that a mismatch can always be reported.
+//   with a line below, and sh_main refuses a table of any other
+//   version. version and write keep their meaning in every version, so
+//   that a mismatch can always be reported.
 // - Tables in this tree name OSVTABLE_VERSION; one written elsewhere
 //   states the number it implements.
 // - Once frozen: entries are only appended, a floor sets the oldest
@@ -558,5 +559,7 @@ struct OsVtable {
     decltype(os_tasktag)    *tasktag;
     decltype(os_racy)       *racy;
 };
-// Entry point, called by the platform after it fills in OsInfo.
+// Entry point, called by the platform after it fills in OsInfo. Given a
+// table of another OSVTABLE_VERSION, it writes a message to std[2]
+// through the table's write and returns 126.
 static i32     sh_main(Os *, OsInfo *);
