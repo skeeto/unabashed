@@ -423,12 +423,14 @@ static void safepointslow(Sched *s)
 }
 
 // A point where shell code may give way to other tasks: cheap unless
-// its budget ran out.
-static void safepoint(Sched *s)
+// its budget ran out. True if it was not cheap.
+static b32 safepoint(Sched *s)
 {
     if (--s->budget < 0) {
         safepointslow(s);
+        return 1;
     }
+    return 0;
 }
 
 

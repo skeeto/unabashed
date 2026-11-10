@@ -3714,6 +3714,16 @@ static b32 loopflow(Shell *sh)
     return sh->flow == FLOW_RETURN || sh->exiting;
 }
 
+// A loop's safe point. Now and then it also takes signals, which a
+// loop of only arithmetic and compound commands would otherwise never
+// see. True if a trap's break, return or exit ends the loop.
+static b32 loopsafepoint(Shell *sh, Arena scratch)
+{
+    if (!safepoint(sh->sched)) return 0;
+    checksigs(sh, scratch);
+    return (sh->flow && loopflow(sh)) || sh->exiting;
+}
+
 static void runpipeline(Shell *sh, Node *n, Arena scratch);
 static void runselect(Shell *sh, Node *n, Arena scratch);
 
@@ -3939,7 +3949,7 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
     sh->loopdepth++;
     for (iz i = 0; i < list.len; i++) {
         Arena it = scratch;
-        safepoint(sh->sched);
+        if (loopsafepoint(sh, it)) break;
         if (head.data && sh->opt[O_XTRACE]) traceline(sh, it, head);
         if (debug) {
             // DEBUG before each iteration, BASH_COMMAND the header
@@ -4013,7 +4023,7 @@ static void execarithfor(Shell *sh, Node *n, Arena scratch)
     sh->loopdepth++;
     for (;;) {
         Arena it = scratch;
-        safepoint(sh->sched);
+        if (loopsafepoint(sh, it)) break;
         Arith r = {};
         if (sh->traps) debugarithfor(sh, n, test, it);
         if (!arithpart(sh, it, test, &r)) status = 1;
@@ -4279,7 +4289,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         sh->loopdepth++;
         for (;;) {
             Arena it = scratch;
-            safepoint(sh->sched);
+            if (loopsafepoint(sh, it)) break;
             sh->noerrexit++;
             execute(sh, n->a, it);
             sh->noerrexit--;
@@ -4446,7 +4456,7 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
     b32 menu = 1;
     for (;;) {
         Arena it = scratch;
-        safepoint(sh->sched);
+        if (loopsafepoint(sh, it)) break;
         if (menu) selectmenu(sh, it, list);
         Got ps3 = getvar(sh, &it, "PS3");
         fdwrite(sh, 2, ps3.set ? ps3.value : Str("#? "));

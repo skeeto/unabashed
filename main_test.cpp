@@ -955,6 +955,39 @@ static void test_sigpipe(Test *t)
     t->os->chaos = 0;
 }
 
+// A loop of only arithmetic and compound commands takes signals at
+// its safe points. Background levels are fibers here, as in the
+// library, so even an untrapped TERM is the shell's to act on; a vos
+// process running such a loop would never let its parent run again.
+static void test_loopsigs(Test *t)
+{
+    Str script =
+        "coproc L { for ((i=0;;i++)); do ((i)) || echo ready; done; }\n"
+        "read -r -u ${L[0]} x; echo $x\n"
+        "kill $L_PID; wait $L_PID; echo $?\n"
+        "coproc L { while ((1)); do ((i++)) || echo ready; done; }\n"
+        "read -r -u ${L[0]} x; echo $x\n"
+        "kill $L_PID; wait $L_PID; echo $?\n"
+        "coproc L { trap 'echo caught; exit 3' TERM\n"
+        "    for ((i=0;;i++)); do ((i)) || echo ready >&3; done 3>&1 >&2; }\n"
+        "read -r -u ${L[0]} x; echo $x\n"
+        "kill $L_PID; wait $L_PID; echo $?\n"
+        "coproc L { trap 'echo caught; break' TERM\n"
+        "    until ((0)); do ((i++)) || echo ready >&3; done 3>&1 >&2; echo after >&2; }\n"
+        "read -r -u ${L[0]} x; echo $x\n"
+        "kill $L_PID; wait $L_PID; echo $?\n";
+    b32 saved = images;
+    images = 0;
+    for (u64 seed = 0; seed <= 3; seed++) {
+        t->os->chaos = seed * 0x9e3779b97f4a7c15u;
+        Result r = runc(t, script);
+        expect(t, "loops take signals", r.merged,
+               "ready\n143\nready\n143\nready\ncaught\n3\nready\ncaught\nafter\n0\n");
+    }
+    t->os->chaos = 0;
+    images = saved;
+}
+
 // SpecFile tests: run a script recorded by tools/record and compare all
 // of its outputs. The harness reads the files; the shell never does.
 
@@ -1992,6 +2025,7 @@ int main(int argc, char **argv)
     test_chacha(&t);
     test_sched(&t);
     test_sigpipe(&t);
+    test_loopsigs(&t);
     test_vwin(&t);
     test_jobctl(&t);
     test_pathmodes(&t);
