@@ -1,0 +1,47 @@
+# The tests ubhost fails as a drop-in, by design, and why. ubhost is the
+# library's test host (tools/ubhost.c): run in place of the shell, its
+# runs keep to the library's contract, so what needs a process of the
+# shell's own, a terminal or job control, or the executable's signal
+# channel differs. Anything failing beyond this list is a bug.
+#
+# POSIX, on Linux (the oracle image, 8 at a time):
+#   ls t/exec/*.sh t/posix/*.sh |
+#   xargs -P 8 -n 4 env RECORD_SHELL=$PWD/ubhost RECORD_CHECK=1 tools/record
+# Windows (t/win32/run, WORKDIR outside %TEMP%):
+#   t/win32/run -s $PWD/ubhost.exe -x WORKDIR      (ubhost32.exe beside it)
+#   t/win32/run -s $PWD/ubhost32.exe WORKDIR       (Windows XP)
+# This is free and unencumbered software released into the public domain.
+
+# Job control and terminals: a run has no terminal, no process groups,
+# and no stopped jobs (set -m and suspend are refused)
+t/exec/905-stopped-jobs.sh          stopped jobs (times out: nothing stops)
+t/exec/906-stopped-pipelines.sh     stopped pipelines
+t/exec/909-interactive-jobs.sh      interactive job reports need a terminal
+t/exec/944-stopped-shell-stages.sh  shell code stopped with its job
+t/win32/008-interactive.sh          Ctrl-C to an interactive shell's prompt
+t/win32/019-interactive-jobs.sh     interactive job control on a console
+t/win32/022-fg-job.sh               Ctrl-C to a job fg brought forward
+
+# Images: a background level is a fiber of the run, not a process ($!
+# is a virtual pid, as under tests --fibers)
+t/exec/877-bg-process.sh            $! is not a process
+t/win32/016-bg-image.sh             no image self-spawn: leftovers killed
+
+# exec does not replace the host: the program runs while the run waits,
+# so the pid is the shell's and a signal to it reaches the shell
+t/exec/880-exec-forks.sh            exec with procsubs and jobs in flight
+t/posix/001-processes.sh            exec keeps the pid; another process's level
+t/posix/003-signals.sh              QUIT and INT to an exec'd shell's pid
+
+# Signals: a subshell is a level, and a stop signal it sends to $$ is
+# refused (the host's pid), where bash's parent process runs its trap
+t/exec/955-trap-stop-self.sh        ( kill -TTOU $$ ) under a parent's trap
+t/win32/017-signals.sh              no signal channel between shells
+t/win32/012-ctrlc-young.sh          no Ctrl-C judging (Windows 7 and later)
+
+# The core: fails under tests --fibers too
+t/exec/954-posix-arith-status.sh    arithmetic error status apart
+
+# Flaky for the executable too, not the library's
+t/exec/931-setlocale-programs.sh    fails only under the parallel run's load
+t/win32/015-fds.sh                  XP: busybox diff's stat of a procsub bridge

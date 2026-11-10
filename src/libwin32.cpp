@@ -1140,7 +1140,7 @@ static Lib *libnew(ub_config const *c)
     Os *os = &l->os;
     dynamics(os);
     os->lateattach = 0;  // no Ctrl-C judging
-    os->jobflags   = 0;  // the run's job lets nothing break away
+    os->jobflags   = 0;  // a program's own job lets nothing break away
     os->sharecon   = !!(l->cfg.flags & UB_SHARECONSOLE);
     l->cancelsync0 = os->cancelsync;
     l->isfiber     = (IsThreadAFiberFn)dynamic(u"kernel32.dll", "IsThreadAFiber");
@@ -1148,7 +1148,11 @@ static Lib *libnew(ub_config const *c)
     os->donetail   = &os->done;
     os->runjob     = CreateJobObjectW(0, 0);
     JobLimits jl = {};
-    jl.flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // Before Windows 8 jobs do not nest: a shell the run starts takes its
+    // programs out of this job into its own, which then ends with it (as
+    // the executable's jobs let its programs go)
+    jl.flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+               (os->nestedjobs ? 0 : JOB_OBJECT_LIMIT_BREAKAWAY_OK);
     if (!os->wake || !os->runjob ||
         !SetInformationJobObject(os->runjob, JobObjectExtendedLimitInformation,
                                  &jl, sizeof(jl))) {
