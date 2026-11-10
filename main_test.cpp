@@ -19,6 +19,9 @@
 #include <fcntl.h>
 #include <io.h>
 #endif
+#if __APPLE__
+#include <sys/mman.h>
+#endif
 #define EDIT_CHECK 1
 #include "src/unabashed.cpp"
 #include "src/fibers.cpp"
@@ -1890,6 +1893,25 @@ int main(int argc, char **argv)
                                      // vprocs, and the images of jobs not yet
                                      // started (read2.sub has some 50 at once)
     os.heap            = (byte *)malloc((uz)os.heapcap);
+    #if __APPLE__
+    // An image's words are audited for addresses outside it in the heap
+    // (vimageescape), and macOS's malloc puts the heap at 5-byte
+    // addresses (0x79xxxxxxxx to 0x7dxxxxxxxx, moved by ASLR), where
+    // five bytes of text and three NULs ("S[@]}") read as one: specs
+    // failed now and then, whichever held the text that run. So did
+    // two adjacent i32s, 0 and a small count, read as one word: a heap
+    // across a multiple of 4 GiB holds that word. Here every address
+    // has a 0x01 byte, which no text does, and its low half runs from
+    // 0xa0000000 to 0xe0000000, no 0 and no power of two.
+    void *hint = (void *)(uz)0x123a0000000;
+    void *p = mmap(hint, (uz)os.heapcap, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
+    if (p == hint) {
+        free(os.heap);
+        os.heap = (byte *)p;
+    } else if (p != MAP_FAILED) {
+        munmap(p, (uz)os.heapcap);
+    }
+    #endif
     os.vos.outcap      = (iz)1<<20;
     os.vos.out.data    = (u8 *)malloc((uz)os.vos.outcap);
     os.vos.err.data    = (u8 *)malloc((uz)os.vos.outcap);
