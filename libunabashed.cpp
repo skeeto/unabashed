@@ -54,7 +54,7 @@ namespace {
 #include "src/unabashed.cpp"
 #include "src/fibers.cpp"
 #include "src/posix.cpp"
-#include "src/library.cpp"
+#include "src/libposix.cpp"
 
 [[noreturn]] static void os_oom()
 {
