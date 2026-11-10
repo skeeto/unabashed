@@ -1000,6 +1000,7 @@ static b32 wildok(PatCtx *x, iz pos, PatUnit u)
 
 static b32 matchone(PatCtx *x, PatNode *nd, iz pos, PatUnit u)
 {
+    if constexpr (LIBMODE) lib_step();  // a pathological match ends
     switch (nd->kind) {
     case PN_CHAR: return (nd->flag&PN_TRAIL ? u.c : patfold(u.c, x->flags)) == nd->c;
     case PN_ANY:  return wildok(x, pos, u);

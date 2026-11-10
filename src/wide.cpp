@@ -655,7 +655,7 @@ using PeRead = iz (*)(void *ctx, i64 off, u8 *buf, iz len);
 
 // Our own images carry this section, which pesniff recognizes. Only PE
 // names sections so (Mach-O would want "segment,section").
-#if _WIN32
+#if _WIN32 && !UB_LIBRARY
 [[gnu::used, gnu::section(".unabash")]]
 static char const unabashedmark[] = "unabashed";
 #endif

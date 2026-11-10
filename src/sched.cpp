@@ -345,6 +345,7 @@ static void deadlock(Sched *s)
         woke = 1;
     }
     if (!woke) {
+        if constexpr (LIBMODE) lib_abort(s->os, E_DEADLK);
         os_oom();  // nothing left to try
     }
 }
@@ -538,6 +539,26 @@ static i32 taskjoin(Sched *s, Task *t)
     return status;
 }
 
+// As taskjoin, but giving up at deadline (os_now): false, with the task
+// left running, if the deadline comes first.
+static b32 taskjoinby(Sched *s, Task *t, i64 deadline, i32 *status)
+{
+    Task *self = s->cur;
+    while (t->state != TS_DONE) {
+        t->joiner      = self;
+        self->deadline = deadline;
+        block(s, W_JOIN);
+        self->deadline = 0;
+        if (self->timedout) {
+            self->timedout = 0;
+            t->joiner = 0;
+            return 0;
+        }
+    }
+    *status = taskjoin(s, t);
+    return 1;
+}
+
 // As taskjoin, but in the wait builtin: false, with the task left to
 // join later, if a signal interrupts the wait.
 static b32 taskjoinintr(Sched *s, Task *t, i32 *status)
@@ -613,7 +634,9 @@ static void taskio(Sched *s, Io *io)
 // Read up to len bytes: 0 at end of file, -1 on error.
 static iz taskread(Sched *s, Handle h, u8 *buf, iz len)
 {
-    if (s->ntasks==1 && !s->cur->deadline && !s->cur->anysig) {
+    // A library's run never blocks outside os_wait, so that it can be
+    // signalled or cancelled while it waits
+    if (!LIBMODE && s->ntasks==1 && !s->cur->deadline && !s->cur->anysig) {
         return os_read(s->os, h, buf, len);
     }
     Io *io = &s->cur->io;
@@ -630,7 +653,7 @@ static iz taskread(Sched *s, Handle h, u8 *buf, iz len)
 // Write all bytes. Returns 0 or an E_* error, E_PIPE without readers.
 static i32 taskwrite(Sched *s, Handle h, u8 *buf, iz len)
 {
-    if (s->ntasks == 1) {
+    if (!LIBMODE && s->ntasks==1) {
         if (os_write(s->os, h, buf, len)) return 0;
         Stat st = os_fstat(s->os, h);
         return st.type==FT_PIPE || st.type==FT_FIFO ? E_PIPE : E_IO;

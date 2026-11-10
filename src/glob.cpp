@@ -170,6 +170,7 @@ static Dirent *proclist(Shell *sh, Arena *a, PathRes r)
 // /proc what proclist has.
 static Dirent *pathlist(Shell *sh, Arena *a, Str dir, i32 *err)
 {
+    if constexpr (LIBMODE) lib_step();  // a long walk ends
     if (sh->pathmode != PM_MSYS) {
         return os_list(sh->os, a, absolute(sh, a, dir), err);
     }

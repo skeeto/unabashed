@@ -1975,6 +1975,30 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         histexit(sh);
     }
     jobctloff(sh);
+    if constexpr (LIBMODE) {
+        // A library's run: the non-standard descriptors close, so that
+        // the procsubs reading them finish, and get a second to do so.
+        // The host's teardown ends every program, level and task left.
+        Fdtab *t = sh->fds;
+        for (i32 fd = 0; fd < t->top; fd++) {
+            File *f = t->fd[fd];
+            b32 std = f && f->kind==F_OS &&
+                      (f->h==info->std[0] || f->h==info->std[1] || f->h==info->std[2]);
+            if (f && !std) {
+                fileunref(sh, f);
+                t->fd[fd] = 0;
+            }
+        }
+        i64 until = os_now(os) + 1000000000;
+        while (sh->psubs) {
+            Task *p = sh->psubs;
+            i32   st;
+            if (!taskjoinby(sh->sched, p, until, &st)) break;
+            sh->psubs = p->sib;
+        }
+        if (sh->killsig) return WSIGNALED | (128 + sh->killsig);
+        return sh->status & 255;
+    }
     if (sh->jobs) orphanjobs(sh);
     if (sh->psubs || sh->sched->orphans) {
         // Procsubs and background jobs still running end on EOF once

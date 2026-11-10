@@ -22,7 +22,9 @@
 //
 // This is free and unencumbered software released into the public domain.
 
-enum { MAXBG = 4 };   // live background vprocs (the fallback) before & waits
+// Live background vprocs (the fallback) before & waits. Every
+// background level of a library's run is one.
+enum { MAXBG = !LIBMODE ? 4 : sizeof(void *)==8 ? 64 : 16 };
 
 static b32 ownjob(Shell *sh, Job *j)
 {
