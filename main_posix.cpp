@@ -637,6 +637,52 @@ static b32 sigin(u64 set, i32 sig)
     return sig<=64 && set>>(sig-1) & 1;
 }
 
+// The core numbers signals as Linux x86-64 does (trap.cpp), and other
+// hosts, macOS among them, number them otherwise. Every number that
+// crosses is translated: hostsig for one going out, coresig for one
+// coming in, each 0 where the other side has no such signal; corebit
+// and hostin take a host number into the core's masks. On Linux all
+// of them are the identity.
+#if __linux__
+static_assert(SIGBUS==7 && SIGUSR1==10 && SIGCHLD==17 && SIGSTOP==19 &&
+              SIGIO==29 && SIGSYS==31, "the generic Linux numbering");
+static i32 hostsig(i32 sig) { return sig; }
+static i32 coresig(i32 sig) { return sig; }
+static u64 corebit(i32 sig) { return (u64)1 << (sig-1); }
+static b32 hostin(u64 set, i32 sig) { return sigin(set, sig); }
+#else
+static i32 const hostsigs[32] = {
+    0,       SIGHUP,  SIGINT,  SIGQUIT,   SIGILL,  SIGTRAP,  SIGABRT, SIGBUS,
+    SIGFPE,  SIGKILL, SIGUSR1, SIGSEGV,   SIGUSR2, SIGPIPE,  SIGALRM, SIGTERM,
+    0,       SIGCHLD, SIGCONT, SIGSTOP,   SIGTSTP, SIGTTIN,  SIGTTOU, SIGURG,
+    SIGXCPU, SIGXFSZ, SIGVTALRM, SIGPROF, SIGWINCH, SIGIO,   0,       SIGSYS,
+};  // 16 (STKFLT), 30 (PWR) and the real-time signals are Linux's own
+
+static i32 hostsig(i32 sig)
+{
+    return sig>0 && sig<32 ? hostsigs[sig] : 0;
+}
+
+static i32 coresig(i32 sig)
+{
+    for (i32 i = 1; sig>0 && i<32; i++) {
+        if (hostsigs[i] == sig) return i;
+    }
+    return 0;
+}
+
+static u64 corebit(i32 sig)
+{
+    i32 c = coresig(sig);
+    return c ? (u64)1<<(c-1) : 0;
+}
+
+static b32 hostin(u64 set, i32 sig)
+{
+    return (set & corebit(sig)) != 0;
+}
+#endif
+
 // With a fork: the child has its own memory, and reports a failed exec
 // through a close-on-exec pipe, which a successful exec closes. For
 // what posix_spawn cannot set up (trispawn).
@@ -678,9 +724,9 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
             struct sigaction sa = {};
             if (sig==SIGKILL || sig==SIGSTOP || sigaction(sig, 0, &sa)) continue;
             b32 caught = sa.sa_handler!=SIG_DFL && sa.sa_handler!=SIG_IGN;
-            if (sigin(p->ign, sig)) {
+            if (hostin(p->ign, sig)) {
                 signal(sig, SIG_IGN);
-            } else if (caught || sigin(p->dfl, sig)) {
+            } else if (caught || hostin(p->dfl, sig)) {
                 signal(sig, SIG_DFL);
             }
         }
@@ -755,7 +801,7 @@ static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
     if (p->pgid && p->fg) return -1;
     #endif
     for (i32 sig = 1; sig < NSIG; sig++) {
-        if (!sigin(p->ign, sig) || sig==SIGKILL || sig==SIGSTOP) continue;
+        if (!hostin(p->ign, sig) || sig==SIGKILL || sig==SIGSTOP) continue;
         struct sigaction sa = {};
         if (sigaction(sig, 0, &sa) || sa.sa_handler!=SIG_IGN) return -1;
     }
@@ -783,7 +829,7 @@ static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
         sigemptyset(&dfl);
         for (i32 sig = 1; sig < NSIG; sig++) {
             if (sig==SIGKILL || sig==SIGSTOP) continue;
-            if (sigin(p->dfl, sig)) sigaddset(&dfl, sig);
+            if (hostin(p->dfl, sig)) sigaddset(&dfl, sig);
         }
         posix_spawnattr_setsigdefault(&at, &dfl);
         if (p->pgid) {
@@ -865,8 +911,8 @@ static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
     // defaults, except what it was told to ignore (trap '' in the
     // spawning subshell) and what was ignored on entry
     u64 changed = sigos ? sigos->changed : 0;
-    if (!sigos || !sigos->pipeign) changed |= (u64)1 << (SIGPIPE-1);
-    changed |= (u64)1 << (SIGCHLD-1);
+    if (!sigos || !sigos->pipeign) changed |= corebit(SIGPIPE);
+    changed |= corebit(SIGCHLD);
     p.ign     = s->sigign | (sigos ? sigos->entryign : 0);
     p.dfl     = changed & ~p.ign;
     p.rlimits = s->rlimits;
@@ -965,7 +1011,7 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
             setrlimit(k, &l);
         }
         for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
-            u64 bit = (u64)1 << (sig-1);
+            u64 bit = corebit(sig);
             if (sig==SIGKILL || sig==SIGSTOP || sig==SIGCHLD) continue;
             if ((s->sigign | os->entryign) & bit) {
                 signal(sig, SIG_IGN);
@@ -1119,14 +1165,14 @@ static i32 plt_exec(Os *os, Arena scratch, Spawn *s)
     u64 touched = 0;
     u64 changed = sigos ? sigos->changed : 0;
     u64 ign     = s->sigign | (sigos ? sigos->entryign : 0);
-    if (!sigos || !sigos->pipeign) changed |= (u64)1 << (SIGPIPE-1);
-    changed |= (u64)1 << (SIGCHLD-1);
+    if (!sigos || !sigos->pipeign) changed |= corebit(SIGPIPE);
+    changed |= corebit(SIGCHLD);
     for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
-        u64 bit = (u64)1 << (sig-1);
+        u64 bit = corebit(sig);
         if (sig==SIGKILL || sig==SIGSTOP || !((ign|changed) & bit)) continue;
         struct sigaction sa = {};
         sa.sa_handler = ign&bit ? SIG_IGN : SIG_DFL;
-        if (!sigaction(sig, &sa, old+sig)) touched |= bit;
+        if (!sigaction(sig, &sa, old+sig)) touched |= (u64)1 << (sig-1);
     }
 
     execve(path, argv, envp);
@@ -1154,8 +1200,8 @@ static i32 plt_exec(Os *os, Arena scratch, Spawn *s)
 static i32 waitstatus(i32 status)
 {
     if (WIFEXITED(status)) return WEXITSTATUS(status);
-    if (WIFSIGNALED(status)) return WSIGNALED | (128 + WTERMSIG(status));
-    if (WIFSTOPPED(status)) return WSTOP | WSTOPSIG(status);
+    if (WIFSIGNALED(status)) return WSIGNALED | (128 + coresig(WTERMSIG(status)));
+    if (WIFSTOPPED(status)) return WSTOP | coresig(WSTOPSIG(status));
     if (WIFCONTINUED(status)) return WCONT;
     return 127;
 }
@@ -1234,7 +1280,7 @@ static void onsignal(int sig, siginfo_t *info, void *)
     (void)tty;
     (void)info;
     #endif
-    __atomic_fetch_or(grp ? &grpbits : &sigbits, (u64)1<<(sig-1), __ATOMIC_RELAXED);
+    __atomic_fetch_or(grp ? &grpbits : &sigbits, corebit(sig), __ATOMIC_RELAXED);
     u8 c = 0;
     if (write(sigos->wakefd[1], &c, 1)) {}
     errno = saved;
@@ -1318,7 +1364,9 @@ static i32 plt_kill(Os *os, i64 pid, i32 sig)
 {
     flushw(os);
     if (pid<-(i64)0x7fffffff || pid>(i64)0x7fffffff) return E_SRCH;
-    return kill((pid_t)pid, sig) ? errno : 0;
+    i32 hsig = hostsig(sig);
+    if (sig && !hsig) return E_INVAL;  // one of Linux's this host lacks
+    return kill((pid_t)pid, hsig) ? errno : 0;
 }
 
 static i32 plt_setpgid(Os *os, i64 pid, i64 pgid)
@@ -1454,15 +1502,16 @@ static void quietpipe(Os *)
 static void plt_sigmode(Os *os, i32 sig, i32 mode)
 {
     flushw(os);
-    u64 bit = (u64)1 << (sig-1);
-    if (sig<1 || sig>=NSIG || sig==SIGKILL || sig==SIGSTOP) return;
+    u64 bit  = (u64)1 << (sig-1);
+    i32 hsig = hostsig(sig);
+    if (hsig<1 || hsig>=NSIG || hsig==SIGKILL || hsig==SIGSTOP) return;
     if ((os->entryign & bit) && mode!=SIGM_CLAIM) return;
-    if (sig == SIGCHLD) return;  // os_wait's own handler
+    if (hsig == SIGCHLD) return;  // os_wait's own handler
     if (mode==SIGM_DEFAULT && !(os->changed & bit)) {
         return;  // still as on entry, which may be a profiler's SIGPROF
     }
     os->changed |= bit;
-    if (mode==SIGM_DEFAULT && sig==SIGPIPE) {
+    if (mode==SIGM_DEFAULT && hsig==SIGPIPE) {
         quietpipe(os);  // its in-process subshells' broken pipes
         return;
     }
@@ -1482,7 +1531,7 @@ static void plt_sigmode(Os *os, i32 sig, i32 mode)
         sa.sa_sigaction = onsignal;
         break;
     }
-    sigaction(sig, &sa, 0);
+    sigaction(hsig, &sa, 0);
 }
 
 static void initasync(Os *os)
@@ -1493,7 +1542,7 @@ static void initasync(Os *os)
     os->pipeign = sa.sa_handler == SIG_IGN;
     for (i32 sig = 1; sig < NSIGNAL && sig < NSIG; sig++) {
         if (!sigaction(sig, 0, &sa) && sa.sa_handler==SIG_IGN) {
-            os->entryign |= (u64)1 << (sig-1);
+            os->entryign |= corebit(sig);
         }
     }
     if (!os->pipeign) quietpipe(os);  // else it stays ignored
@@ -1977,7 +2026,7 @@ static void exitwith(i32 status)
     #endif
     if (status & WSIGNALED) {
         // Killed by a signal: die by it, so that the parent sees that
-        i32 sig = (status & 255) - 128;
+        i32 sig = hostsig((status & 255) - 128);
         signal(sig, SIG_DFL);
         sigset_t set;
         sigemptyset(&set);
