@@ -29,7 +29,11 @@
 #include <unistd.h>
 #if __APPLE__
 #include <libproc.h>
+#include <sys/event.h>
 #include <sys/random.h>  // getentropy
+#endif
+#if __linux__
+#include <sys/epoll.h>
 #endif
 #if FIBER_UCONTEXT || !(__x86_64__ || (__APPLE__ && __aarch64__))
 #include <ucontext.h>    // fibers.cpp's, here outside the namespace

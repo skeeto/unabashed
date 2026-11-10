@@ -29,6 +29,7 @@ enum : iz { RESHEAD = (iz)1<<16 };  // a page on every system
 
 struct LibKid {
     i64 pid;
+    i32 watch;   // Linux: its pidfd, or -1; macOS: in the kqueue
     b32 reaped;
 };
 
@@ -66,6 +67,7 @@ struct Lib {
     // Programs, and the process groups they lead (each its own session)
     LibKid     kids[MAXKIDS];
     i32        nkids;
+    i32        waitfd;    // Linux: the run's epoll; macOS: a kqueue
 };
 
 static __thread Lib *curlib;  // the run on this thread
@@ -320,11 +322,131 @@ static LibKid *findkid(Lib *l, i64 pid)
     return 0;
 }
 
+// Program exits come with no SIGCHLD. Linux watches each program's
+// pidfd in one epoll descriptor, macOS its exit in a kqueue, and waits
+// poll that one descriptor. A program not watched (an old kernel, the
+// descriptor budget spent, already gone) is polled with WNOHANG,
+// backing off.
+static void watchkid(Lib *l, LibKid *k)
+{
+    #if __linux__
+    k->watch = -1;
+    #ifdef SYS_pidfd_open
+    if (l->waitfd < 0) {
+        l->waitfd = fdtake(l, epoll_create1(EPOLL_CLOEXEC));
+        if (l->waitfd < 0) return;
+    }
+    i32 fd = fdtake(l, (i32)syscall(SYS_pidfd_open, (pid_t)k->pid, 0));
+    if (fd < 0) return;
+    struct epoll_event e = {};
+    e.events   = EPOLLIN;
+    e.data.u64 = (u64)k->pid;
+    if (epoll_ctl(l->waitfd, EPOLL_CTL_ADD, fd, &e)) {
+        fdgive(l, fd);
+        close(fd);
+        return;
+    }
+    k->watch = fd;
+    #endif
+    #else
+    struct kevent e;
+    EV_SET(&e, (uintptr_t)k->pid, EVFILT_PROC, EV_ADD|EV_ONESHOT, NOTE_EXIT, 0, 0);
+    k->watch = l->waitfd>=0 && !kevent(l->waitfd, &e, 1, 0, 0, 0);  // ESRCH: gone
+    #endif
+}
+
+static b32 watching(LibKid *k)
+{
+    #if __linux__
+    return k->watch >= 0;
+    #else
+    return k->watch;
+    #endif
+}
+
+static void unwatchkid(Lib *l, LibKid *k)
+{
+    #if __linux__
+    if (watching(k)) {
+        fdgive(l, k->watch);
+        close(k->watch);  // and so out of the epoll set
+    }
+    k->watch = -1;
+    #else
+    k->watch = 0;  // its event was one-shot
+    #endif
+}
+
+// A process wait pending for pid?
+static b32 procpending(Os *os, i64 pid)
+{
+    for (Io *io = os->pending; io; io = io->next) {
+        if (isproc(io) && (i64)io->h==pid) return 1;
+    }
+    return 0;
+}
+
+// Take what the watch descriptor says. A program that ended with no
+// wait yet pending is watched no more, lest it wake every wait: its
+// wait, once submitted, finds it ended at once.
+static void drainwatch(Lib *l)
+{
+    #if __linux__
+    struct epoll_event e[64];
+    i32 n = epoll_wait(l->waitfd, e, countof(e), 0);
+    for (i32 i = 0; i < n; i++) {
+        LibKid *k = findkid(l, (i64)e[i].data.u64);
+        if (k && !procpending(&l->os, k->pid)) unwatchkid(l, k);
+    }
+    #else
+    struct kevent e[64];
+    struct timespec zero = {};
+    while (kevent(l->waitfd, 0, 0, e, countof(e), &zero) == countof(e)) {}
+    #endif
+}
+
 static void reapedkid(Lib *l, LibKid *k)
 {
     if (k->reaped) return;
     k->reaped = 1;
+    unwatchkid(l, k);
     if (l->cfg.child) l->cfg.child(l->cfg.user, k->pid, 0);
+}
+
+// Programs that outlived their handle, killed but not yet reapable
+// (stuck in the kernel): any later call of any handle reaps them.
+static i64 graves[64];
+static i32 gravelock;
+
+static void lockgraves(b32 lock)
+{
+    if (lock) {
+        while (__atomic_exchange_n(&gravelock, 1, __ATOMIC_ACQUIRE)) sched_yield();
+    } else {
+        __atomic_store_n(&gravelock, 0, __ATOMIC_RELEASE);
+    }
+}
+
+static void reapgraves()
+{
+    lockgraves(1);
+    for (i32 i = 0; i < countof(graves); i++) {
+        i32 status;
+        if (graves[i] && waitpid((pid_t)graves[i], &status, WNOHANG)) graves[i] = 0;
+    }
+    lockgraves(0);
+}
+
+static void bury(i64 pid)
+{
+    lockgraves(1);
+    for (i32 i = 0; i < countof(graves); i++) {
+        if (!graves[i]) {
+            graves[i] = pid;
+            break;
+        }
+    }  // else a zombie left for good: 64 programs stuck at once
+    lockgraves(0);
 }
 
 static void lib_reaped(i64 pid)
@@ -364,6 +486,7 @@ static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
         LibKid *k = l->kids + l->nkids++;
         k->pid    = r.pid;
         k->reaped = 0;
+        watchkid(l, k);
         if (l->cfg.child) l->cfg.child(l->cfg.user, r.pid, 1);
     }
     return r;
@@ -392,6 +515,24 @@ static i32 libwaitproc(Os *os, Handle proc)
     }
 }
 
+// Linux: a thread of the host's, whose id kill takes for the host.
+static b32 hostthread(i64 tid)
+{
+    #if __linux__
+    char path[48] = "/proc/self/task/";
+    i32  len = 16;
+    char digits[24];
+    i32  nd = 0;
+    for (i64 v = tid; v > 0; v /= 10) digits[nd++] = (char)('0' + v%10);
+    while (nd) path[len++] = digits[--nd];
+    path[len] = 0;
+    return tid>0 && !access(path, F_OK);
+    #else
+    (void)tid;
+    return 0;
+    #endif
+}
+
 static i32 libkill(Os *os, i64 pid, i32 sig)
 {
     Lib *l = (Lib *)os;
@@ -408,7 +549,7 @@ static i32 libkill(Os *os, i64 pid, i32 sig)
     }
     i64 host = getpid();
     if (pid==-1 || pid==host || pid==-host || pid==-(i64)getpgrp() ||
-        pid<-(i64)0x7fffffff || pid>(i64)0x7fffffff) {
+        pid<-(i64)0x7fffffff || pid>(i64)0x7fffffff || hostthread(pid)) {
         return sig ? E_PERM : pid==-1 ? E_PERM : 0;
     }
     return plt_kill(os, pid, sig);
@@ -465,15 +606,22 @@ static Io *libwait(Os *os, i64 deadline)
         Io *done = takeproc(os);
         if (done) return done;
 
-        b32 procs = 0;
-        b32 trunc = 0;
+        b32 procs   = 0;  // a pending program not watched
+        b32 watched = 0;
+        b32 trunc   = 0;
         i32 n = 0;
         fds[n].fd        = os->wakefd[0];
         fds[n].events    = POLLIN;
         fds[n++].revents = 0;
+        fds[n].fd        = l->waitfd;
+        fds[n].events    = POLLIN;
+        fds[n++].revents = 0;
         for (Io *io = os->pending; io; io = io->next) {
             if (isproc(io)) {
-                procs = 1;
+                LibKid *k = findkid(l, (i64)io->h);
+                b32 w = k && watching(k);
+                watched |= w;
+                procs   |= !w;
                 continue;
             }
             if (n == MAXPOLL) {
@@ -495,16 +643,18 @@ static Io *libwait(Os *os, i64 deadline)
         if ((procs || trunc) && (timeout<0 || timeout>backoff)) {
             timeout = backoff;
         }
+        if (!watched) fds[1].fd = -1;  // ignored
         i32 r = poll(fds, (nfds_t)n, timeout);
         if (r<0 && errno!=EINTR) return 0;
         if (fds[0].revents) {
             u8 buf[64];
             while (read(os->wakefd[0], buf, sizeof(buf)) > 0) {}
         }
+        if (fds[1].revents) drainwatch(l);
         checkhard(l);
         if (os->sigbits || os->grpbits) return 0;  // the core first
 
-        i32 k = 1;
+        i32 k = 2;
         for (Io **p = &os->pending; *p && k<n; p = &(*p)->next) {
             Io *io = *p;
             if (isproc(io)) continue;
@@ -807,6 +957,15 @@ static void teardown(Lib *l)
         l->fdbits[w] = 0;
     }
     l->nfds = 0;
+    for (i32 i = 0; i < l->nkids; i++) {
+        l->kids[i].watch = 0;  // closed with the rest
+        #if __linux__
+        l->kids[i].watch = -1;
+        #endif
+    }
+    #if __linux__
+    l->waitfd = -1;  // the epoll, closed with the rest
+    #endif
 
     for (LibRes *r = l->res, *next; r; r = next) {
         next = r->next;
@@ -872,6 +1031,10 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     curlib = l;
 
     // Reaped by now, perhaps, are the stragglers of earlier runs
+    reapgraves();
+    #if __APPLE__
+    drainwatch(l);
+    #endif
     i32 n = 0;
     for (i32 i = 0; i < l->nkids; i++) {
         i32 status;
@@ -982,6 +1145,14 @@ static Lib *libnew(ub_config const *c)
         l->os.wakefd[i] = fds[i];
         fcntl(fds[i], F_SETFL, O_NONBLOCK);
     }
+    l->waitfd = -1;
+    #if __APPLE__
+    l->cfg.spawnlock(l->cfg.user, 1);
+    l->waitfd = kqueue();  // not inherited across fork, and close-on-exec
+    if (l->waitfd >= 0) fcntl(l->waitfd, F_SETFD, FD_CLOEXEC);
+    l->cfg.spawnlock(l->cfg.user, 0);
+    #endif
+    reapgraves();
     return l;
 }
 
@@ -990,12 +1161,17 @@ static void libfree(Lib *l)
     if (!l) return;
     for (i32 i = 0; i < l->nkids; i++) {
         i32 status;
+        if (l->kids[i].reaped) continue;
         if (waitpid((pid_t)l->kids[i].pid, &status, WNOHANG)) {
             reapedkid(l, l->kids+i);
+        } else {
+            bury(l->kids[i].pid);
         }
     }
+    reapgraves();
     close(l->os.wakefd[0]);
     close(l->os.wakefd[1]);
+    if (l->waitfd >= 0) close(l->waitfd);  // macOS's kqueue
     munmap(l, sizeof(Lib));
 }
 
