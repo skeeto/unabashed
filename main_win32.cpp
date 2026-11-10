@@ -470,14 +470,18 @@ enum : i32 { P_READING = 1, P_WRITING, P_DONE };  // a pump's state
 struct Wobj;
 struct Os;
 
+// Each helper lives in a block of its own, with a copy of all that its
+// thread reads (own, kind, the bytes to write), so that it never needs
+// the object or the core's buffer, which may be gone before it ends.
 struct Helper {
     Wnode   node;    // pushed when its operation ends
     Helper *next;    // idle list
     Os     *os;
-    Wobj   *obj;
+    Wobj   *obj;     // the main thread's
+    uz      own;     // obj->own
+    i32     kind;    // obj->kind
     i32     op;      // H_*
-    u8     *wbuf;    // H_WRITE: the core's bytes
-    iz      wlen;
+    iz      wlen;    // H_WRITE: bytes in wbuf
     iz      n;       // result: bytes in buf, or written
     i32     code;    // GetLastError of a failure, else 0
     b32     eof;     // the source reached its end
@@ -489,6 +493,7 @@ struct Helper {
     i32     stop;    // atomic: H_PUMP should stop
     i32     pstate;  // atomic: P_*
     u8      buf[1<<12];
+    u8      wbuf[1<<16];  // H_WRITE: a copy of the core's bytes
 };
 
 struct Interpose {
@@ -756,7 +761,7 @@ static void flushw(Os *os)
 // Translate a system error code into a Linux errno number.
 static i32 errnum(i32 code)
 {
-    static struct { i32 code; i32 err; } table[] = {
+    static struct { i32 code; i32 err; } const table[] = {
         {   2, E_NOENT},        // ERROR_FILE_NOT_FOUND
         {   3, E_NOENT},        // ERROR_PATH_NOT_FOUND
         {   4, E_MFILE},        // ERROR_TOO_MANY_OPEN_FILES
@@ -988,7 +993,7 @@ static Wobj *track(Os *os, uz h)
     return w;
 }
 
-static void reserveahead(Wobj *w, iz extra)
+static void reserveahead(Os *, Wobj *w, iz extra)
 {
     iz len = w->alen - w->aoff;
     if (w->aoff) {
@@ -1014,7 +1019,7 @@ static void reserveahead(Wobj *w, iz extra)
 // An inherited pipe may have other readers, so is never read ahead.
 enum : i32 { AHEADSTREAK = 16, AHEADBLOCK = 1<<14 };
 
-static void fillahead(Wobj *w, uz h)
+static void fillahead(Os *os, Wobj *w, uz h)
 {
     if (!w->mine || w->streak<AHEADSTREAK || w->alen>w->aoff || w->eof ||
             w->helper || w->lent || w->ip) {
@@ -1022,17 +1027,17 @@ static void fillahead(Wobj *w, uz h)
     }
     i32 avail = 0;
     if (!PeekNamedPipe(h, 0, 0, 0, &avail, 0) || !avail) return;
-    reserveahead(w, AHEADBLOCK);
+    reserveahead(os, w, AHEADBLOCK);
     i32 n = 0;
     if (ReadFile(h, w->ahead+w->alen, chunk(avail<AHEADBLOCK ? avail : AHEADBLOCK), &n, 0)) {
         w->alen += n;
     }
 }
 
-static void appendahead(Wobj *w, u8 *buf, iz len)
+static void appendahead(Os *os, Wobj *w, u8 *buf, iz len)
 {
     if (!len) return;
-    reserveahead(w, len);
+    reserveahead(os, w, len);
     copybytes(w->ahead+w->alen, buf, len);
     w->alen += len;
 }
@@ -1188,14 +1193,13 @@ static iz conline(Os *os, uz h, u8 *out, i32 *code)
 // the end, -1 on failure (code set).
 static iz srcread(Helper *hp, iz len)
 {
-    Wobj *w = hp->obj;
-    iz    r = 0;
+    iz r = 0;
     __atomic_store_n(&hp->inio, 1, __ATOMIC_SEQ_CST);
-    if (w->kind == K_CONIN) {
-        r = conline(hp->os, w->own, hp->buf, &hp->code);
+    if (hp->kind == K_CONIN) {
+        r = conline(hp->os, hp->own, hp->buf, &hp->code);
     } else {
         i32 n = 0;
-        if (ReadFile(w->own, hp->buf, (i32)len, &n, 0)) {
+        if (ReadFile(hp->own, hp->buf, (i32)len, &n, 0)) {
             r = n;
         } else {
             hp->code = GetLastError();
@@ -1266,7 +1270,7 @@ static u32 __stdcall helpermain(void *arg)
         } break;
         case H_WRITE: {
             i32 n = 0;
-            if (WriteFile(hp->obj->own, hp->wbuf, chunk(hp->wlen), &n, 0) && n) {
+            if (WriteFile(hp->own, hp->wbuf, (i32)hp->wlen, &n, 0) && n) {
                 hp->n = n;
             } else {
                 hp->code = GetLastError();
@@ -1277,7 +1281,7 @@ static u32 __stdcall helpermain(void *arg)
             pumploop(hp);
             break;
         case H_CONNECT:
-            hp->code = connectpipe(hp->obj->own);
+            hp->code = connectpipe(hp->own);
             break;
         }
         __atomic_store_n(&hp->live, 0, __ATOMIC_SEQ_CST);
@@ -1294,12 +1298,19 @@ static Helper *gethelper(Os *os)
         return hp;
     }
     if (os->nhelpers == MAXHELPERS) return 0;
-    hp = alloc<Helper>(&os->perm);
+    hp = (Helper *)VirtualAlloc(0, sizeof(Helper), MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+    if (!hp) return 0;
     hp->os        = os;
     hp->node.kind = WN_HELPER;
     hp->go        = CreateEventW(0, 0, 0, 0);
-    hp->thread    = CreateThread(0, 1<<16, helpermain, hp, 0x10000, 0);
-    if (!hp->go || !hp->thread) return 0;  // leaked, as it is rare
+    if (hp->go) {
+        hp->thread = CreateThread(0, 1<<16, helpermain, hp, 0x10000, 0);
+    }
+    if (!hp->thread) {
+        if (hp->go) CloseHandle(hp->go);
+        VirtualFree((byte *)hp, 0, MEM_RELEASE);
+        return 0;
+    }
     os->nhelpers++;
     return hp;
 }
@@ -1318,13 +1329,15 @@ static b32 issue(Os *os, Wobj *w, uz h, i32 op, Io *io, uz iw = 0)
     Helper *hp = gethelper(os);
     if (!hp) return 0;
     hp->obj    = w;
+    hp->own    = w->own;
+    hp->kind   = w->kind;
     hp->op     = op;
     hp->stop   = 0;
     hp->pstate = 0;
     hp->iw     = iw;
     if (io && op==H_WRITE) {
-        hp->wbuf = io->buf;
-        hp->wlen = io->len;
+        hp->wlen = io->len<countof(hp->wbuf) ? io->len : countof(hp->wbuf);
+        copybytes(hp->wbuf, io->buf, hp->wlen);
     }
     w->helper = hp;
     w->active = io;
@@ -1345,7 +1358,7 @@ static b32 issue(Os *os, Wobj *w, uz h, i32 op, Io *io, uz iw = 0)
 // read: the console would throw away the next line typed.
 static void cancelhelper(Os *os, Helper *hp)
 {
-    if (!os->cancelsync || hp->obj->kind==K_CONIN) return;
+    if (!os->cancelsync || hp->kind==K_CONIN) return;
     for (i32 i = 0; i<20 && __atomic_load_n(&hp->live, __ATOMIC_SEQ_CST); i++) {
         if (__atomic_load_n(&hp->inio, __ATOMIC_SEQ_CST) && os->cancelsync(hp->thread)) {
             return;
@@ -1401,7 +1414,7 @@ static b32 startio(Os *os, Wobj *w, Io *io)
     if (io->op == IO_READ) {
         if (w->kind == K_PIPE) {
             w->streak += w->streak < AHEADSTREAK;
-            fillahead(w, h);
+            fillahead(os, w, h);
         }
         if (w->alen>w->aoff || w->eof) {
             readahead(w, h, io);
@@ -1491,7 +1504,7 @@ static void helperdone(Os *os, Helper *hp)
             writeall(w->ip->iw, hp->buf, hp->n);
             hp->n = 0;
         }
-        appendahead(w, hp->buf, hp->n);
+        appendahead(os, w, hp->buf, hp->n);
         w->eof |= hp->eof;
         if (io) {
             readahead(w, w->own, io);
@@ -1531,7 +1544,7 @@ static void helperdone(Os *os, Helper *hp)
         pushdone(os, io);
         break;
     case H_PUMP:
-        appendahead(w, hp->buf, hp->n);  // read after the stop
+        appendahead(os, w, hp->buf, hp->n);  // read after the stop
         break;
     case H_CONNECT:
         if (io) {
@@ -1654,7 +1667,7 @@ static iz mainread(Os *os, uz h, u8 *buf, iz len)
 // away the next line typed.
 static iz conread(Os *os, Wobj *w, uz h)
 {
-    reserveahead(w, 3*CONUNITS);
+    reserveahead(os, w, 3*CONUNITS);
     i32 code = 0;
     iz  n    = conline(os, h, w->ahead+w->alen, &code);
     if (n<0 && code==ERROR_OPERATION_ABORTED) {
@@ -1667,10 +1680,10 @@ static iz conread(Os *os, Wobj *w, uz h)
 }
 
 // Drain an interposed pipe into the read-ahead.
-static void drainpipe(Wobj *w, uz ir)
+static void drainpipe(Os *os, Wobj *w, uz ir)
 {
     for (;;) {
-        reserveahead(w, 1<<16);
+        reserveahead(os, w, 1<<16);
         iz n = peekread(ir, w->ahead+w->alen, w->acap-w->alen);
         if (!n) return;
         w->alen += n;
@@ -1686,7 +1699,7 @@ static void stopinterpose(Os *os, Wobj *w)
     if (hp) {
         __atomic_store_n(&hp->stop, 1, __ATOMIC_SEQ_CST);
         for (i32 i = 0;; i++) {
-            drainpipe(w, ip->ir);  // lets a blocked write finish
+            drainpipe(os, w, ip->ir);  // lets a blocked write finish
             if (__atomic_load_n(&hp->pstate, __ATOMIC_SEQ_CST) != P_WRITING) break;
             Sleep(i<4 ? 0 : 1);
         }
@@ -1695,7 +1708,7 @@ static void stopinterpose(Os *os, Wobj *w)
         CloseHandle(ip->iw);  // the read in flight is not forwarded
         ip->iw = 0;
     }
-    drainpipe(w, ip->ir);
+    drainpipe(os, w, ip->ir);
     CloseHandle(ip->ir);
     w->ip    = 0;
     ip->next = os->freeip;
@@ -2526,9 +2539,9 @@ static i32 chansend(i64 pid, i64 level, i32 sig)
     return err;
 }
 
-static b32 __stdcall onctrl(u32 type)
+// A console control event for os (on a thread of the system's).
+static b32 ctrlevent(Os *os, u32 type)
 {
-    Os *os = ctrlos;
     i32 sig = 0;
     switch (type) {
     case 0:  sig = 2; break;  // CTRL_C_EVENT
@@ -2548,6 +2561,11 @@ static b32 __stdcall onctrl(u32 type)
         Sleep(10000);  // the shell exits meanwhile, else the system ends it
     }
     return 1;
+}
+
+static b32 __stdcall onctrl(u32 type)
+{
+    return ctrlevent(ctrlos, type);
 }
 
 
@@ -2659,7 +2677,7 @@ static iz plt_read(Os *os, Handle h, u8 *buf, iz len)
     drainwake(os);
     if (w->kind == K_PIPE) {
         w->streak += w->streak < AHEADSTREAK;
-        fillahead(w, h);
+        fillahead(os, w, h);
     }
     for (;;) {
         iz n = takeahead(w, buf, len);
@@ -2706,7 +2724,7 @@ static iz plt_peek(Os *os, Handle h, u8 *buf, iz len)
     Wobj *w = lookup(os, h);
     if (!w || (w->kind!=K_PIPE && w->kind!=K_CONIN)) return -1;
     drainwake(os);
-    if (w->kind == K_PIPE) fillahead(w, h);
+    if (w->kind == K_PIPE) fillahead(os, w, h);
     iz n = w->alen - w->aoff;
     n = n<len ? n : len;
     copybytes(buf, w->ahead+w->aoff, n);
@@ -2749,7 +2767,8 @@ static Opened plt_tempfile(Os *os, Arena)
     }
     static u32 counter;
     for (i32 try_ = 0; try_ < 100; try_++) {
-        u64 tag = ((u64)GetCurrentProcessId()<<32) ^ ++counter ^ (u64)plt_now(os);
+        u32 serial = __atomic_add_fetch(&counter, 1u, __ATOMIC_RELAXED);
+        u64 tag = ((u64)GetCurrentProcessId()<<32) ^ serial ^ (u64)plt_now(os);
         i32 n = len;
         for (char c : "sh-thd-") if (c) path[n++] = (c16)c;
         for (i32 i = 0; i < 16; i++) {
@@ -2780,7 +2799,8 @@ static NamedTemp plt_namedtemp(Os *os, Arena *a, Str dir)
     r.h = BADHANDLE;
     static u32 counter;
     for (i32 try_ = 0; try_ < 100; try_++) {
-        u64 tag = ((u64)GetCurrentProcessId()<<32) ^ ++counter ^ (u64)plt_now(os);
+        u32 serial = __atomic_add_fetch(&counter, 1u, __ATOMIC_RELAXED);
+        u64 tag = ((u64)GetCurrentProcessId()<<32) ^ serial ^ (u64)plt_now(os);
         tag *= 0x9e3779b97f4a7c15u;
         Buf b(a, dir.len+32);
         print(&b, dir);
@@ -2947,7 +2967,8 @@ static NamedPipe plt_namedpipe(Os *os, Arena *a, Str name, i32 how)
         if (!name.data) {
             i64 qpc = 0;
             QueryPerformanceCounter(&qpc);
-            u64 tag = (u64)plt_now(os) ^ (u64)qpc<<20 ^ (u64)++counter<<48;
+            u32 serial = __atomic_add_fetch(&counter, 1u, __ATOMIC_RELAXED);
+            u64 tag = (u64)plt_now(os) ^ (u64)qpc<<20 ^ (u64)serial<<48;
             tag *= 0x9e3779b97f4a7c15u;
             tag ^= tag >> 31;
             Buf b(a, 64);
@@ -4222,6 +4243,13 @@ static void *dynamic(c16 const *dll, char const *name)
     return m ? GetProcAddress(m, name) : 0;
 }
 
+// For tests, unabashed_xpio in a shell's environment takes the XP
+// code paths for its I/O, as if CancelSynchronousIo were missing.
+static void xpio(Os *os, Str *env, iz nenv)
+{
+    if (envget(env, nenv, "unabashed_xpio").data) os->cancelsync = 0;
+}
+
 static Str fromwidez(Arena *a, c16 *s)
 {
     iz len = 0;
@@ -4464,9 +4492,7 @@ void mainCRTStartup()
     FreeEnvironmentStringsW(block);
     info.env  = env.data;
     info.nenv = env.len;
-    if (envget(env.data, env.len, "unabashed_xpio").data) {
-        os.cancelsync = 0;  // for tests: the XP code paths
-    }
+    xpio(&os, env.data, env.len);
 
     i32  cap = GetCurrentDirectoryW(0, 0);
     c16 *cwd = alloc<c16>(&a, cap+1);
