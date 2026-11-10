@@ -753,7 +753,8 @@ static void test_vtable(Test *t)
     r = runc(t, "echo hi");
     os->vt = 0;
     expect(t, "vtable version", r.out, "");
-    expect(t, "vtable version err", r.err, "bash: bad platform table version\n");
+    expect(t, "vtable version err", r.err,
+        "bash: bad platform table version\n");
     expectint(t, "vtable version status", r.status, 126);
 }
 

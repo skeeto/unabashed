@@ -478,7 +478,8 @@ static void    os_racy(Os *);
 // main_posix.cpp and main_win32.cpp fill one with the real OS
 // (pltvtable), vos.cpp with a virtual one (vosvtable). An embedder may
 // fill its own, or copy one and replace entries to hook or filter them.
-// The fibers, os_oom and sh_main are not in it.
+// The fibers, os_oom, sh_main, and fakes.cpp's own calls into the vos
+// (os_mkdir and the rest) are not in it.
 //
 // - Every entry is required.
 // - An implementation calls its own module directly (plt_*, vos_*), not
@@ -494,8 +495,8 @@ static void    os_racy(Os *);
 // - Nothing is frozen. A change that an implementation must act on, to
 //   an entry or to what one passes or returns, bumps OSVTABLE_VERSION
 //   with a line below, and sh_main refuses a table of any other
-//   version. version and write keep their meaning in every version, so
-//   that a mismatch can always be reported.
+//   version. version and write keep their meaning and their place in
+//   every version, so that a mismatch can always be reported.
 // - Tables in this tree name OSVTABLE_VERSION; one written elsewhere
 //   states the number it implements.
 // - Once frozen: entries are only appended, a floor sets the oldest
