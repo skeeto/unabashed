@@ -475,7 +475,7 @@ static void    os_racy(Os *);
 
 // The platform as a table. The shell calls each entry above through its
 // Os's table (dispatch.cpp), which the platform layer's osvtable names.
-// main_posix.cpp and main_win32.cpp fill one with the real OS
+// src/posix.cpp and src/win32.cpp fill one with the real OS
 // (pltvtable), vos.cpp with a virtual one (vosvtable). An embedder may
 // fill its own, or copy one and replace entries to hook or filter them.
 // The fibers, os_oom, sh_main, and fakes.cpp's own calls into the vos

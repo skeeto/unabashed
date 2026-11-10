@@ -1,8 +1,6 @@
 // Win32 platform layer: no CRT, no headers, runs on Windows XP and later
-// $ g++ -std=c++20 -O2 -s -nostartfiles -static-libgcc
-//       -o unabashed.exe main_win32.cpp
-// The i686 build also takes -Wl,--large-address-aware (4 GiB on x64
-// Windows) and subsystem version 5.01 for XP: see the Makefile.
+// A root includes the core, then this module, then its startup code
+// (main_win32.cpp for the executable).
 //
 // Imports only kernel32.dll. Anything newer than XP must be resolved at
 // run time with a fallback.
@@ -13,7 +11,6 @@
 // inheritable duplicates of just the child's standard handles.
 //
 // This is free and unencumbered software released into the public domain.
-#include "unabashed.cpp"
 
 enum : i32 {
     CREATE_BREAKAWAY_FROM_JOB    = 0x01000000,
@@ -365,59 +362,6 @@ W32(b32,    FillConsoleOutputCharacterW(uz, i32, i32, i32, i32 *));
 W32(b32,    FillConsoleOutputAttribute(uz, i32, i32, i32, i32 *));
 W32(b32,    WriteFile(uz, u8 *, i32, i32 *, uz));
 
-// GCC emits calls to these even without a CRT. Defining them keeps
-// msvcrt.dll out of the imports.
-#if defined(__x86_64__) || defined(__i386__)
-extern "C" void *memcpy(void *dst, void const *src, uz len)
-{
-    void *r = dst;
-    __asm volatile ("rep movsb" : "+D"(dst), "+S"(src), "+c"(len) : : "memory");
-    return r;
-}
-
-extern "C" void *memset(void *dst, i32 c, uz len)
-{
-    void *r = dst;
-    __asm volatile ("rep stosb" : "+D"(dst), "+c"(len) : "a"(c) : "memory");
-    return r;
-}
-
-extern "C" void *memmove(void *dst, void const *src, uz len)
-{
-    u8 *d = (u8 *)dst;
-    u8 *s = (u8 *)src;
-    if (d <= s || d >= s+len) {
-        return memcpy(dst, src, len);
-    }
-    for (uz i = len; i; i--) {
-        d[i-1] = s[i-1];
-    }
-    return dst;
-}
-
-extern "C" void *memchr(void const *s, i32 c, uz len)
-{
-    u8 *p = (u8 *)s;
-    for (uz i = 0; i < len; i++) {
-        if (p[i] == (u8)c) {
-            return p + i;
-        }
-    }
-    return 0;
-}
-
-extern "C" i32 memcmp(void const *a, void const *b, uz len)
-{
-    u8 *x = (u8 *)a;
-    u8 *y = (u8 *)b;
-    for (uz i = 0; i < len; i++) {
-        if (x[i] != y[i]) {
-            return x[i] - y[i];
-        }
-    }
-    return 0;
-}
-#endif
 
 #include "fibers.cpp"
 
@@ -736,7 +680,6 @@ static b32 writeall(uz h, u8 *buf, iz len)
     return 1;
 }
 
-static Os *ctrlos;  // the one Os, for the console handler and os_oom
 
 // Write out the coalesced output. A failure shows at the handle's next
 // write. Every platform call but os_write to that same file does this
@@ -750,13 +693,6 @@ static void flushw(Os *os)
     os->wlen = 0;
 }
 
-[[noreturn]] static void os_oom()
-{
-    if (ctrlos) flushw(ctrlos);
-    Str msg = "bash: out of memory\n";
-    writeall(GetStdHandle(STD_ERROR_HANDLE), msg.data, msg.len);
-    ExitProcess(2);
-}
 
 // Translate a system error code into a Linux errno number.
 static i32 errnum(i32 code)
@@ -1079,7 +1015,7 @@ enum : i32 { CONUNITS = 1024 };  // UTF-16 units per console read
 enum : i32 { TK_LINES, TK_VT, TK_EVENTS, TK_SILENT, TK_CHARS };
 
 static void wakemain(Os *);
-static b32 __stdcall onctrl(u32);
+static b32 ctrlevent(Os *, u32 type);
 
 // Keys from a console in the editor's raw mode, as xterm bytes into
 // out (3*CONUNITS bytes): with VT input the console's own characters,
@@ -1152,7 +1088,7 @@ static iz conline(Os *os, uz h, u8 *out, i32 *code)
             }
             if (!got) continue;
             if (c == 3) {
-                onctrl(0);  // as the console would have
+                ctrlevent(os, 0);  // as the console would have
                 *code = ERROR_OPERATION_ABORTED;
                 return -1;
             } else if (c=='\r' || c=='\n') {
@@ -1179,7 +1115,7 @@ static iz conline(Os *os, uz h, u8 *out, i32 *code)
     }
     for (i32 i = 0; keys==TK_CHARS && i<n; i++) {
         if (tmp[i] == 3) {
-            onctrl(0);  // the keys with it go, as with line input
+            ctrlevent(os, 0);  // the keys with it go, as with line input
             *code = ERROR_OPERATION_ABORTED;
             return -1;
         }
@@ -1643,7 +1579,7 @@ static b32 waitidle(Os *os, Wobj *w)
 }
 
 // Read a pipe on the main thread, blocking, where Ctrl-C can cancel it
-// (onctrl, CancelSynchronousIo): -1 then, or on error.
+// (ctrlevent, CancelSynchronousIo): -1 then, or on error.
 static iz mainread(Os *os, uz h, u8 *buf, iz len)
 {
     __atomic_add_fetch(&os->mainio, 1, __ATOMIC_SEQ_CST);  // odd
@@ -2563,10 +2499,6 @@ static b32 ctrlevent(Os *os, u32 type)
     return 1;
 }
 
-static b32 __stdcall onctrl(u32 type)
-{
-    return ctrlevent(ctrlos, type);
-}
 
 
 
@@ -4298,8 +4230,67 @@ static Str plt_localtz(Os *, Arena *a)
     return wintz(a, &w);
 }
 
+// Find what this Windows offers, for os.
+static void dynamics(Os *os)
+{
+    os->now = GetSystemTimeAsFileTime;
+    os->queryfile = (NtQueryInformationFileFn)dynamic(u"ntdll.dll", "NtQueryInformationFile");
+    void *precise = dynamic(u"kernel32.dll", "GetSystemTimePreciseAsFileTime");
+    if (precise) {
+        os->now = (void (__stdcall *)(Filetime *))precise;  // Windows 8
+        os->lateattach = 1;
+    }
+    os->queryproc = (NtQueryInformationProcessFn)dynamic(u"ntdll.dll", "NtQueryInformationProcess");
+    os->iswow64 = (b32 (__stdcall *)(uz, b32 *))dynamic(u"kernel32.dll", "IsWow64Process");
+    b32 wow64 = 0;
+    if (sizeof(uz)==4 && os->iswow64 && os->iswow64(GetCurrentProcess(), &wow64) && wow64) {
+        os->queryproc64 = (NtQueryInformationProcessFn)dynamic(u"ntdll.dll", "NtWow64QueryInformationProcess64");
+        os->read64      = (NtWow64ReadFn)dynamic(u"ntdll.dll", "NtWow64ReadVirtualMemory64");
+        if (!os->queryproc64 || !os->read64) os->queryproc64 = 0;
+    }
+    os->xp = !dynamic(u"kernel32.dll", "GetTickCount64");  // Vista
+    i32 conpid = 0;
+    os->noconsole = !GetConsoleProcessList(&conpid, 1);
+    i64 freq = 0;
+    QueryPerformanceFrequency(&freq);
+    os->freq       = freq;
+    os->youngticks = freq / 10;
+    os->cancelsync = (b32 (__stdcall *)(uz))dynamic(u"kernel32.dll", "CancelSynchronousIo");
+}
+
+// What every shell on this host shares: the Windows directory, ids,
+// the parent's pid, the host name.
+static void hostinfo(Arena *a, OsInfo *info)
+{
+    c16 windir[260];
+    i32 windirlen = GetSystemWindowsDirectoryW(windir, countof(windir));
+    if (windirlen>0 && windirlen<countof(windir)) {
+        Str s = fromwide(a, windir, windirlen);
+        for (iz i = 0; i < s.len; i++) {
+            s[i] = s[i]=='\\' ? '/' : s[i];
+        }
+        info->windir = s;
+    }
+
+    info->uid  = info->euid = 1000;
+    info->gid  = info->egid = 1000;
+    using NtQueryInformationProcess = i32 (__stdcall *)(uz, i32, void *, i32, i32 *);
+    NtQueryInformationProcess query =
+        (NtQueryInformationProcess)dynamic(u"ntdll.dll", "NtQueryInformationProcess");
+    BasicInfo bi = {};
+    if (query && !query(GetCurrentProcess(), 0, &bi, sizeof(bi), 0)) {
+        info->ppid = (i64)bi.ppid;
+    }
+
+    c16 host[256];
+    i32 hostlen = countof(host);
+    if (GetComputerNameW(host, &hostlen)) {
+        info->host = fromwide(a, host, hostlen);
+    }
+}
+
 // The platform table (api.cpp, OsVtable)
-static OsVtable const pltvtable = {
+static constexpr OsVtable pltvtable = {
     .version    = OSVTABLE_VERSION,
     .reserve    = plt_reserve,
     .commit     = plt_commit,
@@ -4353,238 +4344,3 @@ static OsVtable const pltvtable = {
     .racy       = plt_racy,
 };
 
-static OsVtable const *osvtable(Os *)
-{
-    return &pltvtable;
-}
-
-// Was the process started with Ctrl-C ignored (inherited from
-// SetConsoleCtrlHandler(0, 1) in its parent)? The flag is bit 0 of
-// RTL_USER_PROCESS_PARAMETERS.ConsoleFlags, reached through the PEB.
-static b32 ctrlcignored()
-{
-    byte *peb = 0;
-    #if defined(__x86_64__)
-    __asm volatile ("mov %%gs:0x60, %0" : "=r"(peb));
-    byte *params = 0;
-    __builtin_memcpy(&params, peb+0x20, sizeof(params));
-    u32 flags = 0;
-    __builtin_memcpy(&flags, params+0x18, 4);
-    return flags & 1;
-    #elif defined(__i386__)
-    __asm volatile ("mov %%fs:0x30, %0" : "=r"(peb));
-    byte *params = 0;
-    __builtin_memcpy(&params, peb+0x10, sizeof(params));
-    u32 flags = 0;
-    __builtin_memcpy(&flags, params+0x14, 4);
-    return flags & 1;
-    #else
-    return 0;
-    #endif
-}
-
-// Runs the shell on its own fiber (see SHELLSTACK). A shell killed by
-// SIGINT exits as Ctrl-C ends a native program, which Cygwin's
-// processes also take for death by SIGINT; by another signal, with
-// SIGEXIT.
-static void shellmain(Os *os, void *arg)
-{
-    i32 status = sh_main(os, (OsInfo *)arg);
-    flushw(os);
-    u32 code   = (u32)(status & 255);
-    if (status == (WSIGNALED|(128+2))) {
-        code = 0xc000013a;
-    } else if (status & WSIGNALED) {
-        code |= SIGEXIT;
-    }
-    ExitProcess(code);
-}
-
-extern "C" __attribute((force_align_arg_pointer))
-void mainCRTStartup()
-{
-    constinit static Os os = {};  // in .bss, no guard
-    OsInfo info = {};
-    info.reserve = (iz)1 << (sizeof(void *)==8 ? 34 : 28);
-
-    os.now = GetSystemTimeAsFileTime;
-    os.queryfile = (NtQueryInformationFileFn)dynamic(u"ntdll.dll", "NtQueryInformationFile");
-    void *precise = dynamic(u"kernel32.dll", "GetSystemTimePreciseAsFileTime");
-    if (precise) {
-        os.now = (void (__stdcall *)(Filetime *))precise;  // Windows 8
-        os.lateattach = 1;
-    }
-    os.queryproc = (NtQueryInformationProcessFn)dynamic(u"ntdll.dll", "NtQueryInformationProcess");
-    os.iswow64 = (b32 (__stdcall *)(uz, b32 *))dynamic(u"kernel32.dll", "IsWow64Process");
-    b32 wow64 = 0;
-    if (sizeof(uz)==4 && os.iswow64 && os.iswow64(GetCurrentProcess(), &wow64) && wow64) {
-        os.queryproc64 = (NtQueryInformationProcessFn)dynamic(u"ntdll.dll", "NtWow64QueryInformationProcess64");
-        os.read64      = (NtWow64ReadFn)dynamic(u"ntdll.dll", "NtWow64ReadVirtualMemory64");
-        if (!os.queryproc64 || !os.read64) os.queryproc64 = 0;
-    }
-    os.xp = !dynamic(u"kernel32.dll", "GetTickCount64");  // Vista
-    i32 conpid = 0;
-    os.noconsole = !GetConsoleProcessList(&conpid, 1);
-    i64 freq = 0;
-    QueryPerformanceFrequency(&freq);
-    os.freq       = freq;
-    os.youngticks = freq / 10;
-    if (os.lateattach) setupjobs(&os);
-    os.cancelsync = (b32 (__stdcall *)(uz))dynamic(u"kernel32.dll", "CancelSynchronousIo");
-    os.perm     = newarena(&os, (iz)1<<24);
-    os.wake     = CreateEventW(0, 0, 0, 0);
-    os.donetail = &os.done;
-    uz self = GetCurrentProcess();
-    DuplicateHandle(self, GetCurrentThread(), self, &os.mainthread, 0, 0,
-                    DUPLICATE_SAME_ACCESS);
-    ctrlos = &os;
-    SetConsoleCtrlHandler((void *)onctrl, 1);
-
-    // Startup data lives in its own small arena.
-    Arena a = newarena(&os, (iz)1<<26);
-
-    info.cmdline = fromwidez(&a, GetCommandLineW());
-    Slice<Str> args = splitcmdline(&a, clone(&a, info.cmdline));
-    info.args  = args.data;
-    info.nargs = args.len;
-    Str flag = "--unabashed-image=";
-    if (args.len==2 && startswith(args[1], flag)) {
-        info.image = imagearg(cuthead(args[1], flag.len));
-    }
-
-    for (i32 cap = 260; cap <= 1<<15; cap *= 2) {
-        c16 *buf = alloc<c16>(&a, cap);
-        i32  len = GetModuleFileNameW(0, buf, cap);
-        if (len>0 && len<cap) {
-            Str s = fromwide(&a, buf, len);
-            if (startswith(s, "\\\\?\\")) s = cuthead(s, 4);
-            for (iz i = 0; i < s.len; i++) {
-                s[i] = s[i]=='\\' ? '/' : s[i];
-            }
-            info.exe = os.exe = s;
-            break;
-        } else if (!len) {
-            break;
-        }
-    }
-
-    c16 windir[260];
-    i32 windirlen = GetSystemWindowsDirectoryW(windir, countof(windir));
-    if (windirlen>0 && windirlen<countof(windir)) {
-        Str s = fromwide(&a, windir, windirlen);
-        for (iz i = 0; i < s.len; i++) {
-            s[i] = s[i]=='\\' ? '/' : s[i];
-        }
-        info.windir = s;
-    }
-
-    // As Windows spells it: Path tells the core (importnative) that a
-    // Windows parent started it, and the core spells it PATH
-    Slice<Str> env = {};
-    c16 *block = GetEnvironmentStringsW();
-    for (c16 *p = block; p && *p;) {
-        iz n = 0;
-        for (; p[n]; n++) {}
-        Str var = fromwide(&a, p, n);
-        env = push(&a, env, var);
-        p += n + 1;
-    }
-    FreeEnvironmentStringsW(block);
-    info.env  = env.data;
-    info.nenv = env.len;
-    xpio(&os, env.data, env.len);
-
-    i32  cap = GetCurrentDirectoryW(0, 0);
-    c16 *cwd = alloc<c16>(&a, cap+1);
-    i32  len = cap>0 ? GetCurrentDirectoryW(cap, cwd) : 0;
-    if (len>0 && len<cap) {
-        Str s = fromwide(&a, cwd, len);
-        if (startswith(s, "\\\\?\\UNC\\")) {
-            s = cuthead(s, 6);
-            s[0] = '\\';
-        } else if (startswith(s, "\\\\?\\")) {
-            s = cuthead(s, 4);
-        }
-        for (iz i = 0; i < s.len; i++) {
-            s[i] = s[i]=='\\' ? '/' : s[i];
-        }
-        info.cwd = s;
-    }
-
-    info.windows = 1;
-    info.pid  = GetCurrentProcessId();
-    chanopen(&os, info.pid);
-    info.uid  = info.euid = 1000;
-    info.gid  = info.egid = 1000;
-    using NtQueryInformationProcess = i32 (__stdcall *)(uz, i32, void *, i32, i32 *);
-    NtQueryInformationProcess query =
-        (NtQueryInformationProcess)dynamic(u"ntdll.dll", "NtQueryInformationProcess");
-    BasicInfo bi = {};
-    if (query && !query(GetCurrentProcess(), 0, &bi, sizeof(bi), 0)) {
-        info.ppid = (i64)bi.ppid;
-    }
-
-    c16 host[256];
-    i32 hostlen = countof(host);
-    if (GetComputerNameW(host, &hostlen)) {
-        info.host = fromwide(&a, host, hostlen);
-    }
-
-    // Inherited standard handles are often inheritable, and would leak
-    // into every child even when redirected away.
-    for (i32 i = 0; i < 3; i++) {
-        uz h = GetStdHandle(-10 - i);
-        h = h ? h : BADHANDLE;
-        if (h != BADHANDLE) {
-            SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
-            Wobj *w = 0;
-            for (i32 j = 0; j<i && !w; j++) {
-                w = info.std[j]==h ? lookup(&os, h) : 0;
-            }
-            if (w) {
-                reg(&os, h, w);  // the same handle twice: one object
-            } else {
-                track(&os, h);
-            }
-        }
-        info.std[i] = h;
-    }
-    // Descriptors above 2 from a CRT parent (busybox, ourselves) in the
-    // lpReserved2 blob, at this image's width: real handles of a known
-    // type only, made the shell's own (not inheritable, registered), a
-    // handle that another descriptor also names duplicated
-    StartupInfo si = {};
-    si.cb = sizeof(si);
-    GetStartupInfoW(&si);
-    Str blob = {si.reserved2, (iz)((u32)si.show >> 16)};
-    Slice<CrtFd>     crt = blob.data ? decodecrtfds(&a, blob, sizeof(void *)) : Slice<CrtFd>{};
-    Slice<InheritFd> in  = {};
-    for (i32 fd = 3; fd < crt.len; fd++) {
-        uz  h    = (uz)crt[fd].handle;
-        i32 type = (crt[fd].flags & CRTFD_OPEN) ? GetFileType(h) : 0;
-        if (type!=FILE_TYPE_DISK && type!=FILE_TYPE_CHAR && type!=FILE_TYPE_PIPE) {
-            continue;
-        }
-        b32 seen = h==info.std[0] || h==info.std[1] || h==info.std[2];
-        for (iz i = 0; i < in.len; i++) seen |= h == in[i].h;
-        if (seen) {
-            h = plt_dup(&os, h);
-            if (h == BADHANDLE) continue;
-        } else {
-            SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
-            track(&os, h);
-        }
-        InheritFd e = {};
-        e.fd    = fd;
-        e.h     = h;
-        e.flags = OF_READ | OF_WRITE;
-        in = push(&a, in, e);
-    }
-    info.inherit  = in.data;
-    info.ninherit = in.len;
-
-    if (ctrlcignored()) info.sigign |= (u64)1 << (2-1);
-    info.stack = SHELLSTACK;
-    os_switch(&os, os_fiber(&os, &a, SHELLSTACK, shellmain, &info));
-    __builtin_unreachable();  // shellmain exits the process
-}
