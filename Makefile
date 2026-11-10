@@ -22,16 +22,16 @@ SOURCES = $(wildcard src/*.cpp)
 default:
 	@echo "pick a target, e.g. make debug.exe or make tests" && false
 
-unabashed.exe: src/win32.cpp $(SOURCES)
-	$(CXX) $(FLAGS) $(WARN) $(RELEASE) $(WIN32) -o $@ src/win32.cpp
+unabashed.exe: main_win32.cpp $(SOURCES)
+	$(CXX) $(FLAGS) $(WARN) $(RELEASE) $(WIN32) -o $@ main_win32.cpp
 
-unabashed32.exe: src/win32.cpp $(SOURCES)
+unabashed32.exe: main_win32.cpp $(SOURCES)
 	$(CXX32) $(FLAGS) $(WARN) $(RELEASE) $(WIN32) \
 	    -Wl,--major-subsystem-version=5,--minor-subsystem-version=1 \
-	    -Wl,--large-address-aware -o $@ src/win32.cpp
+	    -Wl,--large-address-aware -o $@ main_win32.cpp
 
-debug.exe: src/win32.cpp $(SOURCES)
-	$(CXX) $(FLAGS) $(WARN) $(DEBUG) $(WIN32) -o $@ src/win32.cpp
+debug.exe: main_win32.cpp $(SOURCES)
+	$(CXX) $(FLAGS) $(WARN) $(DEBUG) $(WIN32) -o $@ main_win32.cpp
 
 tests.exe: main_test.cpp $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -Og -Wl,--stack,0x2000000 -o $@ main_test.cpp
@@ -44,11 +44,11 @@ argv.exe: tools/argv.cpp
 argv32.exe: tools/argv.cpp
 	$(CXX32) -std=c++20 -municode $(WARN) $(RELEASE) -o $@ tools/argv.cpp
 
-unabashed: src/posix.cpp $(SOURCES)
-	$(CXX) $(FLAGS) $(WARN) $(RELEASE) -nostdlib++ -o $@ src/posix.cpp
+unabashed: main_posix.cpp $(SOURCES)
+	$(CXX) $(FLAGS) $(WARN) $(RELEASE) -nostdlib++ -o $@ main_posix.cpp
 
-debug: src/posix.cpp $(SOURCES)
-	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -o $@ src/posix.cpp
+debug: main_posix.cpp $(SOURCES)
+	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -o $@ main_posix.cpp
 
 tests: main_test.cpp $(SOURCES)
 	$(CXX) $(FLAGS) $(WARN) $(DEBUG) -Og -o $@ main_test.cpp
