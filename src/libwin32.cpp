@@ -151,7 +151,7 @@ static void lib_spawnlock(Os *os, b32 lock)
     }
     l->why   = err;
     l->inrun = 0;
-    os_switch(os, &os->fibers.main);
+    os_switchfinal(os, &os->fibers.main);
     __builtin_trap();  // never resumed
 }
 
@@ -837,7 +837,7 @@ static void runmain(Os *os, void *arg)
 
     l->status = sh_main(os, &info);
     l->inrun  = 0;
-    os_switch(os, &os->fibers.main);
+    os_switchfinal(os, &os->fibers.main);
     __builtin_trap();  // never resumed
 }
 

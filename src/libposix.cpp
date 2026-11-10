@@ -110,7 +110,7 @@ static void lib_spawnlock(b32 lock)
     }
     l->why   = err;
     l->inrun = 0;
-    os_switch(os, &os->fibers.main);
+    os_switchfinal(os, &os->fibers.main);
     __builtin_trap();  // never resumed
 }
 
@@ -911,7 +911,7 @@ static void runmain(Os *os, void *arg)
 
     l->status = sh_main(os, &info);
     l->inrun  = 0;
-    os_switch(os, &os->fibers.main);
+    os_switchfinal(os, &os->fibers.main);
     __builtin_trap();  // never resumed
 }
 
@@ -985,6 +985,7 @@ static void teardown(Lib *l)
     l->waitfd = -1;  // the epoll, closed with the rest
     #endif
 
+    os_fibersend(os);  // ASan: the fibers' fake stacks, on their stacks
     for (LibRes *r = l->res, *next; r; r = next) {
         next = r->next;
         munmap(r, (uz)r->len);

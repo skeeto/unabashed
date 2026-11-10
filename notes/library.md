@@ -188,7 +188,8 @@ the records list, without calling the core.
   process, so a run that closes a file the host has locked releases the
   host's lock.
 - **Build the library with ASan if the host uses it.** Hooks run on
-  library fibers.
+  library fibers, and only an ASan build tells ASan about them (POSIX
+  only: the Windows fibers are not annotated).
 - **On POSIX, feed the `child` hook to a keeper** if programs must not
   outlive a crashed host. On Windows the job ends them.
 - **Not call the library from a hook, nor unwind out of one.** A hook
@@ -348,6 +349,27 @@ no marker. It checks:
 - biron (x64; i686 with `--quick`);
 - XP (i686).
 
+**AddressSanitizer** (POSIX). Build the library and host with
+`-fsanitize=address`, then run `ubhost --check`. Fibers are annotated
+when the build has ASan (src/fibers.cpp):
+- every switch is announced, so ASan neither warns about
+  `__asan_handle_no_return` nor misreads a fiber's stack;
+- a fiber's last switch out (back to the host at the end of a run)
+  passes no save, which frees its fake stack under
+  `detect_stack_use_after_return`;
+- a freed fiber that still owns a fake stack is entered once more to
+  release it, and teardown does so for every fiber left.
+
+`STACKAT` (src/base.cpp) takes the frame address for the stack-depth
+checks instead of a local's, which ASan may move to a fake stack. ubhost
+sets `quarantine_size_mb=0` by default: a quarantine holds freed blocks
+and maps more memory every case, so snapshots would differ.
+
+ASan passes `--check` on the Mac (clang) and the ubuntu VM (gcc), with
+and without `detect_stack_use_after_return=1`, and catches a planted
+overflow on the shell fiber. Linux clang cannot build the shell for
+arm64 (no `__builtin_setjmp`). On the Mac the 300-programs case runs
+about 9x slower under ASan, since each fork copies its shadow mappings.
 
 ## Deferred
 

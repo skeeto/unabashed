@@ -24,6 +24,22 @@
 #include <mach/mach_vm.h>
 #endif
 
+// Built with AddressSanitizer: its quarantine holds freed blocks back,
+// so the allocator maps more with each case whatever allocates, and
+// snapshots would differ. This host keeps none (ASAN_OPTIONS overrides).
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define UBCHECK_ASAN 1
+#  endif
+#endif
+#if __SANITIZE_ADDRESS__ || UBCHECK_ASAN
+const char *__asan_default_options(void);
+const char *__asan_default_options(void) { return "quarantine_size_mb=0"; }
+#  define FORKSCALE 4  // macOS forks an ASan process in ~60 ms
+#else
+#  define FORKSCALE 1
+#endif
+
 typedef struct {
     char  *buf;
     size_t len, cap;
@@ -102,7 +118,9 @@ static void snapshot(Snap *s)
     // malloc carves its regions from untagged no-access reservations of
     // its own, growing once per size class whoever allocates (libSystem
     // inside posix_spawn): those are left out, and the total of every
-    // region kept, which any mapping left behind changes
+    // region kept, which any mapping left behind changes. Under ASan its
+    // allocator and shadow (VM_MEMORY_SANITIZER) grow the same way, and
+    // are left out of both.
     mach_vm_address_t addr = 0;
     unsigned long long total = 0;
     for (;;) {
@@ -112,6 +130,10 @@ static void snapshot(Snap *s)
         mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
         if (mach_vm_region_recurse(mach_task_self(), &addr, &size, &depth,
                                    (vm_region_recurse_info_t)&info, &count)) break;
+        if (info.user_tag == VM_MEMORY_SANITIZER) {
+            addr += size;
+            continue;
+        }
         total += size;
         int mallocs = info.user_tag>=VM_MEMORY_MALLOC &&
                       info.user_tag<=VM_MEMORY_MALLOC_PROB_GUARD;
@@ -541,7 +563,7 @@ static int check(char *argv0, int quick)
         {"procsub finishes", procsub, 0, 0, 1.5},
         {"exec into procsub", tee, 0, 0, 1.5},
         {"300 programs left", "for i in $(seq 300); do sleep 1000 & done; true; echo done",
-         0, "done", 10},  // QEMU: 300 emulated starts
+         0, "done", 10*FORKSCALE},  // QEMU: 300 emulated starts
         {"SIGPIPE in programs", "{ yes | head -1; echo ${PIPESTATUS[@]}; } & wait", 0,
          "141 0"},
         {"closed host pipe", "echo hi; echo no >&2", UB_SIGNALED|(128+SIGPIPE), 0, 0, 0,
