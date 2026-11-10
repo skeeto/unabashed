@@ -32,6 +32,16 @@ struct Vos;
 static Vos *osvos(Os *);
 // The layer's memory, from which every reservation comes.
 static byte *osheap(Os *, iz *len);
+// The layer's reserve, commit and decommit entries, for vosvtable and
+// image regions
+static decltype(os_reserve)  plt_reserve;
+static decltype(os_commit)   plt_commit;
+static decltype(os_decommit) plt_decommit;
+// Used before their definitions
+static decltype(os_close) vos_close;
+static decltype(os_dup)   vos_dup;
+static decltype(os_fstat) vos_fstat;
+static decltype(os_kill)  vos_kill;
 
 struct VNode {
     VNode *child;   // directory entries, newest first
@@ -768,7 +778,7 @@ static void vyield(Os *os, Vos *v)
 static void vcloseall(Os *os, VProc *p)
 {
     for (iz i = 0; i < countof(p->ctx.fd); i++) {
-        os_close(os, p->ctx.fd[i]);
+        vos_close(os, p->ctx.fd[i]);
         p->ctx.fd[i] = BADHANDLE;
     }
 }
@@ -1192,7 +1202,7 @@ static iz vttyget(Os *os, Vos *v, u8 *buf, iz len)
             for (i32 i = 0; i < v->nprocs; i++) {
                 VProc *p = v->procs + i;
                 if (p->shell && (p->state==VP_RUN || p->state==VP_BLOCK)) {
-                    os_kill(os, p->pid, 28);
+                    vos_kill(os, p->pid, 28);
                     p->intr = 1;  // the reader's own read too
                 }
             }
@@ -1251,7 +1261,7 @@ static b32 vistty(Vos *v, Handle h)
     return f && f->kind==VK_TTY;
 }
 
-static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
+static Tty vos_tty(Os *os, Handle in, Handle out, i32 how)
 {
     Vos *v = osvos(os);
     Tty  r = {};
@@ -1281,7 +1291,7 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
 
 // The legacy console's primitives over the terminal's screen, which
 // knows only reverse video and bold of the attributes
-static b32 os_con(Os *os, Handle out, ConOp *o)
+static b32 vos_con(Os *os, Handle out, ConOp *o)
 {
     Vos  *v = osvos(os);
     VTty *y = &v->tty;
@@ -1462,7 +1472,7 @@ static void vttyinit(Vos *v, i32 rows, i32 cols, b32 xenl, VKey *keys, iz nkeys,
 
 static Opened vnpopen(Vos *, Str name, i32 flags);
 
-static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
+static Opened vos_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
     Vos   *v = osvos(os);
     Opened r = {};
@@ -1483,13 +1493,13 @@ static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
         Handle h = fd<countof(v->procs[0].ctx.fd) ? v->procs[v->cur].ctx.fd[fd] : BADHANDLE;
         VFile *f = vfile(v, h);
         if (!f && h<3) {
-            r.h = os_dup(os, h);
+            r.h = vos_dup(os, h);
             return r;
         } else if (!f) {
             r.err = E_NOENT;
             return r;
         } else if (f->kind!=VK_FILE && f->kind!=VK_DIR) {
-            r.h = os_dup(os, h);
+            r.h = vos_dup(os, h);
             return r;
         }
         Handle n = vnewhandle(v);
@@ -1562,7 +1572,7 @@ static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
     return r;
 }
 
-static Opened os_tempfile(Os *os, Arena)
+static Opened vos_tempfile(Os *os, Arena)
 {
     // A node in no directory, as an unlinked file: bash's heredoc file
     // is left readable only by its owner
@@ -1585,7 +1595,7 @@ static Opened os_tempfile(Os *os, Arena)
 
 static void vdetach(VNode *);
 
-static void os_close(Os *os, Handle h)
+static void vos_close(Os *os, Handle h)
 {
     Vos   *v = osvos(os);
     VFile *f = vfile(v, h);
@@ -1602,7 +1612,7 @@ static void os_close(Os *os, Handle h)
     f->kind = VK_FREE;
 }
 
-static Handle os_dup(Os *os, Handle h)
+static Handle vos_dup(Os *os, Handle h)
 {
     Vos *v = osvos(os);
     if (h < 3) return h;  // the outermost standard streams
@@ -1611,12 +1621,12 @@ static Handle os_dup(Os *os, Handle h)
     return f ? h : BADHANDLE;
 }
 
-static iz os_pipecap(Os *)
+static iz vos_pipecap(Os *)
 {
     return VPIPECAP;
 }
 
-static OsPipe os_pipe(Os *os)
+static OsPipe vos_pipe(Os *os)
 {
     Vos   *v = osvos(os);
     OsPipe r = {};
@@ -1639,7 +1649,7 @@ static OsPipe os_pipe(Os *os)
     return r;
 }
 
-static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
+static b32 vos_write(Os *os, Handle h, u8 *buf, iz len)
 {
     Vos *v = osvos(os);
     if (h==1 || h==2) {
@@ -1708,7 +1718,7 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
     return 0;
 }
 
-static iz os_read(Os *os, Handle h, u8 *buf, iz len)
+static iz vos_read(Os *os, Handle h, u8 *buf, iz len)
 {
     Vos *v = osvos(os);
     if (vistty(v, h)) {
@@ -1758,7 +1768,7 @@ static iz os_read(Os *os, Handle h, u8 *buf, iz len)
     return -1;
 }
 
-static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
+static iz vos_peek(Os *os, Handle h, u8 *buf, iz len)
 {
     Vos   *v = osvos(os);
     VFile *f = h ? vfile(v, h) : 0;
@@ -1770,7 +1780,7 @@ static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
     return n;
 }
 
-static i64 os_seek(Os *os, Handle h, i64 off, i32 whence)
+static i64 vos_seek(Os *os, Handle h, i64 off, i32 whence)
 {
     Vos   *v = osvos(os);
     VFile *f = vfile(v, h);
@@ -1821,7 +1831,7 @@ static Stat vstat(Vos *v, VNode *n)
     return r;
 }
 
-static Stat os_stat(Os *os, Arena scratch, Str path, b32 follow)
+static Stat vos_stat(Os *os, Arena scratch, Str path, b32 follow)
 {
     Vos *v = osvos(os);
     if (v->win) {
@@ -1851,7 +1861,7 @@ static Stat os_stat(Os *os, Arena scratch, Str path, b32 follow)
     i32 fd = v->win ? -1 : vdevfd(path);
     if (fd>=0 && v->cur) {
         Handle h = fd<countof(v->procs[0].ctx.fd) ? v->procs[v->cur].ctx.fd[fd] : BADHANDLE;
-        if (h<3 || vfile(v, h)) return os_fstat(os, h);
+        if (h<3 || vfile(v, h)) return vos_fstat(os, h);
         Stat r = {};
         r.err = E_NOENT;
         return r;
@@ -1873,12 +1883,12 @@ static Stat os_stat(Os *os, Arena scratch, Str path, b32 follow)
     return vstat(v, res.node);
 }
 
-static b32 os_isatty(Os *os, Handle h)
+static b32 vos_isatty(Os *os, Handle h)
 {
     return vistty(osvos(os), h);
 }
 
-static Stat os_fstat(Os *os, Handle h)
+static Stat vos_fstat(Os *os, Handle h)
 {
     Vos *v = osvos(os);
     Stat r = {};
@@ -1919,7 +1929,7 @@ static b32 vntfsless(Dirent **a, Dirent **b)
 
 // Directory entries in creation order, as a fresh tmpfs lists them, or
 // in Windows mode in NTFS's order.
-static Dirent *os_list(Os *os, Arena *a, Str dir, i32 *err)
+static Dirent *vos_list(Os *os, Arena *a, Str dir, i32 *err)
 {
     Vos *v = osvos(os);
     VResolved res = vresolve(v, a, dir, 1);
@@ -1956,7 +1966,7 @@ static Dirent *os_list(Os *os, Arena *a, Str dir, i32 *err)
     return head;
 }
 
-static i64 os_now(Os *os)
+static i64 vos_now(Os *os)
 {
     Vos *v = osvos(os);
     return v->clock += 1000;
@@ -1964,7 +1974,7 @@ static i64 os_now(Os *os)
 
 // Deterministic, from the process's identity: its tracing identity
 // (the same under every chaos seed) when tracing, else its pid.
-static u64 os_entropy(Os *os)
+static u64 vos_entropy(Os *os)
 {
     Vos   *v = osvos(os);
     VProc *p = v->procs + v->cur;
@@ -1973,13 +1983,13 @@ static u64 os_entropy(Os *os)
 
 // The system zone: UTC as in the oracle's container, unless a test
 // configures another (a spec's "# localtz:" line).
-static Str os_localtz(Os *os, Arena *)
+static Str vos_localtz(Os *os, Arena *)
 {
     Vos *v = osvos(os);
     return v->localtz.data ? v->localtz : Str("UTC0");
 }
 
-static ClipText os_clipget(Os *os, Arena *a)
+static ClipText vos_clipget(Os *os, Arena *a)
 {
     Vos     *v = osvos(os);
     ClipText r = {};
@@ -1996,7 +2006,7 @@ static ClipText os_clipget(Os *os, Arena *a)
 
 // As Windows stores it: UTF-16, so up to a NUL and with WTF-8's
 // conversion of what is not UTF-8
-static i32 os_clipset(Os *os, Arena scratch, Str text)
+static i32 vos_clipset(Os *os, Arena scratch, Str text)
 {
     Vos *v = osvos(os);
     if (!v->win) return E_NOSYS;
@@ -2089,7 +2099,7 @@ static void vsignal(Os *os, Vos *v, VProc *p, i32 sig)
     }
 }
 
-static i32 os_kill(Os *os, i64 pid, i32 sig)
+static i32 vos_kill(Os *os, i64 pid, i32 sig)
 {
     Vos *v = osvos(os);
     if (sig<0 || sig>=NSIGNAL) return E_INVAL;
@@ -2112,7 +2122,7 @@ static i32 os_kill(Os *os, i64 pid, i32 sig)
     return any ? 0 : E_SRCH;
 }
 
-static i32 os_setpgid(Os *os, i64 pid, i64 pgid)
+static i32 vos_setpgid(Os *os, i64 pid, i64 pgid)
 {
     Vos *v = osvos(os);
     for (i32 i = 0; i < v->nprocs; i++) {
@@ -2125,7 +2135,7 @@ static i32 os_setpgid(Os *os, i64 pid, i64 pgid)
     return E_SRCH;
 }
 
-static i64 os_tcpgrp(Os *os, Handle tty, i64 pgid)
+static i64 vos_tcpgrp(Os *os, Handle tty, i64 pgid)
 {
     Vos *v = osvos(os);
     if (!vistty(v, tty)) return -E_NOTTY;
@@ -2164,14 +2174,14 @@ static void vrldefault(Rlimit *rl, b32 win)
     rl[RL_STACK]      = {(i64)8<<20, RL_INFINITY, 0};
 }
 
-static Rlimit os_getrlimit(Os *os, i32 res)
+static Rlimit vos_getrlimit(Os *os, i32 res)
 {
     Vos *v = osvos(os);
     return v->procs[v->cur].rl[res];
 }
 
 // As Linux for an unprivileged user (or main_win32.cpp's model)
-static i32 os_setrlimit(Os *os, i32 res, Rlimit r)
+static i32 vos_setrlimit(Os *os, i32 res, Rlimit r)
 {
     Vos    *v = osvos(os);
     Rlimit *t = v->procs[v->cur].rl + res;
@@ -2190,7 +2200,7 @@ static i32 os_setrlimit(Os *os, i32 res, Rlimit r)
     return 0;
 }
 
-static i32 os_siglevel(Os *os, i64 pid, i64 level, i32 sig)
+static i32 vos_siglevel(Os *os, i64 pid, i64 level, i32 sig)
 {
     Vos *v = osvos(os);
     if (sig<0 || sig>=NSIGNAL) return E_INVAL;
@@ -2212,7 +2222,7 @@ static i32 os_siglevel(Os *os, i64 pid, i64 level, i32 sig)
     return 0;
 }
 
-static LevelSig os_levelsig(Os *os)
+static LevelSig vos_levelsig(Os *os)
 {
     Vos     *v  = osvos(os);
     VProc   *me = v->procs + v->cur;
@@ -2225,7 +2235,7 @@ static LevelSig os_levelsig(Os *os)
     return r;
 }
 
-static u64 os_sigpending(Os *os)
+static u64 vos_sigpending(Os *os)
 {
     Vos   *v  = osvos(os);
     VProc *me = v->procs + v->cur;
@@ -2235,7 +2245,7 @@ static u64 os_sigpending(Os *os)
     return r;
 }
 
-static u64 os_siggroup(Os *os)
+static u64 vos_siggroup(Os *os)
 {
     Vos   *v  = osvos(os);
     VProc *me = v->procs + v->cur;
@@ -2266,7 +2276,7 @@ static u64 os_siggroup(Os *os)
     return r;
 }
 
-static void os_tasktag(Os *os, u64 tag, iz ntasks, u64 group)
+static void vos_tasktag(Os *os, u64 tag, iz ntasks, u64 group)
 {
     Vos *v = osvos(os);
     v->procs[v->cur].tag    = tag;
@@ -2274,14 +2284,14 @@ static void os_tasktag(Os *os, u64 tag, iz ntasks, u64 group)
     v->procs[v->cur].group  = group;
 }
 
-static void os_racy(Os *os)
+static void vos_racy(Os *os)
 {
     osvos(os)->racy = 1;
 }
 
 // Shells take every signal through os_sigpending, but for the stop
 // signals in their default mode.
-static void os_sigmode(Os *os, i32 sig, i32 mode)
+static void vos_sigmode(Os *os, i32 sig, i32 mode)
 {
     Vos *v = osvos(os);
     if (sig<1 || sig>=NSIGNAL) return;
@@ -2693,7 +2703,7 @@ static void vwinctx(Vos *v, Arena *mem, FakeCtx *ctx, Spawn *s, VWinCmd *wc, VPr
 // pid and a sequence number. A slot is free again once both ends are
 // closed. Unlike Win32's, an NP_NOBUF instance buffers what the server
 // writes, like any pipe.
-static NamedPipe os_namedpipe(Os *os, Arena *a, Str name, i32 how)
+static NamedPipe vos_namedpipe(Os *os, Arena *a, Str name, i32 how)
 {
     b32 out = how & NP_OUT;
     Vos      *v = osvos(os);
@@ -2712,12 +2722,12 @@ static NamedPipe os_namedpipe(Os *os, Arena *a, Str name, i32 how)
         r.err = E_NFILE;
         return r;
     }
-    OsPipe p = os_pipe(os);
+    OsPipe p = vos_pipe(os);
     if (p.err) {
         r.err = p.err;
         return r;
     }
-    os_close(os, out ? p.r : p.w);  // the client's, opened by name
+    vos_close(os, out ? p.r : p.w);  // the client's, opened by name
     VNamedPipe *n = v->npipes + i;
     v->npipeseq++;
     if (name.data) {
@@ -2744,7 +2754,7 @@ static NamedPipe os_namedpipe(Os *os, Arena *a, Str name, i32 how)
 // As Win32's, under a deterministic name: the creator's pid and a
 // sequence number. Detached from its directory when the handle closes,
 // as delete-on-close: what others have open stays readable.
-static NamedTemp os_namedtemp(Os *os, Arena *a, Str dir)
+static NamedTemp vos_namedtemp(Os *os, Arena *a, Str dir)
 {
     Vos      *v = osvos(os);
     NamedTemp r = {};
@@ -2761,7 +2771,7 @@ static NamedTemp os_namedtemp(Os *os, Arena *a, Str dir)
     putbyte(&b, '-');
     print(&b, (i64)v->npipeseq);
     Str    path = finish(&b);
-    Opened o    = os_open(os, *a, path, OF_READ|OF_WRITE|OF_CREATE|OF_EXCL, 0600);
+    Opened o    = vos_open(os, *a, path, OF_READ|OF_WRITE|OF_CREATE|OF_EXCL, 0600);
     if (o.err) {
         r.err = o.err;
         return r;
@@ -2832,7 +2842,7 @@ static Opened vnpopen(Vos *v, Str name, i32 flags)
 // arguments are copied into its memory, since it outlives the call.
 // The vos's processes share one address space: a child takes the
 // region in place.
-static ImageRef os_imagenew(Os *os, iz cap)
+static ImageRef vos_imagenew(Os *os, iz cap)
 {
     ImageRef r = {};
     Vos     *v = osvos(os);
@@ -2851,14 +2861,14 @@ static ImageRef os_imagenew(Os *os, iz cap)
     // The child runs from it after the nested shell that made it, and
     // whose memory the layer releases, has ended
     osvos(os)->imaging = 1;
-    r.base = os_reserve(os, cap);
+    r.base = plt_reserve(os, cap);
     osvos(os)->imaging = 0;
     r.cap  = r.base ? cap : 0;
     return r;
 }
 
 // An image whose spawn failed: its region goes back for reuse
-static void os_imagefree(Os *os, ImageRef im)
+static void vos_imagefree(Os *os, ImageRef im)
 {
     Vos *v = osvos(os);
     if (im.base && v->nfreeimgs<countof(v->freeimgs)) {
@@ -2935,7 +2945,7 @@ static void vreapexited(Os *os, Vos *v)
     }
 }
 
-static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
+static Spawned vos_spawn(Os *os, Arena scratch, Spawn *s)
 {
     Vos    *v = osvos(os);
     Spawned r = {};
@@ -3045,7 +3055,7 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
         // Windows passes descriptors past 2 only through the CRT's blob
         b32 pass = !v->win || s->fds[i].fd<3 || s->crtslot || s->image.base;
         if (s->fds[i].fd<countof(ctx.fd) && pass) {
-            ctx.fd[s->fds[i].fd] = os_dup(os, s->fds[i].h);
+            ctx.fd[s->fds[i].fd] = vos_dup(os, s->fds[i].h);
         }
     }
     ctx.scratch = mem;
@@ -3109,17 +3119,17 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
     return r;
 }
 
-static i32 os_exec(Os *, Arena, Spawn *)
+static i32 vos_exec(Os *, Arena, Spawn *)
 {
     return E_NOSYS;  // a vos process is a fiber: start a child instead
 }
 
-static i32 os_forkexec(Os *, Arena, Spawn *)
+static i32 vos_forkexec(Os *, Arena, Spawn *)
 {
     return E_NOSYS;
 }
 
-static i32 os_waitproc(Os *os, Handle proc)
+static i32 vos_waitproc(Os *os, Handle proc)
 {
     Vos *v = osvos(os);
     if (!proc || proc>=(Handle)v->nprocs || v->procs[proc].state==VP_FREE) {
@@ -3163,7 +3173,7 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
             if (p->len==p->pos && p->writers) return 0;
             if (perform) io->n = vpiperead(v, p, io->buf, io->len);
         } else if (perform) {
-            io->n = os_read(os, io->h, io->buf, io->len);
+            io->n = vos_read(os, io->h, io->buf, io->len);
             io->err = io->n<0 ? E_BADF : 0;
         }
         return 1;
@@ -3183,8 +3193,8 @@ static b32 vio(Os *os, Vos *v, Io *io, b32 perform)
         } else if (perform) {
             // a failure as taskwrite reports it with no other tasks
             io->n = io->len;
-            if (!os_write(os, io->h, io->buf, io->len)) {
-                Stat st = os_fstat(os, io->h);
+            if (!vos_write(os, io->h, io->buf, io->len)) {
+                Stat st = vos_fstat(os, io->h);
                 io->err = st.type==FT_PIPE || st.type==FT_FIFO ? E_PIPE : E_IO;
             }
         }
@@ -3226,7 +3236,7 @@ static b32 vioready(Vos *v, Io *io)
     return vio(0, v, io, 0);
 }
 
-static void os_submit(Os *os, Io *io)
+static void vos_submit(Os *os, Io *io)
 {
     Vos   *v  = osvos(os);
     VProc *me = v->procs + v->cur;
@@ -3246,7 +3256,7 @@ static void os_submit(Os *os, Io *io)
     *tail = io;
 }
 
-static Io *os_wait(Os *os, i64 deadline)
+static Io *vos_wait(Os *os, i64 deadline)
 {
     Vos   *v  = osvos(os);
     VProc *me = v->procs + v->cur;
@@ -3300,7 +3310,7 @@ static Io *os_wait(Os *os, i64 deadline)
     }
 }
 
-static b32 os_cancel(Os *os, Io *io)
+static b32 vos_cancel(Os *os, Io *io)
 {
     Vos *v = osvos(os);
     if (io->op==IO_CONNECT && vioready(v, io)) {
@@ -4167,7 +4177,7 @@ static i32 os_link(Os *os, Arena scratch, Str from, Str to)
     return 0;
 }
 
-static i32 os_unlink(Os *os, Arena scratch, Str path)
+static i32 vos_unlink(Os *os, Arena scratch, Str path)
 {
     Vos      *v = osvos(os);
     vmutate(v);
@@ -4198,7 +4208,7 @@ static i32 os_rmdir(Os *os, Arena scratch, Str path)
     return 0;
 }
 
-static i32 os_rename(Os *os, Arena scratch, Str from, Str to)
+static i32 vos_rename(Os *os, Arena scratch, Str from, Str to)
 {
     Vos      *v = osvos(os);
     vmutate(v);
@@ -4259,13 +4269,69 @@ static i32 os_utime(Os *os, Arena scratch, Str path, i64 mtime)
     return 0;
 }
 
-static Str os_readlink(Os *os, Arena *a, Str path)
+static Str vos_readlink(Os *os, Arena *a, Str path)
 {
     Vos      *v = osvos(os);
     VResolved r = vresolve(v, a, path, 0);
     if (!r.node || r.node->type!=FT_LINK) return {};
     return clone(a, r.node->data);
 }
+
+// The vos as a platform table (api.cpp, OsVtable), with the memory of
+// the layer that includes it
+static OsVtable const vosvtable = {
+    .version    = OSVTABLE_VERSION,
+    .reserve    = plt_reserve,
+    .commit     = plt_commit,
+    .decommit   = plt_decommit,
+    .write      = vos_write,
+    .read       = vos_read,
+    .open       = vos_open,
+    .tempfile   = vos_tempfile,
+    .namedtemp  = vos_namedtemp,
+    .close      = vos_close,
+    .unlink     = vos_unlink,
+    .rename     = vos_rename,
+    .dup        = vos_dup,
+    .pipe       = vos_pipe,
+    .namedpipe  = vos_namedpipe,
+    .pipecap    = vos_pipecap,
+    .peek       = vos_peek,
+    .seek       = vos_seek,
+    .stat       = vos_stat,
+    .readlink   = vos_readlink,
+    .fstat      = vos_fstat,
+    .isatty     = vos_isatty,
+    .tty        = vos_tty,
+    .con        = vos_con,
+    .list       = vos_list,
+    .spawn      = vos_spawn,
+    .imagenew   = vos_imagenew,
+    .imagefree  = vos_imagefree,
+    .exec       = vos_exec,
+    .forkexec   = vos_forkexec,
+    .waitproc   = vos_waitproc,
+    .submit     = vos_submit,
+    .wait       = vos_wait,
+    .cancel     = vos_cancel,
+    .kill       = vos_kill,
+    .setpgid    = vos_setpgid,
+    .tcpgrp     = vos_tcpgrp,
+    .getrlimit  = vos_getrlimit,
+    .setrlimit  = vos_setrlimit,
+    .siglevel   = vos_siglevel,
+    .levelsig   = vos_levelsig,
+    .sigpending = vos_sigpending,
+    .siggroup   = vos_siggroup,
+    .sigmode    = vos_sigmode,
+    .now        = vos_now,
+    .entropy    = vos_entropy,
+    .clipget    = vos_clipget,
+    .clipset    = vos_clipset,
+    .localtz    = vos_localtz,
+    .tasktag    = vos_tasktag,
+    .racy       = vos_racy,
+};
 
 static i32 os_umask(Os *)
 {

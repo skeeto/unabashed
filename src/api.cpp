@@ -472,5 +472,91 @@ static void    os_tasktag(Os *, u64 tag, iz ntasks, u64 group);
 // schedule (a write that found no reader), so runs under different
 // chaos seeds need not agree.
 static void    os_racy(Os *);
+
+// The platform as a table. The shell calls each entry above through its
+// Os's table (dispatch.cpp), which the platform layer's osvtable names.
+// main_posix.cpp and main_win32.cpp fill one with the real OS
+// (pltvtable), vos.cpp with a virtual one (vosvtable). An embedder may
+// fill its own, or copy one and replace entries to hook or filter them.
+// The fibers, os_oom and sh_main are not in it.
+//
+// - Every entry is required.
+// - An implementation calls its own module directly (plt_*, vos_*), not
+//   os_*, so that a wrapping table sees each call once, as the shell
+//   made it. Memory is the exception: arenas call os_reserve, os_commit
+//   and os_decommit through the table from anywhere, so a memory entry
+//   must not allocate from its own Os's arenas.
+// - A wrapper reaches its own state, and the table it wraps, through
+//   its Os. A wrapper of entry X that calls os_X recurses into itself.
+// - The shell keeps no table or entry pointer, and asks for the table
+//   at every call: a state image (notes/m5b.md) holds no pointer out of
+//   itself.
+// - Nothing is frozen. A change that an implementation must act on, to
+//   an entry or to what one passes or returns, bumps OSVTABLE_VERSION
+//   with a line below. version and write keep their meaning in every
+//   version, so that a mismatch can always be reported.
+// - Tables in this tree name OSVTABLE_VERSION; one written elsewhere
+//   states the number it implements.
+// - Once frozen: entries are only appended, a floor sets the oldest
+//   version accepted, and an entry newer than a table's version counts
+//   as absent, with a stated fallback.
+//
+// Versions:
+// 1: the first
+enum : i32 { OSVTABLE_VERSION = 1 };
+
+struct OsVtable {
+    i32 version;  // the OSVTABLE_VERSION it implements
+    decltype(os_reserve)    *reserve;
+    decltype(os_commit)     *commit;
+    decltype(os_decommit)   *decommit;
+    decltype(os_write)      *write;
+    decltype(os_read)       *read;
+    decltype(os_open)       *open;
+    decltype(os_tempfile)   *tempfile;
+    decltype(os_namedtemp)  *namedtemp;
+    decltype(os_close)      *close;
+    decltype(os_unlink)     *unlink;
+    decltype(os_rename)     *rename;
+    decltype(os_dup)        *dup;
+    decltype(os_pipe)       *pipe;
+    decltype(os_namedpipe)  *namedpipe;
+    decltype(os_pipecap)    *pipecap;
+    decltype(os_peek)       *peek;
+    decltype(os_seek)       *seek;
+    decltype(os_stat)       *stat;
+    decltype(os_readlink)   *readlink;
+    decltype(os_fstat)      *fstat;
+    decltype(os_isatty)     *isatty;
+    decltype(os_tty)        *tty;
+    decltype(os_con)        *con;
+    decltype(os_list)       *list;
+    decltype(os_spawn)      *spawn;
+    decltype(os_imagenew)   *imagenew;
+    decltype(os_imagefree)  *imagefree;
+    decltype(os_exec)       *exec;
+    decltype(os_forkexec)   *forkexec;
+    decltype(os_waitproc)   *waitproc;
+    decltype(os_submit)     *submit;
+    decltype(os_wait)       *wait;
+    decltype(os_cancel)     *cancel;
+    decltype(os_kill)       *kill;
+    decltype(os_setpgid)    *setpgid;
+    decltype(os_tcpgrp)     *tcpgrp;
+    decltype(os_getrlimit)  *getrlimit;
+    decltype(os_setrlimit)  *setrlimit;
+    decltype(os_siglevel)   *siglevel;
+    decltype(os_levelsig)   *levelsig;
+    decltype(os_sigpending) *sigpending;
+    decltype(os_siggroup)   *siggroup;
+    decltype(os_sigmode)    *sigmode;
+    decltype(os_now)        *now;
+    decltype(os_entropy)    *entropy;
+    decltype(os_clipget)    *clipget;
+    decltype(os_clipset)    *clipset;
+    decltype(os_localtz)    *localtz;
+    decltype(os_tasktag)    *tasktag;
+    decltype(os_racy)       *racy;
+};
 // Entry point, called by the platform after it fills in OsInfo.
 static i32     sh_main(Os *, OsInfo *);

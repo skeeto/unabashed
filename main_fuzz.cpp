@@ -151,6 +151,11 @@ static byte *osheap(Os *os, iz *len)
     return os->heap;
 }
 
+static OsVtable const *osvtable(Os *)
+{
+    return &vosvtable;
+}
+
 // Out of memory ends the run, from whichever fiber it happens on
 static JmpBuf oomjmp;
 
@@ -164,7 +169,7 @@ static JmpBuf oomjmp;
     jmpback(oomjmp);
 }
 
-static byte *os_reserve(Os *os, iz len)
+static byte *plt_reserve(Os *os, iz len)
 {
     iz pad = -os->heapused & 63;
     if (len > os->heapcap/2 - os->heapused - pad) {
@@ -181,12 +186,12 @@ static byte *os_reserve(Os *os, iz len)
     return r;
 }
 
-static b32 os_commit(Os *, byte *, iz)
+static b32 plt_commit(Os *, byte *, iz)
 {
     return 1;
 }
 
-static void os_decommit(Os *, byte *p, iz len)
+static void plt_decommit(Os *, byte *p, iz len)
 {
     memset(p, 0x55, (uz)len);
 }

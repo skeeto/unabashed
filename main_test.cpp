@@ -78,6 +78,11 @@ static byte *osheap(Os *os, iz *len)
     return os->heap;
 }
 
+static OsVtable const *osvtable(Os *)
+{
+    return &vosvtable;
+}
+
 static jmp_buf *oomjmp;  // test-only: where os_oom lands
 
 [[noreturn]] static void os_oom()
@@ -110,7 +115,7 @@ static i32 heapowner(Os *os)
     return -1;
 }
 
-static byte *os_reserve(Os *os, iz len)
+static byte *plt_reserve(Os *os, iz len)
 {
     // An image's region the vos recycles itself (os_imagenew)
     b32 own = !os->vos.imaging && heapowner(os)>=0;
@@ -142,14 +147,14 @@ static byte *os_reserve(Os *os, iz len)
     return r;
 }
 
-static b32 os_commit(Os *os, byte *p, iz len)
+static b32 plt_commit(Os *os, byte *p, iz len)
 {
     assert(p>=os->heap && p+len<=os->heap+os->heapcap);
     return 1;
 }
 
 // Poisoned, as the contents are gone.
-static void os_decommit(Os *os, byte *p, iz len)
+static void plt_decommit(Os *os, byte *p, iz len)
 {
     assert(p>=os->heap && p+len<=os->heap+os->heapcap);
     memset(p, 0x55, (uz)len);

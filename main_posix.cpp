@@ -68,6 +68,10 @@ static Fibers *osfibers(Os *os)
     return &os->fibers;
 }
 
+// Used before their definitions
+static decltype(os_now)  plt_now;
+static decltype(os_exec) plt_exec;
+
 static b32 writeall(i32 fd, u8 *buf, iz len)
 {
     for (iz off = 0; off < len;) {
@@ -110,19 +114,19 @@ static Os *sigos;  // for the signal handler, os_oom and exits
     _exit(2);
 }
 
-static byte *os_reserve(Os *, iz len)
+static byte *plt_reserve(Os *, iz len)
 {
     void *p = mmap(0, (uz)len, PROT_NONE, MAP_PRIVATE|MAP_ANON|MAP_NORESERVE, -1, 0);
     return p==MAP_FAILED ? 0 : (byte *)p;
 }
 
-static b32 os_commit(Os *, byte *p, iz len)
+static b32 plt_commit(Os *, byte *p, iz len)
 {
     return !mprotect(p, (uz)len, PROT_READ|PROT_WRITE);
 }
 
 // Mapping over the range drops its pages and their contents.
-static void os_decommit(Os *, byte *p, iz len)
+static void plt_decommit(Os *, byte *p, iz len)
 {
     mmap(p, (uz)len, PROT_NONE, MAP_PRIVATE|MAP_ANON|MAP_NORESERVE|MAP_FIXED, -1, 0);
 }
@@ -153,7 +157,7 @@ static u8 fdkind(Os *os, i32 fd)
     return kind;
 }
 
-static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
+static b32 plt_write(Os *os, Handle h, u8 *buf, iz len)
 {
     i32 fd = (i32)h;
     if (fdkind(os, fd) != FK_REG) {
@@ -181,7 +185,7 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
     return 1;
 }
 
-static iz os_read(Os *os, Handle h, u8 *buf, iz len)
+static iz plt_read(Os *os, Handle h, u8 *buf, iz len)
 {
     flushw(os);
     iz max = (iz)1<<30;  // macOS rejects reads over INT_MAX
@@ -221,7 +225,7 @@ static i32 highfd(i32 fd)
     return r;
 }
 
-static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
+static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
     flushw(os);
     Opened r = {};
@@ -246,13 +250,13 @@ static Opened os_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
     return r;
 }
 
-static i32 os_unlink(Os *os, Arena scratch, Str path)
+static i32 plt_unlink(Os *os, Arena scratch, Str path)
 {
     flushw(os);
     return unlink(cpath(&scratch, path)) ? errno : 0;
 }
 
-static i32 os_rename(Os *os, Arena scratch, Str from, Str to)
+static i32 plt_rename(Os *os, Arena scratch, Str from, Str to)
 {
     flushw(os);
     char *f = cpath(&scratch, from);
@@ -260,7 +264,7 @@ static i32 os_rename(Os *os, Arena scratch, Str from, Str to)
     return rename(f, t) ? errno : 0;
 }
 
-static Opened os_tempfile(Os *os, Arena scratch)
+static Opened plt_tempfile(Os *os, Arena scratch)
 {
     flushw(os);
     // As bash: created in TMPDIR (or /tmp), then unlinked, readable
@@ -280,7 +284,7 @@ static Opened os_tempfile(Os *os, Arena scratch)
         print(&b, "/sh-thd.");
         print(&b, (i64)getpid());
         print(&b, ".");
-        print(&b, (i64)(++counter ^ (u32)os_now(os)));
+        print(&b, (i64)(++counter ^ (u32)plt_now(os)));
         char *path = cpath(&scratch, finish(&b));
         i32 fd = open(path, O_RDWR|O_CREAT|O_EXCL|O_CLOEXEC, 0600);
         if (fd < 0 && errno==EEXIST) continue;
@@ -299,7 +303,7 @@ static Opened os_tempfile(Os *os, Arena scratch)
     return r;
 }
 
-static void os_close(Os *os, Handle h)
+static void plt_close(Os *os, Handle h)
 {
     flushw(os);
     if (h == BADHANDLE) return;
@@ -308,14 +312,14 @@ static void os_close(Os *os, Handle h)
     close((i32)h);
 }
 
-static Handle os_dup(Os *os, Handle h)
+static Handle plt_dup(Os *os, Handle h)
 {
     flushw(os);
     i32 fd = fcntl((i32)h, F_DUPFD_CLOEXEC, 10);
     return fd<0 ? BADHANDLE : (Handle)fd;
 }
 
-static NamedPipe os_namedpipe(Os *os, Arena *, Str, i32)
+static NamedPipe plt_namedpipe(Os *os, Arena *, Str, i32)
 {
     flushw(os);
     NamedPipe r = {};
@@ -324,7 +328,7 @@ static NamedPipe os_namedpipe(Os *os, Arena *, Str, i32)
     return r;
 }
 
-static NamedTemp os_namedtemp(Os *, Arena *, Str)
+static NamedTemp plt_namedtemp(Os *, Arena *, Str)
 {
     NamedTemp r = {};
     r.h   = BADHANDLE;
@@ -332,7 +336,7 @@ static NamedTemp os_namedtemp(Os *, Arena *, Str)
     return r;
 }
 
-static iz os_pipecap(Os *os)
+static iz plt_pipecap(Os *os)
 {
     flushw(os);
 #ifdef __linux__
@@ -342,7 +346,7 @@ static iz os_pipecap(Os *os)
 #endif
 }
 
-static OsPipe os_pipe(Os *os)
+static OsPipe plt_pipe(Os *os)
 {
     flushw(os);
     OsPipe r = {};
@@ -360,7 +364,7 @@ static OsPipe os_pipe(Os *os)
 #ifdef __linux__
 // Look into a pipe without consuming: tee(2) copies what it holds into
 // a private pipe, which is then drained. Zero when it holds nothing.
-static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
+static iz plt_peek(Os *os, Handle h, u8 *buf, iz len)
 {
     flushw(os);
     if (fdkind(os, (i32)h) != FK_FIFO) {
@@ -391,14 +395,14 @@ static iz os_peek(Os *os, Handle h, u8 *buf, iz len)
     return n;
 }
 #else
-static iz os_peek(Os *os, Handle, u8 *, iz)
+static iz plt_peek(Os *os, Handle, u8 *, iz)
 {
     flushw(os);
     return -1;  // pipes cannot be peeked
 }
 #endif
 
-static i64 os_seek(Os *os, Handle h, i64 off, i32 whence)
+static i64 plt_seek(Os *os, Handle h, i64 off, i32 whence)
 {
     flushw(os);
     return lseek((i32)h, off, whence==0 ? SEEK_SET : whence==1 ? SEEK_CUR : SEEK_END);
@@ -436,7 +440,7 @@ static Stat tostat(struct stat *s)
     return r;
 }
 
-static Str os_readlink(Os *os, Arena *a, Str path)
+static Str plt_readlink(Os *os, Arena *a, Str path)
 {
     flushw(os);
     char *p = cpath(a, path);
@@ -449,7 +453,7 @@ static Str os_readlink(Os *os, Arena *a, Str path)
     return {};
 }
 
-static Stat os_stat(Os *os, Arena scratch, Str path, b32 follow)
+static Stat plt_stat(Os *os, Arena scratch, Str path, b32 follow)
 {
     flushw(os);
     struct stat s;
@@ -462,7 +466,7 @@ static Stat os_stat(Os *os, Arena scratch, Str path, b32 follow)
     return tostat(&s);
 }
 
-static Stat os_fstat(Os *os, Handle h)
+static Stat plt_fstat(Os *os, Handle h)
 {
     flushw(os);
     struct stat s;
@@ -477,13 +481,13 @@ static Stat os_fstat(Os *os, Handle h)
 static void onsignal(int, siginfo_t *, void *);
 static void quietpipe(Os *);
 
-static b32 os_con(Os *os, Handle, ConOp *)
+static b32 plt_con(Os *os, Handle, ConOp *)
 {
     flushw(os);
     return 0;  // no legacy consoles here
 }
 
-static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
+static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
 {
     flushw(os);
     Tty     r = {};
@@ -550,12 +554,12 @@ static Tty os_tty(Os *os, Handle in, Handle out, i32 how)
     return r;
 }
 
-static b32 os_isatty(Os *, Handle h)
+static b32 plt_isatty(Os *, Handle h)
 {
     return isatty((i32)h);
 }
 
-static Dirent *os_list(Os *os, Arena *a, Str dir, i32 *err)
+static Dirent *plt_list(Os *os, Arena *a, Str dir, i32 *err)
 {
     flushw(os);
     Arena tmp = *a;
@@ -836,7 +840,7 @@ static i32 trispawn(SpawnPlan *, Arena, pid_t *)
 }
 #endif
 
-static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
+static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
 {
     flushw(os);
     if (s->image.base) return forkimage(os, scratch, s);
@@ -889,16 +893,16 @@ static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 
 // Self-spawning with a state image: a plain reservation, which a forked
 // child (forkimage) already has at the same address.
-static ImageRef os_imagenew(Os *os, iz cap)
+static ImageRef plt_imagenew(Os *os, iz cap)
 {
     flushw(os);
     ImageRef r = {};
-    r.base = os_reserve(os, cap);
+    r.base = plt_reserve(os, cap);
     r.cap  = r.base ? cap : 0;
     return r;
 }
 
-static void os_imagefree(Os *os, ImageRef im)
+static void plt_imagefree(Os *os, ImageRef im)
 {
     flushw(os);
     if (im.base) munmap(im.base, (uz)im.cap);
@@ -1016,7 +1020,7 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
 // Fork, and in the original exec: the copy, which keeps the other
 // tasks, learns how the exec went from a close-on-exec pipe, closed by
 // a successful exec, written to on failure (the copy then vanishes).
-static i32 os_forkexec(Os *os, Arena scratch, Spawn *s)
+static i32 plt_forkexec(Os *os, Arena scratch, Spawn *s)
 {
     flushw(os);
     i32 sync[2];
@@ -1051,7 +1055,7 @@ static i32 os_forkexec(Os *os, Arena scratch, Spawn *s)
     sigprocmask(SIG_SETMASK, &old, 0);
     close(sync[0]);
     if (!err) {
-        err = os_exec(os, scratch, s);  // returns only on failure
+        err = plt_exec(os, scratch, s);  // returns only on failure
         u8 c = 1;
         if (write(sync[1], &c, 1)) {}
         i32 status;
@@ -1065,7 +1069,7 @@ static i32 os_forkexec(Os *os, Arena scratch, Spawn *s)
 // execve fails (a script without #!, which the shell then runs itself):
 // the targets were saved first, the other descriptors are only marked
 // close-on-exec, the directory and signal actions are put back.
-static i32 os_exec(Os *os, Arena scratch, Spawn *s)
+static i32 plt_exec(Os *os, Arena scratch, Spawn *s)
 {
     flushw(os);
     char *path = cpath(&scratch, s->path);
@@ -1161,7 +1165,7 @@ static b32 isproc(Io *io)
     return io->op==IO_PROC || io->op==IO_PROCSTOP;
 }
 
-static i32 os_waitproc(Os *os, Handle proc)
+static i32 plt_waitproc(Os *os, Handle proc)
 {
     flushw(os);
     i32 status;
@@ -1282,7 +1286,7 @@ static rlim_t torlim(i64 v)
     return v==RL_INFINITY ? RLIM_INFINITY : (rlim_t)v;
 }
 
-static Rlimit os_getrlimit(Os *, i32 res)
+static Rlimit plt_getrlimit(Os *, i32 res)
 {
     Rlimit r = {};
     if (res == RL_PIPE) {
@@ -1300,7 +1304,7 @@ static Rlimit os_getrlimit(Os *, i32 res)
     return r;
 }
 
-static i32 os_setrlimit(Os *os, i32 res, Rlimit r)
+static i32 plt_setrlimit(Os *os, i32 res, Rlimit r)
 {
     flushw(os);
     if (res == RL_PIPE) return E_INVAL;
@@ -1310,20 +1314,20 @@ static i32 os_setrlimit(Os *os, i32 res, Rlimit r)
     return setrlimit(n, &l) ? errno : 0;
 }
 
-static i32 os_kill(Os *os, i64 pid, i32 sig)
+static i32 plt_kill(Os *os, i64 pid, i32 sig)
 {
     flushw(os);
     if (pid<-(i64)0x7fffffff || pid>(i64)0x7fffffff) return E_SRCH;
     return kill((pid_t)pid, sig) ? errno : 0;
 }
 
-static i32 os_setpgid(Os *os, i64 pid, i64 pgid)
+static i32 plt_setpgid(Os *os, i64 pid, i64 pgid)
 {
     flushw(os);
     return setpgid((pid_t)pid, (pid_t)pgid) ? errno : 0;
 }
 
-static i64 os_tcpgrp(Os *os, Handle tty, i64 pgid)
+static i64 plt_tcpgrp(Os *os, Handle tty, i64 pgid)
 {
     flushw(os);
     if (!pgid) {
@@ -1382,7 +1386,7 @@ static b32 ourprocess(i64 pid)
     return alen>0 && alen==blen && !__builtin_memcmp(a, b, (uz)alen);
 }
 
-static i32 os_siglevel(Os *os, i64 pid, i64 level, i32 sig)
+static i32 plt_siglevel(Os *os, i64 pid, i64 level, i32 sig)
 {
     flushw(os);
     i64 serial = (level>>22) - 1;
@@ -1396,14 +1400,14 @@ static i32 os_siglevel(Os *os, i64 pid, i64 level, i32 sig)
     return sigqueue((pid_t)pid, siglevelnum(), v) ? errno : 0;
 }
 #else
-static i32 os_siglevel(Os *os, i64, i64, i32)
+static i32 plt_siglevel(Os *os, i64, i64, i32)
 {
     flushw(os);
     return E_NOSYS;
 }
 #endif
 
-static LevelSig os_levelsig(Os *)
+static LevelSig plt_levelsig(Os *)
 {
     LevelSig r = {};
     u32 h = levelhead;
@@ -1416,23 +1420,23 @@ static LevelSig os_levelsig(Os *)
 
 // Polled between commands: a plain load first spares the common case a
 // locked exchange, and a bit set meanwhile waits for the next poll.
-static u64 os_sigpending(Os *)
+static u64 plt_sigpending(Os *)
 {
     if (!__atomic_load_n(&sigbits, __ATOMIC_RELAXED)) return 0;
     return __atomic_exchange_n(&sigbits, (u64)0, __ATOMIC_RELAXED);
 }
 
-static u64 os_siggroup(Os *)
+static u64 plt_siggroup(Os *)
 {
     if (!__atomic_load_n(&grpbits, __ATOMIC_RELAXED)) return 0;
     return __atomic_exchange_n(&grpbits, (u64)0, __ATOMIC_RELAXED);
 }
 
-static void os_tasktag(Os *, u64, iz, u64)
+static void plt_tasktag(Os *, u64, iz, u64)
 {
 }
 
-static void os_racy(Os *)
+static void plt_racy(Os *)
 {
 }
 
@@ -1447,7 +1451,7 @@ static void quietpipe(Os *)
     sigaction(SIGPIPE, &sa, 0);
 }
 
-static void os_sigmode(Os *os, i32 sig, i32 mode)
+static void plt_sigmode(Os *os, i32 sig, i32 mode)
 {
     flushw(os);
     u64 bit = (u64)1 << (sig-1);
@@ -1578,7 +1582,7 @@ static i32 pollnow(Io *io, i32 timeout)
     return r>0 ? p.revents : 0;
 }
 
-static void os_submit(Os *os, Io *io)
+static void plt_submit(Os *os, Io *io)
 {
     flushw(os);
     io->done = 0;
@@ -1592,7 +1596,7 @@ static void os_submit(Os *os, Io *io)
     *tail = io;
 }
 
-static Io *os_wait(Os *os, i64 deadline)
+static Io *plt_wait(Os *os, i64 deadline)
 {
     if (deadline != WAIT_POLL) flushw(os);  // it may block
     enum { MAXPOLL = 256 };
@@ -1621,7 +1625,7 @@ static Io *os_wait(Os *os, i64 deadline)
         if (deadline == WAIT_POLL) {
             timeout = 0;
         } else if (deadline > 0) {
-            i64 left = (deadline - os_now(os) + 999999) / 1000000;
+            i64 left = (deadline - plt_now(os) + 999999) / 1000000;
             timeout = left<0 ? 0 : left>(1<<30) ? (1<<30) : (i32)left;
         }
         i32 r = poll(fds, (nfds_t)n, timeout);
@@ -1654,7 +1658,7 @@ static Io *os_wait(Os *os, i64 deadline)
     }
 }
 
-static b32 os_cancel(Os *os, Io *io)
+static b32 plt_cancel(Os *os, Io *io)
 {
     flushw(os);
     for (Io **p = &os->pending; *p; p = &(*p)->next) {
@@ -1666,20 +1670,20 @@ static b32 os_cancel(Os *os, Io *io)
     return 0;
 }
 
-static i64 os_now(Os *)
+static i64 plt_now(Os *)
 {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     return (i64)ts.tv_sec*1000000000 + ts.tv_nsec;
 }
 
-static u64 os_entropy(Os *os)
+static u64 plt_entropy(Os *os)
 {
     u64 r = 0;
     if (!getentropy(&r, sizeof(r))) {
         return r;
     }
-    u64 x = (u64)os_now(os) ^ (u64)getpid()<<40;
+    u64 x = (u64)plt_now(os) ^ (u64)getpid()<<40;
     x += ++os->entropyn * 0x9e3779b97f4a7c15u;
     x  = (x ^ x>>30) * 0xbf58476d1ce4e5b9u;
     x  = (x ^ x>>27) * 0x94d049bb133111ebu;
@@ -1688,16 +1692,76 @@ static u64 os_entropy(Os *os)
 
 // glibc's default zone is the file /etc/localtime, which the core
 // reads whole (transitions and footer), else UTC.
-static ClipText os_clipget(Os *, Arena *) { return {{}, E_NOSYS}; }
-static i32 os_clipset(Os *, Arena, Str) { return E_NOSYS; }
+static ClipText plt_clipget(Os *, Arena *) { return {{}, E_NOSYS}; }
+static i32 plt_clipset(Os *, Arena, Str) { return E_NOSYS; }
 
-static Str os_localtz(Os *, Arena *)
+static Str plt_localtz(Os *, Arena *)
 {
     struct stat st;
     if (stat("/etc/localtime", &st) || !S_ISREG(st.st_mode)) {
         return "UTC0";
     }
     return ":/etc/localtime";
+}
+
+// The platform table (api.cpp, OsVtable)
+static OsVtable const pltvtable = {
+    .version    = OSVTABLE_VERSION,
+    .reserve    = plt_reserve,
+    .commit     = plt_commit,
+    .decommit   = plt_decommit,
+    .write      = plt_write,
+    .read       = plt_read,
+    .open       = plt_open,
+    .tempfile   = plt_tempfile,
+    .namedtemp  = plt_namedtemp,
+    .close      = plt_close,
+    .unlink     = plt_unlink,
+    .rename     = plt_rename,
+    .dup        = plt_dup,
+    .pipe       = plt_pipe,
+    .namedpipe  = plt_namedpipe,
+    .pipecap    = plt_pipecap,
+    .peek       = plt_peek,
+    .seek       = plt_seek,
+    .stat       = plt_stat,
+    .readlink   = plt_readlink,
+    .fstat      = plt_fstat,
+    .isatty     = plt_isatty,
+    .tty        = plt_tty,
+    .con        = plt_con,
+    .list       = plt_list,
+    .spawn      = plt_spawn,
+    .imagenew   = plt_imagenew,
+    .imagefree  = plt_imagefree,
+    .exec       = plt_exec,
+    .forkexec   = plt_forkexec,
+    .waitproc   = plt_waitproc,
+    .submit     = plt_submit,
+    .wait       = plt_wait,
+    .cancel     = plt_cancel,
+    .kill       = plt_kill,
+    .setpgid    = plt_setpgid,
+    .tcpgrp     = plt_tcpgrp,
+    .getrlimit  = plt_getrlimit,
+    .setrlimit  = plt_setrlimit,
+    .siglevel   = plt_siglevel,
+    .levelsig   = plt_levelsig,
+    .sigpending = plt_sigpending,
+    .siggroup   = plt_siggroup,
+    .sigmode    = plt_sigmode,
+    .now        = plt_now,
+    .entropy    = plt_entropy,
+    .clipget    = plt_clipget,
+    .clipset    = plt_clipset,
+    .localtz    = plt_localtz,
+    .tasktag    = plt_tasktag,
+    .racy       = plt_racy,
+};
+
+static OsVtable const *osvtable(Os *)
+{
+    return &pltvtable;
 }
 
 static byte *fiberstack(Os *, iz size)
