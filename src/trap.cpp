@@ -460,10 +460,14 @@ static i64 vpidowner(Shell *sh, i64 pid)
 }
 
 // Take the signals that arrived from outside the process. Those sent
-// to the process belong to its outermost level. Those the terminal
-// sent to its foreground group (Ctrl-C) go to every level that runs,
-// as to every process of bash's foreground job, while a level waiting
-// for a foreground child only notes them (see waitdone). An INT sent
+// to the process belong to its outermost level. Those sent to its
+// group go to every level, as to every process of bash's foreground
+// job. A level waiting for a foreground child only notes the
+// terminal's INT, QUIT and TSTP (see waitdone); any other reaches it
+// as it would reach bash, which has no handler for it while it waits:
+// untrapped it ends the level at once, trapped it runs once the child
+// ends. A level whose program bash would have exec'd leaves those to
+// the program, which the group signal reached already. An INT sent
 // to the process while its outermost level waits for a foreground
 // child, other than a comsub, is noted likewise, as bash waits for the
 // child and acts on it only if the child died of INT too. True if any
@@ -507,13 +511,18 @@ static b32 ossignals(Sched *s)
         if (p) sigsend(p->sh, p, m.sig);
         levels = 1;
     }
+    u64 term  = grp & (sigbit(2) | sigbit(3) | sigbit(20));
+    u64 other = grp & ~term;
     for (Sigproc *p = s->sigprocs; grp && p; p = p->next) {
         if (p->sh->sig!=p || p->fgwait) {
-            p->waitsig |= grp;  // an outer level, or waiting for a program
+            p->waitsig |= term;  // an outer level, or waiting for a program
         } else {
-            for (u64 m = grp; m; m &= m-1) {
+            for (u64 m = term; m; m &= m-1) {
                 sigsend(p->sh, p, __builtin_ctzll(m)+1);
             }
+        }
+        for (u64 m = p->execpid ? 0 : other; m; m &= m-1) {
+            sigsend(p->sh, p, __builtin_ctzll(m)+1);
         }
     }
     return any || levels;

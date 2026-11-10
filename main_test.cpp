@@ -335,6 +335,23 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
 
 static b32 images = 1;  // os_imagenew self-spawns (--fibers: not)
 
+// ttysig N: signal N from the terminal to its foreground group, as a
+// hangup or a host's soft stop reaches every process of the job.
+static i32 fake_ttysig(Os *os, FakeCtx *ctx)
+{
+    FkProg p = fkprog(os, ctx);
+    FkOpt  o = fkopts(&p, 1);
+    for (i32 c; (c = fkgetopt(&o, "")) != -1;) {
+        return fkusage(&p, 2);
+    }
+    i64 sig = 0;
+    if (o.nrest!=1 || !parsei64(o.rest[0], &sig) || sig<1 || sig>=NSIGNAL) {
+        return fkusage(&p, 2);
+    }
+    vttysignal(os, osvos(os), (i32)sig);
+    return fkexit(&p, 0);
+}
+
 static Fake testfakes[256];
 static iz   ntestfakes;
 
@@ -342,6 +359,7 @@ static void initfakes()
 {
     ntestfakes = 0;
     testfakes[ntestfakes++] = {"bash", fake_bash};
+    testfakes[ntestfakes++] = {"ttysig", fake_ttysig};
     for (iz i = 0; i < countof(fakes) && ntestfakes < countof(testfakes); i++) {
         testfakes[ntestfakes++] = fakes[i];
     }
@@ -986,6 +1004,29 @@ static void test_loopsigs(Test *t)
     }
     t->os->chaos = 0;
     images = saved;
+}
+
+// A group signal other than the terminal's INT, QUIT and TSTP, while
+// a level waits for a program that ignores it: as bash, untrapped it
+// ends the level at once, trapped it runs once the program ends.
+static void test_grpsigs(Test *t)
+{
+    static struct { Str script, want; i32 status; } cases[] = {
+        {"bash -c 'trap \"\" TERM; ttysig 15; sleep 1'; echo after\n", "", 143},
+        {"bash -c 'trap \"\" HUP; ttysig 1; sleep 1'; echo after\n", "", 129},
+        {"trap 'echo t' TERM\n"
+         "bash -c 'trap \"\" TERM; ttysig 15; echo inner'; echo after\n",
+         "inner\nt\nafter\n", 0},
+        {"( trap 'echo t' TERM\n"
+         "  bash -c 'trap \"\" TERM; ttysig 15; echo inner'; echo sub ); echo after\n",
+         "inner\nt\nsub\n", 143},
+        {"x=$(bash -c 'trap \"\" TERM; ttysig 15; sleep 1'); echo after\n", "", 143},
+    };
+    for (iz i = 0; i < countof(cases); i++) {
+        Result r = runc(t, cases[i].script);
+        expect(t, "group signal output", r.merged, cases[i].want);
+        expectint(t, "group signal status", r.status, cases[i].status);
+    }
 }
 
 // SpecFile tests: run a script recorded by tools/record and compare all
@@ -2026,6 +2067,7 @@ int main(int argc, char **argv)
     test_sched(&t);
     test_sigpipe(&t);
     test_loopsigs(&t);
+    test_grpsigs(&t);
     test_vwin(&t);
     test_jobctl(&t);
     test_pathmodes(&t);
