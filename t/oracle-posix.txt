@@ -4,10 +4,12 @@
 # Frozen at M7's close: categories d and e all PASS or BASH. The FAILs
 # left, each owned in notes/issues.md: builtins (our own help text),
 # dollars (a bash bug not copied). complete passes since M8 step 8,
-# history fails only as bash does since step 10.
+# history fails only as bash does since step 10. arith, comsub2 and
+# exp-tests fail since RANDOM became PCG64 (c55e2e0): each seeds RANDOM
+# and expects bash's sequence (issues.md, "RANDOM is PCG64").
 alias PASS
 appendop PASS
-arith PASS
+arith FAIL
 arith-for PASS
 array PASS
 array2 PASS
@@ -21,7 +23,7 @@ complete PASS
 comsub PASS
 comsub-eof PASS
 comsub-posix PASS
-comsub2 PASS
+comsub2 FAIL
 cond PASS
 coproc PASS
 cprint PASS
@@ -32,7 +34,7 @@ dollars FAIL
 dynvar PASS
 errors PASS
 execscript BASH
-exp-tests PASS
+exp-tests FAIL
 exportfunc PASS
 extglob PASS
 extglob2 PASS
