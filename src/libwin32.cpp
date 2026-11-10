@@ -394,15 +394,6 @@ static void lib_spawned(Os *os, uz proc, i64 pid, u64 sigign, b32 shared, b32 in
     k->injob     = injob;
     k->announced = 0;
     k->reaped    = 0;
-    // A reused pid: the job a program of that pid had is not this one's,
-    // and terminating it (empty now) must not pass for ending this one
-    for (i32 i = 0; i < countof(os->bgjobs); i++) {
-        BgJob *b = os->bgjobs + i;
-        if (b->job && b->pid==pid) {
-            closeh(os, b->job);
-            b->job = 0;
-        }
-    }
 }
 
 static void lib_reaped(Os *os, uz proc)
@@ -504,6 +495,15 @@ static u64 libsigpending(Os *os)
     return plt_sigpending(os);
 }
 
+// A program's own background job, with whatever it started: only one
+// that holds it, never the job of an earlier program of its pid.
+static uz kidjob(Os *os, LibKid *k)
+{
+    uz  job = bgjobof(os, k->pid);
+    b32 in  = 0;
+    return job && IsProcessInJob(k->proc, job, &in) && in ? job : 0;
+}
+
 // A group signal the core takes goes to every program the run started,
 // then to every level (ossignals): an unabashed shell through its
 // signal channel, another program through the host's softsig hook, or
@@ -528,7 +528,7 @@ static u64 libsiggroup(Os *os)
                 }
             }
             u32 code = sig==2 ? 0xc000013au : SIGEXIT|(u32)(128+sig);
-            uz  job  = bgjobof(os, k->pid);
+            uz  job  = kidjob(os, k);
             if ((job && TerminateJobObject(job, code)) ||
                 TerminateProcess(k->proc, code)) {
                 recordkill(os, k->pid, code);
@@ -924,7 +924,7 @@ static void teardown(Lib *l)
     for (i32 i = 0; i < l->nkids; i++) {
         LibKid *k = l->kids + i;
         if (!k->reaped) {
-            uz job = bgjobof(os, k->pid);
+            uz job = kidjob(os, k);
             if (job) TerminateJobObject(job, code);
             if (!k->injob) TerminateProcess(k->proc, code);
         }

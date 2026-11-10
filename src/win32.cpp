@@ -352,6 +352,7 @@ W32(b32,    SetEndOfFile(uz));
 W32(b32,    SetFilePointerEx(uz, i64, i64 *, i32));
 W32(b32,    SetHandleInformation(uz, i32, i32));
 W32(uz,     OpenProcess(i32, b32, i32));
+W32(b32,    IsProcessInJob(uz, uz, b32 *));
 W32(b32,    TerminateProcess(uz, u32));
 W32(b32,    TerminateJobObject(uz, u32));
 W32(b32,    SetConsoleCtrlHandler(void *, b32));
@@ -2210,6 +2211,43 @@ static uz newjob(Os *os, uz proc, u32 extra)
     return job;
 }
 
+// Background programs' own jobs (bgjobs), each the "process group" of
+// its program's pid, as in plt_kill. Windows reuses a pid once its
+// program is gone, which POSIX never does while the group has members:
+// the newest background program of a pid takes the name, and a group
+// with nothing left in it has ended.
+static void recordbgjob(Os *os, i64 pid, uz job)
+{
+    for (i32 i = 0; i < countof(os->bgjobs); i++) {
+        BgJob *b = os->bgjobs + i;
+        if (b->job && b->pid==pid) {
+            closeh(os, b->job);
+            b->job = 0;
+        }
+    }
+    BgJob *b = os->bgjobs + os->nbgjobs%countof(os->bgjobs);
+    if (b->job) closeh(os, b->job);  // the oldest: let it go
+    b->pid = (i32)pid;
+    b->job = job;
+    os->nbgjobs++;
+}
+
+static uz bgjobof(Os *os, i64 pid)
+{
+    for (i32 i = 0; i < countof(os->bgjobs); i++) {
+        BgJob *b = os->bgjobs + i;
+        if (b->job && b->pid==pid) return b->job;
+    }
+    return 0;
+}
+
+static b32 jobended(uz job)
+{
+    JobCounts c = {};
+    i32 info = JobObjectBasicAccountingInformation;
+    return QueryInformationJobObject(job, info, &c, sizeof(c), 0) && !c.active;
+}
+
 // Prepare for jobs (Windows 8): the port, the breakaway rule and this
 // program's image path.
 static void setupjobs(Os *os)
@@ -3836,13 +3874,7 @@ static Spawned libstartproc(Os *os, Arena scratch, Spawn *s, Str16 app,
         // A background program's own job, inside the run's, so that a
         // signal to its "group" reaches what it started (plt_kill)
         uz j = newjob(os, pi.process, 0);
-        if (j && regh(os, j, 0)) {
-            BgJob *b = os->bgjobs + os->nbgjobs%countof(os->bgjobs);
-            if (b->job) closeh(os, b->job);  // the oldest: let it go
-            b->pid = pi.pid;
-            b->job = j;
-            os->nbgjobs++;
-        }
+        if (j && regh(os, j, 0)) recordbgjob(os, pi.pid, j);
     }
     if (ok) {
         ResumeThread(pi.thread);
@@ -4051,13 +4083,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
         *job = j;
     } else if (ok && bgjob) {
         uz j = newjob(os, pi.process, 0);
-        if (j) {
-            BgJob *b = os->bgjobs + os->nbgjobs%countof(os->bgjobs);
-            if (b->job) CloseHandle(b->job);  // the oldest: let it go
-            b->pid = pi.pid;
-            b->job = j;
-            os->nbgjobs++;
-        }
+        if (j) recordbgjob(os, pi.pid, j);
         if (!unseen) ResumeThread(pi.thread);
     } else if (ok && !noint) {
         uz j = tojob ? newjob(os, pi.process, 0) : 0;
@@ -4182,17 +4208,6 @@ static i64 plt_tcpgrp(Os *, Handle, i64)
     return -E_NOSYS;
 }
 
-// The job of a background program by its pid, 0 if none.
-static uz bgjobof(Os *os, i64 pid)
-{
-    i32 n = os->nbgjobs<countof(os->bgjobs) ? os->nbgjobs : countof(os->bgjobs);
-    for (i32 i = 0; i < n; i++) {
-        BgJob *b = os->bgjobs + i;
-        if (b->job && b->pid==pid) return b->job;
-    }
-    return 0;
-}
-
 // No process groups here: -pid is a background program and everything
 // in its job, the program alone if it has none.
 static i32 plt_kill(Os *os, i64 pid, i32 sig)
@@ -4202,18 +4217,29 @@ static i32 plt_kill(Os *os, i64 pid, i32 sig)
         uz job = bgjobof(os, -pid);
         pid = -pid;
         b32 kills = sig>0 && sig!=17 && sig!=18 && !(sig>=19 && sig<=23) && sig!=28;
-        if (job && kills) {
-            if (!chansend(pid, 0, sig)) return 0;  // one of our shells
-            // another program: end it and its kin
-            u32 code = sig==2 ? 0xc000013au : SIGEXIT|(u32)(128+sig);
-            if (TerminateJobObject(job, code)) {
-                i32     i = os->nkilled % (i32)countof(os->killed);
-                Killed *k = os->killed + i;
-                k->pid  = (i32)pid;
-                k->code = code;
-                os->nkilled = i + 1;
-                return 0;
+        if (job) {
+            if (jobended(job)) return E_SRCH;  // the pid may be anyone's now
+            uz  h  = OpenProcess(0x1000, 0, (i32)pid);  // QUERY_LIMITED_INFORMATION
+            b32 in = 0;
+            b32 leader = h && IsProcessInJob(h, job, &in) && in;
+            if (h) CloseHandle(h);
+            if (kills) {
+                if (leader && !chansend(pid, 0, sig)) return 0;  // one of our shells
+                // another program: end it and its kin
+                u32 code = sig==2 ? 0xc000013au : SIGEXIT|(u32)(128+sig);
+                if (TerminateJobObject(job, code)) {
+                    if (leader) {
+                        i32     i = os->nkilled % (i32)countof(os->killed);
+                        Killed *k = os->killed + i;
+                        k->pid  = (i32)pid;
+                        k->code = code;
+                        os->nkilled = i + 1;
+                    }
+                    return 0;
+                }
             }
+            // Only kin left: the pid is not theirs to send to
+            if (!leader) return kills ? E_PERM : 0;
         }
     }
     if (pid<=0 || pid>(i64)0x7fffffff) return E_SRCH;

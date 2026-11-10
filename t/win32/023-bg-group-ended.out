@@ -1,0 +1,10 @@
+wait 0
+ended 1
+probe 1
+live 0
+killed 143
+after 1
+kin 0
+kin killed 0
+kin gone 1
+status 0

@@ -86,16 +86,14 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
 ## The library
 
 Its deviations by design are in library.md (Known deviations and
-limits) and tools/ubhost.expect. Found in its review (2026-11-10), not
-yet fixed:
+limits) and tools/ubhost.expect. Not yet fixed:
 
-- The executable on Windows 8 and later keeps a background program's
-  job in os->bgjobs until the 64-entry ring evicts it. A later program
-  given the same pid then finds the old, empty job, so `kill -- -PID`
-  terminates that job, reports success, and leaves the program running.
-  The library drops the stale entry when a pid is reused
-  (lib_spawned); the executable's plt_kill has no equivalent.
-
+- A group signal (`kill -- -PID`) whose leader is one of our shells
+  goes only to that shell, through its signal channel (plt_kill), not
+  to the rest of its job: when the shell dies of it, a program it was
+  waiting on lives on, where every member of a POSIX process group gets
+  the signal. Found with t/win32/023 on a w64devkit whose sh is
+  unabashed (2026-11-10); the test leads its groups with cmd instead.
 
 ## Test infrastructure
 
