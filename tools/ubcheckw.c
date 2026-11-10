@@ -81,6 +81,7 @@ W32(int,       PeekNamedPipe(uintptr_t, void *, int, int *, int *, int *));
 W32(int,       ReadProcessMemory(uintptr_t, void const *, void *, size_t, size_t *));
 W32(uintptr_t, CreateEventW(void *, int, int, void *));
 W32(int,       SetEvent(uintptr_t));
+W32(int,       ResetEvent(uintptr_t));
 
 static int strcmp(char const *a, char const *b)
 {
@@ -140,7 +141,7 @@ static void sputx(Snap *s, uint64_t v)
 
 static void sputw(Snap *s, uint16_t const *w, ptrdiff_t n)
 {
-    char tmp[3*600];
+    char tmp[3*600 + 1];
     n = n<600 ? n : 600;
     sput(s, wtf8(tmp, w, n));
 }
@@ -245,22 +246,33 @@ static void snapshot(State *st)
     Snap *s = &st->text;
     s->len = 0;
     st->private_ = 0;
+    // Images and views by identity: each allocation whole, since its
+    // pages split as copy-on-write data is first written (the check's
+    // own statics, too)
     MemInfo m;
-    for (uintptr_t a = 0; VirtualQuery((void *)a, &m, sizeof(m)) == sizeof(m);) {
-        if (m.state != 0x10000) {  // MEM_FREE
-            if (m.type == 0x20000) {  // MEM_PRIVATE: heaps, stacks, the run's
-                st->private_ += m.size;
-            } else {  // images and views, by identity
-                sput(s, "map ");
-                sputx(s, m.base);
-                sput(s, " ");
-                sputx(s, m.size);
-                sput(s, " ");
-                sputx(s, m.type);
-                sput(s, " ");
-                sputx(s, m.state);
-                sput(s, "\n");
+    uintptr_t mbase = 0, mlen = 0, mtype = 0;
+    for (uintptr_t a = 0;; ) {
+        int ok = VirtualQuery((void *)a, &m, sizeof(m)) == sizeof(m);
+        int mapped = ok && m.state!=0x10000 && m.type!=0x20000;  // not free or private
+        if (mlen && (!mapped || m.allocbase!=mbase)) {
+            sput(s, "map ");
+            sputx(s, mbase);
+            sput(s, " ");
+            sputx(s, mlen);
+            sput(s, " ");
+            sputx(s, mtype);
+            sput(s, "\n");
+            mlen = 0;
+        }
+        if (!ok) break;
+        if (m.state!=0x10000 && m.type==0x20000) {  // heaps, stacks, the run's
+            st->private_ += m.size;
+        } else if (mapped) {
+            if (!mlen) {
+                mbase = m.allocbase;
+                mtype = m.type;
             }
+            mlen = m.base + m.size - mbase;
         }
         uintptr_t next = m.base + m.size;
         if (next <= a) break;
@@ -427,14 +439,110 @@ static int packets(State *st)
 
 static uint64_t hostborn;
 
+// A process by pid, to wait on and time: XP lacks the limited right.
+static uintptr_t openproc(int pid)
+{
+    uintptr_t h = OpenProcess(0x101000, 0, pid);  // SYNCHRONIZE|QUERY_LIMITED
+    return h ? h : OpenProcess(0x100400, 0, pid);  // SYNCHRONIZE|QUERY
+}
+
 static uint64_t bornat(int pid)
 {
     uint64_t c = 0, e, k, u;
-    uintptr_t h = OpenProcess(0x1000, 0, pid);  // QUERY_LIMITED_INFORMATION
+    uintptr_t h = openproc(pid);
     if (!h) return 0;
     if (!GetProcessTimes(h, &c, &e, &k, &u)) c = 0;
     CloseHandle(h);
     return c;
+}
+
+// Every descendant seen while a case runs, sampled by a watcher thread:
+// a leftover whose parent exited is out of the tree kidsgone walks.
+typedef struct {
+    int      pid;
+    uint64_t born;
+} Seen;
+
+static Seen      seen[4096];
+static int       nseen;
+static uintptr_t watchstop;  // an event: the case has run
+
+static int seenat(int pid)
+{
+    for (int i = 0; i < nseen; i++) {
+        if (seen[i].pid == pid) return i;
+    }
+    return -1;
+}
+
+static void sample(void)
+{
+    static ProcEntry all[8192];
+    int n = 0;
+    uintptr_t snap = CreateToolhelp32Snapshot(2, 0);  // TH32CS_SNAPPROCESS
+    all[0].size = sizeof(*all);
+    for (int ok = Process32FirstW(snap, all); ok && n<8191;) {
+        n++;
+        all[n].size = sizeof(*all);
+        ok = Process32NextW(snap, all+n);
+    }
+    CloseHandle(snap);
+    int self = GetCurrentProcessId();
+    for (int grew = 1; grew && nseen<4096;) {
+        grew = 0;
+        for (int i = 0; i<n && nseen<4096; i++) {
+            int pid = (int)all[i].pid, ppid = (int)all[i].ppid;
+            if (pid==self || seenat(pid)>=0) continue;
+            int parent = seenat(ppid);
+            if (ppid!=self && parent<0) continue;
+            uint64_t born = bornat(pid);
+            if (!born || born<hostborn) continue;  // gone, or the pid's earlier owner
+            if (parent>=0 && born<seen[parent].born) continue;  // not that one's child
+            seen[nseen].pid  = pid;
+            seen[nseen].born = born;
+            nseen++;
+            grew = 1;
+        }
+    }
+}
+
+static unsigned __stdcall watcher(void *arg)
+{
+    (void)arg;
+    do sample(); while (WaitForSingleObject(watchstop, 2));
+    sample();
+    return 0;
+}
+
+static uintptr_t watch(void)
+{
+    nseen = 0;
+    if (!watchstop) watchstop = CreateEventW(0, 1, 0, 0);
+    ResetEvent(watchstop);
+    return CreateThread(0, 1<<16, watcher, 0, 0, 0);
+}
+
+// Stop watching, then every program seen must have ended (within a
+// second, as teardown waits for them).
+static int seenended(uintptr_t w, Snap *why)
+{
+    SetEvent(watchstop);
+    WaitForSingleObject(w, -1);
+    CloseHandle(w);
+    for (int i = 0; i < nseen; i++) {
+        uintptr_t h = openproc(seen[i].pid);
+        if (!h) continue;  // gone
+        uint64_t c = 0, e, k, u;
+        int same = GetProcessTimes(h, &c, &e, &k, &u) && c==seen[i].born;
+        int live = same && WaitForSingleObject(h, 1000);
+        CloseHandle(h);
+        if (live) {
+            sput(why, "a program outlived the run: pid ");
+            sputd(why, seen[i].pid);
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int kidsgone(Snap *why)
@@ -515,8 +623,9 @@ static unsigned __stdcall stopper(void *arg)
 
 static uint16_t outpath[300];
 
-// One run of a case: its status, output in out.
-static int runcase(Case const *c, char *out, int outlen, double *secs)
+// One run of a case: its status, output in out, and in left why a
+// program it started outlived it (before ub_free, which ends the job).
+static int runcase(Case const *c, char *out, int outlen, double *secs, Snap *left)
 {
     ub_config cfg = {0};
     cfg.spawnlock = hostlock;
@@ -541,6 +650,7 @@ static int runcase(Case const *c, char *out, int outlen, double *secs)
     if (c->stopms) s.done = CreateEventW(0, 1, 0, 0);
     if (c->stopms) t = CreateThread(0, 1<<16, stopper, &s, 0, 0);
     void *fiber = c->fiber ? ConvertThreadToFiber((void *)0x5eed) : 0;
+    uintptr_t w = watch();
     double t0 = nowsec();
     int r = ub_run(os, &cmd);
     *secs = nowsec() - t0;
@@ -560,6 +670,7 @@ static int runcase(Case const *c, char *out, int outlen, double *secs)
         CloseHandle(t);
         CloseHandle(s.done);
     }
+    seenended(w, left);
     if (c->hostpipe) {
         // The peer's next operation: an XP helper orphaned in the read
         // takes it, then frees itself
@@ -594,14 +705,18 @@ static int checkcase(Case const *c, int reps)
     Snap why;
     snapinit(&why, 1<<12);
     double secs;
-    runcase(c, out, sizeof(out), &secs);  // warm-up
-    for (double until = nowsec()+2; !kidsgone(&why) && nowsec()<until;) Sleep(1);
-    why.len = 0;
+    runcase(c, out, sizeof(out), &secs, &why);  // warm-up, which counts too
+    int ok = !why.len;
+    if (ok) {
+        for (double until = nowsec()+2; !kidsgone(&why) && nowsec()<until;) Sleep(1);
+        why.len = 0;
+    }
     snapshot(&before);
-    int ok = 1;
     for (int i = 0; i<reps && ok; i++) {
-        int r = runcase(c, out, sizeof(out), &secs);
-        if (c->status!=ANY && r!=c->status) {
+        int r = runcase(c, out, sizeof(out), &secs, &why);
+        if (why.len) {
+            ok = 0;  // a program outlived the run
+        } else if (c->status!=ANY && r!=c->status) {
             sput(&why, "status ");
             sputd(&why, r);
             sput(&why, ", not ");
@@ -777,17 +892,18 @@ static int checkconcurrent(int threads, int reps)
     // A warm-up round: on XP the host's first spawn loads a DLL, and
     // contended locks get their events
     basefds = hostspawn();
-    concround(threads, 1);
+    concround(threads, 1);  // its failures count too
     for (double until = nowsec()+2; !kidsgone(&why) && nowsec()<until;) Sleep(1);
     why.len = 0;
-    concfails = 0;
     snapshot(&before);
+    uintptr_t w = watch();
     double t0 = nowsec();
     concround(threads, reps);
     double secs = nowsec() - t0;
+    int ended = seenended(w, &why);
     Sleep(100);
     snapshot(&after);
-    int ok = !concfails && kidsgone(&why) && samestate(&before, &after, &why);
+    int ok = !concfails && ended && kidsgone(&why) && samestate(&before, &after, &why);
     sput(&report, ok ? "PASS " : "FAIL ");
     sput(&report, "concurrent runs ");
     sputd(&report, (int64_t)(secs*1000));
@@ -883,8 +999,9 @@ static int check(int quick)
         {"soft: sleep", "sleep 100", UB_SIGNALED|(128+15), 0, 1, 100, 15|UB_GROUP},
         {"soft: pipeline", "sleep 100 | sleep 100 | cat", UB_SIGNALED|(128+15), 0, 1,
          100, 15|UB_GROUP},
-        {"soft: trapped subshell", "( trap 'echo t' TERM; sleep 100 ); sleep 100",
-         UB_SIGNALED|(128+15), "t", 1.5, 100, 15|UB_GROUP},
+        {"soft: trapped subshell",  // the trap's marker, not in "Terminated"
+         "( trap 'echo T$((6*7))' TERM; sleep 100 ); sleep 100",
+         UB_SIGNALED|(128+15), "T42", 1.5, 100, 15|UB_GROUP},
         {"soft: comsub keeps output",
          "trap 'echo trapped' TERM; x=$(sleep 0.5; echo hi); echo x=$x",
          0, "trapped\nx=hi", 2, 100, 15},
@@ -892,8 +1009,8 @@ static int check(int quick)
         {"out of memory", "x=a; while :; do x=$x$x; done", -UB_ENOMEM, "out of memory", 0, 0,
          0, 32<<20},
         {"descriptor budget",
-         "for i in $(seq 40); do exec {fd}</dev/null || break; done; echo n=$i",
-         0, "n=", 0, 0, 0, 0, 24},
+         "for i in $(seq 40); do exec {fd}</dev/null || break; done;"
+         " ((i<24)) && echo capped", 0, "capped", 0, 0, 0, 0, 24},
     };
     int fails = 0;
     for (int i = 0; i < (int)(sizeof(cases)/sizeof(*cases)); i++) {
