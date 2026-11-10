@@ -37,13 +37,14 @@ struct Fiber {
     void  *arg;
 };
 
-// Labels pin the symbol names, which otherwise vary by platform.
+// Labels pin the symbol names, which otherwise vary by platform. They
+// stay local to the object, so that two copies of these layers, such as
+// a library linked beside its host, never clash.
 extern "C" void fiberswap(void **save, void *sp) asm("fiberswap");
 extern "C" void fiberstart() asm("fiberstart");
 #if __x86_64__
 asm (
     "        .text\n"
-    "        .globl fiberswap\n"
     "fiberswap:\n"
     "        push  %rbp\n"
     "        push  %rbx\n"
@@ -60,7 +61,6 @@ asm (
     "        pop   %rbx\n"
     "        pop   %rbp\n"
     "        ret\n"
-    "        .globl fiberstart\n"
     "fiberstart:\n"
     "        mov   %r12, %rdi\n"
     "        call  fiberentry\n"
@@ -72,7 +72,6 @@ asm (
 asm (
     "        .text\n"
     "        .p2align 2\n"
-    "        .globl fiberswap\n"
     "fiberswap:\n"
     "        sub   sp, sp, #160\n"
     "        stp   x19, x20, [sp, #0]\n"
@@ -100,7 +99,6 @@ asm (
     "        ldp   d14, d15, [sp, #144]\n"
     "        add   sp, sp, #160\n"
     "        ret\n"
-    "        .globl fiberstart\n"
     "        .p2align 2\n"
     "fiberstart:\n"
     "        mov   x0, x19\n"
@@ -178,8 +176,8 @@ static void os_fiberfree(Os *os, Fiber *f)
 }
 
 #else
-extern "C" [[gnu::used]] void fiberentry(Fiber *f) asm("fiberentry");
-extern "C" void fiberentry(Fiber *f)
+[[gnu::used]] static void fiberentry(Fiber *f) asm("fiberentry");
+static void fiberentry(Fiber *f)
 {
     f->fn(f->os, f->arg);
     __builtin_trap();  // fibers never return

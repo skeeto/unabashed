@@ -14,8 +14,19 @@ using byte = decltype('0');
 #define assert(c)   while (!(c)) __builtin_unreachable()
 #define countof(a)  (iz)(sizeof(a) / sizeof(*(a)))
 
+// Only the library's root defines UB_LIBRARY as 1. Code for the library
+// alone sits in "if constexpr (LIBMODE)" branches. The root also
+// provides the placement new, which must be global while the rest of
+// the library sits in a namespace.
+#ifndef UB_LIBRARY
+#  define UB_LIBRARY 0
+#endif
+enum { LIBMODE = UB_LIBRARY };
+
+#if !UB_LIBRARY
 template<typename T>
 void *operator new(uz, T *p) noexcept { return p; }
+#endif
 
 // Non-local exits: jmpset(b) returns 0, then 1 again when jmpback(b)
 // unwinds to it. Callers keep to __builtin_setjmp's rules: jmpback only
@@ -39,7 +50,6 @@ extern "C" [[noreturn]] void jmpbackasm(JmpBuf *) asm("jmpbackasm");
 asm (
     "        .text\n"
     "        .p2align 2\n"
-    "        .globl jmpsetasm\n"
     "jmpsetasm:\n"
     "        stp   x19, x20, [x0, #0]\n"
     "        stp   x21, x22, [x0, #16]\n"
@@ -55,7 +65,6 @@ asm (
     "        stp   d14, d15, [x0, #152]\n"
     "        mov   w0, #0\n"
     "        ret\n"
-    "        .globl jmpbackasm\n"
     "jmpbackasm:\n"
     "        ldp   x19, x20, [x0, #0]\n"
     "        ldp   x21, x22, [x0, #16]\n"
