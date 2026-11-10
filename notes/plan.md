@@ -61,7 +61,7 @@ Research and design reports (about 440 KB, our own summaries with bash source li
 - **Builds:**
   - One command each, for example `g++ -std=c++20 -nostartfiles -o bash.exe main_win32.cpp` and `g++ -std=c++20 -o bash main_posix.cpp`.
   - Debug: `-g3 -fsanitize=undefined -fsanitize-trap`.
-  - A Makefile and an optional CMakeLists.txt are for convenience only.
+  - A CMakeLists.txt is for convenience only (it replaced a Makefile).
   - The i686 build must import no CRT or toolchain DLLs and must have PE subsystem version 5.01 or lower.
 
 ### 2. Execution model (no fork for shell code)

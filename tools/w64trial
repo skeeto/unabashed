@@ -4,7 +4,7 @@
 #
 # usage: tools/w64trial [-s SHELL] [-k KIT] [-j N] [-n RUNS] WORKDIR TARBALL...
 #   -s SHELL  the shell to install as sh.exe (default: unabashed.exe
-#             beside this repository's Makefile)
+#             in this repository's top directory)
 #   -k KIT    the w64devkit to copy (default: the one running make)
 #   -j N      make's job count (default 8)
 #   -n RUNS   then time configure RUNS more times per shell, the two

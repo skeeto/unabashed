@@ -1,5 +1,5 @@
 // ubcollide: a C++ host defining names the library uses inside, which
-// must link beside it without clashing (make check-lib).
+// must link beside it without clashing (check-lib in CMakeLists.txt).
 // This is free and unencumbered software released into the public domain.
 #include <signal.h>
 #include "../unabashed.h"

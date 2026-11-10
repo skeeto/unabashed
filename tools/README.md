@@ -64,8 +64,8 @@ spec.
 
     RECORD_SHELL=unabashed RECORD_CHECK=1 tools/record t/exec/*.sh
 
-`RECORD_SHELL` runs a Linux build of our shell (`make unabashed`, in WSL
-or Linux) in bash's place, mounted read-only over `/usr/local/bin/bash`
+`RECORD_SHELL` runs a Linux build of our shell (main_posix.cpp's header,
+or CMakeLists.txt, in WSL or Linux) in bash's place, mounted read-only over `/usr/local/bin/bash`
 in the same container, so that scripts' own `bash -c` run it too;
 `RECORD_CHECK` compares the result with each spec instead of writing
 it, printing `PASS` or `FAIL` per script. Several instances can share
@@ -250,7 +250,10 @@ filters out.
 other tools it keeps the normal CRT startup, so msvcrt.dll splits the
 command line (mingw-w64 `__wgetmainargs`, no wildcard expansion):
 
-    make argv.exe argv32.exe
+    g++ -std=c++20 -municode -O2 -s -o argv.exe tools/argv.cpp
+    i686-w64-mingw32-g++ -std=c++20 -municode -O2 -s -o argv32.exe tools/argv.cpp
+
+(or target `argv` in a CMake build).
 
 It prints to standard output, in UTF-8, each line ending in a bare LF:
 

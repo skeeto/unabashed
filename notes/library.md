@@ -34,11 +34,23 @@ linked into a C or C++ host with the C compiler:
   local. There are no global constructors, no C++ runtime, no entry
   point, and TLS only on POSIX.
 
-Makefile targets:
-- POSIX: `libunabashed.o`, `libunabashed-O0.o`, `ubhost`, `ubcollide`,
-  and `check-lib`.
-- Windows: `libunabashed.obj`, `libunabashed32.obj`, `ubhost.exe`,
-  `ubhost32.exe`, `ubtiny.exe`, and `check-lib-win`.
+With CMake (CMakeLists.txt), a host takes the library as a subproject,
+which defines only the library: `unabashed::unabashed`, an object
+library with unabashed.h on its include path, built with the host's
+build type.
+
+    FetchContent_Declare(unabashed URL ... URL_HASH SHA256=...)
+    FetchContent_MakeAvailable(unabashed)
+    target_link_libraries(host PRIVATE unabashed::unabashed)
+
+A host built with ASan adds it to the library's target as well:
+`target_compile_options(libunabashed PRIVATE -fsanitize=address)`.
+
+At the top level, CMake also builds the hosts below: `ubhost` and
+`ubcollide` (POSIX), `ubhost.exe`, and in an i686 build
+(cmake/mingw32.cmake) `ubhost32.exe` and `ubtiny.exe`. Target
+`check-lib` checks the objects at -O2 and -O0 and, on POSIX, runs
+`ubcollide` and `ubhost`.
 
 `tools/check-lib` checks the objects:
 - `nm` shows only `ub_*` and imports, at -O2 and -O0;

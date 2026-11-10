@@ -24,6 +24,10 @@ On POSIX systems:
 
     $ cc -std=c++20 -fno-exceptions -O2 -o bash main_posix.cpp
 
+For development, CMakeLists.txt builds the shell, its tests and tools
+at once, and gives a host the shell as a library (libunabashed,
+unabashed.h, notes/library.md) through FetchContent or add_subdirectory.
+
 
 [busybox-w32]: https://frippery.org/busybox/
 [w64devkit]: https://github.com/skeeto/w64devkit
