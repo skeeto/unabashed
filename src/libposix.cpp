@@ -596,7 +596,9 @@ static void libsubmit(Os *os, Io *io)
             }
             return;
         }
-        if (io->op==IO_READ && io->len && fdkind(os, (i32)io->h)==FK_FIFO) {
+        u8 kind = FK_UNKNOWN;
+        if (io->op==IO_READ && io->len) kind = fdkind(os, (i32)io->h);
+        if (kind==FK_FIFO || kind==FK_NFIFO) {
             // read takes a pipe a byte at a time. While data is waiting,
             // skip plt_submit's poll: FIONREAD then read, as in tryio,
             // and nothing between them in which another reader could
@@ -639,6 +641,11 @@ static Io *libwait(Os *os, i64 deadline)
         checkhard(l);
         Io *done = takeproc(os);
         if (done) return done;
+        b32 named = 0;  // a pending read of a named FIFO (macOS)
+        #if __APPLE__
+        done = fifoends(os, &named);
+        if (done) return done;
+        #endif
 
         b32 procs   = 0;  // a pending program not watched
         b32 watched = 0;
@@ -674,7 +681,7 @@ static Io *libwait(Os *os, i64 deadline)
             i64 left = (deadline - plt_now(os) + 999999) / 1000000;
             timeout = left<0 ? 0 : left>(1<<30) ? (1<<30) : (i32)left;
         }
-        if ((procs || trunc) && (timeout<0 || timeout>backoff)) {
+        if ((procs || trunc || named) && (timeout<0 || timeout>backoff)) {
             timeout = backoff;
         }
         if (!watched) fds[1].fd = -1;  // ignored

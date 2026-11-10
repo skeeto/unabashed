@@ -529,11 +529,18 @@ static int check(char *argv0, int quick)
     char f[64], big[64];
     snprintf(f, sizeof(f), "/tmp/ubcheck.out.%ld", (long)getpid());
     snprintf(big, sizeof(big), "/tmp/ubcheck.big.%ld", (long)getpid());
-    char procsub[600], tee[600], fsize[600];
+    char procsub[600], tee[600], fsize[600], fifo[600];
     snprintf(procsub, sizeof(procsub), "seq 1000 > >(sort -rn > %s)", f);
     snprintf(tee, sizeof(tee), "exec > >(tee %s >/dev/null); echo hi", f);
     snprintf(fsize, sizeof(fsize),
              "ulimit -f 1; head -c 4096 /dev/zero > %s; echo s=$?; rm -f %s", big, big);
+    // A named FIFO's end, which macOS poll never reports (fifoends). The
+    // writer opens it itself: an open with no reader would block the run.
+    snprintf(fifo, sizeof(fifo),
+             "f=/tmp/ubcheck.fifo.%ld; rm -f $f; mkfifo $f; sh -c \"echo a >$f\" & "
+             "exec 3<$f; sleep 1 & while read -u3 l; do echo got $l; done; "
+             "read -u3 l; echo again $?; cat <&3; read -u3 l; echo cat $?; "
+             "exec 3<&-; rm -f $f; echo end", (long)getpid());
 
     Case cases[] = {
         {"exit status", "exit 3", 3},
@@ -562,6 +569,7 @@ static int check(char *argv0, int quick)
         {"leftover procsub", ": > >(while :; do sleep 0.01; done)", 0, 0, 1.5},
         {"procsub finishes", procsub, 0, 0, 1.5},
         {"exec into procsub", tee, 0, 0, 1.5},
+        {"named FIFO ends", fifo, 0, "got a\nagain 1\ncat 1\nend", 2},
         {"300 programs left", "for i in $(seq 300); do sleep 1000 & done; true; echo done",
          0, "done", 10*FORKSCALE},  // QEMU: 300 emulated starts
         {"SIGPIPE in programs", "{ yes | head -1; echo ${PIPESTATUS[@]}; } & wait", 0,

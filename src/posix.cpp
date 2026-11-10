@@ -154,7 +154,9 @@ static b32 wfailed(Os *os, i32 fd)
 }
 
 // What a descriptor is, remembered until os_close frees its number.
-enum : u8 { FK_UNKNOWN, FK_REG, FK_FIFO, FK_OTHER };
+// FK_NFIFO, a named FIFO, only on macOS, whose poll misses its end
+// (waitfds); elsewhere it is an FK_FIFO like a pipe.
+enum : u8 { FK_UNKNOWN, FK_REG, FK_FIFO, FK_OTHER, FK_NFIFO };
 
 static u8 fdkind(Os *os, i32 fd)
 {
@@ -164,6 +166,9 @@ static u8 fdkind(Os *os, i32 fd)
     u8 kind = fstat(fd, &st) ? FK_OTHER :
               S_ISREG(st.st_mode) ? FK_REG :
               S_ISFIFO(st.st_mode) ? FK_FIFO : FK_OTHER;
+    #if __APPLE__
+    if (kind==FK_FIFO && st.st_dev) kind = FK_NFIFO;  // a pipe's st_dev is 0
+    #endif
     if (cache) os->wkind[fd] = kind;
     return kind;
 }
@@ -1710,6 +1715,68 @@ static i32 pollnow(Io *io, i32 timeout)
     return r>0 ? p.revents : 0;
 }
 
+#if __APPLE__
+// macOS poll (and kqueue, on which it is built) never reports that a
+// named FIFO's writers have all closed, and select does so only until a
+// read first returns 0 there. A read waiting at the end would wait for
+// ever, though read would return 0 at once. So while such a read is
+// pending, waits are bounded and the read is tried through a descriptor
+// of its own, opened by path without blocking: that reads what is
+// there, 0 with no writer, or fails (EAGAIN) while a writer is idle.
+// The shared descriptor's flags are never touched. Unlinked or moved,
+// the FIFO is not reopened, and its end is not seen.
+static b32 isnamedread(Os *os, Io *io)
+{
+    return io->op==IO_READ && io->len && fdkind(os, (i32)io->h)==FK_NFIFO;
+}
+
+static b32 fifoend(Io *io)
+{
+    // F_GETPATH still gives a path once the FIFO is unlinked, renamed
+    // or replaced, and opening another FIFO would release its writer
+    // only to close on it: look before opening, and again after
+    struct stat a, b;
+    char path[MAXPATHLEN];
+    if (fstat((i32)io->h, &a) || !a.st_nlink) return 0;
+    if (fcntl((i32)io->h, F_GETPATH, path)) return 0;
+    if (lstat(path, &b) || !S_ISFIFO(b.st_mode) ||
+        a.st_dev!=b.st_dev || a.st_ino!=b.st_ino) return 0;
+    i32 fd = open(path, O_RDONLY|O_NONBLOCK|O_CLOEXEC);
+    if (fd < 0) return 0;
+    b32 same = !fstat(fd, &b) && a.st_dev==b.st_dev && a.st_ino==b.st_ino;
+    iz n = -1;
+    if (same) {
+        iz len = io->len<(1<<30) ? io->len : (1<<30);
+        do {
+            n = read(fd, io->buf, (uz)len);
+        } while (n<0 && errno==EINTR);
+    }
+    close(fd);
+    if (n < 0) return 0;
+    io->n   = n;
+    io->err = 0;
+    return 1;
+}
+
+// Complete a pending read of a named FIFO that has ended, or has data
+// poll missed. *any says whether such a read is pending.
+static Io *fifoends(Os *os, b32 *any)
+{
+    *any = 0;
+    for (Io **p = &os->pending; *p; p = &(*p)->next) {
+        Io *io = *p;
+        if (!isnamedread(os, io)) continue;
+        *any = 1;
+        if (fifoend(io)) {
+            *p = io->next;
+            io->done = 1;
+            return io;
+        }
+    }
+    return 0;
+}
+#endif
+
 static void plt_submit(Os *os, Io *io)
 {
     flushw(os);
@@ -1729,6 +1796,9 @@ static Io *plt_wait(Os *os, i64 deadline)
     if (deadline != WAIT_POLL) flushw(os);  // it may block
     enum { MAXPOLL = 256 };
     struct pollfd fds[MAXPOLL];
+    #if __APPLE__
+    i32 backoff = 1;  // named FIFOs: 1 to 64 ms (fifoends)
+    #endif
     for (;;) {
         // Process exits first: the self-pipe only says "look again"
         for (Io **p = &os->pending; *p; p = &(*p)->next) {
@@ -1739,6 +1809,11 @@ static Io *plt_wait(Os *os, i64 deadline)
                 return io;
             }
         }
+        #if __APPLE__
+        b32 named = 0;
+        Io *ended = fifoends(os, &named);
+        if (ended) return ended;
+        #endif
         i32 n = 0;
         fds[n].fd      = os->wakefd[0];
         fds[n].events  = POLLIN;
@@ -1756,6 +1831,13 @@ static Io *plt_wait(Os *os, i64 deadline)
             i64 left = (deadline - plt_now(os) + 999999) / 1000000;
             timeout = left<0 ? 0 : left>(1<<30) ? (1<<30) : (i32)left;
         }
+        #if __APPLE__
+        b32 bounded = named && (timeout<0 || timeout>backoff);
+        if (bounded) {
+            timeout = backoff;
+            backoff = backoff<64 ? backoff*2 : 64;
+        }
+        #endif
         i32 r = poll(fds, (nfds_t)n, timeout);
         if (r<0 && errno!=EINTR) return 0;
         if (fds[0].revents) {
@@ -1782,6 +1864,12 @@ static Io *plt_wait(Os *os, i64 deadline)
                 return io;
             }
         }
+        #if __APPLE__
+        if (bounded) {
+            if (deadline>0 && plt_now(os)>=deadline) return 0;
+            continue;  // only the bound passed
+        }
+        #endif
         if (r==0 && timeout>=0) return 0;
     }
 }
