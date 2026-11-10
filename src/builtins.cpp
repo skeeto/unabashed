@@ -4229,11 +4229,12 @@ static Rlimit nofilelimit(Shell *sh)
 // Set a limit: in the shell's own process at the top level, so that
 // the shell and everything it starts have it; in a subshell only in
 // its table, which it passes to its programs, checked as a kernel
-// checks an unprivileged process.
+// checks an unprivileged process. A library's run is never the
+// process, so its top level is as a subshell.
 static i32 setrlimit(Shell *sh, i32 res, Rlimit r)
 {
     Rlimit *t = rltable(sh) + res;
-    if (!sh->subshell) {
+    if (!LIBMODE && !sh->subshell) {
         i32 err = os_setrlimit(sh->os, res, r);
         if (!err) *t = os_getrlimit(sh->os, res);
         return err;

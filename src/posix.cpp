@@ -632,7 +632,15 @@ static void closefds(i32 lo, i32 hi)
     #ifdef SYS_close_range
     if (!syscall(SYS_close_range, (unsigned)lo, (unsigned)hi, 0)) return;
     #endif
-    for (i32 fd = lo; fd <= (hi<0 ? 1023 : hi); fd++) close(fd);
+    i32 max = 1023;
+    if constexpr (LIBMODE) {
+        // the host's may go as high as its limit
+        struct rlimit rl;
+        if (!getrlimit(RLIMIT_NOFILE, &rl)) {
+            max = rl.rlim_cur>(1<<16) ? (1<<16) - 1 : (i32)rl.rlim_cur - 1;
+        }
+    }
+    for (i32 fd = lo; fd <= (hi<0 ? max : hi); fd++) close(fd);
 }
 
 static Spawned forkimage(Os *, Arena, Spawn *);
