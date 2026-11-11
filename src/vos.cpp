@@ -1927,6 +1927,14 @@ static b32 vntfsless(Dirent **a, Dirent **b)
     return x.len < y.len;
 }
 
+// Programs start at their directory's name (Linux mode keeps no other
+// hold either: a removed directory is entered by name as if there).
+static void vos_cwd(Os *, Arena, Str) {}
+
+// The longest working directory Windows starts a program in, without
+// a trailing slash: MAX_PATH, less the NUL and the slash it appends.
+enum : i32 { VCWDMAX = 258 };
+
 // Directory entries in creation order, as a fresh tmpfs lists them, or
 // in Windows mode in NTFS's order.
 static Dirent *vos_list(Os *os, Arena *a, Str dir, i32 *err)
@@ -2993,6 +3001,21 @@ static Spawned vos_spawn(Os *os, Arena scratch, Spawn *s)
     if (prog < 0) {
         r.err = g.err;
         return r;
+    }
+    if (v->win && !s->image.base && s->cwd.len) {
+        // CreateProcess refuses a working directory that is gone, or
+        // too long for a process (main_win32.cpp's cwdfailure)
+        Stat  st  = vos_stat(os, scratch, s->cwd, 1);
+        VPath cwd = vpath(v, &scratch, s->cwd);
+        Str   n   = cwd.native;
+        for (; n.len>3 && n[n.len-1]=='/'; n.len--) {}
+        if (st.err || st.type!=FT_DIR) {
+            r.err = E_NOENT;
+            return r;
+        } else if (n.len > VCWDMAX) {
+            r.err = E_NAMETOOLONG;
+            return r;
+        }
     }
     if (!v->win) {
         // Linux execve: each string at most MAX_ARG_STRLEN (32 pages),
@@ -4305,6 +4328,7 @@ static OsVtable const vosvtable = {
     .tty        = vos_tty,
     .con        = vos_con,
     .list       = vos_list,
+    .cwd        = vos_cwd,
     .spawn      = vos_spawn,
     .imagenew   = vos_imagenew,
     .imagefree  = vos_imagefree,

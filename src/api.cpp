@@ -367,7 +367,16 @@ static Tty     os_tty(Os *, Handle in, Handle out, i32 how);
 static b32     os_con(Os *, Handle out, ConOp *);
 // Directory entries in the platform's order, or null with *err set.
 static Dirent *os_list(Os *, Arena *, Str dir, i32 *err);
-// Start a program. The child's descriptors are exactly those listed.
+// The shell has entered directory dir (native form, as Spawn.cwd will
+// name it). A platform whose programs inherit a directory rather than
+// a name (POSIX) may hold it open, so that a program later started in
+// dir runs in this directory, as bash's would, even once it is renamed
+// or removed. A no-op elsewhere.
+static void    os_cwd(Os *, Arena scratch, Str dir);
+// Start a program. The child's descriptors are exactly those listed. A
+// working directory it cannot start in is an error (E_NOENT where it
+// is gone, E_NAMETOOLONG where Windows cannot take it): it never runs
+// elsewhere.
 static Spawned os_spawn(Os *, Arena scratch, Spawn *);
 // Reserve a region for a child's state image (Spawn.image), where a
 // fresh process of this shell can reserve it again: base null where
@@ -520,7 +529,8 @@ static Str     lib_root(Os *);
 //
 // Versions:
 // 1: the first
-enum : i32 { OSVTABLE_VERSION = 1 };
+// 2: os_cwd, and os_spawn's working directory is never skipped
+enum : i32 { OSVTABLE_VERSION = 2 };
 
 struct OsVtable {
     i32 version;  // the OSVTABLE_VERSION it implements
@@ -548,6 +558,7 @@ struct OsVtable {
     decltype(os_tty)        *tty;
     decltype(os_con)        *con;
     decltype(os_list)       *list;
+    decltype(os_cwd)        *cwd;
     decltype(os_spawn)      *spawn;
     decltype(os_imagenew)   *imagenew;
     decltype(os_imagefree)  *imagefree;

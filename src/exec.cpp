@@ -2539,6 +2539,27 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
     if (err == E_INTERP) {
         return 126;  // reported
     }
+    if (err==E_NOENT || err==E_NOTDIR) {
+        // A working directory that is gone, which no program can start
+        // in where the platform could not hold it (os_cwd): refused,
+        // never run elsewhere. bash's child would be in it still.
+        Str  cwd = spawncwd(sh, &a);
+        Stat st  = os_stat(sh->os, a, cwd, 1);
+        if (st.err || st.type!=FT_DIR) {
+            Buf b(&a, 128);
+            print(&b, path);
+            print(&b, ": cannot start in the working directory: ");
+            print(&b, errtext(st.err ? st.err : E_NOTDIR));
+            shellerror(sh, a, finish(&b));
+            return 126;
+        }
+    }
+    if (err == E_NAMETOOLONG) {
+        // Also Windows refusing a working directory too long for a
+        // process, which Git Bash reports so
+        shellerror(sh, a, concat3(&a, path, Str(": "), errtext(err)));
+        return 126;
+    }
     if (err==E_NOEXEC && sh->pathmode==PM_NATIVE &&
         !canexec(sh, pathstat(sh, a, path, 1))) {
         // Windows ran what native mode does not count as executable (a

@@ -25,6 +25,7 @@ enum : i32 {
     ERROR_BROKEN_PIPE            = 109,
     ERROR_DIRECTORY              = 267,
     ERROR_FILE_NOT_FOUND         = 2,
+    ERROR_FILENAME_EXCED_RANGE   = 206,
     ERROR_INVALID_PARAMETER      = 87,
     ERROR_MORE_DATA              = 234,
     ERROR_NO_DATA                = 232,
@@ -3592,6 +3593,40 @@ static Stat plt_fstat(Os *os, Handle h)
     return r;
 }
 
+// A program starts at its directory's name: there is nothing to hold.
+static void plt_cwd(Os *, Arena, Str) {}
+
+// A working directory for CreateProcess: never extended-length, which
+// counts against the limit below and which cmd refuses ("UNC paths are
+// not supported", then starting in the Windows directory).
+static Str16 cwdwide(Arena *a, Str dir)
+{
+    Str16 r = widepath(a, dir);
+    c16  *p = r.data;
+    if (r.len<4 || p[0]!='\\' || p[1]!='\\' || p[2]!='?' || p[3]!='\\') {
+        return r;
+    } else if (r.len>=8 && p[4]=='U' && p[5]=='N' && p[6]=='C' && p[7]=='\\') {
+        r.data += 6;  // \\?\UNC\host to \\host
+        r.len  -= 6;
+        r.data[0] = '\\';
+    } else if (r.len>=6 && p[5]==':') {
+        r.data += 4;
+        r.len  -= 4;
+    }
+    return r;
+}
+
+// Why CreateProcess refused working directory dir (ERROR_DIRECTORY):
+// one that is there is too long for a process, which keeps it within
+// MAX_PATH (Git Bash refuses it too, "File name too long"); else it is
+// gone. Never run elsewhere instead, as the program would there.
+static i32 cwdfailure(Arena scratch, Str dir)
+{
+    i32 a = GetFileAttributesW(widepath(&scratch, dir).data);
+    b32 isdir = a!=INVALID_FILE_ATTRIBUTES && (a&FILE_ATTRIBUTE_DIRECTORY);
+    return isdir ? ERROR_FILENAME_EXCED_RANGE : ERROR_PATH_NOT_FOUND;
+}
+
 static Dirent *plt_list(Os *os, Arena *a, Str dir, i32 *err)
 {
     flushw(os);
@@ -3851,12 +3886,11 @@ static Spawned libstartproc(Os *os, Arena scratch, Spawn *s, Str16 app,
         code = ok ? 0 : GetLastError();
         if (!ok && code==ERROR_INVALID_PARAMETER && listed) {
             listed = 0;  // a handle the list refuses: the lock alone
-        } else if (!ok && code==ERROR_DIRECTORY && cwd.data) {
-            cwd = {};  // unusable working directory: run anyway
         } else {
             break;
         }
     }
+    if (!ok && code==ERROR_DIRECTORY && cwd.data) code = cwdfailure(scratch, s->cwd);
     b32 injob = 0;
     if (ok) {
         injob = AssignProcessToJobObject(os->runjob, pi.process);
@@ -3952,7 +3986,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
         return r;
     }
 
-    Str16 cwd = s->cwd.len ? widepath(&scratch, s->cwd) : Str16{};
+    Str16 cwd = s->cwd.len ? cwdwide(&scratch, s->cwd) : Str16{};
     if constexpr (LIBMODE) {
         r = libstartproc(os, scratch, s, app, line, wenv, cwd);
         return r;  // the same object every return names
@@ -4045,12 +4079,7 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
     b32 ok = CreateProcessW(app.data, line.data, 0, 0, 1, flags, wenv.data,
                             cwd.data, &si, &pi);
     i32 code = ok ? 0 : GetLastError();
-    if (!ok && code==ERROR_DIRECTORY && cwd.data) {
-        // Unusable working directory (too long, or gone): run anyway
-        ok = CreateProcessW(app.data, line.data, 0, 0, 1, flags, wenv.data,
-                            0, &si, &pi);
-        code = ok ? 0 : GetLastError();
-    }
+    if (!ok && code==ERROR_DIRECTORY && cwd.data) code = cwdfailure(scratch, s->cwd);
     if (noint) SetConsoleCtrlHandler(0, 0);
     if (ok && self) {
         i32 err = imagecopy(pi.process, s->image);
@@ -4883,6 +4912,7 @@ static constexpr OsVtable pltvtable = {
     .tty        = plt_tty,
     .con        = plt_con,
     .list       = plt_list,
+    .cwd        = plt_cwd,
     .spawn      = plt_spawn,
     .imagenew   = plt_imagenew,
     .imagefree  = plt_imagefree,

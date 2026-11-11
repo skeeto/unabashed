@@ -918,6 +918,7 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     setattrs(sh, "PWD", V_EXPORT, 0);
     sh->cwd = sclone(sh->store, cwd);
     sh->wd  = pwd==cwd ? sh->cwd : sclone(sh->store, pwd);
+    if (sh->cwd.len) os_cwd(sh->os, scratch, sh->cwd);
     g = getvar(sh, a, "OLDPWD");
     if (!g.set) setattrs(sh, "OLDPWD", V_EXPORT, 0);
 

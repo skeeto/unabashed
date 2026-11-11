@@ -192,6 +192,21 @@ Moved from M5a: limits of the test tiers, not of the shell.
 
 ## Accepted deviations
 
+- **Accepted: a removed working directory on Windows refuses
+  programs.** bash's child would start in it; a Windows process cannot
+  be given a directory that is gone, so a program fails with "cannot
+  start in the working directory" and 126 (t/winvos/049, 050). Git
+  Bash never gets there: Cygwin holds its directory open, so it cannot
+  be removed. One too long for a process (over 258 characters) fails
+  with "File name too long" and 126, as in Git Bash. Neither ever runs
+  the program elsewhere. (2026-11-10)
+- **Accepted: eight pinned directories on POSIX.** The shell holds open
+  up to eight directories it has entered (posix.cpp, plt_cwd), so a
+  program starts in a removed or renamed one as bash's child does
+  (t/posix/004). Past eight removed ones at once, the oldest is let go,
+  and a program there is refused as on Windows. Not checked on macOS,
+  where the pins open O_RDONLY (no O_PATH), so an unreadable directory
+  is not pinned. (2026-11-10)
 - **Accepted: no BOM handling, as bash.** A UTF-8 byte order mark is
   part of the first word of a script, sourced file or -c text, and
   hides a `#!` line from the shell's own sniffer; Git Bash 5.3.15 does

@@ -4,8 +4,21 @@
 // startup code (main_linux.cpp, main_darwin.cpp for the executable).
 // This is free and unencumbered software released into the public domain.
 
+// A directory the shell entered (os_cwd), held open (plt_cwd)
+struct Pin {
+    i32   fd;    // 0: free (a pin is at 10 or up, highfd)
+    u32   used;  // Os.pinclock when last entered or started in
+    dev_t dev;
+    ino_t ino;
+    iz    len;
+    char  path[PATH_MAX];
+};
+enum : i32 { NPIN = 8 };
+
 struct Os {
     Fibers fibers;
+    Pin    pins[NPIN];
+    u32    pinclock;
     Io    *pending;     // submitted operations, oldest first
     i32    wakefd[2];   // self-pipe written by the SIGCHLD handler
     i32    peekfd[2];   // private pipe for os_peek, once needed
@@ -138,6 +151,7 @@ static i32   coresig(i32 sig);
 static u64   corebit(i32 sig);
 static b32   hostin(u64 set, i32 sig);
 static b32   spawnable(SpawnPlan *);
+static void  spawndir(posix_spawn_file_actions_t *, SpawnPlan *);
 static short spawnpre(posix_spawnattr_t *, posix_spawn_file_actions_t *,
                       SpawnPlan *, i32 *src, i32 base);
 static void  spawnpost(posix_spawn_file_actions_t *, SpawnPlan *, i32 base);
@@ -263,6 +277,100 @@ static i32 highfd(i32 fd)
     i32 r = fcntl(fd, F_DUPFD_CLOEXEC, 10);
     close(fd);
     return r;
+}
+
+// Directories the shell entered, held open: a program starts in the
+// directory itself, as bash's forked child inherits it, so that it runs
+// there even once the directory is renamed or removed, where its name
+// leads elsewhere or nowhere. The least recently used goes first, but
+// one its name still reaches before one only the descriptor can.
+// Without its pin a program starts at the name, or not at all.
+
+#ifdef O_PATH
+enum : i32 { O_PIN = O_PATH|O_DIRECTORY|O_CLOEXEC };  // only search access
+#else
+enum : i32 { O_PIN = O_RDONLY|O_DIRECTORY|O_CLOEXEC };
+#endif
+
+static b32 reachable(Pin *p)  // does its name still lead to it?
+{
+    struct stat st;
+    return !stat(p->path, &st) && st.st_dev==p->dev && st.st_ino==p->ino;
+}
+
+static Pin *findpin(Os *os, Str dir)
+{
+    for (i32 i = 0; i < NPIN; i++) {
+        Pin *p = os->pins + i;
+        if (p->fd && p->len==dir.len && dir.len &&
+            !__builtin_memcmp(p->path, dir.data, (uz)dir.len)) {
+            return p;
+        }
+    }
+    return 0;
+}
+
+// Pin directory fd (taken) under name dir, replacing any pin of dir.
+static void pinfd(Os *os, Str dir, i32 fd)
+{
+    Pin *p = findpin(os, dir);
+    if (!p) {
+        Pin *reach = 0;
+        Pin *any   = 0;
+        for (i32 i = 0; i<NPIN && !p; i++) {
+            Pin *q = os->pins + i;
+            if (!q->fd) {
+                p = q;
+            } else {
+                any = !any || q->used<any->used ? q : any;
+                if (reachable(q) && (!reach || q->used<reach->used)) reach = q;
+            }
+        }
+        p = p ? p : reach ? reach : any;
+    }
+    if (p->fd) close(p->fd);
+    p->fd = 0;
+    struct stat st;
+    fd = highfd(fd);
+    if (fd<0 || fstat(fd, &st) || dir.len>=PATH_MAX) {
+        if (fd >= 0) close(fd);
+        return;
+    }
+    p->fd   = fd;
+    p->used = ++os->pinclock;
+    p->dev  = st.st_dev;
+    p->ino  = st.st_ino;
+    p->len  = dir.len;
+    copybytes(p->path, dir.data, dir.len);
+    p->path[dir.len] = 0;
+}
+
+static void plt_cwd(Os *os, Arena scratch, Str dir)
+{
+    flushw(os);
+    if constexpr (LIBMODE) return;  // no descriptors held between runs
+    Pin *p = findpin(os, dir);
+    if (p && reachable(p)) {
+        p->used = ++os->pinclock;  // still the same directory
+        return;
+    }
+    if (dir.len >= PATH_MAX) return;
+    pinfd(os, dir, open(cpath(&scratch, dir), O_PIN));
+}
+
+// The descriptor to start a program in dir with, or -1 for its name.
+static i32 pinned(Os *os, Str dir)
+{
+    Pin *p = findpin(os, dir);
+    if (!p) return -1;
+    p->used = ++os->pinclock;
+    return p->fd;
+}
+
+// Enter the directory: by its pin, else by name. 0 or an errno.
+static i32 enterdir(i32 fd, char *path)
+{
+    return (fd>=0 ? fchdir(fd) : chdir(path)) ? errno : 0;
 }
 
 static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
@@ -612,6 +720,7 @@ static void joingroup(pid_t pid, i64 pgid, b32 fg, i32 tty)
 struct SpawnPlan {
     char    *path;
     char    *cwd;
+    i32      cwdfd;    // its pin, or -1 (plt_cwd)
     char   **argv;
     char   **envp;
     i32     *src;      // dst[i] gets src[i] (none if negative)
@@ -647,6 +756,13 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
     pid_t pid = fork();
     if (!pid) {
         close(sync[0]);
+        // The directory first, while its pin is open and not yet
+        // replaced by a target of the map
+        i32 err = enterdir(p->cwdfd, p->cwd);
+        if (err) {
+            if (write(sync[1], &err, sizeof(err))) {}
+            _exit(127);
+        }
         if constexpr (LIBMODE) setsid();  // away from the host's terminal
         joingroup(0, p->pgid, p->fg, p->tty);
         // Move the pipe and the sources out of the way first, then
@@ -663,9 +779,6 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
         } else {
             closefds(base, w-1);
             closefds(w+1, -1);
-        }
-        if (chdir(p->cwd)) {
-            // run anyway: bash reports nothing here
         }
         // Every handler of the shell's goes too, as an exec would take
         // them, so that none runs here before it
@@ -693,7 +806,7 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
         }
         sigprocmask(SIG_SETMASK, mask, 0);
         execve(p->path, p->argv, p->envp);
-        i32 err = errno ? errno : E_NOEXEC;
+        err = errno ? errno : E_NOEXEC;
         if (w>=0 && write(w, &err, sizeof(err))) {}
         _exit(127);
     }
@@ -726,14 +839,7 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
 //   the while would throw away one pending;
 // - the terminal for a foreground group, without an attribute for it
 //   (the parent hands it over too, but only after the program may
-//   already have run into the terminal);
-// - a directory it cannot enter, where bash runs the program anyway.
-static b32 dirok(char *path)
-{
-    struct stat st;
-    return !stat(path, &st) && S_ISDIR(st.st_mode) && !access(path, X_OK);
-}
-
+//   already have run into the terminal).
 static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
 {
     if (p->rlimits || !spawnable(p)) return -1;
@@ -780,6 +886,7 @@ static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
             flags |= POSIX_SPAWN_SETPGROUP;
             posix_spawnattr_setpgroup(&at, p->pgid<0 ? 0 : (pid_t)p->pgid);
         }
+        spawndir(&fa, p);  // first, as forkspawn
         flags |= spawnpre(&at, &fa, p, src, base);
         for (i32 i = 0; i < p->nfds; i++) {
             if (src[i] >= 0) posix_spawn_file_actions_adddup2(&fa, src[i], p->dst[i]);
@@ -790,7 +897,6 @@ static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
         err = posix_spawn(out, p->path, &fa, &at, p->argv, p->envp);
         posix_spawn_file_actions_destroy(&fa);
         posix_spawnattr_destroy(&at);
-        if (err && !dirok(p->cwd)) err = -1;
     }
 
     for (i32 i = 0; i < p->nfds; i++) {
@@ -818,9 +924,10 @@ static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
     Spawned r = {};
     r.proc = BADHANDLE;
     SpawnPlan p = {};
-    p.path = cpath(&scratch, s->path);
-    p.cwd  = cpath(&scratch, s->cwd);
-    p.argv = alloc<char *>(&scratch, s->argc+1);
+    p.path  = cpath(&scratch, s->path);
+    p.cwd   = cpath(&scratch, s->cwd);
+    p.cwdfd = pinned(os, s->cwd);
+    p.argv  = alloc<char *>(&scratch, s->argc+1);
     for (iz i = 0; i < s->argc; i++) p.argv[i] = cpath(&scratch, s->argv[i]);
     p.envp = alloc<char *>(&scratch, s->nenv+1);
     for (iz i = 0; i < s->nenv; i++) p.envp[i] = cpath(&scratch, s->env[i]);
@@ -903,8 +1010,9 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
 {
     Spawned r = {};
     r.proc = BADHANDLE;
-    char *cwd = cpath(&scratch, s->cwd);
-    i32  *src = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
+    char *cwd   = cpath(&scratch, s->cwd);
+    i32   cwdfd = pinned(os, s->cwd);
+    i32  *src   = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
     i32  *dst = alloc<i32>(&scratch, s->nfds ? s->nfds : 1);
     for (iz i = 0; i < s->nfds; i++) {
         src[i] = (i32)s->fds[i].h;
@@ -923,6 +1031,10 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
             char c;
             while (read((i32)s->gater, &c, 1)<0 && errno==EINTR) {}
         }
+        // The shell keeps its directory by name, so it runs on where it
+        // cannot enter it, but its own pin is only good while the map
+        // leaves it: it holds the directory again from inside
+        b32 entered = !enterdir(cwdfd, cwd);
         i32 base = fdbase(dst, nfds);
         for (i32 i = 0; i < nfds; i++) {
             if (src[i] < base) src[i] = fcntl(src[i], F_DUPFD, base);
@@ -930,9 +1042,8 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         closefds(0, base-1);
         for (i32 i = 0; i < nfds; i++) dup2(src[i], dst[i]);
         closefds(base, -1);
-        if (chdir(cwd)) {
-            // as for a program: it runs anyway
-        }
+        for (i32 i = 0; i < NPIN; i++) os->pins[i].fd = 0;
+        if (entered) pinfd(os, s->cwd, open(".", O_PIN));
         for (i32 i = 0; s->rlimits && i<RL_COUNT; i++) {
             i32 k = rlres(i);
             if (k<0 || s->rlimits[i].err) continue;
@@ -1069,9 +1180,15 @@ static i32 plt_exec(Os *os, Arena scratch, Spawn *s)
     for (iz i = 0; i<n && !err; i++) {
         save[i] = fcntl(s->fds[i].fd, F_DUPFD_CLOEXEC, base);  // -1 if closed
     }
-    i32 dot = open(".", O_RDONLY|O_CLOEXEC);
-    if (err || dot<0) {
-        err = err ? err : errno;
+    i32 dot = open(".", O_PIN);
+    if (dot>=0 && dot<base) {  // above the targets, as the saves
+        i32 d = fcntl(dot, F_DUPFD_CLOEXEC, base);
+        close(dot);
+        dot = d;
+    }
+    if (!err && dot<0) err = errno;
+    if (!err) err = enterdir(pinned(os, s->cwd), cwd);  // as os_spawn
+    if (err) {
         for (iz i = 0; i < n; i++) {
             if (src[i] >= 0) close(src[i]);
             if (save[i] >= 0) close(save[i]);
@@ -1086,9 +1203,6 @@ static i32 plt_exec(Os *os, Arena scratch, Spawn *s)
         if (!target) fcntl(fd, F_SETFD, FD_CLOEXEC);
     }
     for (iz i = 0; i < n; i++) dup2(src[i], s->fds[i].fd);
-    if (chdir(cwd)) {
-        // run anyway, as os_spawn
-    }
     // Signal actions as os_spawn's child gets them
     struct sigaction old[NSIGNAL] = {};
     u64 touched = 0;
@@ -1613,6 +1727,7 @@ static constexpr OsVtable pltvtable = {
     .tty        = plt_tty,
     .con        = plt_con,
     .list       = plt_list,
+    .cwd        = plt_cwd,
     .spawn      = plt_spawn,
     .imagenew   = plt_imagenew,
     .imagefree  = plt_imagefree,

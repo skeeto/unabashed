@@ -81,10 +81,11 @@ static b32 hostin(u64 set, i32 sig)
     return (set & corebit(sig)) != 0;
 }
 
-// posix_spawn beyond POSIX: a chdir action (10.15, named without _np
+// posix_spawn beyond POSIX: chdir actions (10.15, named without _np
 // from 26), and close-on-exec for all but the map
 #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 260000
 #  define posix_spawn_file_actions_addchdir_np posix_spawn_file_actions_addchdir
+#  define posix_spawn_file_actions_addfchdir_np posix_spawn_file_actions_addfchdir
 #endif
 
 // Whether posix_spawn can carry out the plan (trispawn): not handing a
@@ -103,11 +104,18 @@ static short spawnpre(posix_spawnattr_t *, posix_spawn_file_actions_t *,
     return POSIX_SPAWN_CLOEXEC_DEFAULT;
 }
 
-// After the map: the directory
-static void spawnpost(posix_spawn_file_actions_t *fa, SpawnPlan *p, i32)
+// Before anything else: the directory, by its pin while that is open
+static void spawndir(posix_spawn_file_actions_t *fa, SpawnPlan *p)
 {
-    posix_spawn_file_actions_addchdir_np(fa, p->cwd);
+    if (p->cwdfd >= 0) {
+        posix_spawn_file_actions_addfchdir_np(fa, p->cwdfd);
+    } else {
+        posix_spawn_file_actions_addchdir_np(fa, p->cwd);
+    }
 }
+
+// After the map: nothing (POSIX_SPAWN_CLOEXEC_DEFAULT closed the rest)
+static void spawnpost(posix_spawn_file_actions_t *, SpawnPlan *, i32) {}
 
 // Whether the terminal sent the signal to its group: macOS cannot tell
 static b32 fromterminal(siginfo_t *)

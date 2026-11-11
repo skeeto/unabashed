@@ -2117,9 +2117,14 @@ removed while the shell runs, even after
 In msys mode a program started from a virtual directory such as
 .I /proc
 starts in the install root.
-When Windows refuses the directory, as when it is too long or has been
-removed, the program starts in the directory the shell itself was
-started in.
+A program never starts anywhere else.
+When Windows refuses the directory, the command fails with status 126:
+.B "File name too long"
+for a directory longer than 258 characters, which no process may have,
+as in Git Bash, and
+.B "cannot start in the working directory"
+for one that has been removed.
+Builtins and the shell's own redirections still work there.
 .PP
 A file whose name ends in
 .B .bat
@@ -4175,6 +4180,11 @@ Its
 and
 .B OSTYPE
 always name x86_64 Linux.
+As in bash, a program starts in the working directory itself even after
+it has been renamed or removed: the shell holds open up to eight
+directories it has entered, keeping removed ones the longest.
+A removed directory past those is an error for a program, as on
+Windows, never another directory.
 .SH SEE ALSO
 .BR busybox (1),
 .BR make (1),

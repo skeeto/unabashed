@@ -78,7 +78,7 @@ static i32 coresig(i32 sig) { return sig; }
 static u64 corebit(i32 sig) { return (u64)1 << (sig-1); }
 static b32 hostin(u64 set, i32 sig) { return sigin(set, sig); }
 
-// posix_spawn beyond POSIX, by glibc version: a chdir action (2.29),
+// posix_spawn beyond POSIX, by glibc version: chdir actions (2.29),
 // closefrom (2.34), and the terminal for a new group (2.35)
 #if defined(__GLIBC_PREREQ)
 #  if __GLIBC_PREREQ(2, 29)
@@ -131,18 +131,27 @@ static short spawnpre(posix_spawnattr_t *at, posix_spawn_file_actions_t *fa,
     return flags;
 }
 
-// After the map: the shell's copies above it closed, and the directory
-static void spawnpost(posix_spawn_file_actions_t *fa, SpawnPlan *p, i32 base)
+// Before anything else: the directory, by its pin while that is open
+static void spawndir(posix_spawn_file_actions_t *fa, SpawnPlan *p)
+{
+    #if SPAWN_CHDIR
+    if (p->cwdfd >= 0) {
+        posix_spawn_file_actions_addfchdir_np(fa, p->cwdfd);
+    } else {
+        posix_spawn_file_actions_addchdir_np(fa, p->cwd);
+    }
+    #else
+    (void)fa; (void)p;
+    #endif
+}
+
+// After the map: the shell's copies above it closed
+static void spawnpost(posix_spawn_file_actions_t *fa, SpawnPlan *, i32 base)
 {
     #if SPAWN_CLOSEFROM
     posix_spawn_file_actions_addclosefrom_np(fa, base);
     #else
-    (void)base;
-    #endif
-    #if SPAWN_CHDIR
-    posix_spawn_file_actions_addchdir_np(fa, p->cwd);
-    #else
-    (void)fa; (void)p;
+    (void)fa; (void)base;
     #endif
 }
 

@@ -2141,6 +2141,7 @@ static b32 setcwd(Shell *sh, Arena scratch, Str dir, Str old)
     ok &= setvar(sh, scratch, "PWD", dir);
     sh->wd  = sclone(sh->store, dir);
     sh->cwd = ncwd.data==dir.data ? sh->wd : sclone(sh->store, ncwd);
+    if (sh->cwd.len) os_cwd(sh->os, scratch, sh->cwd);
     if (sh->pathmode != PM_POSIX) setdrivecwd(sh, scratch, ncwd);
     return ok;
 }
