@@ -52,14 +52,14 @@ Research and design reports (about 440 KB, our own summaries with bash source li
   - `history`, `histexp`, `edit`, `complete`, `inputrc`, `vtcon`.
 - **Platform layers:**
   - `main_win32.cpp`: CRT-free; kernel32 statically linked; advapi32 and ntdll entry points resolved at run time.
-  - `main_posix.cpp`.
+  - `main_linux.cpp` and `main_darwin.cpp`, sharing the POSIX layer (`src/posix.cpp`, with `src/linux.cpp` or `src/darwin.cpp`).
   - `main_test.cpp`, which includes `vos.cpp` (the virtual OS), `fakes.cpp`, `vterm.cpp` and `test/*_test.cpp`.
   - `main_fuzz.cpp`.
   - `oracle.cpp`, the runner for the bash suite.
 - **Other directories:** `t/` (spec tests), `bench/`, `tools/` (record, difftest, ptyrun, sandbox runner, `Dockerfile.bash53`), `notes/`.
 - `bash-5.3.tar.gz` and `third_party/` are gitignored. M0 runs `git init`.
 - **Builds:**
-  - One command each, for example `g++ -std=c++20 -nostartfiles -o bash.exe main_win32.cpp` and `g++ -std=c++20 -o bash main_posix.cpp`.
+  - One command each, for example `g++ -std=c++20 -nostartfiles -o bash.exe main_win32.cpp` and `g++ -std=c++20 -o bash main_linux.cpp`.
   - Debug: `-g3 -fsanitize=undefined -fsanitize-trap`.
   - A CMakeLists.txt is for convenience only (it replaced a Makefile).
   - The i686 build must import no CRT or toolchain DLLs and must have PE subsystem version 5.01 or lower.
@@ -263,7 +263,7 @@ Research and design reports (about 440 KB, our own summaries with bash source li
   - Only our own scripts and the recorded outputs are committed.
 - **bash's test suite as an external oracle** (`oracle`, `BASH_TESTS=<extracted path>`, read-only):
   - It reimplements the run-* contract.
-  - Categories a, b and the faked part of c run on the vos. Categories c, d and e run on `main_posix` in a disposable non-root container with `--network none` and a tmpfs workdir.
+  - Categories a, b and the faked part of c run on the vos. Categories c, d and e run on `main_linux` in a disposable non-root container with `--network none` and a tmpfs workdir.
   - Only a manifest is committed: test name, status, reason. No test content is ever copied.
 - **Differential testing:** stdout, stderr, status, the merged stream and a final `declare -p`, normalized for paths, pids and time. Run against:
   - bash 5.3 in a container;

@@ -64,9 +64,9 @@ spec.
 
     RECORD_SHELL=unabashed RECORD_CHECK=1 tools/record t/exec/*.sh
 
-`RECORD_SHELL` runs a Linux build of our shell (main_posix.cpp's header,
-or CMakeLists.txt, in WSL or Linux) in bash's place, mounted read-only over `/usr/local/bin/bash`
-in the same container, so that scripts' own `bash -c` run it too;
+`RECORD_SHELL` runs a Linux build of our shell (main_linux.cpp's header,
+or CMakeLists.txt, in WSL or Linux) in bash's place, mounted read-only
+over `/usr/local/bin/bash` in the same container, so that scripts' own `bash -c` run it too;
 `RECORD_CHECK` compares the result with each spec instead of writing
 it, printing `PASS` or `FAIL` per script. Several instances can share
 the work: `ls t/exec/*.sh | xargs -P 6 -n 25 env RECORD_SHELL=...

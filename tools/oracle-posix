@@ -3,7 +3,7 @@
 #
 #   tools/oracle-posix [-v] [-m MANIFEST] SHELL [NAME...]
 #
-# SHELL is a Linux build of unabashed (main_posix.cpp, in WSL or Linux).
+# SHELL is a Linux build of unabashed (main_linux.cpp, in WSL or Linux).
 # Each NAME runs as run-all runs it, "sh run-NAME" in the suite's
 # directory with THIS_SH our shell, and passes (PASS) if it prints
 # nothing but "warning:" lines. A failing test is run again with the

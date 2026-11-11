@@ -1,6 +1,7 @@
 // POSIX platform layer (Linux, macOS)
 // A root includes the system headers, the core and the fibers, then
-// this module, then its startup code (main_posix.cpp for the executable).
+// this module and the OS's own (linux.cpp, darwin.cpp), then its
+// startup code (main_linux.cpp, main_darwin.cpp for the executable).
 // This is free and unencumbered software released into the public domain.
 
 struct Os {
@@ -124,6 +125,31 @@ static void  lib_reaped(i64 pid);
 static void  lib_dir(Os *, DIR *);
 static char *lib_tmpdir(Os *);
 
+// The OS's own (linux.cpp, darwin.cpp), included after this module:
+// what Linux and macOS do differently.
+struct SpawnPlan;
+static i32   cloexecpipe(i32 fds[2]);
+static iz    plt_pipecap(Os *);
+static iz    plt_peek(Os *, Handle, u8 *, iz);
+static void  stattimes(Stat *, struct stat *);
+static b32   closerange(i32 lo, i32 hi);
+static i32   hostsig(i32 sig);
+static i32   coresig(i32 sig);
+static u64   corebit(i32 sig);
+static b32   hostin(u64 set, i32 sig);
+static b32   spawnable(SpawnPlan *);
+static short spawnpre(posix_spawnattr_t *, posix_spawn_file_actions_t *,
+                      SpawnPlan *, i32 *src, i32 base);
+static void  spawnpost(posix_spawn_file_actions_t *, SpawnPlan *, i32 base);
+static b32   fromterminal(siginfo_t *);
+static i32   rlres(i32 res);
+static i32   plt_siglevel(Os *, i64 pid, i64 level, i32 sig);
+static void  initlevel();
+static u8    fifokind(struct stat *);
+static Io   *fifoends(Os *, b32 *any);
+static Str   machos(Str *vendor, b32 *release);
+static Slice<InheritFd> openfds(Arena *, i32 max);
+
 
 static byte *plt_reserve(Os *, iz len)
 {
@@ -155,7 +181,7 @@ static b32 wfailed(Os *os, i32 fd)
 
 // What a descriptor is, remembered until os_close frees its number.
 // FK_NFIFO, a named FIFO, only on macOS, whose poll misses its end
-// (waitfds); elsewhere it is an FK_FIFO like a pipe.
+// (fifoends); elsewhere it is an FK_FIFO like a pipe (fifokind).
 enum : u8 { FK_UNKNOWN, FK_REG, FK_FIFO, FK_OTHER, FK_NFIFO };
 
 static u8 fdkind(Os *os, i32 fd)
@@ -166,9 +192,7 @@ static u8 fdkind(Os *os, i32 fd)
     u8 kind = fstat(fd, &st) ? FK_OTHER :
               S_ISREG(st.st_mode) ? FK_REG :
               S_ISFIFO(st.st_mode) ? FK_FIFO : FK_OTHER;
-    #if __APPLE__
-    if (kind==FK_FIFO && st.st_dev) kind = FK_NFIFO;  // a pipe's st_dev is 0
-    #endif
+    if (kind == FK_FIFO) kind = fifokind(&st);
     if (cache) os->wkind[fd] = kind;
     return kind;
 }
@@ -239,27 +263,6 @@ static i32 highfd(i32 fd)
     i32 r = fcntl(fd, F_DUPFD_CLOEXEC, 10);
     close(fd);
     return r;
-}
-
-// A pipe. In the library both ends are close-on-exec from the start,
-// since another thread of the host may spawn a program at any moment.
-static i32 cloexecpipe(i32 fds[2])
-{
-    if constexpr (LIBMODE) {
-        #if __linux__
-        return pipe2(fds, O_CLOEXEC);
-        #else
-        lib_spawnlock(1);
-        i32 r = pipe(fds);
-        if (!r) {
-            fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-            fcntl(fds[1], F_SETFD, FD_CLOEXEC);
-        }
-        lib_spawnlock(0);
-        return r;
-        #endif
-    }
-    return pipe(fds);
 }
 
 static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
@@ -378,16 +381,6 @@ static NamedTemp plt_namedtemp(Os *, Arena *, Str)
     return r;
 }
 
-static iz plt_pipecap(Os *os)
-{
-    flushw(os);
-#ifdef __linux__
-    return 1<<16;
-#else
-    return 1<<14;  // macOS starts small
-#endif
-}
-
 static OsPipe plt_pipe(Os *os)
 {
     flushw(os);
@@ -402,47 +395,6 @@ static OsPipe plt_pipe(Os *os)
     r.w = (Handle)highfd(fds[1]);
     return r;
 }
-
-#ifdef __linux__
-// Look into a pipe without consuming: tee(2) copies what it holds into
-// a private pipe, which is then drained. Zero when it holds nothing.
-static iz plt_peek(Os *os, Handle h, u8 *buf, iz len)
-{
-    flushw(os);
-    if (fdkind(os, (i32)h) != FK_FIFO) {
-        return -1;
-    } else if (!len) {
-        return 0;
-    }
-    if (!os->peekfd[1]) {
-        i32 fds[2];
-        if (cloexecpipe(fds)) {
-            return -1;
-        }
-        os->peekfd[0] = highfd(fds[0]);
-        os->peekfd[1] = highfd(fds[1]);
-    }
-    len = len<(1<<16) ? len : 1<<16;  // what the private pipe holds
-    iz n = tee((i32)h, os->peekfd[1], (uz)len, SPLICE_F_NONBLOCK);
-    if (n < 0) {
-        return errno==EAGAIN ? 0 : -1;
-    }
-    for (iz got = 0; got < n;) {
-        iz r = read(os->peekfd[0], buf+got, (uz)(n-got));
-        if (r <= 0) {
-            return -1;
-        }
-        got += r;
-    }
-    return n;
-}
-#else
-static iz plt_peek(Os *os, Handle, u8 *, iz)
-{
-    flushw(os);
-    return -1;  // pipes cannot be peeked
-}
-#endif
 
 static i64 plt_seek(Os *os, Handle h, i64 off, i32 whence)
 {
@@ -465,15 +417,7 @@ static Stat tostat(struct stat *s)
     r.mode  = (i32)(s->st_mode & 07777);
     r.nlink = (i32)s->st_nlink;
     r.size  = (i64)s->st_size;
-    #if __APPLE__
-    r.mtime = (i64)s->st_mtimespec.tv_sec*1000000000 + s->st_mtimespec.tv_nsec;
-    r.atime = (i64)s->st_atimespec.tv_sec*1000000000 + s->st_atimespec.tv_nsec;
-    r.ctime = (i64)s->st_ctimespec.tv_sec*1000000000 + s->st_ctimespec.tv_nsec;
-    #else
-    r.mtime = (i64)s->st_mtim.tv_sec*1000000000 + s->st_mtim.tv_nsec;
-    r.atime = (i64)s->st_atim.tv_sec*1000000000 + s->st_atim.tv_nsec;
-    r.ctime = (i64)s->st_ctim.tv_sec*1000000000 + s->st_ctim.tv_nsec;
-    #endif
+    stattimes(&r, s);
     r.blocks = (i64)s->st_blocks;
     r.dev   = (i64)s->st_dev;
     r.ino   = (i64)s->st_ino;
@@ -630,13 +574,11 @@ static Dirent *plt_list(Os *os, Arena *a, Str dir, i32 *err)
     return head;
 }
 
-// Close descriptors lo to hi, or lo up with hi -1, as close_range(2)
-// where the kernel has it.
+// Close descriptors lo to hi, or lo up with hi -1, in one system call
+// where the kernel has one (closerange).
 static void closefds(i32 lo, i32 hi)
 {
-    #ifdef SYS_close_range
-    if (!syscall(SYS_close_range, (unsigned)lo, (unsigned)hi, 0)) return;
-    #endif
+    if (closerange(lo, hi)) return;
     i32 max = 1023;
     if constexpr (LIBMODE) {
         // the host's may go as high as its limit
@@ -688,52 +630,6 @@ static b32 sigin(u64 set, i32 sig)
 {
     return sig<=64 && set>>(sig-1) & 1;
 }
-
-// The core numbers signals as Linux x86-64 does (trap.cpp), and other
-// hosts, macOS among them, number them otherwise. Every number that
-// crosses is translated: hostsig for one going out, coresig for one
-// coming in, each 0 where the other side has no such signal; corebit
-// and hostin take a host number into the core's masks. On Linux all
-// of them are the identity.
-#if __linux__
-static_assert(SIGBUS==7 && SIGUSR1==10 && SIGCHLD==17 && SIGSTOP==19 &&
-              SIGIO==29 && SIGSYS==31, "the generic Linux numbering");
-static i32 hostsig(i32 sig) { return sig; }
-static i32 coresig(i32 sig) { return sig; }
-static u64 corebit(i32 sig) { return (u64)1 << (sig-1); }
-static b32 hostin(u64 set, i32 sig) { return sigin(set, sig); }
-#else
-static i32 const hostsigs[32] = {
-    0,       SIGHUP,  SIGINT,  SIGQUIT,   SIGILL,  SIGTRAP,  SIGABRT, SIGBUS,
-    SIGFPE,  SIGKILL, SIGUSR1, SIGSEGV,   SIGUSR2, SIGPIPE,  SIGALRM, SIGTERM,
-    0,       SIGCHLD, SIGCONT, SIGSTOP,   SIGTSTP, SIGTTIN,  SIGTTOU, SIGURG,
-    SIGXCPU, SIGXFSZ, SIGVTALRM, SIGPROF, SIGWINCH, SIGIO,   0,       SIGSYS,
-};  // 16 (STKFLT), 30 (PWR) and the real-time signals are Linux's own
-
-static i32 hostsig(i32 sig)
-{
-    return sig>0 && sig<32 ? hostsigs[sig] : 0;
-}
-
-static i32 coresig(i32 sig)
-{
-    for (i32 i = 1; sig>0 && i<32; i++) {
-        if (hostsigs[i] == sig) return i;
-    }
-    return 0;
-}
-
-static u64 corebit(i32 sig)
-{
-    i32 c = coresig(sig);
-    return c ? (u64)1<<(c-1) : 0;
-}
-
-static b32 hostin(u64 set, i32 sig)
-{
-    return (set & corebit(sig)) != 0;
-}
-#endif
 
 // With a fork: the child has its own memory, and reports a failed exec
 // through a close-on-exec pipe, which a successful exec closes. For
@@ -819,34 +715,19 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
     return err;
 }
 
-// Where the C library's posix_spawn can change directory (glibc 2.29,
-// macOS 10.15), it makes the process: glibc runs the child on a stack
-// of its own in the shell's memory, macOS has a system call, either way
-// no copy of the shell's memory. Returns -1, having done nothing, where
+// Where the C library's posix_spawn can change directory (spawnable),
+// it makes the process: glibc runs the child on a stack of its own in
+// the shell's memory, macOS has a system call, either way no copy of
+// the shell's memory. Returns -1, having done nothing, where
 // it cannot set up the plan:
 // - limits, which no attribute sets;
 // - a signal to ignore that the shell does not: the child may only
 //   reset signals to their default, and ignoring it in the shell for
 //   the while would throw away one pending;
-// - the terminal for a foreground group, without glibc 2.35's
-//   attribute (the parent hands it over too, but only after the
-//   program may already have run into the terminal);
+// - the terminal for a foreground group, without an attribute for it
+//   (the parent hands it over too, but only after the program may
+//   already have run into the terminal);
 // - a directory it cannot enter, where bash runs the program anyway.
-#if __APPLE__
-#  define SPAWN_CHDIR 1
-#  if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 260000
-#    define posix_spawn_file_actions_addchdir_np posix_spawn_file_actions_addchdir
-#  endif
-#elif defined(__GLIBC_PREREQ)
-#  if __GLIBC_PREREQ(2, 29)
-#    define SPAWN_CHDIR 1
-#  endif
-#  if __GLIBC_PREREQ(2, 34)
-#    define SPAWN_CLOSEFROM 1
-#  endif
-#endif
-
-#if SPAWN_CHDIR
 static b32 dirok(char *path)
 {
     struct stat st;
@@ -855,10 +736,7 @@ static b32 dirok(char *path)
 
 static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
 {
-    if (p->rlimits) return -1;
-    #ifndef POSIX_SPAWN_TCSETPGROUP
-    if (p->pgid && p->fg) return -1;
-    #endif
+    if (p->rlimits || !spawnable(p)) return -1;
     for (i32 sig = 1; sig < NSIG; sig++) {
         if (!hostin(p->ign, sig) || sig==SIGKILL || sig==SIGSTOP) continue;
         struct sigaction sa = {};
@@ -901,37 +779,12 @@ static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
         if (p->pgid) {
             flags |= POSIX_SPAWN_SETPGROUP;
             posix_spawnattr_setpgroup(&at, p->pgid<0 ? 0 : (pid_t)p->pgid);
-            #ifdef POSIX_SPAWN_TCSETPGROUP
-            if (p->fg) {
-                flags |= POSIX_SPAWN_TCSETPGROUP;
-                posix_spawnattr_tcsetpgrp_np(&at, p->tty);
-            }
-            #endif
         }
-
-        // Nothing but the map: the shell's own descriptors are all
-        // close-on-exec, but for the standard three it was given
-        #if __APPLE__
-        flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
-        #else
-        for (i32 fd = 0; fd < base; fd++) {
-            b32 target = 0;
-            for (i32 i = 0; i < p->nfds; i++) {
-                target |= p->dst[i]==fd && src[i]>=0;
-            }
-            i32 fl = target ? -1 : fcntl(fd, F_GETFD);
-            if (fl>=0 && !(fl&FD_CLOEXEC)) {
-                posix_spawn_file_actions_addclose(&fa, fd);
-            }
-        }
-        #endif
+        flags |= spawnpre(&at, &fa, p, src, base);
         for (i32 i = 0; i < p->nfds; i++) {
             if (src[i] >= 0) posix_spawn_file_actions_adddup2(&fa, src[i], p->dst[i]);
         }
-        #if SPAWN_CLOSEFROM
-        posix_spawn_file_actions_addclosefrom_np(&fa, base);
-        #endif
-        posix_spawn_file_actions_addchdir_np(&fa, p->cwd);
+        spawnpost(&fa, p, base);
         posix_spawnattr_setflags(&at, flags);
 
         err = posix_spawn(out, p->path, &fa, &at, p->argv, p->envp);
@@ -945,12 +798,6 @@ static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
     }
     return err;
 }
-#else
-static i32 trispawn(SpawnPlan *, Arena, pid_t *)
-{
-    return -1;
-}
-#endif
 
 // The calling thread's signal mask. The executable has one thread; the
 // library runs beside the host's, and macOS's sigprocmask, racing in
@@ -1355,53 +1202,11 @@ static void onsignal(int sig, siginfo_t *info, void *)
     }
     i32 saved = errno;
     b32 tty   = sig==SIGINT || sig==SIGQUIT || sig==SIGTSTP;
-    #ifdef SI_KERNEL
-    b32 grp   = tty && info && info->si_code==SI_KERNEL;
-    #else
-    b32 grp   = 0;
-    (void)tty;
-    (void)info;
-    #endif
+    b32 grp   = tty && fromterminal(info);
     bitsor(grp ? &sigos->grpbits : &sigos->sigbits, corebit(sig));
     u8 c = 0;
     if (write(sigos->wakefd[1], &c, 1)) {}
     errno = saved;
-}
-
-// RL_* as the system numbers them, -1 where it has no such limit
-static i32 rlres(i32 res)
-{
-    switch (res) {
-    #ifdef RLIMIT_RTTIME
-    case RL_RTTIME:     return RLIMIT_RTTIME;
-    #endif
-    case RL_CORE:       return RLIMIT_CORE;
-    case RL_DATA:       return RLIMIT_DATA;
-    #ifdef RLIMIT_NICE
-    case RL_NICE:       return RLIMIT_NICE;
-    #endif
-    case RL_FSIZE:      return RLIMIT_FSIZE;
-    #ifdef RLIMIT_SIGPENDING
-    case RL_SIGPENDING: return RLIMIT_SIGPENDING;
-    #endif
-    case RL_MEMLOCK:    return RLIMIT_MEMLOCK;
-    case RL_RSS:        return RLIMIT_RSS;
-    case RL_NOFILE:     return RLIMIT_NOFILE;
-    #ifdef RLIMIT_MSGQUEUE
-    case RL_MSGQUEUE:   return RLIMIT_MSGQUEUE;
-    #endif
-    #ifdef RLIMIT_RTPRIO
-    case RL_RTPRIO:     return RLIMIT_RTPRIO;
-    #endif
-    case RL_STACK:      return RLIMIT_STACK;
-    case RL_CPU:        return RLIMIT_CPU;
-    case RL_NPROC:      return RLIMIT_NPROC;
-    case RL_AS:         return RLIMIT_AS;
-    #ifdef RLIMIT_LOCKS
-    case RL_LOCKS:      return RLIMIT_LOCKS;
-    #endif
-    }
-    return -1;
 }
 
 static i64 fromrlim(rlim_t v)
@@ -1473,69 +1278,6 @@ static i64 plt_tcpgrp(Os *os, Handle tty, i64 pgid)
     sigprocmask(SIG_SETMASK, &old, 0);
     return r ? -e : pgid;
 }
-
-#ifdef SIGRTMAX
-// A level signal travels as a queued real-time signal whose value
-// holds the signal and the level's serial: a vpid of a process is
-// 2^22*(serial+1) + its pid (newvpid), which the receiver rebuilds.
-static i32 siglevelnum()
-{
-    return SIGRTMAX;
-}
-
-static void onlevel(int, siginfo_t *si, void *)
-{
-    i32 saved = errno;
-    u32 t = leveltail;
-    if (t-levelhead < NLEVELQ) {
-        i32 v = si->si_value.sival_int;
-        LevelSig *ls = levelq + t%NLEVELQ;
-        ls->level = ((i64)(v>>8) + 1)<<22 | getpid();
-        ls->sig   = v & 255;
-        __atomic_store_n(&leveltail, t+1, __ATOMIC_RELEASE);
-    }
-    u8 c = 0;
-    if (write(sigos->wakefd[1], &c, 1)) {}
-    errno = saved;
-}
-
-// Whether pid runs this same program, so the real-time signal, deadly
-// to anything else, reaches only another of our shells.
-static b32 ourprocess(i64 pid)
-{
-    char path[64] = "/proc/";
-    i32  len = 6;
-    char digits[24];
-    i32  nd = 0;
-    for (i64 v = pid; v; v /= 10) digits[nd++] = (char)('0' + v%10);
-    while (nd) path[len++] = digits[--nd];
-    __builtin_memcpy(path+len, "/exe", 5);
-    char a[4096], b[4096];
-    ssize_t alen = readlink("/proc/self/exe", a, sizeof(a));
-    ssize_t blen = readlink(path, b, sizeof(b));
-    return alen>0 && alen==blen && !__builtin_memcmp(a, b, (uz)alen);
-}
-
-static i32 plt_siglevel(Os *os, i64 pid, i64 level, i32 sig)
-{
-    flushw(os);
-    i64 serial = (level>>22) - 1;
-    if (pid<=0 || pid>(i64)0x7fffffff || serial<0 || serial>=(i64)1<<23 ||
-        sig<0 || sig>255 || (level & (((i64)1<<22) - 1))!=pid) {
-        return E_SRCH;
-    }
-    if (!ourprocess(pid)) return E_SRCH;
-    union sigval v = {};
-    v.sival_int = (i32)(serial<<8 | sig);
-    return sigqueue((pid_t)pid, siglevelnum(), v) ? errno : 0;
-}
-#else
-static i32 plt_siglevel(Os *os, i64, i64, i32)
-{
-    flushw(os);
-    return E_NOSYS;
-}
-#endif
 
 static LevelSig plt_levelsig(Os *)
 {
@@ -1638,13 +1380,7 @@ static void initasync(Os *os)
     sa.sa_flags   = SA_RESTART;  // stops too, for job control
     sigemptyset(&sa.sa_mask);
     sigaction(SIGCHLD, &sa, 0);
-#ifdef SIGRTMAX
-    sa = {};
-    sa.sa_sigaction = onlevel;
-    sa.sa_flags     = SA_RESTART | SA_SIGINFO;
-    sigemptyset(&sa.sa_mask);
-    sigaction(siglevelnum(), &sa, 0);
-#endif
+    initlevel();
 }
 
 // Complete an operation if it can be done now. For reads and writes,
@@ -1715,68 +1451,6 @@ static i32 pollnow(Io *io, i32 timeout)
     return r>0 ? p.revents : 0;
 }
 
-#if __APPLE__
-// macOS poll (and kqueue, on which it is built) never reports that a
-// named FIFO's writers have all closed, and select does so only until a
-// read first returns 0 there. A read waiting at the end would wait for
-// ever, though read would return 0 at once. So while such a read is
-// pending, waits are bounded and the read is tried through a descriptor
-// of its own, opened by path without blocking: that reads what is
-// there, 0 with no writer, or fails (EAGAIN) while a writer is idle.
-// The shared descriptor's flags are never touched. Unlinked or moved,
-// the FIFO is not reopened, and its end is not seen.
-static b32 isnamedread(Os *os, Io *io)
-{
-    return io->op==IO_READ && io->len && fdkind(os, (i32)io->h)==FK_NFIFO;
-}
-
-static b32 fifoend(Io *io)
-{
-    // F_GETPATH still gives a path once the FIFO is unlinked, renamed
-    // or replaced, and opening another FIFO would release its writer
-    // only to close on it: look before opening, and again after
-    struct stat a, b;
-    char path[MAXPATHLEN];
-    if (fstat((i32)io->h, &a) || !a.st_nlink) return 0;
-    if (fcntl((i32)io->h, F_GETPATH, path)) return 0;
-    if (lstat(path, &b) || !S_ISFIFO(b.st_mode) ||
-        a.st_dev!=b.st_dev || a.st_ino!=b.st_ino) return 0;
-    i32 fd = open(path, O_RDONLY|O_NONBLOCK|O_CLOEXEC);
-    if (fd < 0) return 0;
-    b32 same = !fstat(fd, &b) && a.st_dev==b.st_dev && a.st_ino==b.st_ino;
-    iz n = -1;
-    if (same) {
-        iz len = io->len<(1<<30) ? io->len : (1<<30);
-        do {
-            n = read(fd, io->buf, (uz)len);
-        } while (n<0 && errno==EINTR);
-    }
-    close(fd);
-    if (n < 0) return 0;
-    io->n   = n;
-    io->err = 0;
-    return 1;
-}
-
-// Complete a pending read of a named FIFO that has ended, or has data
-// poll missed. *any says whether such a read is pending.
-static Io *fifoends(Os *os, b32 *any)
-{
-    *any = 0;
-    for (Io **p = &os->pending; *p; p = &(*p)->next) {
-        Io *io = *p;
-        if (!isnamedread(os, io)) continue;
-        *any = 1;
-        if (fifoend(io)) {
-            *p = io->next;
-            io->done = 1;
-            return io;
-        }
-    }
-    return 0;
-}
-#endif
-
 static void plt_submit(Os *os, Io *io)
 {
     flushw(os);
@@ -1796,9 +1470,7 @@ static Io *plt_wait(Os *os, i64 deadline)
     if (deadline != WAIT_POLL) flushw(os);  // it may block
     enum { MAXPOLL = 256 };
     struct pollfd fds[MAXPOLL];
-    #if __APPLE__
     i32 backoff = 1;  // named FIFOs: 1 to 64 ms (fifoends)
-    #endif
     for (;;) {
         // Process exits first: the self-pipe only says "look again"
         for (Io **p = &os->pending; *p; p = &(*p)->next) {
@@ -1809,11 +1481,9 @@ static Io *plt_wait(Os *os, i64 deadline)
                 return io;
             }
         }
-        #if __APPLE__
         b32 named = 0;
         Io *ended = fifoends(os, &named);
         if (ended) return ended;
-        #endif
         i32 n = 0;
         fds[n].fd      = os->wakefd[0];
         fds[n].events  = POLLIN;
@@ -1831,13 +1501,11 @@ static Io *plt_wait(Os *os, i64 deadline)
             i64 left = (deadline - plt_now(os) + 999999) / 1000000;
             timeout = left<0 ? 0 : left>(1<<30) ? (1<<30) : (i32)left;
         }
-        #if __APPLE__
         b32 bounded = named && (timeout<0 || timeout>backoff);
         if (bounded) {
             timeout = backoff;
             backoff = backoff<64 ? backoff*2 : 64;
         }
-        #endif
         i32 r = poll(fds, (nfds_t)n, timeout);
         if (r<0 && errno!=EINTR) return 0;
         if (fds[0].revents) {
@@ -1864,12 +1532,10 @@ static Io *plt_wait(Os *os, i64 deadline)
                 return io;
             }
         }
-        #if __APPLE__
         if (bounded) {
             if (deadline>0 && plt_now(os)>=deadline) return 0;
             continue;  // only the bound passed
         }
-        #endif
         if (r==0 && timeout>=0) return 0;
     }
 }
@@ -2006,8 +1672,8 @@ static Str fromcstr(char *s)
 
 // The build target as a configure triple, cpu-vendor-os, for MACHTYPE
 // (and through it HOSTTYPE and OSTYPE), with the names config.guess
-// gives. On macOS and the BSDs the os carries the kernel release, as
-// config.guess appends it (darwin24.4.0, freebsd14.1).
+// gives. The os and vendor are the OS's (machos), and the os may carry
+// the kernel release, as config.guess appends it (darwin24.4.0).
 static Str machtype(Arena *a)
 {
     #if __aarch64__
@@ -2032,31 +1698,7 @@ static Str machtype(Arena *a)
 
     Str vendor = "unknown";
     b32 release = 1;
-    #if __APPLE__
-    vendor = "apple";
-    Str os = "darwin";
-    #elif __FreeBSD__
-    Str os = "freebsd";
-    #elif __OpenBSD__
-    Str os = "openbsd";
-    #elif __NetBSD__
-    Str os = "netbsd";
-    #elif __linux__
-    #if __x86_64__ || __i386__
-    vendor = "pc";
-    #endif
-    #if __ANDROID__
-    Str os = "linux-android";
-    #elif __GLIBC__
-    Str os = "linux-gnu";
-    #else
-    Str os = "linux-musl";
-    #endif
-    release = 0;
-    #else
-    Str os = "unknown";
-    release = 0;
-    #endif
+    Str os = machos(&vendor, &release);
 
     Str r = concat3(a, cpu, "-", vendor);
     r = concat3(a, r, "-", os);
@@ -2079,11 +1721,8 @@ static Slice<InheritFd> pushinherit(Arena *a, Slice<InheritFd> r, i32 fd)
 }
 
 // The descriptors above 2 the shell inherited, found before the shell
-// opens any, each moved out of the way as the shell's own: at 10 and
-// up, and close-on-exec. Linux finds them with one poll of them all
-// (POLLNVAL marks a closed one). macOS's poll cannot tell: asked for no
-// events it reports nothing for a closed descriptor, and asked for any
-// it reports POLLNVAL for an open device, so the kernel lists them.
+// opens any (openfds), each moved out of the way as the shell's own: at
+// 10 and up, and close-on-exec.
 static Slice<InheritFd> inherited(Arena *a)
 {
     Slice<InheritFd> r = {};
@@ -2093,30 +1732,7 @@ static Slice<InheritFd> inherited(Arena *a)
         max = (i32)rl.rlim_cur;
     }
     if (max <= 3) return r;
-    #if __APPLE__
-    i32 size = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, 0, 0);
-    if (size <= 0) return r;
-    iz cap = size / (iz)sizeof(proc_fdinfo);
-    proc_fdinfo *list = alloc<proc_fdinfo>(a, cap ? cap : 1);
-    size = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, list, (i32)(cap*(iz)sizeof(*list)));
-    for (iz i = 0; size>0 && i<size/(iz)sizeof(*list); i++) {
-        i32 fd = list[i].proc_fd;
-        if (fd>=3 && fd<max) r = pushinherit(a, r, fd);
-    }
-    #else
-    struct pollfd *fds = alloc<struct pollfd>(a, max-3);
-    for (i32 fd = 3; fd < max; fd++) {
-        fds[fd-3].fd = fd;
-    }
-    i32 ready;
-    do {
-        ready = poll(fds, (nfds_t)(max-3), 0);
-    } while (ready<0 && errno==EINTR);
-    if (ready < 0) return r;
-    for (i32 i = 0; i < max-3; i++) {
-        if (!(fds[i].revents & POLLNVAL)) r = pushinherit(a, r, fds[i].fd);
-    }
-    #endif
+    r = openfds(a, max);
     // All found first: a duplicate may land on a number not yet seen
     iz n = 0;
     for (iz i = 0; i < r.len; i++) {

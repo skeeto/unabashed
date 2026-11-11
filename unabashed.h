@@ -6,9 +6,10 @@
 // command substitutions) runs inside the run. When the run ends,
 // whatever it started has ended too. See notes/library.md.
 //
-// Build: libunabashed.cpp is a single translation unit, compiled with a
-// C++20 compiler as an object to link into a C or C++ host (its header
-// has the command). It needs only libc, and exports only ub_*.
+// Build: the platform's libunabashed_*.cpp (linux, darwin, win32) is a
+// single translation unit, compiled with a C++20 compiler as an object
+// to link into a C or C++ host (its header has the command). It exports
+// only ub_*.
 //
 // This is free and unencumbered software released into the public domain.
 #ifndef UNABASHED_H

@@ -1,34 +1,6 @@
-// POSIX platform layer (Linux, macOS): the executable
-// $ g++ -std=c++20 -O2 -fno-exceptions -fno-rtti -fno-threadsafe-statics \n//       -nostdlib++ -o unabashed main_posix.cpp
-// (only libc: libstdc++ would cost half of startup, for nothing)
+// The executable's startup on POSIX, for the roots main_linux.cpp and
+// main_darwin.cpp, after the platform layer.
 // This is free and unencumbered software released into the public domain.
-#include <dirent.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <limits.h>
-#include <poll.h>
-#include <signal.h>
-#include <spawn.h>
-#include <stdlib.h>
-#include <sys/mman.h>
-#include <sys/resource.h>
-#include <sys/ioctl.h>
-#include <sys/stat.h>
-#include <sys/syscall.h>
-#include <sys/utsname.h>
-#include <sys/wait.h>
-#include <termios.h>
-#include <time.h>
-#include <unistd.h>
-#if __APPLE__
-#include <libproc.h>
-#include <sys/random.h>  // getentropy
-#endif
-extern "C" int rename(char const *, char const *);  // stdio.h, whose macros collide
-extern char **environ;
-#include "src/unabashed.cpp"
-#include "src/fibers.cpp"
-#include "src/posix.cpp"
 
 [[noreturn]] static void os_oom()
 {

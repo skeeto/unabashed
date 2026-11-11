@@ -2,13 +2,14 @@
 # library (unabashed.h, notes/library.md).
 #
 # No build system is needed for a plain build: each executable is one
-# compiler command, given in the header of its main_*.cpp. CMake builds
-# everything at once, and gives hosts the library.
+# compiler command, given in the header of its root, the main_*.cpp for
+# the platform (main_linux.cpp, main_darwin.cpp, main_win32.cpp). CMake
+# builds everything at once, and gives hosts the library.
 #
 # As a subproject (FetchContent or add_subdirectory) it defines only the
 # library, target libunabashed with the alias unabashed::unabashed: an
-# object library of libunabashed.cpp, with unabashed.h on its include
-# path, needing GCC or Clang.
+# object library of the platform's libunabashed_*.cpp, with unabashed.h
+# on its include path, needing GCC or Clang.
 #
 #   FetchContent_Declare(unabashed URL ... URL_HASH SHA256=...)
 #   FetchContent_MakeAvailable(unabashed)
@@ -42,10 +43,22 @@ if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   message(FATAL_ERROR "unabashed needs GCC or Clang (MinGW on Windows)")
 endif()
 
+# The platform: its roots are main_${UNABASHED_OS}.cpp and
+# libunabashed_${UNABASHED_OS}.cpp
+if(WIN32)
+  set(UNABASHED_OS win32)
+elseif(APPLE)
+  set(UNABASHED_OS darwin)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(UNABASHED_OS linux)
+else()
+  message(FATAL_ERROR "unabashed builds for Linux, macOS and Windows")
+endif()
+
 set(UNABASHED_FLAGS -fno-exceptions -fno-rtti -fno-threadsafe-statics
                     -fno-asynchronous-unwind-tables)
 
-add_library(libunabashed OBJECT libunabashed.cpp)
+add_library(libunabashed OBJECT libunabashed_${UNABASHED_OS}.cpp)
 add_library(unabashed::unabashed ALIAS libunabashed)
 set_target_properties(libunabashed PROPERTIES CXX_STANDARD 20
                       CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
@@ -103,14 +116,11 @@ function(shell name source)  # name, then compile options
   endif()
 endfunction()
 
-if(WIN32)
-  shell(unabashed main_win32.cpp -O2)
-  target_link_options(unabashed PRIVATE -s)
-  shell(debug main_win32.cpp ${DEBUG})
-else()
-  shell(unabashed main_posix.cpp -O2)
-  target_link_options(unabashed PRIVATE -s -nostdlib++)
-  shell(debug main_posix.cpp ${DEBUG})
+shell(unabashed main_${UNABASHED_OS}.cpp -O2)
+shell(debug main_${UNABASHED_OS}.cpp ${DEBUG})
+target_link_options(unabashed PRIVATE -s)
+if(NOT WIN32)
+  target_link_options(unabashed PRIVATE -nostdlib++)
 endif()
 set_target_properties(unabashed PROPERTIES OUTPUT_NAME unabashed${SUFFIX})
 set_target_properties(debug PROPERTIES OUTPUT_NAME debug${SUFFIX})
@@ -152,7 +162,7 @@ endif()
 # ubtiny, a CRT-free i686 host with no root or self.
 
 target_compile_options(libunabashed PRIVATE ${WARN} -O2)
-add_library(libunabashed-O0 OBJECT libunabashed.cpp)
+add_library(libunabashed-O0 OBJECT libunabashed_${UNABASHED_OS}.cpp)
 target_compile_options(libunabashed-O0 PRIVATE ${UNABASHED_FLAGS} ${WARN} -O0)
 
 # The C hosts link the object itself, not the target, so that CMake

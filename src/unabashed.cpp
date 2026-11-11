@@ -1,9 +1,9 @@
 // unabashed: a faithful clone of GNU bash 5.3
 //
-// Unity build: a platform layer (main_win32.cpp, main_posix.cpp,
-// main_test.cpp, main_fuzz.cpp) includes this file and implements the
-// platform API (api.cpp) as a table, OsVtable, which its osvtable
-// names. Design notes are in notes/, starting with notes/plan.md.
+// Unity build: a root (main_linux.cpp, main_darwin.cpp, main_win32.cpp,
+// main_test.cpp, main_fuzz.cpp, libunabashed_*.cpp) includes this file
+// and implements the platform API (api.cpp) as a table, OsVtable, which
+// its osvtable names. Design notes are in notes/, starting with notes/plan.md.
 //
 // This is free and unencumbered software released into the public domain.
 

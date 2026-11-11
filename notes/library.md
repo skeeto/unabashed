@@ -16,11 +16,12 @@ leftovers.
 
 ## Building
 
-`libunabashed.cpp` is one translation unit, compiled as an object and
-linked into a C or C++ host with the C compiler:
+The platform's root, `libunabashed_linux.cpp`, `libunabashed_darwin.cpp`
+or `libunabashed_win32.cpp`, is one translation unit, compiled as an
+object and linked into a C or C++ host with the C compiler:
 
     c++ -std=c++20 -O2 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
-        -c libunabashed.cpp
+        -c libunabashed_linux.cpp
 
 - POSIX: it needs only libc.
 - Windows: it needs kernel32, plus advapi32 at run time (for entropy,
@@ -65,8 +66,10 @@ library.
 ## How it fits the shell
 
 The library is the shell's core, plus the real platform layer
-(src/posix.cpp, src/win32.cpp) and a library module (src/libposix.cpp,
-src/libwin32.cpp).
+(src/posix.cpp with src/linux.cpp or src/darwin.cpp, or src/win32.cpp)
+and a library module (src/libposix.cpp with src/liblinux.cpp or
+src/libdarwin.cpp, or src/libwin32.cpp). Each root includes the pieces
+for its platform, then src/ub.cpp, the entry points.
 
 **The platform table.** The module's table, `libvtable`, is the
 executable's `pltvtable` with some entries replaced:
@@ -78,7 +81,7 @@ Both tables are constexpr, so calls through either fold to direct calls.
 
 **LIBMODE.** Library-only code in the core and the layers sits in
 `if constexpr (LIBMODE)` branches, or in conditions the front end folds
-(`!LIBMODE || ...`). `UB_LIBRARY` is 1 only in libunabashed.cpp. A name
+(`!LIBMODE || ...`). `UB_LIBRARY` is 1 only in the libunabashed_*.cpp roots. A name
 used only in such a branch is declared for every build (api.cpp, the
 `lib_*` hooks) but defined only in the module, so the executables never
 reference it. The executables stay byte-identical across library work.
@@ -372,7 +375,7 @@ no marker. It checks:
 
 **AddressSanitizer** (POSIX). Build the library and host with
 `-fsanitize=address`, then run `ubhost --check`. Fibers are annotated
-when the build has ASan (src/fibers.cpp):
+when the build has ASan (src/fibers_posix.cpp):
 - every switch is announced, so ASan neither warns about
   `__asan_handle_no_return` nor misreads a fiber's stack;
 - a fiber's last switch out (back to the host at the end of a run)

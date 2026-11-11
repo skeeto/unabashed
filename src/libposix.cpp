@@ -70,6 +70,23 @@ struct Lib {
     i32        waitfd;    // Linux: the run's epoll; macOS: a kqueue
 };
 
+// The OS's own (liblinux.cpp, libdarwin.cpp), included after this
+// module. Program exits come with no SIGCHLD. Linux watches each
+// program's pidfd in one epoll descriptor, macOS its exit in a kqueue,
+// and waits poll that one descriptor. A program not watched (an old
+// kernel, the descriptor budget spent, already gone) is polled with
+// WNOHANG, backing off.
+static void watchkid(Lib *, LibKid *);
+static b32  watching(LibKid *);
+static void unwatchkid(Lib *, LibKid *);
+static void drainwatch(Lib *);
+static void unwatchall(Lib *);
+static void rewatch(Lib *);
+static i32  newwatch(Lib *);
+static b32  hostthread(i64 tid);
+static b32  blockraised(Lib *);
+static void unraise();
+
 static __thread Lib *curlib;  // the run on this thread
 
 static Lib *runlib()
@@ -332,61 +349,6 @@ static LibKid *findkid(Lib *l, i64 pid)
     return 0;
 }
 
-// Program exits come with no SIGCHLD. Linux watches each program's
-// pidfd in one epoll descriptor, macOS its exit in a kqueue, and waits
-// poll that one descriptor. A program not watched (an old kernel, the
-// descriptor budget spent, already gone) is polled with WNOHANG,
-// backing off.
-static void watchkid(Lib *l, LibKid *k)
-{
-    #if __linux__
-    k->watch = -1;
-    #ifdef SYS_pidfd_open
-    if (l->waitfd < 0) {
-        l->waitfd = fdtake(l, epoll_create1(EPOLL_CLOEXEC));
-        if (l->waitfd < 0) return;
-    }
-    i32 fd = fdtake(l, (i32)syscall(SYS_pidfd_open, (pid_t)k->pid, 0));
-    if (fd < 0) return;
-    struct epoll_event e = {};
-    e.events   = EPOLLIN;
-    e.data.u64 = (u64)k->pid;
-    if (epoll_ctl(l->waitfd, EPOLL_CTL_ADD, fd, &e)) {
-        fdgive(l, fd);
-        close(fd);
-        return;
-    }
-    k->watch = fd;
-    #endif
-    #else
-    struct kevent e;
-    EV_SET(&e, (uintptr_t)k->pid, EVFILT_PROC, EV_ADD|EV_ONESHOT, NOTE_EXIT, 0, 0);
-    k->watch = l->waitfd>=0 && !kevent(l->waitfd, &e, 1, 0, 0, 0);  // ESRCH: gone
-    #endif
-}
-
-static b32 watching(LibKid *k)
-{
-    #if __linux__
-    return k->watch >= 0;
-    #else
-    return k->watch;
-    #endif
-}
-
-static void unwatchkid(Lib *l, LibKid *k)
-{
-    #if __linux__
-    if (watching(k)) {
-        fdgive(l, k->watch);
-        close(k->watch);  // and so out of the epoll set
-    }
-    k->watch = -1;
-    #else
-    k->watch = 0;  // its event was one-shot
-    #endif
-}
-
 // A process wait pending for pid?
 static b32 procpending(Os *os, i64 pid)
 {
@@ -394,33 +356,6 @@ static b32 procpending(Os *os, i64 pid)
         if (isproc(io) && (i64)io->h==pid) return 1;
     }
     return 0;
-}
-
-// Take what the watch descriptor says. A program that ended with no
-// wait yet pending is watched no more, lest it wake every wait: its
-// wait, once submitted, finds it ended at once.
-static void drainwatch(Lib *l)
-{
-    #if __linux__
-    struct epoll_event e[64];
-    i32 n = epoll_wait(l->waitfd, e, countof(e), 0);
-    for (i32 i = 0; i < n; i++) {
-        LibKid *k = findkid(l, (i64)e[i].data.u64);
-        if (k && !procpending(&l->os, k->pid)) unwatchkid(l, k);
-    }
-    #else
-    // XNU posts NOTE_EXIT before the program can be reaped, and the
-    // event is one-shot: its program is polled, backing off, until then
-    struct kevent e[64];
-    struct timespec zero = {};
-    for (i32 n = countof(e); n == countof(e);) {
-        n = kevent(l->waitfd, 0, 0, e, countof(e), &zero);
-        for (i32 i = 0; i < n; i++) {
-            LibKid *k = findkid(l, (i64)e[i].ident);
-            if (k) unwatchkid(l, k);
-        }
-    }
-    #endif
 }
 
 static void reapedkid(Lib *l, LibKid *k)
@@ -533,24 +468,6 @@ static i32 libwaitproc(Os *os, Handle proc)
     }
 }
 
-// Linux: a thread of the host's, whose id kill takes for the host.
-static b32 hostthread(i64 tid)
-{
-    #if __linux__
-    char path[48] = "/proc/self/task/";
-    i32  len = 16;
-    char digits[24];
-    i32  nd = 0;
-    for (i64 v = tid; v > 0; v /= 10) digits[nd++] = (char)('0' + v%10);
-    while (nd) path[len++] = digits[--nd];
-    path[len] = 0;
-    return tid>0 && !access(path, F_OK);
-    #else
-    (void)tid;
-    return 0;
-    #endif
-}
-
 static i32 libkill(Os *os, i64 pid, i32 sig)
 {
     Lib *l = (Lib *)os;
@@ -642,10 +559,8 @@ static Io *libwait(Os *os, i64 deadline)
         Io *done = takeproc(os);
         if (done) return done;
         b32 named = 0;  // a pending read of a named FIFO (macOS)
-        #if __APPLE__
         done = fifoends(os, &named);
         if (done) return done;
-        #endif
 
         b32 procs   = 0;  // a pending program not watched
         b32 watched = 0;
@@ -998,15 +913,7 @@ static void teardown(Lib *l)
         l->fdbits[w] = 0;
     }
     l->nfds = 0;
-    for (i32 i = 0; i < l->nkids; i++) {
-        l->kids[i].watch = 0;  // closed with the rest
-        #if __linux__
-        l->kids[i].watch = -1;
-        #endif
-    }
-    #if __linux__
-    l->waitfd = -1;  // the epoll, closed with the rest
-    #endif
+    unwatchall(l);  // the descriptors closed with the rest
 
     os_fibersend(os);  // ASan: the fibers' fake stacks, on their stacks
     for (LibRes *r = l->res, *next; r; r = next) {
@@ -1020,15 +927,7 @@ static void teardown(Lib *l)
     os->fibers   = {};
 
     if (l->masked) {
-        #if __linux__
-        // A SIGPIPE or SIGXFSZ the run raised on itself goes unseen
-        sigset_t set;
-        sigemptyset(&set);
-        sigaddset(&set, SIGPIPE);
-        sigaddset(&set, SIGXFSZ);
-        struct timespec zero = {};
-        while (sigtimedwait(&set, 0, &zero) > 0) {}
-        #endif
+        unraise();
         pthread_sigmask(SIG_SETMASK, &l->mask, 0);
         l->masked = 0;
     }
@@ -1055,28 +954,12 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     if (sa.sa_handler==SIG_IGN || (sa.sa_flags & SA_NOCLDWAIT)) {
         return -E_CHILD;  // programs would vanish unwaited
     }
-    #if __APPLE__
-    // macOS sends a write's SIGPIPE to the process, not the thread
-    i32 raised[] = {SIGPIPE, SIGXFSZ};
-    for (i32 i = 0; i < countof(raised); i++) {
-        sigaction(raised[i], 0, &sa);
-        if (sa.sa_handler != SIG_IGN) return -E_INVAL;
-    }
-    #else
-    sigset_t block;
-    sigemptyset(&block);
-    sigaddset(&block, SIGPIPE);
-    sigaddset(&block, SIGXFSZ);
-    pthread_sigmask(SIG_BLOCK, &block, &l->mask);
-    l->masked = 1;
-    #endif
+    if (!blockraised(l)) return -E_INVAL;
     curlib = l;
 
     // Reaped by now, perhaps, are the stragglers of earlier runs
     reapgraves();
-    #if __APPLE__
-    drainwatch(l);
-    #endif
+    rewatch(l);
     i32 n = 0;
     for (i32 i = 0; i < l->nkids; i++) {
         i32 status;
@@ -1187,13 +1070,7 @@ static Lib *libnew(ub_config const *c)
         l->os.wakefd[i] = fds[i];
         fcntl(fds[i], F_SETFL, O_NONBLOCK);
     }
-    l->waitfd = -1;
-    #if __APPLE__
-    l->cfg.spawnlock(l->cfg.user, 1);
-    l->waitfd = kqueue();  // not inherited across fork, and close-on-exec
-    if (l->waitfd >= 0) fcntl(l->waitfd, F_SETFD, FD_CLOEXEC);
-    l->cfg.spawnlock(l->cfg.user, 0);
-    #endif
+    l->waitfd = newwatch(l);
     reapgraves();
     return l;
 }
@@ -1231,4 +1108,10 @@ static void libcancel(Lib *l)
 {
     __atomic_fetch_or(&l->req, REQ_HARD, __ATOMIC_RELEASE);
     wakeup(l);
+}
+
+// ub_system's standard handles: the host's own descriptors
+static intptr_t lib_hoststd(i32 i)
+{
+    return i;
 }

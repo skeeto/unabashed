@@ -415,7 +415,7 @@ static c16 *lib_tmpdir(Os *);
     CloseHandle(h);
 }
 
-#include "fibers.cpp"
+#include "fibers_win32.cpp"
 
 // Asynchronous I/O (M3b, notes/m3b.md). Every handle the shell holds
 // to a pipe or a console is registered with a Wobj, the state of its
@@ -4719,9 +4719,6 @@ static i32 plt_clipset(Os *os, Arena scratch, Str text)
     os->closeclip();
     return err;
 }
-
-static byte *fiberstack(Os *, iz) { return 0; }    // unused on Win32
-static void  fiberunstack(Os *, byte *, iz) {}
 
 // Resolve a function newer than XP, or null.
 static void *dynamic(c16 const *dll, char const *name)

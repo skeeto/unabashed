@@ -1216,3 +1216,10 @@ static void libcancel(Lib *l)
     __atomic_fetch_or(&l->req, REQ_HARD, __ATOMIC_RELEASE);
     SetEvent(l->os.wake);
 }
+
+// ub_system's standard handles: the host's own, none the null device
+static intptr_t lib_hoststd(i32 i)
+{
+    intptr_t h = (intptr_t)GetStdHandle(-10 - i);
+    return h ? h : -1;
+}
