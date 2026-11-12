@@ -1468,8 +1468,9 @@ Of the
 .B BB_
 variables only
 .B BB_OVERRIDE_APPLETS
-is read:
-.BR BB_GLOBBING ,
+is read and only
+.B BB_GLOBBING
+is set;
 .BR BB_UMASK ,
 .BR BB_SYSTEMROOT ,
 and the others have no effect.
@@ -1937,6 +1938,10 @@ from
 is the shell's own directory, and
 .B SHELL
 is the shell's own path; none of these is exported.
+.B BB_GLOBBING
+is set to 0 and exported, as busybox-w32's shell does, which tells
+busybox-w32's programs that a shell has already expanded their
+arguments.
 .B TERM
 is left unset.
 Native mode passes the environment to every program as it stands,
@@ -3721,6 +3726,12 @@ not when it is named
 .B sh
 or is in POSIX mode.
 Native mode never reads it.
+.TP
+.B BB_GLOBBING
+Set to 0 and exported in native mode when not inherited, as
+busybox-w32's shell does, so that busybox-w32's programs do not expand
+wildcards in arguments the shell has already expanded.
+An inherited value is kept.
 .TP
 .B BB_OVERRIDE_APPLETS
 In native mode, the applets whose busybox alias stubs run as ordinary

@@ -772,7 +772,7 @@ static b32 importnative(Shell *sh, OsInfo *info, Arena scratch)
 // Defaults the Windows parents leave out. msys: HOME from USERPROFILE
 // and TERM as the MSYS2 runtime sets them, PATH its /usr/bin. Native:
 // HOME, USER and LOGNAME as busybox-w32 sets them (not exported), PATH
-// the shell's own directory.
+// the shell's own directory, and BB_GLOBBING exported.
 static void initwinvars(Shell *sh, Arena scratch)
 {
     Arena *a    = &scratch;
@@ -803,6 +803,13 @@ static void initwinvars(Shell *sh, Arena scratch)
     }
     if (user.value.len && !getvar(sh, a, "LOGNAME").set) {
         setvar(sh, scratch, "LOGNAME", user.value);
+    }
+    // busybox-w32's startup (win32/mingw.c's _setargv): BB_GLOBBING=0,
+    // exported unless inherited, tells its programs that a shell already
+    // expanded their arguments, and that they are in its environment
+    if (!getvar(sh, a, "BB_GLOBBING").set) {
+        setvar(sh, scratch, "BB_GLOBBING", "0");
+        setattrs(sh, "BB_GLOBBING", V_EXPORT, 0);
     }
     if (!getvar(sh, a, "PATH").set) {
         Str dir = takehead(sh->exe, sh->exe.len-lastpart(sh->exe).len);
