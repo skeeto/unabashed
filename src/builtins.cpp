@@ -3795,17 +3795,16 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
     if (i == nargs) return 0;
     if (std && sh->restricted) return restricted(sh, scratch, "command", "-p");
     if (mode) {
-        i32 status = 0;
+        b32 any = 0;
         for (; i < nargs; i++) {
-            if (!describe(sh, &scratch, args[i], mode=='v' ? 'v' : 0, 0, 0, std)) {
-                if (mode == 'V') {
-                    Str msg = concat(&scratch, args[i], ": not found");
-                    builtinerror(sh, scratch, "command", msg);
-                }
-                status = 1;
+            b32 found = describe(sh, &scratch, args[i], mode=='v' ? 'v' : 0, 0, 0, std);
+            if (!found && mode=='V') {
+                Str msg = concat(&scratch, args[i], ": not found");
+                builtinerror(sh, scratch, "command", msg);
             }
+            any |= found;
         }
-        return status;
+        return any ? 0 : 1;
     }
     Builtin *b = findbuiltin(sh, args[i]);
     if (b) {
