@@ -1,0 +1,59 @@
+== snap 1
+$ echo ${x:?no}; echo same
+bash: x: no
+$ ( : ${x?}; echo in ); echo "sub $?"
+bash: x: parameter not set
+sub 1
+$ f() { : ${x?}; echo in; }; f; echo same
+bash: x: parameter not set
+$ v=$(: ${y?}; echo in); echo "[$v] $?"
+bash: y: parameter not set
+[] 1
+$
+@ 10,2
+== snap 2
+$ echo ${x:?no}; echo same
+bash: x: no
+$ ( : ${x?}; echo in ); echo "sub $?"
+bash: x: parameter not set
+sub 1
+$ f() { : ${x?}; echo in; }; f; echo same
+bash: x: parameter not set
+$ v=$(: ${y?}; echo in); echo "[$v] $?"
+bash: y: parameter not set
+[] 1
+$ set -u; echo $nope; echo same
+bash: nope: unbound variable
+$ (( nope + 1 )); echo "same $?"
+bash: nope: unbound variable
+$ for i in 1 2; do echo $i; : $nope; done; echo same
+1
+bash: nope: unbound variable
+$ echo "after $?"
+after 1
+$
+@ 19,2
+== snap 3
+$ echo ${x:?no}; echo same
+bash: x: no
+$ ( : ${x?}; echo in ); echo "sub $?"
+bash: x: parameter not set
+sub 1
+$ f() { : ${x?}; echo in; }; f; echo same
+bash: x: parameter not set
+$ v=$(: ${y?}; echo in); echo "[$v] $?"
+bash: y: parameter not set
+[] 1
+$ set -u; echo $nope; echo same
+bash: nope: unbound variable
+$ (( nope + 1 )); echo "same $?"
+bash: nope: unbound variable
+$ for i in 1 2; do echo $i; : $nope; done; echo same
+1
+bash: nope: unbound variable
+$ echo "after $?"
+after 1
+$ set +u -e; true ${x?} || :
+bash: x: parameter not set
+
+@ 21,0

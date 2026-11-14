@@ -737,10 +737,9 @@ static i64 prompthistnum(Shell *sh)
 
 // Expand a decoded prompt as if in double quotes. As in bash, an
 // expansion error, even one that would end the shell, is reported and
-// the decoded text kept, and the command goes on. But under set -e an
-// unbound variable or ${x?} still ends the shell, wherever it is, as
-// bash's report_error exits then. Neither $? nor the status of an
-// assignment sees its command substitutions, as bash restores both.
+// the decoded text kept, and the command goes on (but see fatalerror
+// for set -e). Neither $? nor the status of an assignment sees its
+// command substitutions, as bash restores both.
 static Str promptexpand(X *x, Str r)
 {
     Shell *sh = x->sh;
@@ -762,11 +761,7 @@ static Str promptexpand(X *x, Str r)
         return v;
     }
     sh->esc = e.up;
-    if (e.why==ESC_FATAL && sh->opt[O_ERREXIT]) {
-        sh->status  = 1;
-        sh->exiting = 1;
-        escape(sh, ESC_EXIT);
-    } else if (e.why!=ESC_DISCARD && e.why!=ESC_FATAL && e.why!=ESC_ABORT) {
+    if (e.why!=ESC_DISCARD && e.why!=ESC_FATAL && e.why!=ESC_ABORT) {
         escape(sh, e.why);
     }
     unwind(sh, e.undo);

@@ -1,0 +1,17 @@
+# An interactive shell abandons the command line at an unbound variable
+# or ${x?}, as at any expansion error, where a subshell or command
+# substitution ends; under set -e the shell exits
+size 24 60
+rc PS1='$ '
+keys echo ${x:?no}; echo same\r
+keys ( : ${x?}; echo in ); echo "sub $?"\r
+keys f() { : ${x?}; echo in; }; f; echo same\r
+keys v=$(: ${y?}; echo in); echo "[$v] $?"\r
+snap
+keys set -u; echo $nope; echo same\r
+keys (( nope + 1 )); echo "same $?"\r
+keys for i in 1 2; do echo $i; : $nope; done; echo same\r
+keys echo "after $?"\r
+snap
+keys set +u -e; true ${x?} || :\r
+snap

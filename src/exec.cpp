@@ -489,12 +489,20 @@ static void expansionerror(Shell *sh, Arena a, Str msg)
     escape(sh, posixfatal(sh) ? ESC_FATAL : ESC_DISCARD);  // as bash
 }
 
-// A fatal expansion error, such as an unbound variable, ends the shell.
+// A fatal expansion error, such as an unbound variable or ${x?}, ends
+// a non-interactive shell. As in bash, an interactive one abandons the
+// command instead, as for any expansion error (ending a subshell), and
+// under set -e either ends with status 1, wherever the error is, as
+// bash's report_error exits then.
 static void fatalerror(Shell *sh, Arena a, Str msg)
 {
     shellerror(sh, a, msg);
     sh->status = 1;
-    escape(sh, ESC_FATAL);
+    if (sh->opt[O_ERREXIT]) {
+        sh->exiting = 1;
+        escape(sh, ESC_EXIT);
+    }
+    escape(sh, sh->interactive ? ESC_DISCARD : ESC_FATAL);
 }
 
 

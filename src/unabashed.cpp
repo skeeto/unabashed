@@ -1026,7 +1026,7 @@ static Str promptstr(Shell *sh, Arena *a, Str name)
     if (!jmpset(e.jmp)) {
         ps = expandstring(sh, a, expr);
     } else if (e.why == ESC_EXIT) {
-        // As set -e with an unbound variable or ${x?}: the shell ends
+        // As set -e with an unbound variable or ${x?} (fatalerror)
         sh->esc        = e.up;
         sh->capdepth   = depth - 1;
         sh->promptkind = kind;
