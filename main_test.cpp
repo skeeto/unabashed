@@ -469,6 +469,38 @@ static void wininfo(Os *os, OsInfo *info, Str exe, Str *env, iz nenv, Str cwd,
     info->cwd     = cwd;
 }
 
+// A Windows personality's process: its program, and the environment a
+// Windows parent hands over, sorted, with LANG and TZ pinned as for the
+// oracle, then the extra variables.
+static void persinfo(Os *os, OsInfo *info, i32 pers, Str *extra, iz nextra)
+{
+    static Str base[] = {
+        "=C:=C:\\work",
+        "ComSpec=C:\\Windows\\System32\\cmd.exe",
+        "LANG=C",
+        "Path=C:\\w64\\bin;C:\\Windows\\System32",
+        "ProgramFiles(x86)=C:\\Program Files (x86)",
+        "SystemRoot=C:\\Windows",
+        "TEMP=C:\\Users\\oracle\\AppData\\Local\\Temp",
+        "TMP=C:\\Users\\oracle\\AppData\\Local\\Temp",
+        "TZ=UTC",
+        "USERPROFILE=C:\\Users\\oracle",
+    };
+    iz   nenv = countof(base) + nextra;
+    Str *env  = alloc<Str>(&os->vos.a, nenv);
+    for (iz i = 0; i < countof(base); i++) env[i] = base[i];
+    for (iz i = 0; i < nextra; i++) env[countof(base)+i] = extra[i];
+    if (pers == PERS_MSYS) {
+        env[3] = "Path=C:\\msys\\usr\\bin;C:\\w64\\bin;C:\\Windows\\System32";
+    }
+    Str exe = pers==PERS_MSYS    ? Str("C:/msys/usr/bin/bash.exe")
+            : pers==PERS_W64BASH ? Str("C:/w64/bin/bash.exe")
+            :                      Str("C:/w64/bin/sh.exe");
+    // a parent that quotes for Cygwin, so that a script given with -c
+    // arrives as written in the msys shell's own split
+    wininfo(os, info, exe, env, nenv, "C:/work", pers!=PERS_NATIVE);
+}
+
 // Run the shell with a fresh virtual OS state. The first argument is
 // $0, conventionally "bash".
 // A Windows personality may give the raw command line in place of the
@@ -488,33 +520,7 @@ static Result runshell(Test *t, Str *args, iz nargs, Str input = {},
         info.nenv = countof(env);
         info.cwd  = "/home/oracle";
     } else {
-        // As a Windows parent hands it over, sorted, with LANG and TZ
-        // pinned as for the oracle
-        static Str env[] = {
-            "=C:=C:\\work",
-            "ComSpec=C:\\Windows\\System32\\cmd.exe",
-            "LANG=C",
-            "Path=C:\\w64\\bin;C:\\Windows\\System32",
-            "ProgramFiles(x86)=C:\\Program Files (x86)",
-            "SystemRoot=C:\\Windows",
-            "TEMP=C:\\Users\\oracle\\AppData\\Local\\Temp",
-            "TMP=C:\\Users\\oracle\\AppData\\Local\\Temp",
-            "TZ=UTC",
-            "USERPROFILE=C:\\Users\\oracle",
-        };
-        static Str msysenv[countof(env)];
-        Str *e = env;
-        if (pers == PERS_MSYS) {
-            for (iz i = 0; i < countof(env); i++) msysenv[i] = env[i];
-            msysenv[3] = "Path=C:\\msys\\usr\\bin;C:\\w64\\bin;C:\\Windows\\System32";
-            e = msysenv;
-        }
-        Str exe = pers==PERS_MSYS    ? Str("C:/msys/usr/bin/bash.exe")
-                : pers==PERS_W64BASH ? Str("C:/w64/bin/bash.exe")
-                :                      Str("C:/w64/bin/sh.exe");
-        // a parent that quotes for Cygwin, so that a script given with
-        // -c arrives as written in the msys shell's own split
-        wininfo(os, &info, exe, e, countof(env), "C:/work", pers!=PERS_NATIVE);
+        persinfo(os, &info, pers, 0, 0);
         if (cmdline.data) info.cmdline = cmdline;
     }
     return finishrun(os, &info);
@@ -1196,24 +1202,41 @@ static Str edenv[] = {
 
 static void putvfile(Os *, Arena, Str path, Str data);
 
-static Str runedit(Test *t, EdScript *ed, b32 nowrap, b32 legacy)
+// A "personality" line runs it as that Windows shell instead, in
+// C:/work, with the specs' Windows environment plus ENV, TERM and the
+// script's own variables.
+static Str runedit(Test *t, EdScript *ed, i32 pers, b32 legacy)
 {
     static u8 snapbuf[1<<20];
     Os *os = t->os;
-    startrun(os, 0, {});
+    b32 win = pers != PERS_LINUX;
+    startrun(os, win, {});
     Str *env  = alloc<Str>(&os->vos.a, countof(edenv)+ed->nenv);
     iz   nenv = 0;
-    for (iz i = 0; i < countof(edenv); i++) env[nenv++] = edenv[i];
+    if (win) {
+        // as sh, the native shell reads ENV and not --rcfile
+        env[nenv++] = "ENV=C:/work/.edrc";
+        env[nenv++] = "TERM=xterm";
+    } else {
+        for (iz i = 0; i < countof(edenv); i++) env[nenv++] = edenv[i];
+    }
     for (iz i = 0; i < ed->nenv; i++) env[nenv++] = ed->env[i];
-    putvfile(os, os->vos.a, "/home/oracle/.edrc", ed->rc);
-    vttyinit(&os->vos, ed->rows, ed->cols, !nowrap, ed->keys, ed->nkeys,
+    Str rc = win ? Str("C:/work/.edrc") : Str("/home/oracle/.edrc");
+    // not a copy of vos.a, which would overlap what the vos keeps
+    putvfile(os, newarena(os, (iz)1<<20), rc, ed->rc);
+    vttyinit(&os->vos, ed->rows, ed->cols, !ed->nowrap, ed->keys, ed->nkeys,
              snapbuf, countof(snapbuf));
     os->vos.tty.legacy = legacy;
-    static Str args[] = {"bash", "--noprofile", "--rcfile", "/home/oracle/.edrc", "-i"};
+    Str args[] = {pers==PERS_NATIVE ? Str("sh") : Str("bash"),
+                  "--noprofile", "--rcfile", rc, "-i"};
     OsInfo info = baseinfo(os, args, countof(args));
-    info.env  = env;
-    info.nenv = nenv;
-    info.cwd  = "/home/oracle";
+    if (win) {
+        persinfo(os, &info, pers, env, nenv);
+    } else {
+        info.env  = env;
+        info.nenv = nenv;
+        info.cwd  = "/home/oracle";
+    }
     finishrun(os, &info);
     if (!os->vos.tty.ended) vsnap(&os->vos);  // the shell exited
     return os->vos.tty.snaps;
@@ -1250,16 +1273,18 @@ static b32 test_edit(Test *t, char *path)
     Arena a   = {mem, mem+cap};
     EdScript ed = edparse(&a, src);
     b32 ok = 1;
+    i32 pers = ed.pers.data ? personality(ed.pers) : PERS_LINUX;
+    if (pers < 0) ed.err = "unknown personality";
     if (ed.err.data) {
         fprintf(stderr, "SKIP: %s (%.*s)\n", path, (int)ed.err.len, (char *)ed.err.data);
     } else {
-        Str got = runedit(t, &ed, ed.nowrap, 0);
+        Str got = runedit(t, &ed, pers, 0);
         ok = edchecked(t, p);
         if (want.data) {
             ok &= expect(t, p, got, want);
             // Again on a console without VT, drawn through vtcon
             Str lp = concat(&a, p, " (vtcon)");
-            got = runedit(t, &ed, ed.nowrap, 1);
+            got = runedit(t, &ed, pers, 1);
             ok &= edchecked(t, lp);
             ok &= expect(t, lp, got, want);
         } else {

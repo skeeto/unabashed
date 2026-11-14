@@ -468,6 +468,16 @@ static Str dollar0(Shell *sh)
 
 static Array *dynarray(Shell *, Arena *, Value *);
 
+// COMP_WORDBREAKS's default, with '@' unless hostname completion is off.
+// Native mode leaves out ':', which there follows a drive letter, so
+// d:/ completes on D: and not at the root of the current drive (/).
+static Str wordbreaks(Shell *sh, b32 at)
+{
+    Str s = at ? Str(" \t\n\"'@><=;|&(:") : Str(" \t\n\"'><=;|&(:");
+    if (sh->pathmode == PM_NATIVE) s.len--;
+    return s;
+}
+
 static Str dynvalue(Shell *sh, Arena *a, Value *v)
 {
     switch (v->dyn) {
@@ -517,7 +527,7 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
     case DYN_BASH_ARGV0:    return dollar0(sh);
     case DYN_PIPESTATUS:    return fmti64(a, sh->npstat ? sh->pstat[0] : 0);
     case DYN_UNDERSCORE:    return sh->lastarg.data ? sh->lastarg : Str("");
-    case DYN_COMP_WORDBREAKS: return " \t\n\"'@><=;|&(:";
+    case DYN_COMP_WORDBREAKS: return wordbreaks(sh, 1);
     case DYN_GROUPS: {
         Array *r = dynarray(sh, a, v);
         return r->len ? r->e[0].val : Str{};

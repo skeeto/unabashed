@@ -1,0 +1,32 @@
+== snap 1
+$ : d:/d
+@ 0,8 bell 1
+== snap 2
+$ : D:/dee/
+@ 0,11 bell 1
+== snap 3
+$ : x=d:/dfile
+@ 0,15 bell 1
+== snap 4
+$ : /cee/
+@ 0,9 bell 1
+== snap 5
+$ : d:/d
+dee/   dfile
+$ : d:/d
+@ 2,8 bell 2
+== snap 6
+$ : d:inner
+@ 0,12 bell 2
+== snap 7
+$ echo "[$COMP_WORDBREAKS]"
+[
+"'@><=;|&(]
+$
+@ 3,2 bell 2
+== snap 8
+$ echo "[$COMP_WORDBREAKS]"
+[
+"'@><=;|&(]
+$
+@ 3,2 bell 2

@@ -482,6 +482,7 @@ struct EdScript {
     i32   cols;
     b32   nowrap;
     Str   rc;
+    Str   pers;  // the test runner's personality name, or null data
     Str  *env;
     iz    nenv;
     VKey *keys;
@@ -587,6 +588,8 @@ static EdScript edparse(Arena *a, Str src)
             r.cols = n2;
         } else if (word == "nowrap") {
             r.nowrap = 1;
+        } else if (word == "personality") {
+            r.pers = rest;
         } else if (word == "env") {
             r.env[r.nenv++] = rest;
         } else if (word == "rc") {

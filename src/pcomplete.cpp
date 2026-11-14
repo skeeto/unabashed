@@ -810,7 +810,7 @@ static Str pcwordbreaks(Shell *sh, Arena *a)
 {
     Got g = getvar(sh, a, "COMP_WORDBREAKS");
     if (g.set) return g.value;
-    return sh->shopt[S_HOSTCOMPLETE] ? Str(" \t\n\"'@><=;|&(:") : Str(" \t\n\"'><=;|&(:");
+    return wordbreaks(sh, sh->shopt[S_HOSTCOMPLETE]);
 }
 
 static i64 pccharcount(Str s)

@@ -119,8 +119,7 @@ static Str compbreaks(Shell *sh, Arena *a)
 {
     Got g = getvar(sh, a, "COMP_WORDBREAKS");
     if (g.set) return g.value;
-    return sh->shopt[S_HOSTCOMPLETE] ? Str(" \t\n\"'@><=;|&(:")
-                                     : Str(" \t\n\"'><=;|&(:");
+    return wordbreaks(sh, sh->shopt[S_HOSTCOMPLETE]);
 }
 
 // Find the word before point (§3)
@@ -324,6 +323,9 @@ static Slice<Str> compfiles(Editor *ed, Shell *sh, Comp *c, Str w, i32 keep)
     }
     if (slash<0 && w.len && w[0]=='~') {
         return compusers(sh, c, w);  // ~name: a user's home
+    }
+    if (slash<0 && sh->pathmode==PM_NATIVE && hasdrive(w)) {
+        slash = 1;  // d:foo, in drive D:'s working directory
     }
     Str udir = takehead(w, slash+1);
     Str part = cuthead(w, slash+1);
@@ -861,7 +863,8 @@ static Str compquote(Editor *, Shell *sh, Comp *c, Str s, b32 mult, i32 *style)
         noesc = "${}()~`";
         b32 any = 0;
         for (iz i = 0; i < s.len; i++) {
-            any |= !compin(noesc, s[i]) && compin(" \t\n\\\"'@<>=;|&#?*[!:", s[i]);
+            any |= !compin(noesc, s[i]) && compin(" \t\n\\\"'@<>=;|&#?*[!:", s[i])
+                   && (s[i]!=':' || sh->pathmode!=PM_NATIVE);
         }
         if (any) qs = QS_DOUBLE;
         plain = 1;
@@ -878,8 +881,10 @@ static Str compquote(Editor *, Shell *sh, Comp *c, Str s, b32 mult, i32 *style)
     case QS_BACKSLASH: {
         b32 tilde = s.len && s[0]=='~' && compexists(sh, *a, s);
         // Without bash's full quoting (the specific commands), = and :
-        // are escaped only as word breaks
+        // are escaped only as word breaks. In native mode : means
+        // nothing to the shell, only a drive (d:/), and is never escaped.
         if (c->partial) noesc = concat(a, noesc, "=:");
+        if (sh->pathmode == PM_NATIVE) noesc = concat(a, noesc, ":");
         return compbackslash(a, s, breaks, noesc, tilde);
     }
     case QS_SINGLE:

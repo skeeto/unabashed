@@ -856,6 +856,18 @@ exist, and a DOS device name such as
 .B nul
 is a device in any directory and with any extension (see Devices below).
 .TP
+completion word breaks
+In msys mode
+.B COMP_WORDBREAKS
+is bash's, with a colon, so completing
+.I c:/
+completes
+.IR / ,
+as bash's default does.
+In native mode it has no colon, so
+.I d:/
+completes on drive D:, and a colon in a completed name is not escaped.
+.TP
 .BR cygpath " and " "pwd \-W"
 In msys mode
 .B cygpath
@@ -2962,6 +2974,8 @@ suffix; in msys mode
 .B shopt \-s completion_strip_exe
 drops it, unless a file without the suffix exists beside it.
 There are no users on Windows, so user name completion finds nothing.
+In native mode a colon does not break words, so a name with a drive
+letter completes as a whole (see The two modes compared above).
 .PP
 In an interactive shell, history and history expansion are on.
 When

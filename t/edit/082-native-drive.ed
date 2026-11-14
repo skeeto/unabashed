@@ -1,0 +1,23 @@
+# Native mode: a drive's colon is no word break, so d:/ completes on D:
+# and not at the root of the current drive, C:, and the colon, which
+# means nothing to the shell there, goes in unescaped. A bare / is still
+# the root of C:, and d:in completes in drive D:'s working directory.
+# Hand-checked: no oracle runs native mode.
+personality native
+size 24 80
+rc PS1='$ '
+rc mkdir d:/dee c:/cee; : > d:/dfile; : > d:/dee/inner; cd d:/dee; cd c:/work
+keys : d:/d\t
+snap
+keys \C-a\C-k: D:/de\t
+snap
+keys \C-a\C-k: x=d:/df\t
+snap
+keys \C-a\C-k: /c\t
+snap
+keys \C-a\C-k: d:/d\t\t
+snap
+keys \C-a\C-k\C-l: d:in\t
+snap
+keys \C-a\C-kecho "[$COMP_WORDBREAKS]"\r
+snap
