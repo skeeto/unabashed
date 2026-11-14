@@ -5445,6 +5445,11 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     File *ferr = sh->fds->fd[2];
     if (!fin || !ferr || fin->kind!=F_OS || ferr->kind!=F_OS) return ED_NOTTY;
     Editor *ed = editor(sh);
+    // The prompt and initial text live in the callers' scratch, which
+    // the size checks below reuse: copy them first
+    ed->linemem = {(byte *)(ed->linemem.mem+1), ed->linemem.end, ed->linemem.mem};
+    prompt      = clone(&ed->linemem, prompt);
+    Str init    = clone(&ed->linemem, opts->init);
     ed->in  = fin->h;
     ed->out = ferr->h;
     ed->tty   = os_tty(sh->os, ed->in, ed->out, TTY_RAW);
@@ -5473,8 +5478,6 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     if (ed->tty.cols < 2) ed->tty.cols = 80;
     ed->width = ed->tty.xenl ? ed->tty.cols : ed->tty.cols-1;
 
-    ed->linemem = {(byte *)(ed->linemem.mem+1), ed->linemem.end, ed->linemem.mem};
-    prompt      = clone(&ed->linemem, prompt);  // callers' scratch is reused
     ed->line    = Buf(&ed->linemem, 256);
     ed->out_    = Buf(&ed->linemem, 256);
     ed->done    = 0;
@@ -5498,7 +5501,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         edtermkeys(ed);
     }
     rlttychars(ed);
-    print(&ed->line, opts->init);
+    print(&ed->line, init);
     ed->point   = ed->line.len;
     ed->eof     = ed->tty.eof ? ed->tty.eof : 0x04;
     ed->lastc   = 0;
