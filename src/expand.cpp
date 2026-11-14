@@ -735,6 +735,49 @@ static i64 prompthistnum(Shell *sh)
     return n - 1;
 }
 
+// Expand a decoded prompt as if in double quotes. As in bash, an
+// expansion error, even one that would end the shell, is reported and
+// the decoded text kept, and the command goes on. But under set -e an
+// unbound variable or ${x?} still ends the shell, wherever it is, as
+// bash's report_error exits then. Neither $? nor the status of an
+// assignment sees its command substitutions, as bash restores both.
+static Str promptexpand(X *x, Str r)
+{
+    Shell *sh = x->sh;
+    Escape e = {};
+    e.up        = sh->esc;
+    e.bout      = sh->bout;
+    e.undo      = sh->undo;
+    e.frame     = sh->frame;
+    e.loopdepth = sh->loopdepth;
+    i32 status   = sh->status;
+    u32 nsubst   = sh->nsubst;
+    i32 capdepth = sh->capdepth;
+    sh->esc = &e;
+    if (!jmpset(e.jmp)) {
+        Str v = expandword(x, r, XC_DQUOTE|XC_PROMPT);
+        sh->esc    = e.up;
+        sh->status = status;
+        sh->nsubst = nsubst;
+        return v;
+    }
+    sh->esc = e.up;
+    if (e.why==ESC_FATAL && sh->opt[O_ERREXIT]) {
+        sh->status  = 1;
+        sh->exiting = 1;
+        escape(sh, ESC_EXIT);
+    } else if (e.why!=ESC_DISCARD && e.why!=ESC_FATAL && e.why!=ESC_ABORT) {
+        escape(sh, e.why);
+    }
+    unwind(sh, e.undo);
+    sh->bout      = e.bout;
+    sh->loopdepth = e.loopdepth;
+    sh->capdepth  = capdepth;
+    sh->status    = status;
+    sh->nsubst    = nsubst;
+    return r;
+}
+
 // Decode the backslash escapes of a prompt string, as ${x@P} does,
 // then expand it as if in double quotes when promptvars is on.
 static Str promptdecode(X *x, Str s)
@@ -852,7 +895,7 @@ static Str promptdecode(X *x, Str s)
         }
     }
     Str r = finish(&b);
-    return expand ? expandword(x, r, XC_DQUOTE|XC_PROMPT) : r;
+    return expand ? promptexpand(x, r) : r;
 }
 
 // One value transformed by ${name@t}, except for @A and @a.

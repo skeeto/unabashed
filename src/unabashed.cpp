@@ -997,15 +997,18 @@ struct StdinSource {
     i32    eofs;  // ends of input in a row ignored for IGNOREEOF
 };
 
-static Str psexpr(b32 first)
+static Str psname(b32 first)
 {
-    return first ? Str("${PS1@P}") : "${PS2@P}";
+    return first ? Str("PS1") : "PS2";
 }
 
-// A prompt expanded by expr (${PS1@P} and the like), \1 and \2 around
-// the invisible parts while editing. An expansion error gives nothing.
-static Str promptstr(Shell *sh, Arena *a, Str expr)
+// The prompt in variable name (PS1 and the like) as ${name@P} expands
+// it, \1 and \2 around the invisible parts while editing. Unset, there
+// is none, even under set -u, as in bash.
+static Str promptstr(Shell *sh, Arena *a, Str name)
 {
+    if (!getvar(sh, a, name).set) return {};
+    Str expr = concat3(a, "${", name, "@P}");
     Escape e = {};
     e.up    = sh->esc;
     e.bout  = sh->bout;
@@ -1015,13 +1018,19 @@ static Str promptstr(Shell *sh, Arena *a, Str expr)
     i32 status = sh->status;
     i32 kind   = sh->promptkind;
     // \! and \# differ by prompt, and HISTCMD while a prompt shows
-    sh->promptkind = find(expr, "PS1")>=0 ? 1 : find(expr, "PS2")>=0 ? 2 : 3;
+    sh->promptkind = name=="PS1" ? 1 : name=="PS2" ? 2 : 3;
     // The caller's arena is the next depth's scratch, and a command
     // substitution in the prompt runs there: claim it
     i32 depth = ++sh->capdepth;
     Str ps = {};
     if (!jmpset(e.jmp)) {
         ps = expandstring(sh, a, expr);
+    } else if (e.why == ESC_EXIT) {
+        // As set -e with an unbound variable or ${x?}: the shell ends
+        sh->esc        = e.up;
+        sh->capdepth   = depth - 1;
+        sh->promptkind = kind;
+        escape(sh, e.why);
     } else {
         unwind(sh, e.undo);
     }
@@ -1033,10 +1042,10 @@ static Str promptstr(Shell *sh, Arena *a, Str expr)
 }
 
 // Show a prompt on standard error, without the editor's markers.
-static void showprompt(Shell *sh, Str expr)
+static void showprompt(Shell *sh, Str name)
 {
     Arena a  = *scratchat(sh, sh->capdepth+1);
-    Str   ps = promptstr(sh, &a, expr);
+    Str   ps = promptstr(sh, &a, name);
     iz    n  = 0;
     for (iz i = 0; i < ps.len; i++) {
         if (ps[i]!=1 && ps[i]!=2) ps.data[n++] = ps[i];
@@ -1068,7 +1077,7 @@ static iz readstdin(Shell *sh, File *f, u8 *buf, iz len)
 // PS0, shown after a command is read and before it runs.
 static void showps0(Shell *sh)
 {
-    showprompt(sh, "${PS0@P}");
+    showprompt(sh, "PS0");
 }
 
 // PROMPT_COMMAND, run before each primary prompt: the string, or each
@@ -1118,7 +1127,7 @@ static b32 fillline(void *ctx, Lexer *L)
     }
     if (sh->interactive && (sh->opt[O_EMACS] || sh->opt[O_VI])) {
         Arena a  = *scratchat(sh, sh->capdepth+1);
-        Str   ps = promptstr(sh, &a, psexpr(L->newunit));
+        Str   ps = promptstr(sh, &a, psname(L->newunit));
         EdRead opts = {};
         opts.delim = -1;
         opts.shell = 1;
@@ -1159,7 +1168,7 @@ static b32 fillline(void *ctx, Lexer *L)
         }
     }
     if (sh->interactive) {
-        showprompt(sh, psexpr(L->newunit));
+        showprompt(sh, psname(L->newunit));
         L->newunit = 0;
     }
     for (b32 done = 0; !done;) {

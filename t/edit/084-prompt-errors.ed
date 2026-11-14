@@ -1,0 +1,11 @@
+# A prompt whose expansion fails is shown decoded after the error, and
+# an unset PS1, PS2 or PS0 is no prompt, even under set -u
+size 12 50
+rc PS1='\101 ${x?boom}$(echo hi)> '
+keys echo one\r
+snap
+keys set -u; unset PS1 PS2 PS0\r
+snap
+keys if true\r
+keys then echo two; fi\r
+snap

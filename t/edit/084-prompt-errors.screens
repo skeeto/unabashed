@@ -1,0 +1,37 @@
+== snap 1
+bash: x: boom
+A ${x?boom}$(echo hi)> echo one
+one
+bash: x: boom
+A ${x?boom}$(echo hi)>
+@ 4,23
+== snap 2
+bash: x: boom
+A ${x?boom}$(echo hi)> echo one
+one
+bash: x: boom
+A ${x?boom}$(echo hi)> set -u; unset PS1 PS2 PS0
+
+@ 5,0
+== snap 3
+bash: x: boom
+A ${x?boom}$(echo hi)> echo one
+one
+bash: x: boom
+A ${x?boom}$(echo hi)> set -u; unset PS1 PS2 PS0
+if true
+then echo two; fi
+two
+
+@ 8,0
+== snap 4
+bash: x: boom
+A ${x?boom}$(echo hi)> echo one
+one
+bash: x: boom
+A ${x?boom}$(echo hi)> set -u; unset PS1 PS2 PS0
+if true
+then echo two; fi
+two
+
+@ 8,0
