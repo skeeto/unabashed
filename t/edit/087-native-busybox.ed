@@ -2,14 +2,14 @@
 # empty command line completes nothing (no_empty_cmd_completion on);
 # LINES and COLUMNS are never set from the terminal (checkwinsize off),
 # so an exported COLUMNS stays; each command goes to HISTFILE before it
-# runs; and title gets and sets the console's title. Hand-checked: no
-# oracle runs native mode.
+# runs, and HISTSIZE defaults to 1024; and title gets and sets the
+# console's title. Hand-checked: no oracle runs native mode.
 personality native
 size 24 70
 rc PS1='$ '; HISTFILE=~/hist; export COLUMNS=80
 keys \C-p\t\t
 snap
-keys echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_completion\r
+keys echo "$COLUMNS ${LINES-unset} $HISTSIZE"; shopt checkwinsize no_empty_cmd_completion\r
 snap
 keys cat ~/hist\r
 snap

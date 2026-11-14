@@ -2,34 +2,34 @@
 $
 @ 0,2
 == snap 2
-$ echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comp
-letion
-80 unset
+$ echo "$COLUMNS ${LINES-unset} $HISTSIZE"; shopt checkwinsize no_empt
+y_cmd_completion
+80 unset 1024
 checkwinsize            off
 no_empty_cmd_completion on
 $
 @ 5,2
 == snap 3
-$ echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comp
-letion
-80 unset
+$ echo "$COLUMNS ${LINES-unset} $HISTSIZE"; shopt checkwinsize no_empt
+y_cmd_completion
+80 unset 1024
 checkwinsize            off
 no_empty_cmd_completion on
 $ cat ~/hist
-echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comple
-tion
+echo "$COLUMNS ${LINES-unset} $HISTSIZE"; shopt checkwinsize no_empty_
+cmd_completion
 cat ~/hist
 $
 @ 9,2
 == snap 4
-$ echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comp
-letion
-80 unset
+$ echo "$COLUMNS ${LINES-unset} $HISTSIZE"; shopt checkwinsize no_empt
+y_cmd_completion
+80 unset 1024
 checkwinsize            off
 no_empty_cmd_completion on
 $ cat ~/hist
-echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comple
-tion
+echo "$COLUMNS ${LINES-unset} $HISTSIZE"; shopt checkwinsize no_empty_
+cmd_completion
 cat ~/hist
 $ title; title 'one two' three; title; type title
 one two
@@ -37,14 +37,14 @@ title is a shell builtin
 $
 @ 12,2
 == snap 5
-$ echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comp
-letion
-80 unset
+$ echo "$COLUMNS ${LINES-unset} $HISTSIZE"; shopt checkwinsize no_empt
+y_cmd_completion
+80 unset 1024
 checkwinsize            off
 no_empty_cmd_completion on
 $ cat ~/hist
-echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comple
-tion
+echo "$COLUMNS ${LINES-unset} $HISTSIZE"; shopt checkwinsize no_empty_
+cmd_completion
 cat ~/hist
 $ title; title 'one two' three; title; type title
 one two
@@ -54,14 +54,14 @@ sh: type: title: not found
 $
 @ 14,2
 == snap 6
-$ echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comp
-letion
-80 unset
+$ echo "$COLUMNS ${LINES-unset} $HISTSIZE"; shopt checkwinsize no_empt
+y_cmd_completion
+80 unset 1024
 checkwinsize            off
 no_empty_cmd_completion on
 $ cat ~/hist
-echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comple
-tion
+echo "$COLUMNS ${LINES-unset} $HISTSIZE"; shopt checkwinsize no_empty_
+cmd_completion
 cat ~/hist
 $ title; title 'one two' three; title; type title
 one two

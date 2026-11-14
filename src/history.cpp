@@ -518,13 +518,17 @@ static void histoption(Shell *sh, i32 opt, b32 on)
     }
 }
 
-// Startup and set -o history: HISTSIZE defaults to 500 and HISTFILESIZE
-// to it, then the file is read.
+// Startup and set -o history: HISTSIZE defaults to 500 (1024 in native
+// mode, as w64devkit's busybox) and HISTFILESIZE to it, then the file
+// is read.
 static void histload(Shell *sh)
 {
     Arena none = {};
     Arena a    = *scratchat(sh, sh->capdepth+1);
-    if (!getvar(sh, &none, "HISTSIZE").set) setvar(sh, a, "HISTSIZE", "500");
+    if (!getvar(sh, &none, "HISTSIZE").set) {
+        Str n = sh->pathmode==PM_NATIVE ? Str("1024") : "500";
+        setvar(sh, a, "HISTSIZE", n);
+    }
     histvarchanged(sh, "HISTSIZE");
     Got fs = getvar(sh, &none, "HISTFILESIZE");
     if (!fs.set) {
