@@ -360,6 +360,7 @@ W32(b32,    TerminateJobObject(uz, u32));
 W32(b32,    SetConsoleCtrlHandler(void *, b32));
 W32(b32,    SetConsoleMode(uz, i32));
 W32(b32,    SetConsoleTitleW(c16 *));
+W32(i32,    GetConsoleTitleW(c16 *, i32));
 W32(byte *, VirtualAlloc(byte *, iz, i32, i32));
 W32(byte *, VirtualAllocEx(uz, byte *, iz, i32, i32));
 W32(b32,    VirtualFree(byte *, iz, i32));
@@ -3530,9 +3531,30 @@ static i32 concoord(i32 x, i32 y)
     return (i32)((u32)(x & 0xffff) | (u32)(y & 0xffff)<<16);
 }
 
+// CON_TITLE and CON_GETTITLE, the console's whatever the handle
+static b32 contitle(ConOp *o)
+{
+    if constexpr (LIBMODE) return 0;  // the host's
+    c16 title[CON_TITLEMAX/3];
+    if (o->op == CON_GETTITLE) {
+        i32 n = GetConsoleTitleW(title, countof(title));
+        if (n<1 || n>=countof(title)) return 0;
+        Arena a = {(byte *)o->text.data, (byte *)o->text.data+o->text.len};
+        o->text = fromwide(&a, title, n);
+        return 1;
+    }
+    i32 n = 0;
+    for (iz i = 0; i<o->text.len && n<countof(title)-3;) {
+        n += (i32)utf16encode(title+n, utf8decode(o->text, &i));
+    }
+    title[n] = 0;
+    return SetConsoleTitleW(title);
+}
+
 static b32 plt_con(Os *os, Handle out, ConOp *o)
 {
     flushw(os);
+    if (o->op==CON_TITLE || o->op==CON_GETTITLE) return contitle(o);
     ConsoleInfo ci = {};
     if (!GetConsoleScreenBufferInfo(out, &ci)) return 0;
     switch (o->op) {
@@ -3556,16 +3578,6 @@ static b32 plt_con(Os *os, Handle out, ConOp *o)
     }
     case CON_ATTR:
         return SetConsoleTextAttribute(out, o->attr);
-    case CON_TITLE: {
-        if constexpr (LIBMODE) return 0;  // the host's
-        c16 title[512];
-        i32 n = 0;
-        for (iz i = 0; i<o->text.len && n<countof(title)-3;) {
-            n += (i32)utf16encode(title+n, utf8decode(o->text, &i));
-        }
-        title[n] = 0;
-        return SetConsoleTitleW(title);
-    }
     }
     return 0;
 }

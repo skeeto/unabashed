@@ -1796,6 +1796,28 @@ static void histexit(Shell *sh)
     histfilesize(sh);
 }
 
+// Native mode, as busybox ash: each command goes to the end of HISTFILE
+// before it runs (so exec and a crash keep it), as history -a would put
+// it there. Once the file holds four times HISTFILESIZE lines, it is
+// cut to that, as busybox trims it.
+static void histnative(Shell *sh)
+{
+    Hist *h = &sh->hist;
+    if (sh->pathmode!=PM_NATIVE || !sh->opt[O_HISTORY] || h->session<=0) return;
+    Arena a    = *scratchat(sh, sh->capdepth+1);
+    Str   file = getvar(sh, &a, "HISTFILE").value;
+    if (!file.len || histcreate(sh, file, a)) return;
+    if (h->session > h->len) h->session = h->len;
+    histwrite(sh, file, h->len-(iz)h->session, 1, a);
+    h->infile += h->session;
+    h->session = 0;
+    Got g = getvar(sh, &a, "HISTFILESIZE");
+    i64 n = 0;
+    if (g.value.len && histnum(g.value, &n) && n>=0 && h->infile>4*n) {
+        histfilesize(sh);
+    }
+}
+
 // history -a, -n, -r, -w, with the file args[i] or HISTFILE.
 static i32 histfileop(Shell *sh, i32 op, Str *args, iz nargs, iz i, Arena scratch)
 {

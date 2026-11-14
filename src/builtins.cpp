@@ -4655,6 +4655,26 @@ static i32 b_times(Shell *sh, Str *, iz, Arena)
     return 0;
 }
 
+// title, native mode only, as busybox-w32's: the console's title with no
+// operand, else the first operand becomes it (the rest ignored, no
+// options). Always true.
+static i32 b_title(Shell *sh, Str *args, iz nargs, Arena scratch)
+{
+    ConOp o = {};
+    if (nargs > 1) {
+        o.op   = CON_TITLE;
+        o.text = args[1];
+        os_con(sh->os, sh->sched->err, &o);
+        return 0;
+    }
+    o.op   = CON_GETTITLE;
+    o.text = {allocbytes(&scratch, CON_TITLEMAX), CON_TITLEMAX};
+    if (os_con(sh->os, sh->sched->err, &o)) {
+        bprint(sh, concat(&scratch, o.text, "\n"));
+    }
+    return 0;
+}
+
 
 // Names for completion (complete.cpp, pcomplete.cpp)
 
@@ -4759,6 +4779,7 @@ static Builtin builtins[] = {
     {"suspend",  b_suspend,  0},
     {"test",     b_test,     B_NOHELP},
     {"times",    b_times,    B_SPECIAL},
+    {"title",    b_title,    B_NATIVE|B_NOHELP},
     {"trap",     b_trap,     B_SPECIAL},
     {"true",     b_true,     B_NOHELP},
     {"type",     b_type,     0},
@@ -4770,10 +4791,13 @@ static Builtin builtins[] = {
     {"wait",     b_wait,     0},
 };
 
-// Builtins that exist in this mode: cygpath only in msys mode.
+// Builtins that exist in this mode: cygpath only in msys mode, title
+// only in native mode.
 static b32 hasbuiltin(Shell *sh, Builtin *b)
 {
-    return !(b->flags & B_MSYS) || sh->pathmode==PM_MSYS;
+    if (b->flags & B_MSYS)   return sh->pathmode == PM_MSYS;
+    if (b->flags & B_NATIVE) return sh->pathmode == PM_NATIVE;
+    return 1;
 }
 
 static_assert(countof(builtins) <= 128, "Shell.disabled holds 128");

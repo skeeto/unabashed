@@ -1030,7 +1030,8 @@ static Editor *editor(Shell *sh)
         ed->vars.inputmeta    = 1;
         ed->vars.outputmeta   = 1;
         ed->vars.visiblebell  = 1;
-        ed->vars.bellstyle    = 2;
+        // No bell in native mode, as w64devkit's busybox was built
+        ed->vars.bellstyle    = sh->pathmode==PM_NATIVE ? 0 : 2;
         ed->vars.comment      = "#";
         ed->vars.regionstart  = "\x1b[7m";
         ed->vars.regionend    = "\x1b[27m";
@@ -5354,6 +5355,8 @@ static void edarg(Editor *ed, Shell *sh, i32 key)
 static void edsize(Editor *ed, Shell *sh, Tty t)
 {
     if (t.err || t.rows<1 || t.cols<1) return;
+    // Native mode, as busybox ash, sets them only with checkwinsize
+    if (sh->pathmode==PM_NATIVE && !sh->shopt[S_CHECKWINSIZE]) return;
     if (t.rows==ed->setrows && t.cols==ed->setcols) return;
     ed->setrows = t.rows;
     ed->setcols = t.cols;

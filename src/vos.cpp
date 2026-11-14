@@ -242,6 +242,9 @@ struct Vos {
     b32        cliptext;
     i32        clipbusy;
     i32        clipsets;
+    // The console's title (CON_TITLE), for CON_GETTITLE
+    u8         title[256];
+    iz         titlelen;
 };
 
 static VNode *vnew(Vos *v, VNode *dir, Str name, i32 type, i32 mode)
@@ -1297,6 +1300,17 @@ static b32 vos_con(Os *os, Handle out, ConOp *o)
 {
     Vos  *v = osvos(os);
     VTty *y = &v->tty;
+    if (o->op == CON_TITLE) {
+        // No title bar, but CON_GETTITLE gets it back
+        v->titlelen = o->text.len<countof(v->title) ? o->text.len : countof(v->title);
+        for (iz i = 0; i < v->titlelen; i++) v->title[i] = o->text[i];
+        return 1;
+    } else if (o->op == CON_GETTITLE) {
+        if (!v->titlelen) return 0;
+        for (iz i = 0; i < v->titlelen; i++) o->text.data[i] = v->title[i];
+        o->text.len = v->titlelen;
+        return 1;
+    }
     if (!y->term || !y->legacy || !vistty(v, out)) return 0;
     VTerm *t = y->term;
     y->active = v->clock;
@@ -1326,8 +1340,6 @@ static b32 vos_con(Os *os, Handle out, ConOp *o)
         i32 fg  = rev ? o->attr>>4 : o->attr;
         t->attr = (u8)((rev ? VA_REVERSE : 0) | (fg&8 ? VA_BOLD : 0));
     } break;
-    case CON_TITLE:
-        break;  // no title bar
     }
     return 1;
 }

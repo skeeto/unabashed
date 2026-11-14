@@ -1652,6 +1652,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
 
     if (!jmpset(top.jmp)) {
         pathsetup(sh, info, &perm, scratch);
+        nativeoptions(sh);
         sh->rshell = startsrestricted(info);
         initvars(sh, info, scratch);
         entrytraps(sh);

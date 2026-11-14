@@ -724,6 +724,16 @@ static b32 hasshopt(Shell *sh, i32 k)
     return k!=S_COMPLETION_STRIP_EXE || sh->pathmode==PM_MSYS;
 }
 
+// Native mode starts out as busybox ash behaves: LINES and COLUMNS are
+// left to the user, and an empty command line completes nothing (a
+// slow search of PATH on Windows).
+static void nativeoptions(Shell *sh)
+{
+    if (sh->pathmode != PM_NATIVE) return;
+    sh->shopt[S_CHECKWINSIZE] = 0;
+    sh->shopt[S_NO_EMPTY_CMD_COMPLETION] = 1;
+}
+
 // The options a shell starts with, which a script without #! also
 // starts from (as bash's reinitialized subshell); with fresh, those a
 // shell keeps across that, as bash, survive: the editing mode, history,
@@ -756,6 +766,7 @@ static void defaultoptions(Shell *sh, b32 fresh)
     for (iz i = 0; i < countof(shoptson); i++) {
         sh->shopt[shoptson[i]] = 1;
     }
+    nativeoptions(sh);
     sh->posixsaved = 0;
 }
 

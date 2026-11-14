@@ -1463,15 +1463,38 @@ There is no
 .B igncr
 option.
 .PP
+Interactive use follows w64devkit's busybox too.
+The shell never sets
+.B LINES
+and
+.B COLUMNS
+from the console, so values from the environment or a startup file
+stay:
+.B checkwinsize
+starts off, and the editor sets them only while it is on.
+There is no bell
+.RB ( bell\-style
+starts as
+.BR none ),
+and Tab on an empty command line completes nothing
+.RB ( no_empty_cmd_completion
+starts on), sparing a slow search of
+.BR PATH .
+Each command goes to the end of the history file just before it runs
+(see Line editing below).
+The
+.B title
+builtin, which exists only in native mode, prints the console window's
+title with no operand and otherwise sets it to its first operand,
+ignoring the rest, as busybox-w32's does.
+.PP
 Some busybox-w32 features are missing.
 Globbing is case sensitive, as in bash, unless
 .B shopt \-s nocaseglob
 is set, where busybox-w32 ignores case by default.
 There is no
 .B \-X
-option, no
-.B title
-builtin, and no
+option and no
 .BR "cd \-a" ,
 and the colons in
 .B MANPATH
@@ -2998,6 +3021,14 @@ signal, so closing the console window loses the session's history
 unless a
 .B HUP
 trap exits.
+In native mode, as in busybox-w32, each command is also appended just
+before it runs, as
+.B history \-a
+would append it, so a command that
+.BR exec s
+or kills the shell is kept; once the file holds four times
+.B HISTFILESIZE
+lines, it is cut to that many.
 A symbolic link as the history file is written through in place.
 .PP
 When unset,

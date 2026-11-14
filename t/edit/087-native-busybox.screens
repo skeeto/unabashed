@@ -1,0 +1,72 @@
+== snap 1
+$
+@ 0,2
+== snap 2
+$ echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comp
+letion
+80 unset
+checkwinsize            off
+no_empty_cmd_completion on
+$
+@ 5,2
+== snap 3
+$ echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comp
+letion
+80 unset
+checkwinsize            off
+no_empty_cmd_completion on
+$ cat ~/hist
+echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comple
+tion
+cat ~/hist
+$
+@ 9,2
+== snap 4
+$ echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comp
+letion
+80 unset
+checkwinsize            off
+no_empty_cmd_completion on
+$ cat ~/hist
+echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comple
+tion
+cat ~/hist
+$ title; title 'one two' three; title; type title
+one two
+title is a shell builtin
+$
+@ 12,2
+== snap 5
+$ echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comp
+letion
+80 unset
+checkwinsize            off
+no_empty_cmd_completion on
+$ cat ~/hist
+echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comple
+tion
+cat ~/hist
+$ title; title 'one two' three; title; type title
+one two
+title is a shell builtin
+$ shopt -s msyspath; type title
+sh: type: title: not found
+$
+@ 14,2
+== snap 6
+$ echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comp
+letion
+80 unset
+checkwinsize            off
+no_empty_cmd_completion on
+$ cat ~/hist
+echo "$COLUMNS ${LINES-unset}"; shopt checkwinsize no_empty_cmd_comple
+tion
+cat ~/hist
+$ title; title 'one two' three; title; type title
+one two
+title is a shell builtin
+$ shopt -s msyspath; type title
+sh: type: title: not found
+$
+@ 14,2

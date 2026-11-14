@@ -17,6 +17,7 @@ enum : i32 {
     B_DECL    = 1<<1,  // declaration builtin: assignment arguments
     B_MSYS    = 1<<2,  // msys mode only (cygpath)
     B_NOHELP  = 1<<3,  // --help is an ordinary argument
+    B_NATIVE  = 1<<4,  // native mode only (title)
 };
 
 static Builtin *findbuiltin(Shell *, Str name);
@@ -28,6 +29,7 @@ static b32      parsei64(Str, i64 *);
 static void     execute(Shell *, Node *, Arena);
 static void     showps0(Shell *);  // unabashed.cpp
 static Str      histline(void *, Lexer *, Str, b32);  // history.cpp
+static void     histnative(Shell *);  // history.cpp
 static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i32 line = 1,
                           b32 (*fill)(void *, Lexer *) = 0, void *fillctx = 0,
                           b32 comsub = 0, b32 hist = 0);
@@ -4794,7 +4796,10 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             sh->line    = L->lineno;
             sh->ctlline = L->lineno;
             if (sh->jobs && !outer) notifyjobs(sh, *L->a);
-            if (fill && sh->interactive) showps0(sh);
+            if (fill && sh->interactive) {
+                histnative(sh);
+                showps0(sh);
+            }
             if (reader) sh->cmdnumber++;
             // Traps for signals that came while the line was read, as
             // before every command in bash
