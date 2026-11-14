@@ -1,0 +1,19 @@
+# Native mode shows PS1 and PS2 in busybox-w32's order: expanded first,
+# as in double quotes but keeping \$, then decoded, so escapes that a
+# command substitution or variable gives work too. ${PS1@P} keeps
+# bash's order. Hand-checked against busybox: no oracle runs native mode.
+personality native
+size 24 70
+rc cd ~; p() { printf '%s' '\[\e[33m\]\W\[\e[0m\] \$ '; }
+rc PS1='$(p)'
+keys echo hi\r
+snap
+keys x='\\w'; PS1='[$x] [\\$x] [$(echo "\\\\$")] \\x41\\101 \\q\\\\ $ '\r
+snap
+keys o='\\[\\e]133;B\\a\\]'; PS1='\\h $o> '; echo "${PS1@P}"\r
+keys typed
+snap
+keys \C-a\C-kPS2='$(echo "\\[\\e[31m\\]+\\[\\e[0m\\]") '\r
+keys if :\r
+keys then echo two; fi\r
+snap

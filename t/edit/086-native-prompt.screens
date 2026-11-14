@@ -1,0 +1,43 @@
+== snap 1
+~ $ echo hi
+hi
+~ $
+@ 2,4
+== snap 2
+~ $ echo hi
+hi
+~ $ x='\w'; PS1='[$x] [\$x] [$(echo "\\$")] \x41\101 \q\\ $ '
+[~] [$x] [$] AA q $
+@ 3,20
+== snap 3
+~ $ echo hi
+hi
+~ $ x='\w'; PS1='[$x] [\$x] [$(echo "\\$")] \x41\101 \q\\ $ '
+[~] [$x] [$] AA q $ o='\[\e]133;B\a\]'; PS1='\h $o> '; echo "${PS1@P}"
+oracle \[\e]133;B\a\]>
+oracle > typed
+@ 5,14
+== snap 4
+~ $ echo hi
+hi
+~ $ x='\w'; PS1='[$x] [\$x] [$(echo "\\$")] \x41\101 \q\\ $ '
+[~] [$x] [$] AA q $ o='\[\e]133;B\a\]'; PS1='\h $o> '; echo "${PS1@P}"
+oracle \[\e]133;B\a\]>
+oracle > PS2='$(echo "\[\e[31m\]+\[\e[0m\]") '
+oracle > if :
++ then echo two; fi
+two
+oracle >
+@ 9,9
+== snap 5
+~ $ echo hi
+hi
+~ $ x='\w'; PS1='[$x] [\$x] [$(echo "\\$")] \x41\101 \q\\ $ '
+[~] [$x] [$] AA q $ o='\[\e]133;B\a\]'; PS1='\h $o> '; echo "${PS1@P}"
+oracle \[\e]133;B\a\]>
+oracle > PS2='$(echo "\[\e[31m\]+\[\e[0m\]") '
+oracle > if :
++ then echo two; fi
+two
+oracle >
+@ 9,9

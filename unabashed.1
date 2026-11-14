@@ -3022,6 +3022,37 @@ always shows
 .BR $ ,
 even in an elevated shell.
 .PP
+In native mode
+.B PS1
+and
+.B PS2
+are shown as busybox-w32's shell shows them: expanded first, as in
+double quotes but with
+.B \e$
+kept, then decoded, so that the backslash escapes a command
+substitution or variable gives are decoded too.
+Where busybox defines an escape it means what it means there:
+.BR \et ,
+.BR \eT ,
+.BR \e@ ,
+and
+.B \eA
+all show the time as HH:MM,
+.B \ex
+takes up to two hex digits,
+.B \eb
+and
+.B \ef
+are control characters, and an unknown escape is its character alone.
+The escapes busybox lacks keep their bash meanings, as does
+.BR \ev .
+.BR PS0 ,
+.BR PS4 ,
+and
+.B ${x@P}
+keep bash's order, decoding first, so escapes that an expansion gives
+are shown as written, as in msys mode.
+.PP
 Bracketed paste is on: pasted text is inserted as it is, with each CR
 turned into LF, and becomes the active region.
 It needs a console with escape sequences, and is off when

@@ -32,6 +32,7 @@ enum : i32 {  // expansion contexts
     XC_PROMPT  = 1<<9,  // prompt string: as in double quotes, but " is literal
     XC_LITANSI = 1<<10, // a pattern within a quoted operator word: $'...'
                         // is literal, as bash in a here-document
+    XC_KEEPDS  = 1<<11, // with XC_PROMPT: \$ stays \$, as busybox's PSSYNTAX
 };
 
 enum : i32 {  // expandwords flags
@@ -740,7 +741,7 @@ static i64 prompthistnum(Shell *sh)
 // the decoded text kept, and the command goes on (but see fatalerror
 // for set -e). Neither $? nor the status of an assignment sees its
 // command substitutions, as bash restores both.
-static Str promptexpand(X *x, Str r)
+static Str promptexpand(X *x, Str r, i32 ctx)
 {
     Shell *sh = x->sh;
     Escape e = {};
@@ -754,7 +755,7 @@ static Str promptexpand(X *x, Str r)
     i32 capdepth = sh->capdepth;
     sh->esc = &e;
     if (!jmpset(e.jmp)) {
-        Str v = expandword(x, r, XC_DQUOTE|XC_PROMPT);
+        Str v = expandword(x, r, ctx);
         sh->esc    = e.up;
         sh->status = status;
         sh->nsubst = nsubst;
@@ -773,19 +774,22 @@ static Str promptexpand(X *x, Str r)
     return r;
 }
 
-// Decode the backslash escapes of a prompt string, as ${x@P} does,
-// then expand it as if in double quotes when promptvars is on.
-static Str promptdecode(X *x, Str s)
+// Decode the backslash escapes of a prompt string. With expand, what
+// they give is quoted for the expansion that follows. With bb, as
+// busybox's line editor decodes a prompt after expanding it: \t, \T,
+// \@ and \A are all HH:MM, \x takes hex, \b and \f are control
+// characters, and an unknown escape is its character; the escapes it
+// lacks or mishandles (\v) keep bash's meaning.
+static Str promptescapes(X *x, Str s, b32 expand, b32 bb)
 {
     Shell *sh = x->sh;
     Arena *a  = x->a;
-    b32 expand  = sh->shopt[S_PROMPTVARS] || sh->opt[O_POSIX];
     b32 editing = sh->opt[O_EMACS] || sh->opt[O_VI];
     Buf b(a, s.len+16);
     PfZone *zone = 0;
     for (iz i = 0; i < s.len; i++) {
         u8 c = s[i];
-        if (c=='!' && sh->opt[O_POSIX]) {
+        if (c=='!' && sh->opt[O_POSIX] && !bb) {
             // the history number, or ! for !!
             if (i+1<s.len && s[i+1]=='!') {
                 putbyte(&b, '!');
@@ -800,6 +804,41 @@ static Str promptdecode(X *x, Str s)
             continue;
         }
         c = s[++i];
+        if (bb) {
+            b32 done = 1;
+            switch (c) {
+            case 'b': putbyte(&b, '\b'); break;
+            case 'f': putbyte(&b, '\f'); break;
+            case 't': case 'T': case '@': case 'A': {
+                if (!zone) zone = shellzone(sh, a);
+                PfTm tm = localtm(os_now(sh->os)/1000000000, zone);
+                PfTout t = {};
+                fmttime(&t, "%H:%M", &tm);
+                print(&b, Str{t.data, t.len});
+            } break;
+            case 'x': case 'X': {
+                i32 v = 0;
+                iz  k = i + 1;
+                for (; k<s.len && k<i+3; k++) {
+                    u8 d = s[k];
+                    i32 h = d>='0' && d<='9' ? d-'0'
+                          : (d|0x20)>='a' && (d|0x20)<='f' ? (d|0x20)-'a'+10
+                          : -1;
+                    if (h < 0) break;
+                    v = v*16 + h;
+                }
+                if (k == i+1) {
+                    putbyte(&b, c);  // no digits: the letter, as busybox
+                } else {
+                    putbyte(&b, v ? (u8)v : '?');
+                    i = k - 1;
+                }
+            } break;
+            default:
+                done = 0;
+            }
+            if (done) continue;
+        }
         switch (c) {
         case 'a':  putbyte(&b, 7);  break;
         case 'e':  putbyte(&b, 27); break;
@@ -883,14 +922,37 @@ static Str promptdecode(X *x, Str s)
                 }
                 putbyte(&b, (u8)v);
                 i = k - 1;
+            } else if (bb) {
+                putbyte(&b, c);
             } else {
                 putbyte(&b, '\\');
                 putbyte(&b, c);
             }
         }
     }
-    Str r = finish(&b);
-    return expand ? promptexpand(x, r) : r;
+    return finish(&b);
+}
+
+// Decode the backslash escapes of a prompt string, as ${x@P} does,
+// then expand it as if in double quotes when promptvars is on.
+static Str promptdecode(X *x, Str s)
+{
+    Shell *sh = x->sh;
+    b32 expand = sh->shopt[S_PROMPTVARS] || sh->opt[O_POSIX];
+    Str r = promptescapes(x, s, expand, 0);
+    return expand ? promptexpand(x, r, XC_DQUOTE|XC_PROMPT) : r;
+}
+
+// A native-mode PS1 or PS2, in busybox's order: expanded first, as if
+// in double quotes but keeping \$, then its backslash escapes decoded,
+// including those that its expansions produce.
+static Str nativeprompt(Shell *sh, Arena *a, Str s)
+{
+    X *x = newx(sh, a);
+    if (sh->shopt[S_PROMPTVARS] || sh->opt[O_POSIX]) {
+        s = promptexpand(x, s, XC_DQUOTE|XC_PROMPT|XC_KEEPDS);
+    }
+    return promptescapes(x, s, 0, 1);
 }
 
 // One value transformed by ${name@t}, except for @A and @a.
@@ -2266,6 +2328,12 @@ static void expandinto(X *x, Str s, i32 ctx)
                 continue;
             }
             u8 n = s[i+1];
+            if (n=='$' && (ctx & XC_KEEPDS) && dq && !inner) {
+                xputc(x, '\\', XF_QUOTED);
+                xputc(x, '$', XF_QUOTED);
+                i += 2;
+                continue;
+            }
             if ((hd || dq) && !inner) {
                 b32 special = n=='$' || n=='`' || n=='\\' || n=='\n' ||
                               (n=='"' && (!hd || (ctx & XC_PARAM))) || ((ctx & XC_PARAM) && n=='}');

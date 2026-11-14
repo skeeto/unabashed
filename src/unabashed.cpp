@@ -1007,8 +1007,11 @@ static Str psname(b32 first)
 // is none, even under set -u, as in bash.
 static Str promptstr(Shell *sh, Arena *a, Str name)
 {
-    if (!getvar(sh, a, name).set) return {};
-    Str expr = concat3(a, "${", name, "@P}");
+    Got v = getvar(sh, a, name);
+    if (!v.set) return {};
+    // Native mode shows PS1 and PS2 as busybox-w32's shell does
+    b32 native = sh->pathmode==PM_NATIVE && (name=="PS1" || name=="PS2");
+    Str expr   = concat3(a, "${", name, "@P}");
     Escape e = {};
     e.up    = sh->esc;
     e.bout  = sh->bout;
@@ -1024,7 +1027,7 @@ static Str promptstr(Shell *sh, Arena *a, Str name)
     i32 depth = ++sh->capdepth;
     Str ps = {};
     if (!jmpset(e.jmp)) {
-        ps = expandstring(sh, a, expr);
+        ps = native ? nativeprompt(sh, a, v.value) : expandstring(sh, a, expr);
     } else if (e.why == ESC_EXIT) {
         // As set -e with an unbound variable or ${x?} (fatalerror)
         sh->esc        = e.up;
