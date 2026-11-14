@@ -292,8 +292,6 @@ between and leave a read blocked where a cancel cannot reach it.
     a fallback list. Its own descendants then escape the final kill.
 - **Vista and 7** are untested (no machine).
 
-**The core.** t/exec/954 fails under `tests --fibers` too.
-
 
 ## Testing
 

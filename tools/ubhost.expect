@@ -39,9 +39,6 @@ t/exec/955-trap-stop-self.sh        ( kill -TTOU $$ ) under a parent's trap
 t/win32/017-signals.sh              no signal channel between shells
 t/win32/012-ctrlc-young.sh          no Ctrl-C judging (Windows 7 and later; XP when the Ctrl-C wins the race)
 
-# The core: fails under tests --fibers too
-t/exec/954-posix-arith-status.sh    arithmetic error status apart
-
 # Flaky for the executable too, not the library's
 t/exec/931-setlocale-programs.sh    fails only under the parallel run's load
 t/win32/015-fds.sh                  XP: busybox diff's stat of a procsub bridge

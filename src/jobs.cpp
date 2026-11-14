@@ -1077,6 +1077,7 @@ static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid,
     if (proc >= 0) return spawnwaiter(sh->sched, (Handle)proc, sh->spawngrp!=0);
     Vproc *m = vprocwith(sh, in, out);
     Shell *c = m->sh;
+    c->catchfatal |= n->kind != N_SIMPLE;  // as imagebuild
     closecoproc(c);
     detachcaptures(sh, c);
     m->node = bgnode(c, &m->perm, n);
