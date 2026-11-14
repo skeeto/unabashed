@@ -16,7 +16,9 @@
 // The initial tree mirrors the oracle container (tools/record) so that
 // recorded specs and the vos agree: cwd and HOME /home/oracle, a /tmp,
 // bash's test helpers in /usr/local/bin and the other fake programs in
-// /opt/fakes/bin, with PATH=/usr/local/bin:/opt/fakes/bin.
+// /opt/fakes/bin, with PATH=/usr/local/bin:/opt/fakes/bin. The test
+// harness's own fakes, which the oracle lacks, are in /opt/test/bin,
+// off PATH, so that a listing of commands matches the recording.
 //
 // Windows mode (Vos.win, see "Windows personality" below) replaces it
 // with drives C: and D:, names looked up ignoring case, reserved DOS
@@ -4102,7 +4104,10 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes, b32 win = 0)
         Str  name = fakes[i].name;
         b32  local = name=="bash" || name=="recho" || name=="zecho"
                   || name=="printenv" || name=="xcase";
-        vinstall(v, local ? Str("usr/local/bin") : Str("opt/fakes/bin"), name, (i32)i);
+        Str  dir   = local          ? Str("usr/local/bin")
+                   : name=="ttysig" ? Str("opt/test/bin")
+                   :                  Str("opt/fakes/bin");
+        vinstall(v, dir, name, (i32)i);
     }
     v->user = 1000;  // everything made from here on is the user's
 }

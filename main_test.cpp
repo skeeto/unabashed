@@ -335,8 +335,9 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
 
 static b32 images = 1;  // os_imagenew self-spawns (--fibers: not)
 
-// ttysig N: signal N from the terminal to its foreground group, as a
-// hangup or a host's soft stop reaches every process of the job.
+// ttysig N, in /opt/test/bin: signal N from the terminal to its
+// foreground group, as a hangup or a host's soft stop reaches every
+// process of the job.
 static i32 fake_ttysig(Os *os, FakeCtx *ctx)
 {
     FkProg p = fkprog(os, ctx);
@@ -1018,15 +1019,15 @@ static void test_loopsigs(Test *t)
 static void test_grpsigs(Test *t)
 {
     static struct { Str script, want; i32 status; } cases[] = {
-        {"bash -c 'trap \"\" TERM; ttysig 15; sleep 1'; echo after\n", "", 143},
-        {"bash -c 'trap \"\" HUP; ttysig 1; sleep 1'; echo after\n", "", 129},
+        {"bash -c 'trap \"\" TERM; /opt/test/bin/ttysig 15; sleep 1'; echo after\n", "", 143},
+        {"bash -c 'trap \"\" HUP; /opt/test/bin/ttysig 1; sleep 1'; echo after\n", "", 129},
         {"trap 'echo t' TERM\n"
-         "bash -c 'trap \"\" TERM; ttysig 15; echo inner'; echo after\n",
+         "bash -c 'trap \"\" TERM; /opt/test/bin/ttysig 15; echo inner'; echo after\n",
          "inner\nt\nafter\n", 0},
         {"( trap 'echo t' TERM\n"
-         "  bash -c 'trap \"\" TERM; ttysig 15; echo inner'; echo sub ); echo after\n",
+         "  bash -c 'trap \"\" TERM; /opt/test/bin/ttysig 15; echo inner'; echo sub ); echo after\n",
          "inner\nt\nsub\n", 143},
-        {"x=$(bash -c 'trap \"\" TERM; ttysig 15; sleep 1'); echo after\n", "", 143},
+        {"x=$(bash -c 'trap \"\" TERM; /opt/test/bin/ttysig 15; sleep 1'); echo after\n", "", 143},
     };
     for (iz i = 0; i < countof(cases); i++) {
         Result r = runc(t, cases[i].script);
