@@ -514,6 +514,9 @@ when
 .B HOME
 is set, even to an empty value.
 .PP
+Then the directory given by
+.BR \-d ,
+if any, becomes the working directory.
 An interactive shell, login or not, then reads the file named by
 .BR ENV ,
 whose value is expanded but whose leading
@@ -611,6 +614,8 @@ for the mode, or to
 when already in POSIX mode by the time options are parsed.
 A shell that enters POSIX mode by its name does so later, and keeps
 .IR .bash_history .
+In native mode it is always busybox's
+.IR $HOME/.ash_history .
 The history file is read after the startup files.
 .SS "The two modes compared"
 Each entry gives msys mode first and native mode second.
@@ -3005,10 +3010,11 @@ When
 .B HISTFILE
 is unset it becomes
 .I $HOME/.bash_history
-in both modes, or
+in msys mode, or
 .I $HOME/.sh_history
-when POSIX mode is on before the startup files (see Startup files
-above).
+when POSIX mode is on before the startup files, and
+.I $HOME/.ash_history
+in native mode, as in busybox (see Startup files above).
 .B HISTSIZE
 defaults to 500 (1024 in native mode, as in w64devkit's busybox) and
 .B HISTFILESIZE
@@ -3029,6 +3035,12 @@ would append it, so a command that
 or kills the shell is kept; once the file holds four times
 .B HISTFILESIZE
 lines, it is cut to that many.
+There, unlike bash, the
+.B \-c
+command never goes into the history, even with
+.B \-i
+or
+.BR \-s .
 A symbolic link as the history file is written through in place.
 .PP
 When unset,
@@ -3720,6 +3732,10 @@ is an invalid option.
 Read commands from standard input even when arguments remain, which
 become the positional parameters.
 It has no effect with
+.BR \-c ,
+except in native mode, where, as in busybox-w32, the shell runs the
+command and then reads standard input, interactive when standard input
+and standard error are both consoles, as without
 .BR \-c .
 .TP
 .B \-D
@@ -3728,6 +3744,24 @@ Print each
 string in the script, the
 .B \-c
 command, or standard input, and run nothing.
+.TP
+.BI "\-d " dir
+Native mode only, as busybox-w32's undocumented option: change to
+.I dir
+after the login profile files, before
+.BR ENV .
+A
+.I dir
+that is not a directory is ignored, and a relative one is taken from
+the shell's working directory, never through
+.BR CDPATH .
+.TP
+.BI "\-t " title
+Native mode only, as busybox-w32's undocumented option: set the console
+window's title at startup.
+It takes the place of
+.BR "set \-t" ,
+which is not available as an option there.
 .TP
 .B \-c
 Run the first argument after the options as a command.
@@ -3837,7 +3871,10 @@ Native mode expands no
 in it.
 .TP
 .B HISTFILE
-The history file, in both modes by default
+The history file, in native mode by default
+.IR ~/.ash_history ,
+as in busybox.
+In msys mode it defaults to
 .IR ~/.bash_history ,
 or
 .I ~/.sh_history

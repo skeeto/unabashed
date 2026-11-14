@@ -454,6 +454,7 @@ struct Startup {
     b32 norc;       // --norc
     b32 posix;      // in POSIX mode before the files (--posix, ...)
     b32 busybox;    // busybox-w32's rules, not bash's (native mode)
+    Str dir;        // busybox-w32's -d: the directory after the profile
 };
 
 // Run one startup file, as bash's maybe_execute_file does: a leading ~
@@ -526,7 +527,8 @@ static void loginfiles(Shell *sh, Arena scratch, Startup *s, b32 actsh)
 // the files. busybox-w32's rules (native mode, w64devkit's build): a
 // login shell (-l, --login, a $0 starting with - or l, as lash) reads
 // <system drive>/etc/profile, <exe>/../etc/profile and $HOME/.profile;
-// an interactive one then $ENV. --noprofile works in both.
+// then -d's directory becomes the working directory, and an interactive
+// shell reads $ENV. --noprofile works in both.
 static void startup(Shell *sh, Arena scratch, Str argv0, Startup *s)
 {
     b32 dash = startswith(argv0, "-");
@@ -550,6 +552,13 @@ static void startup(Shell *sh, Arena scratch, Str argv0, Startup *s)
                 Str path = concat(&scratch, home.value, "/.profile");
                 startupfile(sh, scratch, path, s);
             }
+        }
+        if (s->dir.data) {
+            // As busybox, quietly not when it is no directory, and
+            // neither CDPATH nor a message for a relative one
+            Str  dir = absolute(sh, &scratch, s->dir);
+            Stat st  = pathstat(sh, scratch, dir, 1);
+            if (!st.err && st.type==FT_DIR) cdto(sh, "cd", dir, scratch);
         }
         if (sh->interactive) envfile(sh, scratch, "ENV", s);
         return;
@@ -1596,6 +1605,16 @@ static i32 imagemain(Os *os, OsInfo *info)
     return status;
 }
 
+// Commands from standard input, the shell's own.
+static void readstdin(Shell *sh, Arena scratch)
+{
+    StdinSource in = {};
+    in.sh  = sh;
+    Arena inarena = newarena(sh->os, sh->reserve);
+    in.buf = Buf(&inarena, 4096);
+    runsource(sh, {}, sh->name, scratch, 1, 1, fillstdin, &in);
+}
+
 static i32 sh_main(Os *os, OsInfo *osinfo)
 {
     if (osvtable(os)->version != OSVTABLE_VERSION) {
@@ -1752,6 +1771,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             escape(sh, ESC_EXIT);
         }
         Slice<Str> shopts = {};  // -O and +O: applied after the setup
+        Str title = {};          // native -t
         for (; !selftest_ && i<info->nargs; i++) {
             Str a = info->args[i];
             if (a.len<1 || (a[0]!='-' && a[0]!='+')) break;
@@ -1783,6 +1803,25 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                     st.restricted = 1;
                 } else if (c == 'D') {
                     sh->dumpstrings |= 1;
+                } else if (st.busybox && on && (c=='d' || c=='t')) {
+                    // busybox-w32's undocumented -d DIR, the working
+                    // directory, and -t TITLE, the console's title
+                    if (next >= info->nargs) {
+                        Buf b(&scratch, 64);
+                        print(&b, sh->name);
+                        print(&b, ": -");
+                        putbyte(&b, c);
+                        print(&b, ": option requires an argument\n");
+                        fdwrite(sh, 2, finish(&b));
+                        sh->status = 2;
+                        escape(sh, ESC_EXIT);
+                    }
+                    Str v = info->args[next++];
+                    if (c == 'd') {
+                        st.dir = v;
+                    } else {
+                        title = v;
+                    }
                 } else {
                     b32 found = 0;
                     for (i32 o = 0; o < O_COUNT; o++) {
@@ -1798,9 +1837,18 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         }
         if (sh->dumpstrings) sh->opt[O_NOEXEC] = 1;  // as bash: dump only
 
-        if (!sh->interactive && !sh->cflag && (sh->sflag || i>=info->nargs) &&
+        // busybox-w32's -s with -c: the command, then standard input
+        b32 thenstdin = st.busybox && sh->cflag && sh->sflag;
+        if (!sh->interactive && (!sh->cflag || thenstdin) &&
+                (sh->sflag || i>=info->nargs) &&
                 os_isatty(os, info->std[0]) && os_isatty(os, info->std[2])) {
             sh->interactive = 1;  // as bash: commands from a terminal
+        }
+        if (title.data) {
+            ConOp o = {};
+            o.op   = CON_TITLE;
+            o.text = title;
+            os_con(os, info->std[2], &o);
         }
         histinit(sh);
         sh->cmdnumber = 1;
@@ -1811,7 +1859,9 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             sh->hist.comchar = '#';
             if (!getvar(sh, &scratch, "HISTFILE").set) {
                 Str home = getvar(sh, &scratch, "HOME").value;
-                Str name = sh->opt[O_POSIX] ? Str("/.sh_history") : "/.bash_history";
+                Str name = st.busybox        ? Str("/.ash_history")
+                         : sh->opt[O_POSIX] ? Str("/.sh_history")
+                         :                    Str("/.bash_history");
                 Str name2 = concat(&scratch, home, name);
                 setvar(sh, scratch, "HISTFILE", name2);
             }
@@ -1922,8 +1972,14 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             flush(out);
         } else if (havecmd) {
             sh->hist.noexpand = 1;
-            runsource(sh, cmd, "-c", scratch, 0, 1, 0, 0, 0, 1);
+            // Its lines go in the history once on, as bash's, but never
+            // in native mode, as busybox's
+            runsource(sh, cmd, "-c", scratch, 0, 1, 0, 0, 0, !st.busybox);
             sh->hist.noexpand = 0;
+            if (thenstdin && !sh->exiting) {
+                sh->iname = sh->name;
+                readstdin(sh, scratch);
+            }
         } else if (file.data) {
             // A script file
             i32  err;
@@ -1988,12 +2044,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                 runsource(sh, src, file, scratch, 1);
             }
         } else {
-            // Commands from standard input
-            StdinSource in = {};
-            in.sh  = sh;
-            Arena inarena = newarena(os, sh->reserve);
-            in.buf = Buf(&inarena, 4096);
-            runsource(sh, {}, sh->name, scratch, 1, 1, fillstdin, &in);
+            readstdin(sh, scratch);
         }
     } else if (top.why==ESC_FATAL && sh->cflag) {
         sh->status = 127;  // as bash's -c reports a fatal error
