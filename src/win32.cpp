@@ -299,6 +299,7 @@ W32(b32,    FindNextFileW(uz, FindData *));
 W32(b32,    FreeEnvironmentStringsW(c16 *));
 W32(c16 *,  GetCommandLineW());
 W32(b32,    GetComputerNameW(c16 *, i32 *));
+W32(b32,    GetComputerNameExW(i32, c16 *, i32 *));
 W32(b32,    GetConsoleMode(uz, i32 *));
 W32(b32,    GetConsoleScreenBufferInfo(uz, ConsoleInfo *));
 W32(i32,    GetCurrentDirectoryW(i32, c16 *));
@@ -4878,9 +4879,14 @@ static void hostinfo(Arena *a, OsInfo *info)
         info->ppid = (i64)bi.ppid;
     }
 
+    // The DNS host name, as gethostname gives busybox-w32 and MSYS2:
+    // the NetBIOS name is upper case and cut to 15 characters
     c16 host[256];
     i32 hostlen = countof(host);
-    if (GetComputerNameW(host, &hostlen)) {
+    enum { ComputerNameDnsHostname = 1 };
+    if (GetComputerNameExW(ComputerNameDnsHostname, host, &hostlen) && hostlen) {
+        info->host = fromwide(a, host, hostlen);
+    } else if (hostlen=countof(host), GetComputerNameW(host, &hostlen)) {
         info->host = fromwide(a, host, hostlen);
     }
 }
