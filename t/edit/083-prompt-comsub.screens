@@ -1,0 +1,23 @@
+== snap 1
+[0] b n> false
+[1] b n>
+@ 1,9
+== snap 2
+[0] b n> false
+[1] b n> PS0='<$(echo zero)>'
+[0] b n>
+@ 2,9
+== snap 3
+[0] b n> false
+[1] b n> PS0='<$(echo zero)>'
+[0] b n> echo hi
+<zero>hi
+[0] b n>
+@ 4,9
+== snap 4
+[0] b n> false
+[1] b n> PS0='<$(echo zero)>'
+[0] b n> echo hi
+<zero>hi
+[0] b n>
+@ 4,9

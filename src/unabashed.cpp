@@ -1016,12 +1016,16 @@ static Str promptstr(Shell *sh, Arena *a, Str expr)
     i32 kind   = sh->promptkind;
     // \! and \# differ by prompt, and HISTCMD while a prompt shows
     sh->promptkind = find(expr, "PS1")>=0 ? 1 : find(expr, "PS2")>=0 ? 2 : 3;
+    // The caller's arena is the next depth's scratch, and a command
+    // substitution in the prompt runs there: claim it
+    i32 depth = ++sh->capdepth;
     Str ps = {};
     if (!jmpset(e.jmp)) {
         ps = expandstring(sh, a, expr);
     } else {
         unwind(sh, e.undo);
     }
+    sh->capdepth = depth - 1;
     sh->esc    = e.up;
     sh->status = status;
     sh->promptkind = kind;

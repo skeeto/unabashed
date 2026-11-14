@@ -1,0 +1,11 @@
+# Command substitutions in PS1 and PS0, which once ran over the arena
+# holding the prompt's own expansion: functions, $?, backquotes, nesting
+size 12 40
+rc f() { echo "[$1]"; }
+rc PS1='$(f $?) `echo b` $(echo $(echo n))> '
+keys false\r
+snap
+keys PS0='<$(echo zero)>'\r
+snap
+keys echo hi\r
+snap
