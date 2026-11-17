@@ -3832,13 +3832,25 @@ static b32 arithpart(Shell *sh, Arena scratch, Word *w, Arith *r = 0)
     return t.ok;
 }
 
-// A duration in ns as the time keyword prints it: seconds with prec
-// decimals (truncated), or minutes and seconds when long.
+// A duration in ns as bash's time keyword prints it (mkfmt): taken to
+// the microsecond, as its clocks give it, then rounded half up to prec
+// places (prec 0 truncates), or as minutes and seconds when long. Where
+// rounding carries out of the fraction bash prints a ':' digit; here
+// the carry reaches the seconds.
 static void printduration(Buf *b, i64 ns, i32 prec, b32 islong, u8 radix)
 {
     if (ns < 0) ns = 0;
-    i64 sec = ns / 1000000000;
-    i64 frac = ns % 1000000000;
+    i64 sec  = ns / 1000000000;
+    i64 usec = ns % 1000000000 / 1000;
+    if (prec>0 && prec<6) {
+        i64 unit = 1;
+        for (i32 i = prec; i < 6; i++) unit *= 10;
+        usec = (usec/unit + (usec%unit >= unit/2)) * unit;
+        if (usec == 1000000) {
+            sec++;
+            usec = 0;
+        }
+    }
     if (islong) {
         print(b, sec/60);
         putbyte(b, 'm');
@@ -3847,25 +3859,62 @@ static void printduration(Buf *b, i64 ns, i32 prec, b32 islong, u8 radix)
     print(b, sec);
     if (prec) {
         putbyte(b, radix ? radix : '.');
-        for (i32 i = 0; i < prec; i++) {
-            frac *= 10;
-            putbyte(b, (u8)('0' + frac/1000000000));
-            frac %= 1000000000;
+        i64 place = 100000;
+        for (i32 i = 0; i < prec; i++, place /= 10) {
+            putbyte(b, (u8)('0' + usec/place%10));
         }
     }
     if (islong) putbyte(b, 's');
 }
 
+// What a timed command used: elapsed, user and system time in ns.
+struct Usage {
+    i64 real;
+    i64 user;
+    i64 sys;
+};
+
+// bash's share of the CPU for %P (timeval_to_cpu): user plus system
+// time over real time, in hundredths of a percent, from microseconds
+// scaled up as far as its arithmetic allows.
+static i64 cpushare(Usage u)
+{
+    i64 cpu  = (u.user<0 ? 0 : u.user)/1000 + (u.sys<0 ? 0 : u.sys)/1000;
+    i64 real = u.real<0 ? 0 : u.real/1000;
+    i64 s1 = cpu/1000000,  f1 = cpu%1000000;
+    i64 s2 = real/1000000, f2 = real%1000000;
+    for (i32 i = 0; i < 6; i++) {
+        if (s1>99999999 || s2>99999999) break;
+        s1 = s1*10 + f1/100000;
+        f1 = f1*10 % 1000000;
+        s2 = s2*10 + f2/100000;
+        f2 = f2*10 % 1000000;
+    }
+    for (i32 i = 0; i < 4; i++) {
+        if (s1 < 100000000) {
+            s1 *= 10;
+        } else {
+            s2 /= 10;
+        }
+    }
+    return s2 ? s1/s2 : 0;
+}
+
 // Report a timed pipeline per TIMEFORMAT (or the POSIX format for -p)
-// on standard error. CPU times are not tracked yet and show as zero.
-static void timereport(Shell *sh, Arena scratch, i64 real, b32 posix)
+// on standard error. A bare time in POSIX mode (since) reports the
+// shell's times so far, by default as user and system time alone.
+static void timereport(Shell *sh, Arena scratch, Usage u, b32 posix, b32 since)
 {
     Str fmt = "\nreal\t%3lR\nuser\t%3lU\nsys\t%3lS";
     if (posix) {
         fmt = "real %2R\nuser %2U\nsys %2S";
     } else {
         Got g = getvar(sh, &scratch, "TIMEFORMAT");
-        if (g.set) fmt = g.value;
+        if (g.set) {
+            fmt = g.value;
+        } else if (since) {
+            fmt = "user\t%2lU\nsys\t%2lS";
+        }
     }
     if (!fmt.len) return;
     Str bad = {};
@@ -3875,6 +3924,14 @@ static void timereport(Shell *sh, Arena scratch, i64 real, b32 posix)
         if (c == '%') {
             if (++i==fmt.len || fmt[i]=='%') {
                 putbyte(&b, '%');
+                continue;
+            }
+            if (fmt[i] == 'P') {
+                // As bash, only right after the %, and in whole percent:
+                // its hundredths are scaled away before they are printed
+                print(&b, cpushare(u)/100);
+                putbyte(&b, sh->radix ? sh->radix : '.');
+                print(&b, "00");
                 continue;
             }
             i32 prec = 3;
@@ -3892,14 +3949,13 @@ static void timereport(Shell *sh, Arena scratch, i64 real, b32 posix)
                 c = fmt[i];
             }
             switch (c) {
-            case 'R': printduration(&b, real, prec, islong, sh->radix); break;
-            case 'U':
-            case 'S': printduration(&b, 0, prec, islong, sh->radix);    break;
-            case 'P': print(&b, "0.00");                     break;
+            case 'E':  // bash's undocumented alias
+            case 'R': printduration(&b, u.real, prec, islong, sh->radix); break;
+            case 'U': printduration(&b, u.user, prec, islong, sh->radix); break;
+            case 'S': printduration(&b, u.sys,  prec, islong, sh->radix); break;
             default:  bad = {&fmt.data[i], 1}; goto reject;
             }
         } else {
-            assert(c != 0);
             putbyte(&b, c);
         }
     }
@@ -3919,9 +3975,13 @@ static void executeone(Shell *, Node *, Arena);
 static void execute(Shell *sh, Node *n, Arena scratch)
 {
     if (n && (n->flags & CMD_TIME) && !sh->exiting && !sh->flow) {
-        i64 start = os_now(sh->os);
+        // As bash, a bare time in POSIX mode times the shell so far
+        b32 since = sh->opt[O_POSIX] && n->kind==N_SIMPLE && !n->words && !n->redirs;
+        i64 start = since ? sh->start : os_now(sh->os);
         executeone(sh, n, scratch);
-        timereport(sh, scratch, os_now(sh->os)-start, n->flags & CMD_TIMEPOSIX);
+        Usage u = {};
+        u.real = os_now(sh->os) - start;
+        timereport(sh, scratch, u, n->flags & CMD_TIMEPOSIX, since);
         return;
     }
     executenode(sh, n, scratch);
