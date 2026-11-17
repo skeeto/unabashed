@@ -3901,7 +3901,8 @@ static i64 cpushare(Usage u)
 }
 
 // Report a timed pipeline per TIMEFORMAT (or the POSIX format for -p)
-// on standard error. A bare time in POSIX mode (since) reports the
+// on standard error. Its CPU time is the shell's and its reaped
+// children's, as bash's: in-process subshells count as the shell. A bare time in POSIX mode (since) reports the
 // shell's times so far, by default as user and system time alone.
 static void timereport(Shell *sh, Arena scratch, Usage u, b32 posix, b32 since)
 {
@@ -3976,11 +3977,16 @@ static void execute(Shell *sh, Node *n, Arena scratch)
 {
     if (n && (n->flags & CMD_TIME) && !sh->exiting && !sh->flow) {
         // As bash, a bare time in POSIX mode times the shell so far
+        // As bash, the shell's own CPU time and its reaped children's
         b32 since = sh->opt[O_POSIX] && n->kind==N_SIMPLE && !n->words && !n->redirs;
         i64 start = since ? sh->start : os_now(sh->os);
+        CpuTimes before = since ? CpuTimes{} : os_cputime(sh->os);
         executeone(sh, n, scratch);
+        CpuTimes after = os_cputime(sh->os);
         Usage u = {};
         u.real = os_now(sh->os) - start;
+        u.user = after.user - before.user + after.cuser - before.cuser;
+        u.sys  = after.sys  - before.sys  + after.csys  - before.csys;
         timereport(sh, scratch, u, n->flags & CMD_TIMEPOSIX, since);
         return;
     }

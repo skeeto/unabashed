@@ -1,4 +1,4 @@
-== stdout 287
+== stdout 343
 D.D
 DmD.Ds|D
 D.D
@@ -7,6 +7,10 @@ bash: line D: TIMEFORMAT: `P': invalid format character
 bash: line D: TIMEFORMAT: `P': invalid format character
 %P
 D.D%
+DmD.Ds DmD.Ds
+DmD.Ds DmD.Ds
+DmD.Ds DmD.Ds
+DmD.Ds DmD.Ds
 user	DmD.Ds
 sys	DmD.Ds
 
@@ -25,7 +29,7 @@ sys	DmD.Ds
 
 == stderr 0
 
-== merged 287
+== merged 343
 D.D
 DmD.Ds|D
 D.D
@@ -34,6 +38,10 @@ bash: line D: TIMEFORMAT: `P': invalid format character
 bash: line D: TIMEFORMAT: `P': invalid format character
 %P
 D.D%
+DmD.Ds DmD.Ds
+DmD.Ds DmD.Ds
+DmD.Ds DmD.Ds
+DmD.Ds DmD.Ds
 user	DmD.Ds
 sys	DmD.Ds
 

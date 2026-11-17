@@ -4647,12 +4647,19 @@ static i32 b_hash(Shell *sh, Str *args, iz nargs, Arena scratch)
     return status;
 }
 
-static i32 b_times(Shell *sh, Str *, iz, Arena)
+// times: the shell's user and system time, then its reaped children's,
+// to the millisecond (bash's print_timeval). In-process subshells count
+// as the shell, where bash's are children.
+static i32 b_times(Shell *sh, Str *, iz, Arena scratch)
 {
-    Str line = "0m0.000s 0m0.000s\n";
-    if (sh->radix) line = sh->radix==',' ? Str("0m0,000s 0m0,000s\n") : line;
-    bprint(sh, line);
-    bprint(sh, line);
+    CpuTimes c = os_cputime(sh->os);
+    i64 t[4] = {c.user, c.sys, c.cuser, c.csys};
+    Buf b(&scratch, 64);
+    for (i32 i = 0; i < 4; i++) {
+        printduration(&b, t[i], 3, 1, sh->radix);
+        putbyte(&b, i&1 ? '\n' : ' ');
+    }
+    bprint(sh, finish(&b));
     return 0;
 }
 

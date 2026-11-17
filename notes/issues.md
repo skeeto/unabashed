@@ -42,9 +42,6 @@ None left: step 10 fixed the rest or accepted it (below).
 
 Found while writing unabashed.1 (2026-11-08), not yet fixed:
 
-- `times` and the `time` keyword report no CPU time in any build: user
-  and system are always 0 (exec.cpp, "CPU times are not tracked yet"),
-  where plan.md meant job-object accounting on Windows.
 - Nesting deep enough to overflow the parser's stack (thousands of
   `( `) ends the shell with status 139; bash's bison stack fills first,
   and it reports `syntax error near unexpected token` and goes on.

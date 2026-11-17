@@ -3351,14 +3351,19 @@ On Windows any other locale name acts as C without a warning.
 In msys mode a built-in table of languages gives the decimal point;
 native mode always uses a period.
 .IP \(bu 2
-CPU time is not tracked:
+Subshells, command substitutions and pipeline stages that run inside
+the shell count toward the shell's own CPU time, where bash's are
+child processes:
 .B times
-and the
+shows them on its first line, not its second, and
 .B time
-keyword report zero user and system time.
+reports the same total.
+A background job running inside the shell adds its CPU time to a
 .B time
-reports real time correctly.
-This is an open issue.
+running meanwhile; bash counts it only once it is reaped.
+On Windows a program's CPU time includes what it started only where it
+has a job of its own (Windows 8 and later, for programs started lately
+or in the background); otherwise it is that program's alone.
 .IP \(bu 2
 .B BASHPID
 in a subshell, command substitution, or pipeline stage that runs inside
