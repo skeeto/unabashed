@@ -68,6 +68,10 @@ struct Lib {
     LibKid     kids[MAXKIDS];
     i32        nkids;
     i32        waitfd;    // Linux: the run's epoll; macOS: a kqueue
+
+    // CPU time (os_cputime): the run thread's as the run began, and
+    // what the run's reaped programs used (cuser, csys)
+    CpuTimes   cpu;
 };
 
 // The OS's own (liblinux.cpp, libdarwin.cpp), included after this
@@ -86,6 +90,7 @@ static i32  newwatch(Lib *);
 static b32  hostthread(i64 tid);
 static b32  blockraised(Lib *);
 static void unraise();
+static CpuTimes threadcpu();  // the calling thread's own
 
 static __thread Lib *curlib;  // the run on this thread
 
@@ -402,11 +407,15 @@ static void bury(i64 pid)
     lockgraves(0);
 }
 
-static void lib_reaped(i64 pid)
+static void lib_reaped(i64 pid, struct rusage const *ru)
 {
     Lib    *l = curlib;
     LibKid *k = findkid(l, pid);
     if (k) reapedkid(l, k);
+    if (ru) {
+        l->cpu.cuser += tvns(ru->ru_utime);
+        l->cpu.csys  += tvns(ru->ru_stime);
+    }
 }
 
 // Room for one more: reaped programs' groups are forgotten, oldest
@@ -452,10 +461,11 @@ static i32 libwaitproc(Os *os, Handle proc)
     for (i32 backoff = 1;; backoff = backoff<64 ? backoff*2 : 64) {
         checkhard(l);
         i32   status = 0;
-        pid_t r = waitpid((pid_t)proc, &status, WNOHANG);
+        struct rusage ru = {};
+        pid_t r = wait4((pid_t)proc, &status, WNOHANG, &ru);
         if (r<0 && errno==EINTR) continue;
         if (r) {
-            lib_reaped((i64)proc);
+            lib_reaped((i64)proc, r<0 ? 0 : &ru);
             return r<0 ? 127 : waitstatus(status);
         }
         struct pollfd p = {};
@@ -720,6 +730,20 @@ static i32 libsetrlimit(Os *os, i32, Rlimit)
     return E_PERM;  // the host's
 }
 
+// The run's: its thread's CPU time since it began, not the host's
+// other threads', and its own programs' as it reaped them, not the
+// host's children's
+static CpuTimes libcputime(Os *os)
+{
+    Lib     *l = (Lib *)os;
+    CpuTimes c = threadcpu();
+    c.user -= l->cpu.user;
+    c.sys  -= l->cpu.sys;
+    c.cuser = l->cpu.cuser;
+    c.csys  = l->cpu.csys;
+    return c;
+}
+
 static constexpr OsVtable libtable(OsVtable t)
 {
     t.reserve    = libreserve;
@@ -748,6 +772,7 @@ static constexpr OsVtable libtable(OsVtable t)
     t.sigpending = libsigpending;
     t.siggroup   = libsiggroup;
     t.sigmode    = libsigmode;
+    t.cputime    = libcputime;
     return t;
 }
 static constexpr OsVtable libvtable = libtable(pltvtable);
@@ -977,6 +1002,8 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     l->tmpdir   = 0;
     l->errfd    = -1;
     l->pid      = cmd->pid ? cmd->pid : virtualpid();
+    l->cpu      = threadcpu();
+    l->cpu.cuser = l->cpu.csys = 0;
     os->fibers  = {};
     os->pending = 0;
     os->wlen    = 0;

@@ -704,6 +704,8 @@ struct Os {
     u32        wtick;      // GetTickCount when the buffer began
     uz         werrh;      // a flush to this handle failed
     u8         wbuf[1<<14];
+    i64        kidutime;   // reaped programs' CPU time (reapcpu), 100 ns
+    i64        kidstime;
 
     // The library's (libwin32.cpp)
     b32        nestedjobs; // Windows 8: a program's own job nests in the run's
@@ -718,6 +720,8 @@ struct Os {
     Hent      *hungry;     // objects whose Ios wait for a helper (starve)
     uz         findh;      // plt_list's, while open
     uz         advapi;     // advapi32, once loaded for entropy
+    i64        thrutime;   // the run thread's CPU time as the run began
+    i64        thrstime;
     Helper    *helpers[64];  // every helper made (nhelpers)
     Pwait     *pwaits;     // registered process waits
     iz         libstack;   // the run's shell stack
@@ -1695,6 +1699,49 @@ static b32  takemissed(Os *os, uz proc);
 
 static i32 procpid(Os *os, uz proc);
 
+static i64 ftticks(Filetime t)  // 100 ns units
+{
+    return (i64)((u64)t.hi<<32 | t.lo);
+}
+
+static uz bgjobof(Os *, i64 pid);
+static void lockrecent(Os *);
+static void unlockrecent(Os *);
+
+// A reaped program's CPU time, added to its children's (os_cputime):
+// its own job's, which counts what it started too, while it has one
+// (Windows 8: started lately, or in the background), as RUSAGE_CHILDREN
+// counts reaped descendants; else its own alone. Before takemissed lets
+// the job go.
+static void reapcpu(Os *os, uz proc)
+{
+    JobCounts c    = {};
+    b32       got  = 0;
+    i32       info = JobObjectBasicAccountingInformation;
+    lockrecent(os);
+    for (i32 i = 0; i<countof(os->recent) && !got; i++) {
+        Recent *e = os->recent + i;
+        if (e->proc==proc && e->job) {
+            got = QueryInformationJobObject(e->job, info, &c, sizeof(c), 0);
+        }
+    }
+    unlockrecent(os);
+    if (!got) {
+        uz job = bgjobof(os, procpid(os, proc));
+        got = job && QueryInformationJobObject(job, info, &c, sizeof(c), 0);
+    }
+    if (got) {
+        os->kidutime += c.utime;
+        os->kidstime += c.ktime;
+        return;
+    }
+    Filetime t[4] = {};  // creation, exit, kernel, user
+    if (GetProcessTimes(proc, t, t+1, t+2, t+3)) {
+        os->kidutime += ftticks(t[3]);
+        os->kidstime += ftticks(t[2]);
+    }
+}
+
 // A process's exit status, releasing its handle. XP gives 0 for a
 // process terminated before it finished starting, whatever code
 // TerminateProcess passed, so a process os_kill ended that reads 0
@@ -1712,6 +1759,7 @@ static i32 procexit(Os *os, uz proc)
             }
         }
     }
+    reapcpu(os, proc);
     i32 missed = !LIBMODE && takemissed(os, proc) ? WMISSED : 0;
     if constexpr (LIBMODE) lib_reaped(os, proc);
     CloseHandle(proc);
@@ -4664,6 +4712,19 @@ static i64 plt_now(Os *os)
     return unixns(t);
 }
 
+static CpuTimes plt_cputime(Os *os)
+{
+    CpuTimes c = {};
+    Filetime t[4] = {};  // creation, exit, kernel, user
+    if (GetProcessTimes(GetCurrentProcess(), t, t+1, t+2, t+3)) {
+        c.user = ftticks(t[3]) * 100;
+        c.sys  = ftticks(t[2]) * 100;
+    }
+    c.cuser = os->kidutime * 100;
+    c.csys  = os->kidstime * 100;
+    return c;
+}
+
 static u64 plt_entropy(Os *os)
 {
     if (!os->gentried) {
@@ -4951,6 +5012,7 @@ static constexpr OsVtable pltvtable = {
     .siggroup   = plt_siggroup,
     .sigmode    = plt_sigmode,
     .now        = plt_now,
+    .cputime    = plt_cputime,
     .entropy    = plt_entropy,
     .clipget    = plt_clipget,
     .clipset    = plt_clipset,

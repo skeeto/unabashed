@@ -124,6 +124,7 @@ struct VProc {
     b32     stopped;  // by a signal: it does not run until continued
     i32     change;   // a stop or continue not yet reported (IO_PROCSTOP)
     u64     stoppend; // fakes: fatal signals held while stopped
+    CpuTimes cpu;     // charged by burn.exe; its reaped children's added
     u64     sigpend;  // shells: signals not yet taken by os_sigpending
     u64     grpsig;   // shells: the terminal's, not yet taken by os_siggroup
     LevelSig lsigs[16];  // shells: os_siglevel's, oldest first
@@ -830,6 +831,16 @@ static void vkill(Os *os, Vos *v, VProc *p, i32 status)
 static i32 vreap(Os *os, Vos *v, Handle proc)
 {
     VProc *p = v->procs + proc;
+    for (i32 i = 0; i < v->nprocs; i++) {
+        // As a kernel's RUSAGE_CHILDREN: its parent counts it, with
+        // what it had reaped in turn
+        VProc *q = v->procs + i;
+        if (q==p || q->pid!=p->ppid) continue;
+        if (q->state!=VP_RUN && q->state!=VP_BLOCK) continue;
+        q->cpu.cuser += p->cpu.user + p->cpu.cuser;
+        q->cpu.csys  += p->cpu.sys  + p->cpu.csys;
+        break;
+    }
     if (p->own) os_fiberfree(os, p->own);
     p->own   = p->fiber = 0;
     p->state = VP_FREE;
@@ -2003,6 +2014,12 @@ static i64 vos_now(Os *os)
     return v->clock += 1000;
 }
 
+static CpuTimes vos_cputime(Os *os)
+{
+    Vos *v = osvos(os);
+    return v->procs[v->cur].cpu;
+}
+
 // Deterministic, from the process's identity: its tracing identity
 // (the same under every chaos seed) when tracing, else its pid.
 static u64 vos_entropy(Os *os)
@@ -3136,6 +3153,7 @@ static Spawned vos_spawn(Os *os, Arena scratch, Spawn *s)
     p->stopped  = 0;
     p->change   = 0;
     p->stoppend = 0;
+    p->cpu      = {};
     if (s->pgid && s->fg && vistty(v, s->tty)) v->tty.fgpgrp = p->pgid;
     p->sigpend = 0;
     p->nlsigs  = 0;
@@ -3466,6 +3484,25 @@ static i32 vfake_argv(Os *os, FakeCtx *ctx)
     }
     flush(o);
     return o->err;
+}
+
+// burn USER SYS: uses USER and SYS milliseconds of CPU time, as long as
+// they take to pass, for os_cputime's specs.
+static i32 vfake_burn(Os *os, FakeCtx *ctx)
+{
+    Vos   *v = osvos(os);
+    VProc *p = v->procs + v->cur;
+    i64    ms[2] = {};
+    for (iz i = 0; i<2 && i+1<ctx->argc; i++) {
+        Str a = ctx->argv[i+1];
+        for (iz k = 0; k<a.len && digit(a[k]) && ms[i]<1000000; k++) {
+            ms[i] = ms[i]*10 + (a[k] - '0');
+        }
+    }
+    p->cpu.user += ms[0] * 1000000;
+    p->cpu.sys  += ms[1] * 1000000;
+    os_sleep(os, (ms[0] + ms[1]) * 1000000);
+    return 0;
 }
 
 // The fake for a busybox applet name, ignoring case, or -1.
@@ -3950,6 +3987,7 @@ static Fake vwinfakes[] = {
     {"alias",   vfake_alias,   1},
     {"argv",    vfake_argv,    1},
     {"clipctl", vfake_clipctl, 1},
+    {"burn",    vfake_burn,    1},
     {"busybox", vfake_busybox, 1},
     {"cmd",     vfake_cmd,     1},
 };
@@ -4037,6 +4075,8 @@ static void vwintree(Vos *v)
             vinstallpe(v, "C:/w64/bin", "argvk.exe", i, X64, "kernel32.dll", 0);
         } else if (name == "busybox") {
             vinstallpe(v, "C:/w64/bin", "busybox.exe", i, X64, "msvcrt.dll", 0);
+        } else if (name == "burn") {
+            vinstallpe(v, "C:/w64/bin", "burn.exe", i, X64, "kernel32.dll", 0);
         } else if (name == "clipctl") {
             vinstallpe(v, "C:/w64/bin", "clipctl.exe", i, X64, "kernel32.dll", 0);
         } else if (name == "cmd") {
@@ -4393,6 +4433,7 @@ static OsVtable const vosvtable = {
     .siggroup   = vos_siggroup,
     .sigmode    = vos_sigmode,
     .now        = vos_now,
+    .cputime    = vos_cputime,
     .entropy    = vos_entropy,
     .clipget    = vos_clipget,
     .clipset    = vos_clipset,

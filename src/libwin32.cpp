@@ -607,6 +607,21 @@ static i32 libclipset(Os *os, Arena, Str)
     return E_NOSYS;
 }
 
+// The run's: its thread's CPU time since it began, not the host's
+// other threads', and its own programs' as it reaped them (reapcpu)
+static CpuTimes libcputime(Os *os)
+{
+    CpuTimes c = {};
+    Filetime t[4] = {};  // creation, exit, kernel, user
+    if (GetThreadTimes(GetCurrentThread(), t, t+1, t+2, t+3)) {
+        c.user = (ftticks(t[3]) - os->thrutime) * 100;
+        c.sys  = (ftticks(t[2]) - os->thrstime) * 100;
+    }
+    c.cuser = os->kidutime * 100;
+    c.csys  = os->kidstime * 100;
+    return c;
+}
+
 static constexpr OsVtable libtable(OsVtable t)
 {
     t.reserve    = libreserve;
@@ -631,6 +646,7 @@ static constexpr OsVtable libtable(OsVtable t)
     t.sigmode    = libsigmode;
     t.clipget    = libclipget;
     t.clipset    = libclipset;
+    t.cputime    = libcputime;
     return t;
 }
 static constexpr OsVtable libvtable = libtable(pltvtable);
@@ -1048,6 +1064,12 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     os->nkilled   = 0;
     for (i32 i = 0; i < countof(os->killed); i++) os->killed[i] = {};
     for (i32 i = 0; i < countof(os->bgjobs); i++) os->bgjobs[i] = {};
+    os->kidutime  = 0;
+    os->kidstime  = 0;
+    Filetime ft[4] = {};
+    GetThreadTimes(GetCurrentThread(), ft, ft+1, ft+2, ft+3);
+    os->thrutime  = ftticks(ft[3]);
+    os->thrstime  = ftticks(ft[2]);
     os->nbgjobs   = 0;
     os->libstack  = l->cfg.stack;
     os->rlinit    = 0;

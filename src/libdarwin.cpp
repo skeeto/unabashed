@@ -85,3 +85,16 @@ static i32 newwatch(Lib *l)
     l->cfg.spawnlock(l->cfg.user, 0);
     return kq;
 }
+
+static CpuTimes threadcpu()
+{
+    CpuTimes c = {};
+    thread_basic_info_data_t i = {};
+    mach_msg_type_number_t   n = THREAD_BASIC_INFO_COUNT;
+    thread_t self = pthread_mach_thread_np(pthread_self());  // no reference taken
+    if (!thread_info(self, THREAD_BASIC_INFO, (thread_info_t)&i, &n)) {
+        c.user = (i64)i.user_time.seconds*1000000000 + (i64)i.user_time.microseconds*1000;
+        c.sys  = (i64)i.system_time.seconds*1000000000 + (i64)i.system_time.microseconds*1000;
+    }
+    return c;
+}

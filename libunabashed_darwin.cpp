@@ -29,6 +29,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <libproc.h>
+#include <mach/mach.h>
+#include <pthread.h>
 #include <sys/event.h>
 #include <sys/random.h>  // getentropy
 extern "C" int rename(char const *, char const *);  // stdio.h, whose macros collide

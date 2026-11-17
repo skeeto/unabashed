@@ -134,7 +134,7 @@ static u64 bitstake(u64 volatile *p)
 static byte *lib_fiberstack(Os *, iz size);
 static void  lib_fiberunstack(Os *, byte *, iz size);
 static void  lib_spawnlock(b32 lock);
-static void  lib_reaped(i64 pid);
+static void  lib_reaped(i64 pid, struct rusage const *);
 static void  lib_dir(Os *, DIR *);
 static char *lib_tmpdir(Os *);
 
@@ -1536,13 +1536,14 @@ static b32 tryio(Io *io, i32 revents)
         i32   status = 0;
         i32   flags  = WNOHANG | (io->op==IO_PROCSTOP ? WUNTRACED|WCONTINUED : 0);
         pid_t r;
+        struct rusage ru = {};  // the library's os_cputime
         do {
-            r = waitpid((pid_t)io->h, &status, flags);
+            r = wait4((pid_t)io->h, &status, flags, &ru);
         } while (r<0 && errno==EINTR);
         if (!r) return 0;
         if constexpr (LIBMODE) {
             if (r<0 || WIFEXITED(status) || WIFSIGNALED(status)) {
-                lib_reaped((pid_t)io->h);
+                lib_reaped((pid_t)io->h, r<0 ? 0 : &ru);
             }
         }
         io->n   = r<0 ? 127 : waitstatus(status);
@@ -1673,6 +1674,27 @@ static i64 plt_now(Os *)
     return (i64)ts.tv_sec*1000000000 + ts.tv_nsec;
 }
 
+static i64 tvns(struct timeval t)
+{
+    return (i64)t.tv_sec*1000000000 + (i64)t.tv_usec*1000;
+}
+
+static CpuTimes plt_cputime(Os *)
+{
+    CpuTimes c = {};
+    struct rusage u = {};
+    if (!getrusage(RUSAGE_SELF, &u)) {
+        c.user = tvns(u.ru_utime);
+        c.sys  = tvns(u.ru_stime);
+    }
+    u = {};
+    if (!getrusage(RUSAGE_CHILDREN, &u)) {
+        c.cuser = tvns(u.ru_utime);
+        c.csys  = tvns(u.ru_stime);
+    }
+    return c;
+}
+
 static u64 plt_entropy(Os *os)
 {
     u64 r = 0;
@@ -1748,6 +1770,7 @@ static constexpr OsVtable pltvtable = {
     .siggroup   = plt_siggroup,
     .sigmode    = plt_sigmode,
     .now        = plt_now,
+    .cputime    = plt_cputime,
     .entropy    = plt_entropy,
     .clipget    = plt_clipget,
     .clipset    = plt_clipset,

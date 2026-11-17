@@ -146,6 +146,17 @@ enum : i32 {
 };
 enum : i64 { RL_INFINITY = -1 };
 
+// CPU time in ns, as getrusage's RUSAGE_SELF and RUSAGE_CHILDREN give
+// it: the shell's own, and that of the children it has reaped (os_wait,
+// os_waitproc), with their own reaped descendants' where the platform
+// counts them. Zero where it is not known.
+struct CpuTimes {
+    i64 user;
+    i64 sys;
+    i64 cuser;  // children's
+    i64 csys;
+};
+
 struct Rlimit {
     i64 soft;  // in the system's units, RL_INFINITY for none
     i64 hard;
@@ -453,6 +464,8 @@ static u64     os_siggroup(Os *);
 static void    os_sigmode(Os *, i32 sig, i32 mode);
 // Realtime clock, in ns since the epoch.
 static i64     os_now(Os *);
+// The CPU time the shell and its reaped children have used.
+static CpuTimes os_cputime(Os *);
 // 64 bits from the system's random source. Never fails: without one,
 // a mix of the clock, the pid and a counter. The vos is deterministic.
 static u64     os_entropy(Os *);
@@ -536,7 +549,8 @@ static Str     lib_root(Os *);
 // Versions:
 // 1: the first
 // 2: os_cwd, and os_spawn's working directory is never skipped
-enum : i32 { OSVTABLE_VERSION = 2 };
+// 3: os_cputime
+enum : i32 { OSVTABLE_VERSION = 3 };
 
 struct OsVtable {
     i32 version;  // the OSVTABLE_VERSION it implements
@@ -585,6 +599,7 @@ struct OsVtable {
     decltype(os_siggroup)   *siggroup;
     decltype(os_sigmode)    *sigmode;
     decltype(os_now)        *now;
+    decltype(os_cputime)    *cputime;
     decltype(os_entropy)    *entropy;
     decltype(os_clipget)    *clipget;
     decltype(os_clipset)    *clipset;

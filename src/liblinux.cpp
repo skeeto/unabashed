@@ -99,6 +99,17 @@ static void unraise()
     while (sigtimedwait(&set, 0, &zero) > 0) {}
 }
 
+static CpuTimes threadcpu()
+{
+    CpuTimes c = {};
+    struct rusage u = {};
+    if (!getrusage(RUSAGE_THREAD, &u)) {
+        c.user = tvns(u.ru_utime);
+        c.sys  = tvns(u.ru_stime);
+    }
+    return c;
+}
+
 // Before a run: nothing to take, the epoll gone with the last run
 static void rewatch(Lib *) {}
 

@@ -231,6 +231,11 @@ static i64 os_now(Os *os)
     return osvtable(os)->now(os);
 }
 
+static CpuTimes os_cputime(Os *os)
+{
+    return osvtable(os)->cputime(os);
+}
+
 static u64 os_entropy(Os *os)
 {
     return osvtable(os)->entropy(os);
