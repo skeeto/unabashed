@@ -1,0 +1,22 @@
+== snap 1
+$ TMOUT=1; select x in a b; do echo "got $x"; done
+; echo "st $? [$REPLY]"; TMOUT=
+1) a
+2) b
+#? 2
+got b
+#?
+st 1 []
+$
+@ 8,2
+== snap 2
+$ TMOUT=1; select x in a b; do echo "got $x"; done
+; echo "st $? [$REPLY]"; TMOUT=
+1) a
+2) b
+#? 2
+got b
+#?
+st 1 []
+$
+@ 8,2

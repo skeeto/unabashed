@@ -1,0 +1,20 @@
+# TMOUT at an interactive prompt, read as atoi reads it: one deadline
+# for the whole command from its first prompt, continuation lines
+# included. Past it the line goes unused, the message goes to standard
+# output, and the shell exits as exit would: the EXIT trap, the status
+size 12 50
+rc PS1='$ '
+rc PS2='> '
+rc trap 'echo "exit trap $?"' EXIT
+keys TMOUT=0.9\r
+pause 1500
+keys echo alive\r
+keys TMOUT=' +2x'; sleep 3; echo slept\r
+pause 3500
+snap
+keys false\r
+pause 1000
+keys echo 'a\r
+keys b
+pause 1500
+snap

@@ -1003,8 +1003,45 @@ static File *stdfile(Shell *sh, Handle h, i32 flags)
 struct StdinSource {
     Shell *sh;
     Buf    buf;
-    i32    eofs;  // ends of input in a row ignored for IGNOREEOF
+    i32    eofs;   // ends of input in a row ignored for IGNOREEOF
+    i64    tmout;  // os_now time when reading the command gives up, or 0
 };
+
+// A number as C's atoi reads it, for IGNOREEOF and TMOUT: blanks, a
+// sign, then digits as far as they go (held within a billion).
+static i64 atoilike(Str v)
+{
+    iz i = 0;
+    for (; i<v.len && (v[i]==' ' || (v[i]>='\t' && v[i]<='\r')); i++) {}
+    b32 neg = i<v.len && v[i]=='-';
+    i += i<v.len && (v[i]=='-' || v[i]=='+');
+    i64 n = 0;
+    for (; i<v.len && v[i]>='0' && v[i]<='9' && n<1000000000; i++) {
+        n = n*10 + v[i] - '0';
+    }
+    return neg ? -n : n;
+}
+
+// The deadline for reading an interactive command, from its first
+// prompt on: TMOUT seconds as atoi reads them, as bash's alarm, or 0.
+static i64 tmoutdeadline(Shell *sh)
+{
+    Arena none = {};
+    i64 secs = atoilike(getvar(sh, &none, "TMOUT").value);
+    return secs>0 ? os_now(sh->os) + secs*1000000000 : 0;
+}
+
+// TMOUT passed with the command unread: bash's message, on standard
+// output, then an exit as the exit builtin's, without its checks.
+[[noreturn]] static void tmoutexit(Shell *sh, Arena scratch)
+{
+    fdwrite(sh, 1, "\atimed out waiting for input: auto-logout\n");
+    i32 status = sh->status;
+    logoutfiles(sh, scratch);
+    sh->status  = status;
+    sh->exiting = 1;
+    escape(sh, ESC_EXIT);
+}
 
 static Str psname(b32 first)
 {
@@ -1136,6 +1173,7 @@ static b32 fillline(void *ctx, Lexer *L)
     // As bash, which prints them as it parses: before the next prompt
     if (sh->interactive) reportmessages(sh, L);
     if (sh->interactive && L->newunit) {
+        in->tmout = tmoutdeadline(sh);
         if (sh->jobs) notifyprompt(sh, *scratchat(sh, sh->capdepth+1), 0);
         promptcommand(sh);
     }
@@ -1149,10 +1187,12 @@ static b32 fillline(void *ctx, Lexer *L)
         // the parser's last token allows one, as bash asks it
         opts.ps1   = L->newunit || cmdposition(L, L->last);
         b32 ps2    = !L->newunit;
+        opts.deadline = in->tmout;
         opts.init  = clone(&a, sh->hist.preload);
         sfreestr(sh->store, sh->hist.preload);
         sh->hist.preload = {};
         i32   r  = editline(sh, ps, b, &opts);
+        if (r == ED_TIMEOUT) tmoutexit(sh, a);
         if (r != ED_NOTTY) {
             L->newunit = 0;
             if (r == ED_LINE) {
@@ -1191,8 +1231,15 @@ static b32 fillline(void *ctx, Lexer *L)
             reserve(b, 4096);
             n = readstdin(sh, f, b->data+b->len, 4096);
         } else {
-            u8 c;
+            u8    c;
+            Task *self = sh->sched->cur;
+            self->deadline = in->tmout;
             n = readstdin(sh, f, &c, 1);
+            self->deadline = 0;
+            if (self->timedout) {
+                self->timedout = 0;
+                tmoutexit(sh, *scratchat(sh, sh->capdepth+1));
+            }
             if (n == 1) {
                 putbyte(b, c);
                 done = c == '\n';
@@ -1245,15 +1292,7 @@ static b32 fillstdin(void *ctx, Lexer *L)
         if (sh->opt[O_IGNOREEOF]) {
             Arena none = {};
             Str v = getvar(sh, &none, "IGNOREEOF").value;
-            i64 limit = v.len ? 0 : 10;
-            iz  i     = 0;
-            for (; i<v.len && (v[i]==' ' || (v[i]>='\t' && v[i]<='\r')); i++) {}
-            b32 neg = i<v.len && v[i]=='-';
-            i += i<v.len && (v[i]=='-' || v[i]=='+');
-            for (; i<v.len && v[i]>='0' && v[i]<='9' && limit<1000000000; i++) {
-                limit = limit*10 + v[i] - '0';
-            }
-            if (neg) limit = -limit;
+            i64 limit = v.len ? atoilike(v) : 10;
             if (in->eofs < limit) {
                 in->eofs++;
                 fdwrite(sh, 2, concat3(&a, "Use \"", word, "\" to leave the shell.\n"));

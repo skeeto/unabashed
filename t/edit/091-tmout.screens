@@ -1,0 +1,20 @@
+== snap 1
+$ TMOUT=0.9
+$ echo alive
+alive
+$ TMOUT=' +2x'; sleep 3; echo slept
+slept
+$
+@ 5,2
+== snap 2
+$ TMOUT=0.9
+$ echo alive
+alive
+$ TMOUT=' +2x'; sleep 3; echo slept
+slept
+$ false
+$ echo 'a
+timed out waiting for input: auto-logout
+exit trap 1
+
+@ 9,0 bell 1

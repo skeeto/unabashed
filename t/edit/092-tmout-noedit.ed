@@ -1,0 +1,9 @@
+# TMOUT without line editing: the message follows what was typed
+size 8 50
+rc PS1='$ '
+rc set +o emacs
+rc trap 'echo "exit trap $?"' EXIT
+keys TMOUT=1\r
+keys ab
+pause 1500
+snap

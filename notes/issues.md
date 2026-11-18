@@ -74,8 +74,6 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
   unset it; the profile cannot fix inheritance, so this is the kit's
   decision (export it only when `OSTYPE` is not cygwin, or have msys
   mode drop it at import).
-- `TMOUT` is only read's default timeout: an interactive shell does not
-  exit after TMOUT idle seconds at the prompt, as bash's does.
 - A shell that dies of SIGINT exits 0xC000013A, so a parent that keeps
   only the low byte sees 58, not 130 (Git Bash maps the code to 130).
 

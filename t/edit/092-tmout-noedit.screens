@@ -1,0 +1,6 @@
+== snap 1
+$ TMOUT=1
+$ abtimed out waiting for input: auto-logout
+exit trap 0
+
+@ 3,0 bell 1

@@ -1,0 +1,8 @@
+# select reads as the read builtin does, TMOUT its timeout: a reply,
+# then none in time, which ends the loop as the end of input would
+size 10 50
+rc PS1='$ '
+keys TMOUT=1; select x in a b; do echo "got $x"; done; echo "st $? [$REPLY]"; TMOUT=\r
+keys 2\r
+pause 1500
+snap
