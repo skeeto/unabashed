@@ -35,6 +35,7 @@ static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i3
                           b32 comsub = 0, b32 hist = 0);
 static Str      runfunsub(Shell *, Arena *, Str src, Capture *, Arena);
 static i32      compatlevel(Shell *);  // builtins.cpp
+static i32      b_read(Shell *, Str *, iz, Arena);  // builtins.cpp
 static void     joinpsubs(Shell *);
 static void     closeall(Shell *);
 
@@ -4618,17 +4619,17 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
         if (menu) selectmenu(sh, it, list);
         Got ps3 = getvar(sh, &it, "PS3");
         fdwrite(sh, 2, ps3.set ? ps3.value : Str("#? "));
-        Buf line(&it, 64);
-        u8  c   = 0;
-        b32 eof = 0;
-        while (!(eof = fdread(sh, 0, &c, 1) != 1) && c != '\n') putbyte(&line, c);
-        if (eof && !line.len) {
+        // As bash, the read builtin with no options or names: REPLY,
+        // backslashes processed, TMOUT the default timeout. Its failure
+        // (the end of input, even after part of a line, or a timeout)
+        // ends the loop
+        Str rargs[] = {"read"};
+        if (b_read(sh, rargs, 1, it)) {
             fdwrite(sh, 1, "\n");  // as bash, on standard output
             sh->status = 1;
             break;
         }
-        Str reply = finish(&line);
-        setvar(sh, it, "REPLY", reply);
+        Str reply = getvar(sh, &it, "REPLY").value;
         menu = !trim(reply).len;
         if (menu) continue;
         i64 choice = 0;
