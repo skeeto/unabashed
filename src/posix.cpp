@@ -1043,7 +1043,6 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         for (i32 i = 0; i < nfds; i++) dup2(src[i], dst[i]);
         closefds(base, -1);
         for (i32 i = 0; i < NPIN; i++) os->pins[i].fd = 0;
-        if (entered) pinfd(os, s->cwd, open(".", O_PIN));
         for (i32 i = 0; s->rlimits && i<RL_COUNT; i++) {
             i32 k = rlres(i);
             if (k<0 || s->rlimits[i].err) continue;
@@ -1074,6 +1073,9 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         u64 entryign = os->entryign;
         initasync(os);
         os->entryign = entryign;  // as the parent had them
+        // Pinned only now: taken before, inherited() would count the pin
+        // as the program's and move it, leaving the record stale
+        if (entered) pinfd(os, s->cwd, open(".", O_PIN));
         sigprocmask(SIG_SETMASK, &old, 0);
 
         info.image    = s->image;
