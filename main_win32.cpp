@@ -226,7 +226,8 @@ void mainCRTStartup()
                 track(&os, h);
             }
         }
-        info.std[i] = h;
+        info.std[i]      = h;
+        info.stdflags[i] = h==BADHANDLE ? 0 : handleaccess(&os, h);
     }
     // Descriptors above 2 from a CRT parent (busybox, ourselves) in the
     // lpReserved2 blob, at this image's width: real handles of a known
@@ -256,7 +257,8 @@ void mainCRTStartup()
         InheritFd e = {};
         e.fd    = fd;
         e.h     = h;
-        e.flags = OF_READ | OF_WRITE;
+        e.flags = handleaccess(&os, h);
+        e.flags = e.flags ? e.flags : OF_READ|OF_WRITE;
         in = push(&a, in, e);
     }
     info.inherit  = in.data;

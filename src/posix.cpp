@@ -991,6 +991,7 @@ static void plt_imagefree(Os *os, ImageRef im)
 }
 
 static Slice<InheritFd> inherited(Arena *);
+static i32  fdaccess(i32);
 static void initasync(Os *);
 static void exitwith(i32 status);
 
@@ -1087,7 +1088,10 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         info.reserve  = os->reserve;
         info.stack    = os->stack;
         info.sigign   = os->entryign | s->sigign;
-        for (i32 i = 0; i < 3; i++) info.std[i] = (Handle)i;
+        for (i32 i = 0; i < 3; i++) {
+            info.std[i]      = (Handle)i;
+            info.stdflags[i] = fdaccess(i);
+        }
         Fiber *f = os_fiber(os, &a, os->stack, imagefiber, &info);
         os_switch(os, f);
         _exit(127);  // never reached
@@ -1849,14 +1853,22 @@ static Str machtype(Arena *a)
     return r;
 }
 
-static Slice<InheritFd> pushinherit(Arena *a, Slice<InheritFd> r, i32 fd)
+// How a descriptor is open: OF_READ, OF_WRITE, or 0 if it is not.
+static i32 fdaccess(i32 fd)
 {
     i32 fl = fcntl(fd, F_GETFL);
-    if (fl < 0) return r;
+    if (fl < 0) return 0;
+    return (fl&O_ACCMODE)==O_RDONLY ? OF_READ :
+           (fl&O_ACCMODE)==O_WRONLY ? OF_WRITE : OF_READ|OF_WRITE;
+}
+
+static Slice<InheritFd> pushinherit(Arena *a, Slice<InheritFd> r, i32 fd)
+{
+    i32 flags = fdaccess(fd);
+    if (!flags) return r;
     InheritFd e = {};
     e.fd    = fd;
-    e.flags = (fl&O_ACCMODE)==O_RDONLY ? OF_READ :
-              (fl&O_ACCMODE)==O_WRONLY ? OF_WRITE : OF_READ|OF_WRITE;
+    e.flags = flags;
     return push(a, r, e);
 }
 

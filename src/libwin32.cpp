@@ -820,7 +820,8 @@ static void runmain(Os *os, void *arg)
             track(os, h);
         }
         hostv[i]    = host==INVALID_HANDLE_VALUE ? 0 : host;
-        info.std[i] = (Handle)h;
+        info.std[i]      = (Handle)h;
+        info.stdflags[i] = handleaccess(os, h);
     }
     l->errh = (uz)info.std[2];
     info.inherit = alloc<InheritFd>(a, cmd->nfds);
@@ -842,7 +843,8 @@ static void runmain(Os *os, void *arg)
         InheritFd *e = info.inherit + info.ninherit++;
         e->fd    = cmd->fds[i].fd;
         e->h     = (Handle)h;
-        e->flags = OF_READ | OF_WRITE;
+        e->flags = handleaccess(os, h);
+        e->flags = e->flags ? e->flags : OF_READ|OF_WRITE;
     }
 
     // The null device for an empty handle list (libstartproc)

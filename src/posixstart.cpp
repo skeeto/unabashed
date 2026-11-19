@@ -63,7 +63,8 @@ int main(int argc, char **argv)
         info.stack = (iz)1<<23;
     }
     for (i32 i = 0; i < 3; i++) {
-        info.std[i] = (Handle)i;
+        info.std[i]      = (Handle)i;
+        info.stdflags[i] = fdaccess(i);
     }
     info.sigign = os.entryign;
     os.reserve  = info.reserve;

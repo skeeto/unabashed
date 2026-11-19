@@ -1009,6 +1009,25 @@ static Wobj *track(Os *os, uz h)
     return w;
 }
 
+// How a handle is open: OF_READ, OF_WRITE, or 0 if unknown. A console's
+// input only reads and its output only writes, as in busybox-w32 (Git
+// Bash's console takes both ways); anything else as its access says.
+static i32 handleaccess(Os *os, uz h)
+{
+    switch (classify(h)) {
+    case K_CONIN:  return OF_READ;
+    case K_CONOUT: return OF_WRITE;
+    }
+    IoStatusBlock iosb = {};
+    u32 access = 0;
+    if (!os->queryfile || os->queryfile(h, &iosb, &access, sizeof(access), 8)) {
+        return 0;  // FileAccessInformation
+    }
+    enum { FILE_READ_DATA = 1, FILE_WRITE_DATA = 2, FILE_APPEND_DATA = 4 };
+    i32 r = access&FILE_READ_DATA ? OF_READ : 0;
+    return r | (access&(FILE_WRITE_DATA|FILE_APPEND_DATA) ? OF_WRITE : 0);
+}
+
 static void reserveahead(Os *os, Wobj *w, iz extra)
 {
     iz len = w->alen - w->aoff;

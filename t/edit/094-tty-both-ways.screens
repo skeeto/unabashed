@@ -1,0 +1,24 @@
+== snap 1
+$ echo hi >&0; echo "st $?"
+hi
+st 0
+$ read x <&2; echo "st $? [$x]"
+typed
+st 0 [typed]
+$ exec 3>&0; echo three >&3; echo "st $?"
+three
+st 0
+$
+@ 9,2
+== snap 2
+$ echo hi >&0; echo "st $?"
+hi
+st 0
+$ read x <&2; echo "st $? [$x]"
+typed
+st 0 [typed]
+$ exec 3>&0; echo three >&3; echo "st $?"
+three
+st 0
+$
+@ 9,2

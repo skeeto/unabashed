@@ -646,9 +646,13 @@ static VFile *vfile(Vos *v, Handle h)
     return 0;
 }
 
-// How a handle is open (OF_READ, OF_WRITE), for InheritFd.
+static b32 vistty(Vos *, Handle);
+
+// How a handle is open (OF_READ, OF_WRITE), for InheritFd. The standard
+// three are input and outputs, or all the terminal, open both ways.
 static i32 vaccess(Vos *v, Handle h)
 {
+    if (h < 3) return vistty(v, h) ? OF_READ|OF_WRITE : h ? OF_WRITE : OF_READ;
     VFile *f = vfile(v, h);
     switch (f ? f->kind : VK_FREE) {
     case VK_PIPEREAD:  return OF_READ;
@@ -1686,6 +1690,10 @@ static OsPipe vos_pipe(Os *os)
 static b32 vos_write(Os *os, Handle h, u8 *buf, iz len)
 {
     Vos *v = osvos(os);
+    if (h==0 && vistty(v, h)) {
+        vttyout(v, buf, len);  // the terminal, open both ways
+        return 1;
+    }
     if (h==1 || h==2) {
         if (v->trace) vtraceout(v, h, buf, len);
         if (v->tty.term) vttyout(v, buf, len);

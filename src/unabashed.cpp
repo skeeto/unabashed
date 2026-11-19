@@ -1419,11 +1419,14 @@ static b32 msysargv(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
     return 1;
 }
 
-// The descriptors the process started with.
+// The descriptors the process started with, each usable as it is open,
+// as bash's are: a terminal on fd 0 takes writes, as on 2 reads.
 static void startfds(Shell *sh, OsInfo *info)
 {
     for (i32 i = 0; i < 3; i++) {
-        File *f = stdfile(sh, info->std[i], i ? OF_WRITE : OF_READ);
+        i32 flags = info->stdflags[i];
+        flags = flags ? flags : i ? OF_WRITE : OF_READ;
+        File *f = stdfile(sh, info->std[i], flags);
         sh->fds->fd[i] = f;
     }
     sh->fds->top = 3;

@@ -292,8 +292,9 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     // references, as in a real process: closing one closes it (a pipe
     // a background job's redirection replaces is closed at once)
     for (i32 i = 0; i < 3; i++) {
-        info.std[i] = ctx->fd[i];
-        ctx->fd[i]  = BADHANDLE;
+        info.std[i]      = ctx->fd[i];
+        info.stdflags[i] = ctx->fd[i]==BADHANDLE ? 0 : vaccess(osvos(os), ctx->fd[i]);
+        ctx->fd[i]       = BADHANDLE;
     }
     // The rest it was given, as a POSIX shell inherits them, or a
     // Windows one through lpReserved2 (os_spawn passes them only then)
@@ -414,9 +415,10 @@ static OsInfo baseinfo(Os *os, Str *args, iz nargs)
     info.uid     = info.euid = 1000;
     info.gid     = info.egid = 1000;
     info.host    = "oracle";
-    info.std[0]  = 0;
-    info.std[1]  = 1;
-    info.std[2]  = 2;
+    for (i32 i = 0; i < 3; i++) {
+        info.std[i]      = (Handle)i;
+        info.stdflags[i] = vaccess(osvos(os), (Handle)i);  // as the vos has it
+    }
     info.reserve = (iz)1<<22;
     info.stack   = (iz)1<<20;
     info.chaos   = os->chaos;

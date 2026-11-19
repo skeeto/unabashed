@@ -856,20 +856,20 @@ static void runmain(Os *os, void *arg)
             fd = fcntl((i32)cmd->std[i], F_DUPFD_CLOEXEC, 10);
         }
         if (fdtake(l, fd) < 0) lib_abort(os, E_BADF);
-        info.std[i] = (Handle)fd;
+        info.std[i]      = (Handle)fd;
+        info.stdflags[i] = fdaccess(fd);
     }
     l->errfd = (i32)info.std[2];
     info.inherit = alloc<InheritFd>(a, cmd->nfds);
     for (i32 i = 0; i < cmd->nfds; i++) {
         i32 src = (i32)cmd->fds[i].h;
-        i32 fl  = fcntl(src, F_GETFL);
-        i32 fd  = fl<0 ? -1 : fcntl(src, F_DUPFD_CLOEXEC, 10);
+        i32 fl  = fdaccess(src);
+        i32 fd  = !fl ? -1 : fcntl(src, F_DUPFD_CLOEXEC, 10);
         if (fdtake(l, fd) < 0) lib_abort(os, E_BADF);
         InheritFd *e = info.inherit + info.ninherit++;
         e->fd    = cmd->fds[i].fd;
         e->h     = (Handle)fd;
-        e->flags = (fl&O_ACCMODE)==O_RDONLY ? OF_READ :
-                   (fl&O_ACCMODE)==O_WRONLY ? OF_WRITE : OF_READ|OF_WRITE;
+        e->flags = fl;
     }
 
     l->status = sh_main(os, &info);

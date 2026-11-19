@@ -1,0 +1,10 @@
+# The terminal is open both ways on all three descriptors, and the shell
+# uses each as it is open, as bash does: fd 0 takes writes and fd 2
+# reads, directly and through a copy
+size 10 50
+rc PS1='$ '
+keys echo hi >&0; echo "st $?"\r
+keys read x <&2; echo "st $? [$x]"\r
+keys typed\r
+keys exec 3>&0; echo three >&3; echo "st $?"\r
+snap
