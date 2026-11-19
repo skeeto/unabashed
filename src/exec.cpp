@@ -1156,6 +1156,9 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
 static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
 {
     Fdtab *t = sh->fds;
+    // Taken at once, before any expansion can run other redirections
+    b32 nullchild = sh->nullchild;
+    sh->nullchild = 0;
     for (Redir *r = list; r; r = r->next) {
         i32 fd   = r->src;
         b32 kept = keep;
@@ -1198,8 +1201,9 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                 }
             } else {
                 setfdvar = 1;  // once the descriptor is open, as bash
-                // The new descriptor outlives the command
-                kept |= !sh->shopt[S_VARREDIR_CLOSE];
+                // The new descriptor outlives the command, except in
+                // bash's child, which exits
+                kept |= !sh->shopt[S_VARREDIR_CLOSE] && !nullchild;
             }
         }
         if (fd<0 || fd>=FDMAX) {
@@ -1354,7 +1358,18 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
             fdset(sh, fd, f, kept, a);
         } break;
         }
-        if (setfdvar) {
+        if (setfdvar && nullchild) {
+            // bash assigns it in its child, so only a refusal shows
+            Str    var = r->srcvar->text;
+            Value *v   = find(var, "[")<0 ? lookup(sh, var) : 0;
+            if (v && (v->attrs & V_READONLY)) {
+                shellerror(sh, *a, concat(a, var, ": readonly variable"));
+                Str msg = concat(a, var, ": cannot assign fd to variable");
+                shellerror(sh, *a, msg);
+                fdset(sh, fd, 0, kept, a);
+                return 0;
+            }
+        } else if (setfdvar) {
             Str var = r->srcvar->text;
             Str num = fmti64(a, fd);
             b32 ok  = find(var, "[")>=0 ? assignto(sh, *a, var, num)
@@ -3183,12 +3198,21 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         // The status is the last command substitution's, or zero.
         b32  ok     = doassignments(sh, a, assigns, nassign);
         i32  laststatus = sh->nsubst==nsubst ? 0 : sh->status;
-        if (n->redirs && !doredirs(sh, n->redirs, a, 0)) {
+        // bash runs redirections of fd 0, or with a {var}, in a child
+        // ("Safety"), whose status is theirs alone: the comsubs' is lost
+        b32 child = 0;
+        for (Redir *r = n->redirs; r; r = r->next) {
+            child |= r->src==0 || r->srcvar;
+        }
+        sh->nullchild = child;  // applyredirs takes it
+        b32 redirected = !n->redirs || doredirs(sh, n->redirs, a, 0);
+        if (!redirected) {
             unwind(sh, mark);
             sh->status = sh->redirfail;
             checkerrexit(sh);
             return;
         }
+        if (child) laststatus = 0;
         unwind(sh, mark);
         sh->status = ok ? laststatus : 1;
         if (!ok && posixfatal(sh)) {

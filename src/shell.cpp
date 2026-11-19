@@ -553,6 +553,7 @@ struct Shell {
     i32      dumpstrings;  // 1: -D, --dump-strings; 2: in po form too
     b32      prettyprint;  // --pretty-print: print the script, not run it
     i32      redirfail;    // the status of the last failed redirection
+    b32      nullchild;    // redirections as bash's child for a null command
     b32      argsset;      // set replaced $@ outside functions, which a
                            // sourced file with arguments then keeps
     b32      exiting;
