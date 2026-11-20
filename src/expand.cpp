@@ -3125,6 +3125,14 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
         } else {
             texts = push(a, texts, w->text);
         }
+        // As bash, a declaration's assignment that brace expansion
+        // changed is an assignment no longer: split, globbed and with
+        // no tilde after =
+        b32 plain = (flags & XW_ASSIGN) && (w->flags & W_ASSIGNMENT) &&
+                    (texts.len>1 || texts[0]!=w->text);
+        u32 wflags = plain ? w->flags & ~(W_ASSIGNMENT|W_NOSPLIT|W_NOGLOB) : w->flags;
+        b32 wsplit = split || plain;
+        b32 wglob  = doglob || (plain && !sh->opt[O_NOGLOB]);
         for (iz t = 0; t < texts.len; t++) {
             if (!x) {
                 x = newx(sh, a);
@@ -3137,11 +3145,11 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
                 x->data  = Buf(a, 16);
                 x->flags = flagbuf;
             }
-            x->nosplit = !split || (w->flags & W_NOSPLIT);
-            x->nullmark = split && !(w->flags & W_NOSPLIT);
+            x->nosplit = !wsplit || (wflags & W_NOSPLIT);
+            x->nullmark = wsplit && !(wflags & W_NOSPLIT);
             // A declaration builtin's assignment argument gets tilde
             // expansion after = even in posix mode
-            i32 ctx = flags&XW_ASSIGN && w->flags&W_ASSIGNMENT ? XC_ASSIGNW : wordctx(sh, w);
+            i32 ctx = flags&XW_ASSIGN && wflags&W_ASSIGNMENT ? XC_ASSIGNW : plain ? 0 : wordctx(sh, w);
             ctx |= flags&XW_SUBQ ? XC_SUBQ : 0;
             expandinto(x, texts[t], ctx);
             fields.len = 0;
@@ -3155,7 +3163,7 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
             split2.len = 0;
             for (iz k = 0; k < fields.len; k++) {
                 XField f = fields[k];
-                b32 dosplit = split && !(w->flags & W_NOSPLIT);
+                b32 dosplit = wsplit && !(wflags & W_NOSPLIT);
                 Str sifs    = ifs;
                 if (dosplit && sh->pathmode==PM_NATIVE) {
                     f = dropsplitcr(a, f);  // even with a null IFS
@@ -3179,7 +3187,7 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
             }
             for (iz k = 0; k < split2.len; k++) {
                 XField f = x->nullmark ? stripnulls(a, split2[k]) : split2[k];
-                Str pat = doglob && !(w->flags & W_NOGLOB) ? globpattern(a, f, extglob) : Str{};
+                Str pat = wglob && !(wflags & W_NOGLOB) ? globpattern(a, f, extglob) : Str{};
                 if (pat.data) {
                     Slice<Str> m = glob(sh, a, pat);
                     if (m.len) {
