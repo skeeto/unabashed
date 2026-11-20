@@ -1467,14 +1467,11 @@ static b32 pushtemp(Shell *sh, Arena scratch, Str name, Str value)
     Value *n = (Value *)salloc(st, sizeof(Value));
     n->below = v->top;
     n->depth = sh->funcdepth + 1;
-    n->attrs = V_TEMP|V_EXPORT | (v->top ? v->top->attrs & ~(V_TEMP|V_LOCAL|V_ARRAY|V_ASSOC|V_NAMEREF) : 0);
+    // As bash, a new variable exported and nothing more: its value is
+    // the text, which only += computed with the old one's attributes
+    n->attrs = V_TEMP|V_EXPORT;
     jset(st, &v->top, n);
-    Value *val = n;
-    if (val->attrs & V_INTEGER) {
-        Arith r = evalinteger(sh, &scratch, value);
-        value = fmti64(&scratch, r.ok ? r.value : 0);
-    }
-    val->str = sclone(st, convertcase(&scratch, value, val->attrs, sh->utf8));
+    n->str = sclone(st, value);
     sh->exportgen++;
     varchanged(sh, name);
     return 1;
