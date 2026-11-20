@@ -1492,6 +1492,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 // as bash, no builtin named in an element's integer error
                 Str who = sh->intwho;
                 sh->intwho = {};
+                if (!wordcomp) checkcomplist(sh, scratch, cuttail(cuthead(val, 1), 1));
                 ok = assigncompound(sh, scratch, vname, cuttail(cuthead(val, 1), 1),
                                     sflags|nl, wordcomp);
                 sh->intwho = who;

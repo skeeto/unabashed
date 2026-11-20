@@ -4819,6 +4819,46 @@ static void reportmessages(Shell *sh, Lexer *L)
     L->msgtail = &L->msgs;
 }
 
+// A declaration's quoted (...) list, parsed now as bash's "array assign"
+// does, as if written A=(body). A syntax error is reported, and
+// abandons the command, or as bash ends a POSIX shell with status 127.
+static void checkcomplist(Shell *sh, Arena scratch, Str body)
+{
+    Str    src = concat3(&scratch, "A=(", body, ")");
+    Lexer *L   = newlexer(&scratch, src);
+    L->stackmax = (iz)1<<20;
+    L->extglob  = L->extglobopt = sh->shopt[S_EXTGLOB];
+    L->posix    = sh->opt[O_POSIX];
+    L->extquote = sh->shopt[S_EXTQUOTE];
+    L->utf8     = sh->utf8;
+    Parsed p = parseunit(L);
+    b32 ok = p.status==PARSE_OK && p.cmd && p.cmd->kind==N_SIMPLE &&
+             parseunit(L).status==PARSE_EOF;
+    if (ok && !L->msgs) return;
+    if (!L->msgs) {
+        // a well-formed list followed by more: an unexpected word
+        message(L, 1, "syntax error near unexpected token `)'");
+    }
+    for (Message *m = L->msgs; m; m = m->next) {
+        // As bash, an unexpected token is on the command's line, while
+        // an unexpected end of input is on the list's first
+        b32 token = m->kind==MSG_LINE || startswith(m->text, "syntax error near");
+        m->line = token ? sh->line : 1;
+        if (m->kind == MSG_LINE) m->text = concat3(&scratch, "`", body, "'");
+    }
+    flushbout(sh);
+    Str iname = sh->iname;
+    sh->iname = "array assign";
+    reportmessages(sh, L);
+    sh->iname = iname;
+    if (posixfatal(sh)) {
+        sh->status = sh->catchfatal ? 1 : 127;
+        escape(sh, ESC_FATAL);
+    }
+    sh->status = 1;
+    escape(sh, ESC_DISCARD);
+}
+
 // Parse and run src one command at a time, as -c, eval, source and
 // command substitution do, numbering its lines from line. Returns the
 // final status. With comsub, src is the printed text of a $(...) or
