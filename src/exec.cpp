@@ -448,6 +448,20 @@ static Arith evalinteger(Shell *sh, Arena *a, Str expr)
     return r;
 }
 
+// The same for an integer variable's value, whose error names the
+// builtin assigning it, if one is, as bash's this_command_name.
+static Arith evalintvalue(Shell *sh, Arena *a, Str expr)
+{
+    Arith r = arithraw(sh, a, expr);
+    if (!r.ok) {
+        Str msg = sh->intwho.len ? concat3(a, sh->intwho, ": ", r.err) : r.err;
+        shellerror(sh, *a, msg);
+        sh->status = 1;
+        escape(sh, ESC_ABORT);
+    }
+    return r;
+}
+
 // Evaluate arithmetic for a command such as (( )) or let, where an
 // error is reported with a prefix and the command just fails.
 static Arith evalarithcmd(Shell *sh, Arena *a, Str expr, Str who)
@@ -3405,7 +3419,14 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             sh->nbltargs = argv.len;
             sh->nowriteerr = 0;
             sh->bifatal    = 0;
+            sh->rawstatus  = 0;
             sh->status = runbuiltin(sh, bi, argv.data, argv.len, scratch);
+            // Only bash's forked child, which exits with the builtin's
+            // own status, shows an internal one; the shell maps it to 1
+            if (forked && sh->status && sh->rawstatus) {
+                sh->status = sh->rawstatus & 0xff;
+            }
+            sh->rawstatus = 0;
             b32 fatal = special && sh->bifatal && posixfatal(sh) && !sh->noerrexit;
             sh->bifatal = 0;
             if (fatal) {
@@ -4000,6 +4021,7 @@ static void executeone(Shell *, Node *, Arena);
 
 static void execute(Shell *sh, Node *n, Arena scratch)
 {
+    sh->intwho = {};  // not a builtin's own work, until one runs
     if (n && (n->flags & CMD_TIME) && !sh->exiting && !sh->flow) {
         // As bash, a bare time in POSIX mode times the shell so far
         // As bash, the shell's own CPU time and its reaped children's
@@ -4383,6 +4405,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         return;
     }
     checkstack(sh);
+    sh->intwho = {};
     Undo *mark = sh->undo;
     b32   invert = n->flags & CMD_INVERT;
     if (invert) sh->noerrexit++;

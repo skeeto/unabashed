@@ -554,6 +554,12 @@ struct Shell {
     b32      prettyprint;  // --pretty-print: print the script, not run it
     i32      redirfail;    // the status of the last failed redirection
     b32      nullchild;    // redirections as bash's child for a null command
+    Str      intwho;       // the builtin running, as bash's
+                           // this_command_name, which names its errors
+                           // assigning to an integer variable
+    i32      rawstatus;    // the running builtin's internal status, as
+                           // bash's EX_BADASSIGN (260) or EX_UTILERROR
+                           // (263): its forked child exits with it
     b32      argsset;      // set replaced $@ outside functions, which a
                            // sourced file with arguments then keeps
     b32      exiting;

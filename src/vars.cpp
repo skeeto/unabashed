@@ -80,6 +80,7 @@ static Arith evalarith(Shell *, Arena *, Str);
 static i64   histnumber(Shell *);  // history.cpp
 static void  keepcmdtext(Shell *, byte *beg, byte *end);
 static Arith evalinteger(Shell *, Arena *, Str);
+static Arith evalintvalue(Shell *, Arena *, Str);
 
 static b32 validvarname(Str s)
 {
@@ -702,10 +703,10 @@ static Str assignedvalue(Shell *sh, Arena *scratch, u32 attrs, Str old, Str valu
 {
     if (attrs & V_INTEGER) {
         Arena a = *scratch;
-        Arith r = evalinteger(sh, &a, value);
+        Arith r = evalintvalue(sh, &a, value);
         i64 n = r.value;
         if (flags & SV_APPEND) {
-            Arith o = evalinteger(sh, &a, old.data ? old : Str("0"));
+            Arith o = evalintvalue(sh, &a, old.data ? old : Str("0"));
             n = (i64)((u64)n + (u64)(o.ok ? o.value : 0));
         }
         value = fmti64(scratch, n);

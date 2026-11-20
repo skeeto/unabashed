@@ -988,6 +988,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         builtinerror(sh, scratch, name, "can only be used in a function");
         return 1;
     }
+    if (i<nargs && (name=="export" || name=="readonly")) {
+        print = 0;  // as bash, -p lists only without names
+    }
 
     if (funcs) {
         u32 fattrs = V_EXPORT|V_READONLY|V_TRACE;
@@ -1040,7 +1043,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 if (name=="export" || name=="readonly") {
                     Str msg = concat(&scratch, args[i], ": not a function");
                     builtinerror(sh, scratch, name, msg);
-                } else if (print && !funcnames) {
+                } else if (print) {
                     Str msg = concat(&scratch, args[i], ": not found");
                     builtinerror(sh, scratch, name, msg);
                 }
@@ -1060,6 +1063,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             } else if (modify) {
                 uz attrs = (f->attrs | (on & fattrs)) & ~(uz)(off & fattrs);
                 jwrite(sh->store, &f->attrs, attrs);
+            } else if (funcnames && print) {
+                printfuncname(sh, &scratch, args[i], f);  // declare -f name
             } else if (funcnames) {
                 bprint(sh, args[i]);
                 if (sh->shopt[S_EXTDEBUG]) {
@@ -1165,7 +1170,13 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             hassub = 1;
         }
         if (!validvarname(vname) || (hassub && (name=="export" || name=="readonly"))) {
-            notident(sh, scratch, name, a);
+            // As bash: declare's every invalid name, but for export and
+            // readonly only a well-formed name[sub]=value, is an
+            // assignment error (EX_BADASSIGN), naming just name[sub]
+            b32 pub = name=="export" || name=="readonly";
+            b32 asg = pub && hassub && eq<a.len;
+            notident(sh, scratch, name, asg ? takehead(a, eq - append) : a);
+            if (!pub || asg) sh->rawstatus = 260;
             status = 1;
             if (sh->opt[O_POSIX] && (name=="export" || name=="readonly")) {
                 return 1;  // as bash, the rest left alone
@@ -1195,6 +1206,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         }
         if (onref && eq<a.len && !val.len && !append) {
             builtinerror(sh, scratch, name, "`': not a valid identifier");
+            sh->rawstatus = 260;
             status = 1;
             continue;
         }
@@ -1210,6 +1222,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             if (self && !sh->funcdepth) {
                 Str msg = concat(&scratch, vname, ": nameref variable self references not allowed");
                 builtinerror(sh, scratch, name, msg);
+                sh->rawstatus = 260;
                 status = 1;
                 continue;
             } else if (self) {
@@ -1232,6 +1245,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             if (val.len && !append && !validnameref(val)) {
                 Str msg = concat3(&scratch, "`", val, "': invalid variable name for name reference");
                 builtinerror(sh, scratch, name, msg);
+                sh->rawstatus = 260;
                 status = 1;
                 continue;
             }
@@ -1335,6 +1349,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                     builtinerror(sh, scratch, name, msg);
                 }
                 sh->bifatal = 1;  // a special builtin's assignment error
+                if (eq<a.len && !shadow && !onref) sh->rawstatus = 260;
                 status = 1;
                 continue;
             }
@@ -1474,8 +1489,12 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 builtinerror(sh, scratch, name, msg);
             } else if (compound) {
                 i32 nl = mklocal && fresh ? SV_NEWLOCAL : 0;
+                // as bash, no builtin named in an element's integer error
+                Str who = sh->intwho;
+                sh->intwho = {};
                 ok = assigncompound(sh, scratch, vname, cuttail(cuthead(val, 1), 1),
                                     sflags|nl, wordcomp);
+                sh->intwho = who;
             } else if (hassub) {
                 i32 raw = sh->shopt[S_ARRAY_EXPAND_ONCE] ? SV_RAWKEY : 0;
                 ok = assignelem(sh, scratch, vname, sub, takehead(a, eq), val, sflags|raw);
@@ -1668,6 +1687,14 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
         Value *top = rawlookup(sh, base);
         if (refs && !funcs) {
             // unset -n: the nameref itself, and nothing else
+            // (a readonly variable is still refused, as bash)
+            if (top && (top->attrs & V_READONLY) && !(top->attrs & V_NAMEREF)) {
+                Str msg = concat(&scratch, base, ": cannot unset: readonly variable");
+                builtinerror(sh, scratch, "unset", msg);
+                sh->bifatal = 1;
+                status = 1;
+                continue;
+            }
             if (!top || !(top->attrs & V_NAMEREF)) continue;
         } else if (top && (top->attrs & V_NAMEREF)) {
             // what the nameref names, which may be an array element
@@ -1695,6 +1722,8 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
             status = 1;
         }
     }
+    // bash's EX_UTILERROR, for the errors that end a POSIX shell
+    if (status && sh->bifatal) sh->rawstatus = 263;
     return status;
 }
 
@@ -4829,7 +4858,11 @@ static i32 runbuiltin(Shell *sh, Builtin *b, Str *args, iz nargs, Arena scratch)
     if (nargs>1 && args[1]=="--help" && !(b->flags & B_NOHELP)) {
         return builtinhelp(sh, args[0], scratch);
     }
-    return b->fn(sh, args, nargs, scratch);
+    Str saved  = sh->intwho;  // a command it runs clears it
+    sh->intwho = args[0];
+    i32 r = b->fn(sh, args, nargs, scratch);
+    sh->intwho = saved;
+    return r;
 }
 
 // A builtin by name, enabled or not (enable's own lookup)
