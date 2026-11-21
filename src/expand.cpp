@@ -71,6 +71,7 @@ static void fatalerror(Shell *, Arena, Str msg);
 static Arith evalarith(Shell *, Arena *, Str);
 static Arith evalinteger(Shell *, Arena *, Str);
 static Arith arithraw(Shell *, Arena *, Str);
+static void checkstack(Shell *);
 
 static X *newx(Shell *sh, Arena *a)
 {
@@ -2590,9 +2591,12 @@ static void expandtext(X *x, Str s, i32 ctx)
 
 // Expand text into x. Views of store memory taken meanwhile stay valid
 // while the code they lead to runs, as ${x:(x=5)} or a value that is
-// an expression assigning itself: the store is held.
+// an expression assigning itself: the store is held. Each nested word
+// comes through here, so words nested deep enough to exhaust the stack
+// kill this level, as by bash's crash, before they overflow it.
 static void expandinto(X *x, Str s, i32 ctx)
 {
+    checkstack(x->sh);
     Store *st = x->sh->store;
     storehold(st);
     expandtext(x, s, ctx);
