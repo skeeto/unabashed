@@ -1,0 +1,9 @@
+== snap 1
+$ foo bash: nope: boom
+$ compopt -o nospace; echo $?
+bash: compopt: not currently executing completion function
+1
+$ compopt
+bash: compopt: not currently executing completion function
+$
+@ 6,2

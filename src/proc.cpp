@@ -382,7 +382,6 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->aliases = copyaliases(st, sh->aliases, sh->lexer);
     c->comps   = compscopy(st, sh->comps);
     c->compcur = 0;
-    c->compcurkey = {};
     c->cmdhash = copyhash(st, sh->cmdhash);
     c->args.v  = (Str *)salloc(st, (sh->args.n ? sh->args.n : 1)*(iz)sizeof(Str));
     for (iz i = 0; i < sh->args.n; i++) {

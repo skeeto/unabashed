@@ -1,0 +1,31 @@
+== snap 1
+$ foo bash: g: maximum function nesting level exceeded (3)
+$
+@ 1,2
+== snap 2
+$ foo bash: g: maximum function nesting level exceeded (3)
+$ echo $? ${COMP_LINE-unset} ${COMP_CWORD-unset}
+1 unset unset
+$ return
+bash: return: can only `return' from a function or sourced script
+$ echo still
+still
+$ bar abbash: nope: boom
+$
+@ 8,2
+== snap 3
+$ foo bash: g: maximum function nesting level exceeded (3)
+$ echo $? ${COMP_LINE-unset} ${COMP_CWORD-unset}
+1 unset unset
+$ return
+bash: return: can only `return' from a function or sourced script
+$ echo still
+still
+$ bar abbash: nope: boom
+$ echo $?
+1
+$ baz bash: nope: boom
+$ echo ${COMP_WORDS-unset} ${COMP_POINT-unset}
+unset unset
+$
+@ 13,2

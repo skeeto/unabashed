@@ -394,6 +394,7 @@ struct Fdsave {      // descriptors to restore when a subshell ends
 struct Var;
 struct Func;
 struct Value;
+struct PcCur;       // pcomplete.cpp
 
 struct Args {        // positional parameters
     Str *v;
@@ -473,6 +474,7 @@ struct Escape {
     iz        nbltargs;
     Slice<u8> compargs;
     ArithEnv *arith;
+    PcCur    *compcur;
     i32       noerrexit;
     i32       evaldepth;
     i32       sourcedepth;
@@ -561,7 +563,6 @@ struct Coproc {       // bash 5.3 allows several
 struct SniffCache;  // spawn.cpp
 struct Editor;      // edit.cpp
 struct CompTable;   // pcomplete.cpp
-struct CompSpec;
 
 // The command history (history.cpp)
 enum : i32 { HC_IGNSPACE = 1<<0, HC_IGNDUPS = 1<<1, HC_ERASEDUPS = 1<<2 };
@@ -737,8 +738,7 @@ struct Shell {
     Editor     *editor;    // the line editor, made on first use, a
                            // subshell's its own (edit.cpp, editor)
     CompTable  *comps;     // compspecs (pcomplete.cpp)
-    CompSpec   *compcur;   // the running completion's copy, for compopt
-    Str         compcurkey;
+    PcCur      *compcur;   // the running completion, for compopt
     i32         comptype;  // COMP_TYPE and COMP_KEY of the last completion
     i32         compkey;
     Hist        hist;      // command history (history.cpp)
@@ -1461,6 +1461,7 @@ static void escenter(Shell *sh, Escape *e)
     e->nbltargs   = sh->nbltargs;
     e->compargs   = sh->compargs;
     e->arith      = sh->arith;
+    e->compcur    = sh->compcur;
     e->noerrexit  = sh->noerrexit;
     e->evaldepth  = sh->evaldepth;
     e->sourcedepth = sh->sourcedepth;
@@ -1505,6 +1506,7 @@ static void escrestore(Shell *sh, Escape *e)
     sh->nbltargs   = e->nbltargs;
     sh->compargs   = e->compargs;
     sh->arith      = e->arith;
+    sh->compcur    = e->compcur;
     sh->noerrexit  = e->noerrexit;
     sh->evaldepth  = e->evaldepth;
     sh->sourcedepth = e->sourcedepth;

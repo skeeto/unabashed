@@ -1,0 +1,11 @@
+# After an escape from a compspec, no completion is running, so compopt
+# without a name has nothing to change. bash's goes on changing the
+# abandoned compspec, a copy its jump to the top level leaks; ours was
+# then a dead stack frame. These screens are unabashed's (the vos's
+# tests binary), not bash's, which print that compspec's options.
+size 10 70
+rc PS1='$ '
+rc complete -W '${nope?boom}' foo
+keys foo \t
+keys compopt -o nospace; echo $?\r
+keys compopt\r

@@ -1,0 +1,21 @@
+# An escape from a compspec's shell code (a function's abandoned source,
+# an expansion error in -W or in a function) gives up the line, as
+# bash's jump to the top level does, with status 1: the function's
+# COMP_* variables are gone, and the source no longer counts, so a
+# return at the prompt is refused
+size 24 70
+rc PS1='$ '
+rc printf '%s\n' 'g() { g; }' 'FUNCNEST=3' g >ab.sh
+rc f() { source ./ab.sh; COMPREPLY=(xyz); }; complete -F f foo
+rc complete -W '${nope?boom}' bar
+rc k() { : ${nope?boom}; }; complete -F k baz
+keys foo \t
+snap
+keys echo $? ${COMP_LINE-unset} ${COMP_CWORD-unset}\r
+keys return\r
+keys echo still\r
+keys bar ab\t
+snap
+keys echo $?\r
+keys baz \t
+keys echo ${COMP_WORDS-unset} ${COMP_POINT-unset}\r

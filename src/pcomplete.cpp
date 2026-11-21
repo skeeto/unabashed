@@ -52,6 +52,13 @@ struct CompSpec {
     Str str[PS_COUNT];
 };
 
+// The running completion's compspec, a copy compopt changes, and the
+// name it was found under (Shell.compcur)
+struct PcCur {
+    CompSpec cs;
+    Str      key;
+};
+
 struct CompEnt {
     CompEnt  *next;
     Str       key;
@@ -808,7 +815,7 @@ struct PcCtx {
 
 static Str pcwordbreaks(Shell *sh, Arena *a)
 {
-    Got g = getplain(sh, a, "COMP_WORDBREAKS");
+    Got g = getvar(sh, a, "COMP_WORDBREAKS");
     if (g.set) return g.value;
     return wordbreaks(sh, sh->shopt[S_HOSTCOMPLETE]);
 }
@@ -853,9 +860,10 @@ static void pcbind(Shell *sh, Arena a, PcCtx *x, PcWords *w, b32 exported)
     setvar(sh, a, pcvarnames[5], num4);
 }
 
-static void pcunbind(Shell *sh)
+// The first n of them
+static void pcunbind(Shell *sh, i32 n)
 {
-    for (i32 i = 0; i < 6; i++) unsetvar(sh, pcvarnames[i], 1);
+    for (i32 i = 0; i < n; i++) unsetvar(sh, pcvarnames[i], 1);
 }
 
 static Slice<Str> pcfunction(Shell *sh, Arena *a, CompSpec *cs, PcCtx *x,
@@ -879,7 +887,6 @@ static Slice<Str> pcfunction(Shell *sh, Arena *a, CompSpec *cs, PcCtx *x,
     } else if (!w->cword) {
         prev = w->w[0];
     }
-    pcbind(sh, *a, x, w, 0);
     Str *argv = alloc<Str>(a, 4);
     argv[0] = name;
     argv[1] = clone(a, x->cmd);
@@ -887,10 +894,20 @@ static Slice<Str> pcfunction(Shell *sh, Arena *a, CompSpec *cs, PcCtx *x,
     argv[3] = clone(a, prev.data ? prev : Str(""));
     i32 status = sh->status;
     i32 line   = sh->line;
-    i32 got    = callfunction(sh, fn, argv, 4, *a);
+    pcbind(sh, *a, x, w, 0);
+    // Unbound however the function ends, as bash's unwind-protect does
+    Escape e;
+    escenter(sh, &e);
+    if (jmpset(e.jmp)) {
+        escleave(sh, &e);
+        pcunbind(sh, 6);
+        escape(sh, e.why);
+    }
+    i32 got = callfunction(sh, fn, argv, 4, *a);
+    escleave(sh, &e);
     sh->status = status;
     sh->line   = line;
-    pcunbind(sh);
+    pcunbind(sh, 6);
 
     Slice<Str> m = {};
     Value *v = lookup(sh, "COMPREPLY");
@@ -925,11 +942,19 @@ static Slice<Str> pccommand(Shell *sh, Arena *a, CompSpec *cs, PcCtx *x, PcWords
     putbyte(&b, ' ');
     print(&b, singlequote(a, prev));
     Str src = finish(&b);
-    pcbind(sh, *a, x, w, 1);
     i32 status = sh->status;
-    Str out    = runcapture(sh, a, src, 0);
+    pcbind(sh, *a, x, w, 1);
+    Escape e;  // as for a function
+    escenter(sh, &e);
+    if (jmpset(e.jmp)) {
+        escleave(sh, &e);
+        pcunbind(sh, 4);
+        escape(sh, e.why);
+    }
+    Str out = runcapture(sh, a, src, 0);
+    escleave(sh, &e);
     sh->status = status;
-    for (i32 i = 0; i < 4; i++) unsetvar(sh, pcvarnames[i], 1);
+    pcunbind(sh, 4);
 
     // Lines, a backslash keeping the newline after it
     Slice<Str> m = {};
@@ -1003,7 +1028,7 @@ static PcRes pcgenerate(Shell *sh, Arena *a, CompSpec *cs, PcCtx *x)
         r.m = pcappend(a, r.m, g);
     }
     if (cs->has & (1u<<PS_WORDS)) {
-        Got ifs = getplain(sh, a, "IFS");
+        Got ifs = getvar(sh, a, "IFS");
         Slice<Str> raw = pcifssplit(a, cs->str[PS_WORDS], ifs.set ? ifs.value : Str(" \t\n"));
         Word  *head = 0;
         Word **tail = &head;
@@ -1278,15 +1303,15 @@ static i32 b_compopt(Shell *sh, Str *args, iz nargs, Arena scratch)
         nnames = 1;
     }
     if (!nnames) {
-        CompSpec *cs = sh->compcur;
-        if (!cs) {
+        PcCur *cur = sh->compcur;
+        if (!cur) {
             builtinerror(sh, scratch, "compopt", "not currently executing completion function");
             return 1;
         }
         if (!on && !off) {
-            pcprintopts(sh, scratch, cs->options, sh->compcurkey);
+            pcprintopts(sh, scratch, cur->cs.options, cur->key);
         } else {
-            cs->options = (cs->options | on) & ~off;
+            cur->cs.options = (cur->cs.options | on) & ~off;
         }
         return 0;
     }
@@ -1411,23 +1436,23 @@ static PcLive pcrun(Shell *sh, Arena *a, PcCtx *x)
             x->cmd    = takehead(v, n);
             continue;
         }
-        CompSpec copy = *cs;
-        CompSpec *was = sh->compcur;
-        Str       wkey = sh->compcurkey;
-        sh->compcur    = &copy;
-        sh->compcurkey = key;
-        PcRes r = pcgenerate(sh, a, &copy, x);
-        sh->compcur    = was;
-        sh->compcurkey = wkey;
+        // Current while it runs, and put back by an escape (Escape)
+        PcCur cur = {};
+        cur.cs  = *cs;
+        cur.key = key;
+        PcCur *was  = sh->compcur;
+        sh->compcur = &cur;
+        PcRes r = pcgenerate(sh, a, &cur.cs, x);
+        sh->compcur = was;
         if (r.retry) {
             prev = cs;
             continue;
         }
-        if (r.notfound && !copy.options) break;
+        if (r.notfound && !cur.cs.options) break;
         out.found   = 1;
         out.m       = r.m;
         out.files   = r.files;
-        out.options = copy.options;
+        out.options = cur.cs.options;
         return out;
     }
     if (pass == 33) {
@@ -1514,27 +1539,25 @@ static PcLive pclive(Editor *ed, Shell *sh, Comp *c, b32 *cmdpos)
     return out;
 }
 
-// pclive, guarded: an expansion error abandons the completion
+// pclive, with $? and PIPESTATUS kept, as bash's. An escape from the
+// shell code it runs (an expansion error, an interrupt) abandons the
+// line, as bash's jump to the top level does: it goes on to the
+// editor (editline), the state that code changed put back first.
 static PcLive pclivesafe(Editor *ed, Shell *sh, Comp *c, b32 *cmdpos)
 {
-    Escape e;
-    escenter(sh, &e);
-    i32 depth  = sh->capdepth;
-    i32 status = sh->status;  // $? and PIPESTATUS kept, as bash's
+    i32 status = sh->status;
     i32 npstat = sh->npstat;
     u8 *pstat  = alloc<u8>(c->a, npstat);
     copybytes(pstat, pstatv(sh), npstat);
-    PcLive r = {};
-    if (!jmpset(e.jmp)) {
-        r = pclive(ed, sh, c, cmdpos);
+    Escape e;
+    escenter(sh, &e);
+    if (jmpset(e.jmp)) {
         escleave(sh, &e);
-    } else {
-        escresume(sh, &e);
-        sh->capdepth = depth;
-        if (e.why==ESC_EXIT || e.why==ESC_INTR) escape(sh, e.why);
-        r = {};
-        r.found = 1;  // nothing, and no other completion
+        escrestore(sh, &e);
+        escape(sh, e.why);
     }
+    PcLive r = pclive(ed, sh, c, cmdpos);
+    escleave(sh, &e);
     sh->status = status;
     if (!sh->pstatdirty) {
         copybytes(newpstat(sh, npstat), pstat, npstat);

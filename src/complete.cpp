@@ -117,7 +117,7 @@ static b32 compeq(Editor *ed, Str a, Str b, iz len)
 
 static Str compbreaks(Shell *sh, Arena *a)
 {
-    Got g = getplain(sh, a, "COMP_WORDBREAKS");
+    Got g = getvar(sh, a, "COMP_WORDBREAKS");
     if (g.set) return g.value;
     return wordbreaks(sh, sh->shopt[S_HOSTCOMPLETE]);
 }
@@ -264,19 +264,24 @@ static Str compexpdir(Shell *sh, Arena *a, Str dir)
         if (dir[i+1]=='{' && i+2<dir.len && compin(" \t\n|", dir[i+2])) return dir;
     }
     if (compexists(sh, *a, dir)) return dir;
+    // An expansion error keeps the directory, as in a prompt string
+    // (promptexpand); an interrupt or exit goes on
     Escape e;
     escenter(sh, &e);
     i32 status = sh->status;
-    Str r = {};
     if (!jmpset(e.jmp)) {
-        r = expandstring(sh, a, dir, XC_NOPSUB);
+        Str r = expandstring(sh, a, dir, XC_NOPSUB);
         escleave(sh, &e);
-    } else {
-        escresume(sh, &e);
-        r = dir;
+        sh->status = status;
+        return r;
     }
+    if (e.why!=ESC_DISCARD && e.why!=ESC_FATAL && e.why!=ESC_ABORT) {
+        escleave(sh, &e);
+        escape(sh, e.why);
+    }
+    escresume(sh, &e);
     sh->status = status;
-    return r;
+    return dir;
 }
 
 static Slice<Str> compadd(Comp *c, Slice<Str> m, Str s)
@@ -341,7 +346,7 @@ static Slice<Str> compfiles(Editor *ed, Shell *sh, Comp *c, Str w, i32 keep)
     if (c->dirhook && !sh->opt[O_PHYSICAL] && !isabsolute(sh, odir)) {
         // As bash's hook, a relative directory is read as cd would take
         // it, against $PWD: ../ under a symbolic link is its parent
-        Got pwd = getplain(sh, a, "PWD");
+        Got pwd = getvar(sh, a, "PWD");
         Str abs = joinpath(a, pwd.set && pwd.value.len ? pwd.value : sh->wd, odir);
         Str can = cdcanon(sh, a, abs);
         Stat st = pathstat(sh, *a, can, 1);
@@ -351,7 +356,7 @@ static Slice<Str> compfiles(Editor *ed, Shell *sh, Comp *c, Str w, i32 keep)
             udir.len && part.len && !compexists(sh, *a, odir)) {
         // As bash's directory hook, a misspelled directory is corrected
         // as cd's cdspell does, then made absolute and canonical
-        Got pwd = getplain(sh, a, "PWD");
+        Got pwd = getvar(sh, a, "PWD");
         Str abs = isabsolute(sh, odir) ? odir
                 : joinpath(a, pwd.set ? pwd.value : sh->wd, odir);
         Str fix = spellpath(sh, a, abs);
@@ -467,7 +472,7 @@ static Slice<Str> compcommands(Editor *ed, Shell *sh, Comp *c, Str w)
         Stat st = pathstat(sh, *a, w, 1);
         if (!st.err && st.type==FT_DIR) m = compadd(c, m, w);
     }
-    Str path = getplain(sh, a, "PATH").value;
+    Str path = getvar(sh, a, "PATH").value;
     u8  sep  = listsep(sh);
     for (Str rest = path; rest.data;) {
         Cut d   = cut(rest, sep);
@@ -574,8 +579,8 @@ static Slice<Str> comphosts(Shell *sh, Comp *c, Str w)
 {
     Arena *a = c->a;
     if (!sh->hostsread) {
-        Got g = getplain(sh, a, "HOSTFILE");
-        if (!g.set) g = getplain(sh, a, "hostname_completion_file");
+        Got g = getvar(sh, a, "HOSTFILE");
+        if (!g.set) g = getvar(sh, a, "hostname_completion_file");
         Str file = g.set ? g.value : Str("/etc/hosts");
         Buf names(a, 256);
         print(&names, sh->hosts);
@@ -739,7 +744,7 @@ static Str comppath(Shell *sh, Comp *c, Str m)
 {
     Arena *a = c->a;
     if (c->cmdstat && !compin(m, '/')) {
-        Str p = pathsearch(sh, a, getplain(sh, a, "PATH").value, m);
+        Str p = pathsearch(sh, a, getvar(sh, a, "PATH").value, m);
         if (p.len) return p;
     }
     if (c->udir.len && startswith(m, c->udir)) {
@@ -759,7 +764,7 @@ static void compfilter(Shell *sh, Comp *c)
     if (!c->files || c->ignore==IG_NONE) return;
     Arena *a = c->a;
     Slice<Str> keep = {};
-    Str fig = getplain(sh, a, "FIGNORE").value;
+    Str fig = getvar(sh, a, "FIGNORE").value;
     for (iz i = 0; i < c->m.len; i++) {
         Str  n    = c->m[i];
         b32  drop = 0;
@@ -1077,7 +1082,7 @@ static i32 complistwidth(Editor *ed, Shell *sh, Arena *a)
     if (ed->vars.displaywidth>=0 && ed->vars.displaywidth<=w) {
         return ed->vars.displaywidth;
     }
-    Got g = getplain(sh, a, "COLUMNS");
+    Got g = getvar(sh, a, "COLUMNS");
     if (g.set && g.value.len) {
         i64 v = 0;
         b32 ok = 1;
