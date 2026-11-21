@@ -6,7 +6,7 @@
 
 // A directory the shell entered (os_cwd), held open (plt_cwd)
 struct Pin {
-    i32   fd;    // 0: free (a pin is at 10 or up, highfd)
+    i32   fd;    // 0: free (a pin is above 2, highfd)
     u32   used;  // Os.pinclock when last entered or started in
     dev_t dev;
     ino_t ino;
@@ -271,12 +271,18 @@ static i32 fdbase(i32 *dst, i32 n)
 }
 
 // Keep shell-held descriptors away from the low numbers that scripts
-// redirect, and out of children.
+// redirect, and out of children. Where no number from 10 up is free (a
+// low `ulimit -n`), one above 2 stays where it is, as bash's would.
+// Fails (-1, errno) only with no room at all, the original closed.
 static i32 highfd(i32 fd)
 {
     if (fd < 0) return fd;
     i32 r = fcntl(fd, F_DUPFD_CLOEXEC, 10);
+    if (r<0 && fd>2 && !fcntl(fd, F_SETFD, FD_CLOEXEC)) return fd;
+    if (r < 0) r = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+    i32 err = errno;
     close(fd);
+    errno = err;
     return r;
 }
 
@@ -395,7 +401,9 @@ static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
         r.err = coreerr(errno);
         return r;
     }
-    r.h = (Handle)highfd(fd);
+    fd = highfd(fd);
+    r.h   = fd<0 ? BADHANDLE : (Handle)fd;
+    r.err = fd<0 ? coreerr(errno) : 0;
     return r;
 }
 
@@ -449,7 +457,9 @@ static Opened plt_tempfile(Os *os, Arena scratch)
         }
         unlink(path);
         fchmod(fd, 0400);
-        r.h = (Handle)highfd(fd);
+        fd = highfd(fd);
+        r.h   = fd<0 ? BADHANDLE : (Handle)fd;
+        r.err = fd<0 ? coreerr(errno) : 0;
         return r;
     }
     r.h   = BADHANDLE;
@@ -470,6 +480,7 @@ static Handle plt_dup(Os *os, Handle h)
 {
     flushw(os);
     i32 fd = fcntl((i32)h, F_DUPFD_CLOEXEC, 10);
+    if (fd < 0) fd = fcntl((i32)h, F_DUPFD_CLOEXEC, 3);  // as highfd
     return fd<0 ? BADHANDLE : (Handle)fd;
 }
 
@@ -500,8 +511,22 @@ static OsPipe plt_pipe(Os *os)
         r.r = r.w = BADHANDLE;
         return r;
     }
-    r.r = (Handle)highfd(fds[0]);
-    r.w = (Handle)highfd(fds[1]);
+    fds[0] = highfd(fds[0]);
+    if (fds[0] < 0) {
+        r.err = coreerr(errno);
+        close(fds[1]);
+        r.r = r.w = BADHANDLE;
+        return r;
+    }
+    fds[1] = highfd(fds[1]);
+    if (fds[1] < 0) {
+        r.err = coreerr(errno);
+        close(fds[0]);
+        r.r = r.w = BADHANDLE;
+        return r;
+    }
+    r.r = (Handle)fds[0];
+    r.w = (Handle)fds[1];
     return r;
 }
 
@@ -1496,6 +1521,12 @@ static void initasync(Os *os)
         os->wakefd[i] = highfd(os->wakefd[i]);
         fcntl(os->wakefd[i], F_SETFL, O_NONBLOCK);
     }
+    if (os->wakefd[0]<0 || os->wakefd[1]<0) {
+        if (os->wakefd[0] >= 0) close(os->wakefd[0]);
+        if (os->wakefd[1] >= 0) close(os->wakefd[1]);
+        os->wakefd[0] = os->wakefd[1] = -1;
+        return;
+    }
     sa = {};
     sa.sa_handler = onsigchld;
     sa.sa_flags   = SA_RESTART;  // stops too, for job control
@@ -1578,6 +1609,12 @@ static void plt_submit(Os *os, Io *io)
     flushw(os);
     io->done = 0;
     io->next = 0;
+    if (!isproc(io) && (i32)io->h<0) {
+        io->n    = 0;  // poll would pass over it for ever
+        io->err  = E_BADF;
+        io->done = 1;
+        return;
+    }
     if (tryio(io, isproc(io) ? 1 : pollnow(io, 0))) {
         io->done = 1;
         return;
@@ -1875,7 +1912,7 @@ static Slice<InheritFd> pushinherit(Arena *a, Slice<InheritFd> r, i32 fd)
 
 // The descriptors above 2 the shell inherited, found before the shell
 // opens any (openfds), each moved out of the way as the shell's own: at
-// 10 and up, and close-on-exec.
+// 10 and up where it can be (highfd), and close-on-exec.
 static Slice<InheritFd> inherited(Arena *a)
 {
     Slice<InheritFd> r = {};
@@ -1889,8 +1926,7 @@ static Slice<InheritFd> inherited(Arena *a)
     // All found first: a duplicate may land on a number not yet seen
     iz n = 0;
     for (iz i = 0; i < r.len; i++) {
-        i32 h = fcntl(r[i].fd, F_DUPFD_CLOEXEC, 10);
-        close(r[i].fd);
+        i32 h = highfd(r[i].fd);
         if (h < 0) continue;
         r[n] = r[i];
         r[n++].h = (Handle)h;

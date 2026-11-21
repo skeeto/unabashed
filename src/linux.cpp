@@ -32,8 +32,15 @@ static iz plt_peek(Os *os, Handle h, u8 *buf, iz len)
         if (cloexecpipe(fds)) {
             return -1;
         }
-        os->peekfd[0] = highfd(fds[0]);
-        os->peekfd[1] = highfd(fds[1]);
+        fds[0] = highfd(fds[0]);
+        fds[1] = highfd(fds[1]);
+        if (fds[0]<0 || fds[1]<0) {
+            if (fds[0] >= 0) close(fds[0]);
+            if (fds[1] >= 0) close(fds[1]);
+            return -1;
+        }
+        os->peekfd[0] = fds[0];
+        os->peekfd[1] = fds[1];
     }
     len = len<(1<<16) ? len : 1<<16;  // what the private pipe holds
     iz n = tee((i32)h, os->peekfd[1], (uz)len, SPLICE_F_NONBLOCK);
