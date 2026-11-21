@@ -2700,6 +2700,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         escenter(sh, &e);
         sh->args.v = argv + 1;
         sh->args.n = argc - 1;
+        sh->argsown = {};
         sh->name   = name;
         sh->argv0  = {};
         sh->frame  = 0;
@@ -2869,8 +2870,10 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
         for (i32 k = 0; k < 3; k++) f.trapat[k] = sh->traps[TRAP_DEBUG+k].data;
     }
     Args saved = sh->args;
+    Args own   = sh->argsown;
     sh->args.v = argv + 1;
     sh->args.n = argc - 1;
+    sh->argsown = {};
     sh->frame  = &f;
     sh->funcdepth++;
     i32 loopdepth = sh->loopdepth;
@@ -2925,7 +2928,9 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     sh->ctlline   = ctlline;
     sh->funcline  = funcline;
     leaveframe(sh, &f);
-    sh->args = saved;
+    freeargs(sh->store, sh->argsown);  // what set made in the call
+    sh->args    = saved;
+    sh->argsown = own;
     if (escaped) {
         escape(sh, e->why);
     }

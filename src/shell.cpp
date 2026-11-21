@@ -536,6 +536,9 @@ struct Shell {
     Alias   *aliases;
     uz       aliasseq;     // aliases defined so far
     Args     args;
+    Args     argsown;      // the store vector set made, which args lies
+                           // in (shift advances it), or none: freed
+                           // when replaced
     Str      name;         // $0
     Str      shellname;    // argv[0], for \s in prompts
     Str      iname;        // input name in syntax errors: -c or a file

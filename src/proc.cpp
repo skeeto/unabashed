@@ -395,6 +395,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     for (iz i = 0; i < sh->args.n; i++) {
         c->args.v[i] = sclone(st, sh->args.v[i]);
     }
+    c->argsown    = c->args;
     c->name       = sclone(st, sh->name);
     c->iname      = sclone(st, sh->iname);
     c->srcname    = sclone(st, sh->srcname);
