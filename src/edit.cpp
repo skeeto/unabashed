@@ -5892,9 +5892,10 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
         crlf = 0;
     } else if (ed->result == ED_TIMEOUT) {
         // As readline's timeout: the line goes unused, and what follows
-        // is written over it from the cursor's row
+        // is written over it from the cursor's row (input that is no
+        // terminal: past the prompt)
         ed->line.len = ed->point = 0;
-        edput(ed, "\r");
+        if (!ed->notty) edput(ed, "\r");
         crlf = 0;
     } else if (ed->hscroll) {
         if (ed->result==ED_INTR && ed->vars.echoctl) edput(ed, "^C");
