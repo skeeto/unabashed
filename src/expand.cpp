@@ -3756,7 +3756,7 @@ static Str traceitem(Arena *a, b32 hassub, Str sub, b32 append, Str value)
 }
 
 // The xtrace line bash prints as it assigns a declaration's name=(...)
-// (DeclTrace), before the command's own.
+// (declcompound), before the command's own.
 static void tracecompound(Shell *sh, Arena *a, Str name, b32 append, Slice<Str> items)
 {
     Buf b(a, name.len+64);

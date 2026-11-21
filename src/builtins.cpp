@@ -958,12 +958,15 @@ static u8 compflag(Shell *sh, Str *args, iz i)
     return k<sh->compargs.len ? sh->compargs[k] : 0;
 }
 
-// declare, typeset, local, export and readonly share this.
+// declare, typeset, local, export and readonly share this. Messages
+// name who, if given (see declcompound).
 static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
-                       u32 baseon, b32 local)
+                       u32 baseon, b32 local, Str who = {})
 {
+    if (!who.data) who = name;
     u32 on = baseon, off = 0;
     b32 print = 0, funcs = 0, funcnames = 0, global = 0, inherit = 0;
+    b32 chklocal = 0;  // -G, as bash: -g that finds a local first
     iz  i = 1;
     for (; i < nargs; i++) {
         Str a = args[i];
@@ -982,7 +985,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 case 'a': on |= V_ARRAY; continue;
                 case 'A': on |= V_ASSOC; continue;
                 default:
-                    invalidoption(sh, scratch, name, span(a.data+k-1, a.data+k+1));
+                    invalidoption(sh, scratch, who, span(a.data+k-1, a.data+k+1));
                     return 2;
                 }
             } else if (name == "readonly") {
@@ -994,7 +997,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 case 'a': on |= V_ARRAY; continue;
                 case 'A': on |= V_ASSOC; continue;
                 default:
-                    invalidoption(sh, scratch, name, span(a.data+k-1, a.data+k+1));
+                    invalidoption(sh, scratch, who, span(a.data+k-1, a.data+k+1));
                     return 2;
                 }
             } else switch (a[k]) {
@@ -1012,9 +1015,12 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             case 'f': funcs = 1; continue;
             case 'F': funcnames = 1; funcs = 1; continue;
             case 'g': global = 1; continue;
+            case 'G':
+                if (!plus) global = chklocal = 1;
+                continue;
             case 'I': inherit = 1; continue;
             default:
-                invalidoption(sh, scratch, name, span(a.data+k-1, a.data+k+1));
+                invalidoption(sh, scratch, who, span(a.data+k-1, a.data+k+1));
                 return 2;
             }
             if (plus) {
@@ -1031,8 +1037,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
     if ((on & V_LOWER) && (on & V_UPPER)) {
         on &= ~(V_LOWER|V_UPPER);
     }
+    b32 gonly = global && !chklocal;  // looks past locals
     if (local && !sh->funcdepth) {
-        builtinerror(sh, scratch, name, "can only be used in a function");
+        builtinerror(sh, scratch, who, "can only be used in a function");
         return 1;
     }
     if (i<nargs && (name=="export" || name=="readonly")) {
@@ -1065,7 +1072,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             for (i32 k = 0; k < countof(bad); k++) {
                 if (on & bad[k]) {
                     Str msg = concat(&scratch, opt[k], ": invalid option");
-                    builtinerror(sh, scratch, name, msg);
+                    builtinerror(sh, scratch, who, msg);
                     return 1;
                 }
             }
@@ -1073,7 +1080,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         i32 status = 0;
         for (; i < nargs; i++) {
             if (!print && find(args[i], "=")>=0 && !findfunc(sh, args[i])) {
-                builtinerror(sh, scratch, name, "cannot use `-f' to make functions");
+                builtinerror(sh, scratch, who, "cannot use `-f' to make functions");
                 status = 1;
                 continue;
             }
@@ -1081,7 +1088,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                     !validvarname(args[i])) {
                 // POSIX mode cannot name such functions here, though it
                 // defines and lists them
-                notident(sh, scratch, name, args[i]);
+                notident(sh, scratch, who, args[i]);
                 status = 1;
                 continue;
             }
@@ -1089,10 +1096,10 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             if (!f) {
                 if (name=="export" || name=="readonly") {
                     Str msg = concat(&scratch, args[i], ": not a function");
-                    builtinerror(sh, scratch, name, msg);
+                    builtinerror(sh, scratch, who, msg);
                 } else if (print) {
                     Str msg = concat(&scratch, args[i], ": not found");
-                    builtinerror(sh, scratch, name, msg);
+                    builtinerror(sh, scratch, who, msg);
                 }
                 status = 1;
                 continue;
@@ -1101,11 +1108,11 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             if (modify && name=="export" && (on & V_EXPORT) &&
                     !exportablefunc(args[i])) {
                 Str msg = concat(&scratch, args[i], ": cannot export");
-                builtinerror(sh, scratch, name, msg);
+                builtinerror(sh, scratch, who, msg);
                 status = 1;
             } else if (modify && (off & V_READONLY) && (f->attrs & V_READONLY)) {
                 Str msg = concat(&scratch, args[i], ": readonly function");
-                builtinerror(sh, scratch, name, msg);
+                builtinerror(sh, scratch, who, msg);
                 status = 1;
             } else if (modify) {
                 uz attrs = (f->attrs | (on & fattrs)) & ~(uz)(off & fattrs);
@@ -1180,22 +1187,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
     i32 status = 0;
     u32 arrbits = on & (V_ARRAY|V_ASSOC);
     u32 on0 = on, off0 = off;  // each name starts from the options
-    // bash assigns each literal name=(...) as the words expand: those go
-    // first, then the xtrace line (DeclTrace), then the rest in order
-    DeclTrace *dt = sh->decltrace;
-    sh->decltrace = 0;
-    iz   first = i, count = nargs - first;
-    Str *refarr = alloc<Str>(&scratch, count);  // -n on one: told in its place
-    for (iz step = 0; step < (print ? count : 2*count); step++) {
-        b32 later = !print && step>=count;
-        i = first + (later ? step-count : step);
-        if (dt && step==(print ? 0 : count)) tracedecl(sh, scratch, dt);
-        if (later && refarr[i-first].data) {
-            Str msg = concat(&scratch, refarr[i-first], ": reference variable cannot be an array");
-            builtinerror(sh, scratch, name, msg);
-            status = 1;
-        }
-        if (!print && (compflag(sh, args, i)==1) == later) continue;
+    for (; i < nargs; i++) {
         on  = on0;
         off = off0;
         Str a = args[i];
@@ -1215,7 +1207,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             }
             if (!v) {
                 Str msg = concat(&scratch, a, ": not found");
-                builtinerror(sh, scratch, name, msg);
+                builtinerror(sh, scratch, who, msg);
                 status = 1;
                 continue;
             }
@@ -1241,7 +1233,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             // assignment error (EX_BADASSIGN), naming just name[sub]
             b32 pub = name=="export" || name=="readonly";
             b32 asg = pub && hassub && eq<a.len;
-            notident(sh, scratch, name, asg ? takehead(a, eq - append) : a);
+            notident(sh, scratch, who, asg ? takehead(a, eq - append) : a);
             if (!pub || asg) sh->rawstatus = 260;
             status = 1;
             if (sh->opt[O_POSIX] && (name=="export" || name=="readonly")) {
@@ -1250,31 +1242,15 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             continue;
         }
         Str  val      = eq<a.len ? cuthead(a, eq+1) : Str{};
-        b32  wordcomp = compflag(sh, args, i) == 1;
         if (name=="export" || name=="readonly") {
             // As bash, -a and -A make or convert an array only with a
             // value: export -a x and readonly -A x leave x as it is
             on = (on & ~(V_ARRAY|V_ASSOC)) | (eq<a.len ? arrbits : 0);
         }
         b32  mklocal  = local || (name!="export" && name!="readonly" && sh->funcdepth && !global);
-        // bash's W_FORCELOCAL: an error declaring a literal name=(...)
-        // while it expands is not fatal (-g or not)
-        b32  forcelocal = local || (name!="export" && name!="readonly" && sh->funcdepth);
         b32  onref    = !!(on & V_NAMEREF);
-        if (onref && wordcomp && val.len>1 && val[0]=='(' && val[val.len-1]==')') {
-            // declare -n r=(...): assigned as an array, then reported
-            // among the rest, as bash's declare -n r finds an array
-            refarr[i-first] = vname;
-            on   &= ~V_NAMEREF;
-            onref = 0;
-            Value *old = rawlookup(sh, vname);
-            if (old && (old->attrs & V_NAMEREF)) {
-                Value *nv = setattrs(sh, vname, 0, V_NAMEREF);
-                nv->str = {};
-            }
-        }
         if (onref && eq<a.len && !val.len && !append) {
-            builtinerror(sh, scratch, name, "`': not a valid identifier");
+            builtinerror(sh, scratch, who, "`': not a valid identifier");
             sh->rawstatus = 260;
             status = 1;
             continue;
@@ -1282,7 +1258,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         if (onref) {
             if (hassub) {
                 Str msg = concat(&scratch, takehead(a, eq), ": reference variable cannot be an array");
-                builtinerror(sh, scratch, name, msg);
+                builtinerror(sh, scratch, who, msg);
                 status = 1;
                 continue;
             }
@@ -1290,14 +1266,14 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             b32 self = eq<a.len && (val==vname || (splitref(val, &sn, &ss) && ss.len && sn==vname));
             if (self && !sh->funcdepth) {
                 Str msg = concat(&scratch, vname, ": nameref variable self references not allowed");
-                builtinerror(sh, scratch, name, msg);
+                builtinerror(sh, scratch, who, msg);
                 sh->rawstatus = 260;
                 status = 1;
                 continue;
             } else if (self) {
                 // and again as bash looks the new variable up
                 Str msg = concat3(&scratch, "warning: ", vname, ": circular name reference");
-                builtinerror(sh, scratch, name, msg);
+                builtinerror(sh, scratch, who, msg);
                 shellerror(sh, scratch, msg);
             }
             Value *old = rawlookup(sh, vname);
@@ -1315,13 +1291,13 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             if (append && nv.len && !validnameref(nv)) {
                 // as bash, naming only the text appended
                 Str msg = concat3(&scratch, "`", val, "': not a valid identifier");
-                builtinerror(sh, scratch, name, msg);
+                builtinerror(sh, scratch, who, msg);
                 status = 1;
                 continue;
             }
             if (val.len && !append && !validnameref(val)) {
                 Str msg = concat3(&scratch, "`", val, "': invalid variable name for name reference");
-                builtinerror(sh, scratch, name, msg);
+                builtinerror(sh, scratch, who, msg);
                 sh->rawstatus = 260;
                 status = 1;
                 continue;
@@ -1329,7 +1305,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         }
         Str    refname = {};  // the nameref followed to vname, if any
         Str    hookname = vname;  // as bash's declare names it to the hooks
-        Value *raw = global ? globalvalue(sh, vname) : rawlookup(sh, vname);
+        Value *raw = gonly ? globalvalue(sh, vname) : rawlookup(sh, vname);
         if (raw && (raw->attrs & V_NAMEREF) && hassub && eq<a.len) {
             // declare -n r; declare r[1]=x: r stops being a nameref
             Str msg = concat3(&scratch, "warning: ", vname, ": removing nameref attribute");
@@ -1343,11 +1319,11 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             if ((raw->attrs & V_EMPTYREF) && (off & V_READONLY)) {
                 continue;  // as bash: +r finds no variable, silently
             }
-            Ref r = resolveref(sh, vname, global);
+            Ref r = resolveref(sh, vname, gonly);
             b32 offref = !!(off & V_NAMEREF);
             if (offref && r.last && r.last->str.data && (r.last->attrs & V_READONLY)) {
                 Str msg = concat(&scratch, vname, ": readonly variable");
-                builtinerror(sh, scratch, name, msg);
+                builtinerror(sh, scratch, who, msg);
                 status = 1;
                 continue;
             }
@@ -1357,7 +1333,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             }
             b32 follow = r.name.data && !r.loop && (!mklocal || (r.last && r.last->depth==sh->funcdepth));
             if (follow && r.hassub && (name=="export" || name=="readonly")) {
-                notident(sh, scratch, name, r.last->str);
+                notident(sh, scratch, who, r.last->str);
                 status = 1;
                 continue;
             }
@@ -1366,7 +1342,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 refname = vname;
                 vname   = r.name;
                 // bash's hook names the target only if it makes it anew
-                Value *t = global ? globalvalue(sh, vname) : rawlookup(sh, vname);
+                Value *t = gonly ? globalvalue(sh, vname) : rawlookup(sh, vname);
                 if (!mklocal && (r.hassub || !t)) hookname = vname;
                 if (r.hassub && !hassub) {
                     sub    = r.sub;
@@ -1381,37 +1357,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 nv->str = {};
             }
         }
-        Value *cur = global ? globalvalue(sh, vname) : rawlookup(sh, vname);
-        b32 shadowing = mklocal && cur && cur->depth!=sh->funcdepth && cur->depth;
-        if (wordcomp && cur && (cur->attrs & V_READONLY) && !shadowing) {
-            // As bash, a literal name=(...) to a readonly variable is
-            // first declared alone (with -aAiluc and the scope), while
-            // the arguments expand. An error there is reported under the
-            // stale command name, and abandons the command unless
-            // forcelocal. Otherwise the shell assigns the array itself
-            // then, and its failure abandons the command.
-            u32  bad    = V_ARRAY|V_ASSOC|V_INTEGER|V_LOWER|V_UPPER|V_CAPITAL;
-            b32  shadow = mklocal && cur->depth!=sh->funcdepth && !cur->depth;
-            Str  msg    = concat(&scratch, vname, ": readonly variable");
-            if (((on|off) & bad) || shadow) {
-                Str stale = {sh->cmdname, sh->cmdnamelen};
-                if (stale.len) {
-                    builtinerror(sh, scratch, stale, msg);
-                } else {
-                    shellerror(sh, scratch, msg);
-                }
-                if (!forcelocal) {
-                    sh->status = 1;
-                    escape(sh, ESC_DISCARD);
-                }
-            } else {
-                shellerror(sh, scratch, msg);
-                sh->status = 1;
-                escape(sh, ESC_DISCARD);
-            }
-            a  = vname;  // then declared without its value
-            eq = a.len;
-        }
+        Value *cur = gonly ? globalvalue(sh, vname) : rawlookup(sh, vname);
         if (cur && (cur->attrs & V_READONLY)) {
             // A new local may shadow a caller's readonly local, but
             // never a readonly global
@@ -1430,7 +1376,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 if ((name=="export" || name=="readonly") && !(on & (V_ARRAY|V_ASSOC))) {
                     readonlyerror(sh, scratch, ro);  // bash's err_readonly
                 } else {
-                    builtinerror(sh, scratch, name, msg);
+                    builtinerror(sh, scratch, who, msg);
                 }
                 sh->bifatal = 1;  // a special builtin's assignment error
                 if (eq<a.len && !shadow && !onref) sh->rawstatus = 260;
@@ -1462,41 +1408,27 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         if (((on & V_ASSOC) && isarr) || ((on & V_ARRAY) && isassoc)) {
             Str msg = concat(&scratch, vname, isarr ? Str(": cannot convert indexed to associative array")
                                                     : Str(": cannot convert associative to indexed array"));
-            if (wordcomp && eq<a.len) {
-                // found while a literal name=(...) expands, as bash
-                // names the stale command, a function's or none; unless
-                // forcelocal that abandons the command, else it is
-                // reported again and the command goes on
-                Str stale = {sh->cmdname, sh->cmdnamelen};
-                builtinerror(sh, scratch, stale, msg);
-                if (!forcelocal) {
-                    sh->status = 1;
-                    escape(sh, ESC_DISCARD);
-                }
-                builtinerror(sh, scratch, name, msg);  // and again
-            } else {
-                builtinerror(sh, scratch, name, msg);
-            }
+            builtinerror(sh, scratch, who, msg);
             status = 1;
             continue;
         }
         if ((off & (V_ARRAY|V_ASSOC)) && (isarr || isassoc)) {
             Str msg = concat(&scratch, vname, ": cannot destroy array variables in this way");
-            builtinerror(sh, scratch, name, msg);
+            builtinerror(sh, scratch, who, msg);
             status = 1;
             continue;
         }
-        Value *self = global ? globalvalue(sh, vname) : rawlookup(sh, vname);
+        Value *self = gonly ? globalvalue(sh, vname) : rawlookup(sh, vname);
         if (onref && (isarr || isassoc)) {
             Str msg = concat(&scratch, vname, ": reference variable cannot be an array");
-            builtinerror(sh, scratch, name, msg);
+            builtinerror(sh, scratch, who, msg);
             status = 1;
             continue;
         }
         if (onref && eq==a.len && self && !(self->attrs & V_NAMEREF) &&
                 self->str.data && !validnameref(self->str)) {
             Str msg = concat3(&scratch, "`", self->str, "': invalid variable name for name reference");
-            builtinerror(sh, scratch, name, msg);
+            builtinerror(sh, scratch, who, msg);
             status = 1;
             continue;
         }
@@ -1508,7 +1440,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             Str why  = anew ? Str("': not a valid identifier")
                             : Str("': invalid variable name for name reference");
             Str msg  = concat3(&scratch, "`", val, why);
-            builtinerror(sh, scratch, name, msg);
+            builtinerror(sh, scratch, who, msg);
             if (anew) unsetvar(sh, vname);
             status = 1;
             continue;
@@ -1521,7 +1453,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         }
         if (onref && self && (self->attrs & V_READONLY)) {
             Str msg = concat(&scratch, vname, ": readonly variable");
-            builtinerror(sh, scratch, name, msg);
+            builtinerror(sh, scratch, who, msg);
             status = 1;
             continue;
         }
@@ -1541,7 +1473,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         }
         u32 aon = on & ~(V_READONLY|V_NAMEREF);
         if (hassub && !(on & V_ASSOC) && !isassoc) aon |= V_ARRAY;
-        i32 sflags = (append ? SV_APPEND : 0) | (global ? SV_GLOBAL : 0);
+        i32 sflags = (append ? SV_APPEND : 0) | (gonly ? SV_GLOBAL : 0);
         if (onref || isref) sflags |= SV_NOREF;
         // Through a nameref to a variable that exists, bash's declare
         // runs the hook of the name it was given, not the target's
@@ -1553,8 +1485,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         b32 parens   = val.len>1 && val[0]=='(' && val[val.len-1]==')';
         b32 creating = !!(on & (V_ARRAY|V_ASSOC));
         b32 exists   = isarr || isassoc;
-        b32 compound = parens && wordcomp;
-        if (parens && !wordcomp && !plain && !(hassub && exists && !creating) &&
+        b32 compound = 0;
+        if (parens && !plain && !(hassub && exists && !creating) &&
                 (hassub || creating || exists)) {
             // a quoted name='(...)' is a list only for an array, and
             // name[sub]='(...)' for a new one is an element, as bash
@@ -1570,22 +1502,22 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             // that a hook (LC_ALL, POSIXLY_CORRECT) reads through it
             u32 pre = aon | (on & V_NAMEREF);
             if (pre || off) setattrs(sh, vname, pre, off);
-            if (sh->opt[O_XTRACE] && (name=="export" || name=="readonly") && !wordcomp) {
+            if (sh->opt[O_XTRACE] && (name=="export" || name=="readonly")) {
                 traceassign(sh, scratch, vname, append, val);  // as bash does
             }
             b32 ok = 0;
             if (compound && hassub) {
                 Str msg = concat(&scratch, takehead(a, eq), ": cannot assign list to array member");
-                builtinerror(sh, scratch, name, msg);
+                builtinerror(sh, scratch, who, msg);
             } else if (compound) {
                 i32 nl = mklocal && fresh ? SV_NEWLOCAL : 0;
                 // as bash, no builtin named in an element's integer error
-                Str who = sh->intwho;
+                Str intwho = sh->intwho;
                 sh->intwho = {};
-                if (!wordcomp) checkcomplist(sh, scratch, cuttail(cuthead(val, 1), 1));
+                checkcomplist(sh, scratch, cuttail(cuthead(val, 1), 1));
                 ok = assigncompound(sh, scratch, vname, cuttail(cuthead(val, 1), 1),
-                                    sflags|nl, wordcomp);
-                sh->intwho = who;
+                                    sflags|nl);
+                sh->intwho = intwho;
             } else if (hassub) {
                 i32 raw = sh->shopt[S_ARRAY_EXPAND_ONCE] ? SV_RAWKEY : 0;
                 ok = assignelem(sh, scratch, vname, sub, takehead(a, eq), val, sflags|raw);
@@ -1627,6 +1559,107 @@ static i32 b_export(Shell *sh, Str *args, iz nargs, Arena scratch)
 static i32 b_readonly(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     return declarelike(sh, args, nargs, scratch, "readonly", V_READONLY, 0);
+}
+
+// A declaration builtin's literal name=(...) argument, as bash's
+// expand_declaration_argument: assigned while the command's words
+// expand, so before later words, the temporary bindings and the
+// redirections, whatever then runs. The name is declared alone first,
+// by an internal declare with the options that change how values are
+// stored (-aAiluc, -I) and the scope: -g, or -gG (a visible local, else
+// a global) for a builtin that makes no locals. That declare's messages
+// name the stale command (bash's this_command_name), and its failure
+// abandons the command, unless declare or local in a function goes on
+// without the assignment. A failed assignment abandons it. The builtin
+// gets the name alone, returned. cmd and w are the command word and this
+// argument, as written.
+[[gnu::noinline]]  // not into runsimple1's frame
+static Str declcompound(Shell *sh, Arena scratch, Word *cmd, Word *w)
+{
+    iz  eq     = assignment(w->text, 0);
+    Str vname  = takehead(w->text, eq);
+    b32 append = vname.len && vname[vname.len-1]=='+';
+    if (append) vname = cuttail(vname, 1);
+    Str body = cuttail(cuthead(w->text, eq+2), 1);
+
+    b32 locals = cmd->text=="declare" || cmd->text=="typeset" || cmd->text=="local";
+    b32 assoc = 0, array = 0, global = 0, opts = 1;
+    Str letters = "AGIacgilu";  // the internal declare's, in bash's order
+    u8  map[9]  = {};           // 1 on, 2 off
+    for (Word *v = cmd->next; v != w; v = v->next) {
+        Str t = v->text;
+        if (t.len && t[0]=='-') {
+            // as fix_assignment_words, any such word before
+            assoc  |= find(cuthead(t, 1), "A") >= 0;
+            array  |= find(cuthead(t, 1), "a") >= 0;
+            global |= find(cuthead(t, 1), "g") >= 0;
+        }
+        opts &= t.len>1 && (t[0]=='-' || t[0]=='+') && t!="--";
+        for (iz k = 1; opts && k < t.len; k++) {
+            u8 c = t[k];
+            b32 value = c=='I' || c=='i' || c=='l' || c=='u' || c=='c';
+            for (i32 j = 0; value && j < letters.len; j++) {
+                if (letters[j] == c) map[j] = (u8)(map[j] | (t[0]=='-' ? 1 : 2));
+            }
+        }
+    }
+    map[0] = !!assoc;            // A
+    map[3] = !assoc && array;    // a
+    map[5] = global || !locals;  // g
+    map[1] = !locals;            // G
+
+    u8  on[16] = {'-'}, off[16] = {'+'};
+    iz  non = 1, noff = 1;
+    for (i32 j = 0; j < letters.len; j++) {
+        if (map[j] & 1) on[non++]   = letters[j];
+        if (map[j] & 2) off[noff++] = letters[j];
+    }
+    Str  args[4];
+    iz   nargs = 0;
+    args[nargs++] = "declare";
+    if (non  > 1) args[nargs++] = {on, non};
+    if (noff > 1) args[nargs++] = {off, noff};
+    args[nargs++] = vname;
+
+    Var   *var    = findvar(sh, vname);
+    Value *before = var ? var->top : 0;
+    Str    stale  = {sh->cmdname, sh->cmdnamelen};
+    i32    raw    = sh->rawstatus;
+    b32    fatal  = sh->bifatal;
+    i32    r = declarelike(sh, args, nargs, scratch, "declare", 0, 0,
+                           stale.len ? stale : Str(""));
+    sh->rawstatus = raw;
+    sh->bifatal   = fatal;
+    b32 forcelocal = locals && sh->funcdepth;
+    if (r && forcelocal) return vname;
+    if (r) {
+        sh->status = r;
+        escape(sh, ESC_DISCARD);
+    }
+
+    Str base, sub;
+    if (splitref(vname, &base, &sub)) {
+        Str msg = concat(&scratch, vname, ": cannot assign list to array member");
+        shellerror(sh, scratch, msg);
+        sh->status = 1;
+        escape(sh, ESC_DISCARD);
+    }
+    // A local the declare made hides while the words expand
+    var = findvar(sh, vname);
+    b32 fresh = locals && !global && sh->funcdepth && var && var->top!=before &&
+                var->top && var->top->depth==sh->funcdepth;
+    i32 flags = (append ? SV_APPEND : 0) | (global && locals ? SV_GLOBAL : 0) |
+                (fresh ? SV_NEWLOCAL : 0);
+    // as bash, no builtin named in an element's integer error
+    Str intwho = sh->intwho;
+    sh->intwho = {};
+    b32 ok = assigncompound(sh, scratch, vname, body, flags, 1);
+    sh->intwho = intwho;
+    if (!ok) {
+        sh->status = 1;
+        escape(sh, ESC_DISCARD);
+    }
+    return vname;
 }
 
 // unset 'name[sub]': one element, or for an indexed array's @ and *,

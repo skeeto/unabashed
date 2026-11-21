@@ -469,6 +469,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image, u32 skip = 0)
     c->lexfloor = 0;
     c->current  = 0;
     c->compargs = {};
+    c->nkept    = 0;  // the names are in the parent's store
     c->capdepth = 0;
     c->psubs    = 0;
     c->flow     = FLOW_NONE;

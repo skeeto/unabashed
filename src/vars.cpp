@@ -1174,12 +1174,13 @@ static b32 validnameref(Str s)
 // The variable an array assignment to name goes to, after namerefs, or
 // null after an error. A nameref without a value, given a whole list,
 // stops being a nameref; given an element, it is an error, as is a
-// list for a nameref to an element.
+// list for a nameref to an element. With SV_GLOBAL, the global's.
 static Str arraytarget(Shell *sh, Arena scratch, Str name, i32 *flags, b32 list = 0)
 {
-    Value *v = rawlookup(sh, name);
+    b32    global = !!(*flags & SV_GLOBAL);
+    Value *v = global ? globalvalue(sh, name) : rawlookup(sh, name);
     if (!v || !(v->attrs & V_NAMEREF)) return name;
-    Ref r = resolveref(sh, name);
+    Ref r = resolveref(sh, name, global);
     if (r.hassub) {
         Str msg = concat3(&scratch, "`", r.last->str, "': not a valid identifier");
         builtinerror(sh, scratch, sh->bltname, msg);

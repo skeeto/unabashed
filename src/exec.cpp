@@ -43,6 +43,7 @@ static i32      b_read(Shell *, Str *, iz, Arena);  // builtins.cpp
 static i32      b_eval(Shell *, Str *, iz, Arena);
 static i32      b_source(Shell *, Str *, iz, Arena);
 static i32      b_command(Shell *, Str *, iz, Arena);
+static Str      declcompound(Shell *, Arena, Word *cmd, Word *w);  // builtins.cpp
 static void     edrelease(Shell *, Editor *up);  // edit.cpp
 static void     joinpsubs(Shell *);
 static void     closeall(Shell *);
@@ -3300,7 +3301,8 @@ struct Temps {
     Str   *names;  // bound now, the innermost last
     iz     n;
     Str   *argv;   // once runprogram undoes them, its argv (undotemps)
-    b32    keep;   // a stage or job's builtin or function: never unbound
+    i32    keep;   // a stage or job's command: never unbound (1), or
+                   // until the next simple command ends (2, keeptemps)
 };
 
 static void poptemps(Shell *sh, Temps *tb)
@@ -3308,23 +3310,29 @@ static void poptemps(Shell *sh, Temps *tb)
     while (tb && !tb->keep && tb->n) poptemp(sh, tb->names[--tb->n]);
 }
 
-// The xtrace of a declaration builtin given a literal name=(...): bash
-// assigns and traces those while the words expand, then traces the
-// command with each as its name alone. The builtin prints this once it
-// has assigned them (declarelike), else runsimple1 does.
-struct DeclTrace {
-    Assign *as;  // the temporary bindings
-    iz      nassign;
-    Str    *argv;
-    iz      argc;
-};
-
-static void tracedecl(Shell *sh, Arena a, DeclTrace *t)
+// A forked builtin's bindings stay (Temps.keep), as bash's temporary
+// environment in its child, which only the next simple command to end
+// drops: its EXIT action's first. Their names go to the store, which
+// its level discards. Out of line, as dropkept, for runsimple's frame.
+[[gnu::noinline]]
+static void keeptemps(Shell *sh, Temps *tb)
 {
-    for (iz i = 0; i < t->nassign; i++) {
-        traceassign(sh, a, t->as[i].name, 0, t->as[i].bound);  // as bound
-    }
-    tracewords(sh, a, t->argv, t->argc);
+    if (!tb || tb->keep!=2 || !tb->n) return;
+    Store *st = sh->store;
+    sh->keptnames = (Str *)salloc(st, tb->n*(iz)sizeof(Str));
+    for (iz i = 0; i < tb->n; i++) sh->keptnames[i] = sclone(st, tb->names[i]);
+    sh->nkept = tb->n;
+    tb->n = 0;
+}
+
+[[gnu::noinline]]
+static void dropkept(Shell *sh)
+{
+    Str *names = sh->keptnames;
+    iz   n     = sh->nkept;
+    sh->keptnames = 0;
+    sh->nkept     = 0;
+    while (n) poptemp(sh, names[--n]);
 }
 
 [[gnu::noinline]]
@@ -3463,6 +3471,7 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
         if (jmpset(tb->e.jmp)) {
             escleave(sh, &tb->e);
             poptemps(sh, tb);
+            keeptemps(sh, tb);
             undotemps(sh, tb->argv);
             sh->nolocwarn = tb->e.nolocwarn;
             escape(sh, tb->e.why);
@@ -3472,6 +3481,8 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
     if (tb) escleave(sh, &tb->e);
     sh->cmdnamelen = 0;
     if (last.data) bindlastarg(sh, scratch, last, who);
+    if (sh->nkept) dropkept(sh);
+    if (tb && tb->keep==2) keeptemps(sh, tb);
     checksigs(sh, scratch);
 }
 
@@ -3531,8 +3542,7 @@ static Slice<Str> envlastarg(Shell *sh, Arena *a, Slice<Str> env, Str name)
 // line, as runsimple1's frame is one per function call level.
 [[gnu::noinline]]
 static void callbuiltin(Shell *sh, Builtin *bi, Str name, Slice<Str> argv,
-                        Slice<u8> compargs, DeclTrace *dt, b32 forked, b32 special,
-                        Arena scratch)
+                        Slice<u8> compargs, b32 forked, b32 special, Arena scratch)
 {
     BOut  b     = {};
     BOut *saved = sh->bout;
@@ -3549,7 +3559,6 @@ static void callbuiltin(Shell *sh, Builtin *bi, Str name, Slice<Str> argv,
     sh->nowriteerr = 0;
     sh->bifatal    = 0;
     sh->rawstatus  = 0;
-    sh->decltrace  = dt;
     // As bash, eval, source and command run as a condition turn
     // off set -e for report_error's errors in all they run
     b32 errexitoff = sh->errexitoff;
@@ -3559,8 +3568,6 @@ static void callbuiltin(Shell *sh, Builtin *bi, Str name, Slice<Str> argv,
     }
     sh->status = runbuiltin(sh, bi, argv.data, argv.len, scratch);
     sh->errexitoff = errexitoff;
-    if (sh->decltrace) tracedecl(sh, scratch, sh->decltrace);
-    sh->decltrace = 0;
     // Only bash's forked child, which exits with the builtin's
     // own status, shows an internal one; the shell maps it to 1
     if (forked && sh->status && sh->rawstatus) {
@@ -3597,6 +3604,96 @@ static void callbuiltin(Shell *sh, Builtin *bi, Str name, Slice<Str> argv,
         writeerror(sh, scratch, bltidname(sh->bltlast), sh->writeerr);
         sh->status = 1;
     }
+}
+
+// The temporary bindings, after the words and before the trace and the
+// redirections, as bash's assign_in_env: each value is computed and
+// bound in turn (K=x A=${K#?} cmd, X=1 X+=2 cmd), and traced as bound.
+// An invalid or readonly name is reported, before its value expands,
+// and not bound; under posixfatal a readonly one escapes with why. The
+// command unbinds them however it ends. Returns those put in as. The
+// arena is runsimple1's, a its scratch. Out of line, as runsimple1's
+// frame is one per function call level.
+[[gnu::noinline]]
+static iz bindtemps(Shell *sh, Arena *a, Word *assigns, iz nassign, Assign *as, Temps *tb,
+                    b32 hooks, b32 persist, i32 why, Undo *mark)
+{
+    Arena &scratch = *a;
+    iz     nas = 0;
+    Word  *w   = assigns;
+    for (iz i = 0; i < nassign; i++, w = w->next) {
+        Assign t = splitassign(sh, a, w->text, 0);
+        if (!validvarname(t.name)) {
+            // An array element cannot be bound for one command: the
+            // command runs without it
+            Str msg = concat3(&scratch, "`", t.name, "': not a valid identifier");
+            shellerror(sh, scratch, msg);
+            continue;
+        }
+        Value *cur = lookup(sh, t.name);
+        if (cur && (cur->attrs & V_READONLY)) {
+            readonlyerror(sh, scratch, t.name);
+            if (posixfatal(sh)) {
+                // As bash, it ends the shell before a special builtin,
+                // or abandons the command before another
+                unwind(sh, mark);
+                sh->status = 1;
+                escape(sh, why);
+            }
+            continue;
+        }
+        t = splitassign(sh, a, w->text);
+        t.bound = tempvalue(sh, a, t);
+        as[nas++] = t;
+        if (persist) {
+            // the binding's value, as bash merges it into the shell
+            setvar(sh, scratch, t.name, t.bound, 0);
+            Value *v = lookup(sh, t.name);
+            if (v && (v->attrs & V_TEMP)) {
+                // as bash, also past a function call's temporary
+                // binding, so the value outlives the call
+                setvar(sh, scratch, t.name, t.bound, SV_UNDERTEMP);
+            }
+            // and exported, as the temporary binding bash makes and
+            // then keeps is
+            for (i32 k = 0; k < 2; k++) {
+                i32    f = SV_QUIET|SV_FORCE|(k ? SV_UNDERTEMP : 0);
+                Value *e = assignslot(sh, scratch, t.name, f);
+                if (e && !(e->attrs & V_EXPORT)) {
+                    e->attrs |= V_EXPORT;
+                    sh->exportgen++;
+                }
+            }
+        } else {
+            // One that fails (a readonly nameref target) is not bound,
+            // nor unbound after: that would unbind an outer binding
+            sh->nolocwarn = !hooks;
+            b32 bound = pushtemp(sh, scratch, t.name, t.bound);
+            sh->nolocwarn = 0;
+            if (bound) tb->names[tb->n++] = t.name;
+        }
+        if (sh->opt[O_XTRACE]) {
+            traceassign(sh, scratch, t.name, 0, t.bound);  // as bound
+        }
+    }
+    return nas;
+}
+
+// Temps.keep for a command in bash's child forked for a stage or job,
+// which exits once it returns, its bindings still there: no hook runs
+// again (a setlocale warning). A function, and the builtins that make
+// them a scope of their own, took them along, for good (1); after
+// another builtin they stay until the next simple command, its EXIT
+// action's first, ends (2, keeptemps).
+[[gnu::noinline]]
+static i32 keeptemp(Builtin *bi, Func *fn)
+{
+    if (!bi || fn) return 1;
+    Str scoped[] = {"source", ".", "eval", "unset", "mapfile", "readarray", "fc", "read"};
+    for (iz i = 0; i < countof(scoped); i++) {
+        if (bi->name == scoped[i]) return 1;
+    }
+    return 2;
 }
 
 static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, Temps *tb)
@@ -3692,6 +3789,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
         while (cw && cw->text=="command" && sh->opt[O_POSIX]) cw = cw->next;
         Builtin *b = !cw ? 0 : named && cw->text==first[0] ? usablebuiltin(sh, entry)
                    : usablebuiltin(sh, tablebuiltin(cw->text));
+        Word *dw = cw;  // the declaration builtin's word
         decl = b && (b->flags & B_DECL);
         b32 asgn = b && (b->flags & (B_DECL|B_ASSIGN));
         while (cw && cw->text=="command") cw = cw->next;
@@ -3702,36 +3800,9 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
             Word one2 = *w;
             one2.next = 0;
             Slice<Str> more;
-            if (decl && (w->flags & W_COMPASSIGN)) {
-                // name=(...) goes to the builtin as written, for it to
-                // expand as an array assignment
-                while (compargs.len < argv.len) compargs = push(a, compargs, (u8)0);
-                compargs = push(a, compargs, (u8)1);
-                argv = push(a, argv, w->text);
-                continue;
-            } else if (asgn && (w->flags & W_COMPASSIGN)) {
-                // alias name=(...): as bash's assignment builtins, the
-                // shell assigns the array first (to the visible variable,
-                // as declare -gG), abandons the command if that fails,
-                // and passes on only the name
-                iz  eq     = assignment(w->text, 0);
-                Str vname  = takehead(w->text, eq);
-                b32 append = vname.len && vname[vname.len-1]=='+';
-                if (append) vname = cuttail(vname, 1);
-                Str base, sub;
-                if (splitref(vname, &base, &sub)) {
-                    Arena t = *a;
-                    Str msg = concat(&t, vname, ": cannot assign list to array member");
-                    shellerror(sh, t, msg);
-                    sh->status = 1;
-                    escape(sh, ESC_DISCARD);
-                }
-                Str body = cuttail(cuthead(w->text, eq+2), 1);
-                if (!assigncompound(sh, *a, vname, body, append ? SV_APPEND : 0, 1)) {
-                    sh->status = 1;
-                    escape(sh, ESC_DISCARD);
-                }
-                argv = push(a, argv, vname);
+            if (asgn && (w->flags & W_COMPASSIGN)) {
+                // name=(...): assigned now, and the builtin gets the name
+                argv = push(a, argv, declcompound(sh, *a, dw, w));
                 continue;
             } else if (asgn && (w->flags & W_ASSIGNMENT)) {
                 // Brace expanded, but not split or globbed
@@ -3798,60 +3869,27 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
 
     if (tb) tb->names = alloc<Str>(a, nassign);  // see runsimple
 
-    // Expand assignment values now (bash does it after the words), and
-    // compute each binding's value once, in order, as bash's
-    // assign_in_env: a readonly variable is reported before its value
-    // is expanded, and is not bound
-    Assign *as     = alloc<Assign>(a, nassign);
-    b32     rofail = 0;
-    if (nassign) {
-        // Each sees those before it, bound for the time being, as in
-        // K=x A=${K#?} cmd or X=1 X+=2 cmd
-        Word *w    = assigns;
-        iz    kept = 0;
-        sh->nolocwarn = 1;  // not yet the command's binding
-        for (iz i = 0; i < nassign; i++, w = w->next) {
-            Assign t   = splitassign(sh, a, w->text, 0);
-            Value *cur = lookup(sh, t.name);
-            if (cur && (cur->attrs & V_READONLY)) {
-                readonlyerror(sh, scratch, t.name);
-                rofail = 1;
-                continue;
-            }
-            t = splitassign(sh, a, w->text);
-            b32 valid = validvarname(t.name);
-            if (valid) t.bound = tempvalue(sh, a, t);
-            as[kept++] = t;
-            // A later word reads it by expansion, or a later += by the
-            // old value or by arithmetic
-            b32 later = 0;
-            iz  left  = nassign - i - 1;
-            for (Word *v = w->next; v && !later; v = v->next, left--) {
-                later = find(v->text, "$")>=0 || find(v->text, "`")>=0;
-                iz eq = left>0 ? assignment(v->text, 0) : 0;
-                later |= eq>0 && v->text[eq-1]=='+';
-            }
-            if (later && valid && pushtemp(sh, *a, t.name, t.bound)) {
-                tb->names[tb->n++] = t.name;
-            }
-        }
-        nassign = kept;
-        poptemps(sh, tb);
-        sh->nolocwarn = 0;
+    // What runs, found before the redirections, as bash does. Checked
+    // again: an expansion since may have run enable or shopt
+    Func    *fn = 0;
+    Builtin *bi = named ? usablebuiltin(sh, entry) : findbuiltin(sh, name);
+    b32 special = bi && (bi->flags & B_SPECIAL);
+    if (!(special && sh->opt[O_POSIX])) {
+        // as bash, a name with a slash too, outside POSIX mode
+        if (!sh->opt[O_POSIX] || !haspath(sh, name)) fn = findfunc(sh, name);
     }
-    {
-        // An array element cannot be bound for one command: reported,
-        // and the command runs without it, as in bash
-        iz kept = 0;
-        for (iz i = 0; i < nassign; i++) {
-            if (validvarname(as[i].name)) {
-                as[kept++] = as[i];
-            } else {
-                Str msg = concat3(&scratch, "`", as[i].name, "': not a valid identifier");
-                shellerror(sh, scratch, msg);
-            }
-        }
-        nassign = kept;
+    b32 persist = special && sh->opt[O_POSIX];
+    // A binding runs its variable's hook (a setlocale warning) as it is
+    // made only for a builtin or function, as bash's assign_in_env
+    b32 hooks = nassign && (bi || fn || findfunc(sh, name));
+
+    Assign *as = alloc<Assign>(a, nassign);
+    nassign = bindtemps(sh, a, assigns, nassign, as, tb, hooks, persist,
+                        special&&!fn ? ESC_FATAL : ESC_DISCARD, mark);
+    if (tb && forked) tb->keep = keeptemp(bi, fn);
+
+    if (sh->opt[O_XTRACE]) {
+        tracewords(sh, scratch, argv.data, argv.len);
     }
 
     if (asyncnull) {
@@ -3859,32 +3897,6 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
         // command reads /dev/null
         File *f = devnull(sh, scratch);
         if (f) fdset(sh, 0, f, 0, a);
-    }
-
-    DeclTrace *dt = 0;
-    if (sh->opt[O_XTRACE]) {
-        b32 comp = 0;
-        for (iz i = 0; i < compargs.len; i++) comp |= compargs[i] == 1;
-        dt = comp ? alloc<DeclTrace>(a) : 0;
-        if (dt) {
-            dt->as      = as;
-            dt->nassign = nassign;
-            dt->argv    = alloc<Str>(a, argv.len);
-            dt->argc    = argv.len;
-            for (iz i = 0; i < argv.len; i++) {
-                Str w = argv[i];
-                if (i<compargs.len && compargs[i]==1) {
-                    w = takehead(w, assignment(w, 0));
-                    if (w.len && w[w.len-1]=='+') w = cuttail(w, 1);
-                }
-                dt->argv[i] = w;
-            }
-        } else {
-            for (iz i = 0; i < nassign; i++) {
-                traceassign(sh, scratch, as[i].name, 0, as[i].bound);  // as bound
-            }
-            tracewords(sh, scratch, argv.data, argv.len);
-        }
     }
 
     // Job control shorthand: "%N" is "fg %N", and "%N &" is "bg %N",
@@ -3898,8 +3910,10 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
         for (iz i = 0; i < argv.len; i++) v = push(a, v, argv[i]);
         argv     = v;
         name     = argv[0];
-        named    = 0;
         compargs = {};
+        fn       = 0;
+        bi       = findbuiltin(sh, name);
+        special  = 0;
     }
 
     // exec without a command makes its redirections permanent
@@ -3921,9 +3935,12 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
     b32 redirected = jobspec || doredirs(sh, n->redirs, a, keep, child);
     sh->bltname = savedname;
     if (!redirected) {
-        if (dt) tracedecl(sh, scratch, dt);
         unwind(sh, mark);
         sh->status = sh->redirfail;
+        i32 line = sh->line;  // as below
+        sh->line = sh->ctlline;
+        poptemps(sh, tb);
+        sh->line = line;
         Builtin *sb = findbuiltin(sh, name);
         if (sb && (sb->flags & B_SPECIAL) && posixfatal(sh)) {
             sh->exiting = 1;  // as bash: a special builtin's, fatal
@@ -3942,28 +3959,6 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
         mark = sh->undo;
     }
 
-    // Checked again: an expansion since may have run enable or shopt
-    Func    *fn = 0;
-    Builtin *bi = named ? usablebuiltin(sh, entry) : findbuiltin(sh, name);
-    b32 special = bi && (bi->flags & B_SPECIAL);
-    if (!(special && sh->opt[O_POSIX]) && !jobspec) {
-        // as bash, a name with a slash too, outside POSIX mode
-        if (!sh->opt[O_POSIX] || !haspath(sh, name)) fn = findfunc(sh, name);
-    }
-    if (dt && (fn || !bi)) {
-        tracedecl(sh, scratch, dt);  // no declaration builtin to wait for
-        dt = 0;
-    }
-
-    if (posixfatal(sh) && rofail) {
-        // As bash, an assignment that failed (reported as it expanded)
-        // ends the shell before a special builtin, or abandons the
-        // command before another
-        unwind(sh, mark);
-        sh->status = 1;
-        escape(sh, special&&!fn ? ESC_FATAL : ESC_DISCARD);
-    }
-
     if (fn || bi) {
         // bash's child for a stage counts as a subshell once its words
         // expand, so only for what a builtin or function runs; the
@@ -3978,41 +3973,6 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
             sh->redirs.lexer = sh->lexer;
             sh->redirs.src   = sh->srcframes;
         }
-        // Temporary bindings for builtins and functions
-        b32 persist = special && sh->opt[O_POSIX];
-        for (iz i = 0; i < nassign; i++) {
-            if (persist) {
-                // the binding's value, as bash merges it into the shell
-                setvar(sh, scratch, as[i].name, as[i].bound, 0);
-                Value *v = lookup(sh, as[i].name);
-                if (v && (v->attrs & V_TEMP)) {
-                    // as bash, also past a function call's temporary
-                    // binding, so the value outlives the call
-                    setvar(sh, scratch, as[i].name, as[i].bound, SV_UNDERTEMP);
-                }
-                // and exported, as the temporary binding bash makes and
-                // then keeps is
-                for (i32 k = 0; k < 2; k++) {
-                    i32    f = SV_QUIET|SV_FORCE|(k ? SV_UNDERTEMP : 0);
-                    Value *t = assignslot(sh, scratch, as[i].name, f);
-                    if (t && !(t->attrs & V_EXPORT)) {
-                        t->attrs |= V_EXPORT;
-                        sh->exportgen++;
-                    }
-                }
-            } else {
-                // One that fails (readonly) is not bound, nor unbound
-                // after: that would unbind an outer binding of the name
-                Str value = as[i].bound;
-                if (pushtemp(sh, scratch, as[i].name, value)) {
-                    tb->names[tb->n++] = as[i].name;
-                }
-            }
-        }
-        // bash's child forked for a stage or job exits once the builtin
-        // or function returns, these still bound: no hook runs again (a
-        // setlocale warning), and its EXIT trap still sees them
-        if (tb) tb->keep = forked;
         if (fn) {
             // Until its first simple command ends, a function's name
             // prefixes errors from declaration arguments name=(...)
@@ -4023,7 +3983,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
             callfunction(sh, fn, argv.data, argv.len, scratch);
             sh->line = fnline(sh, n->line);
         } else {
-            callbuiltin(sh, bi, name, argv, compargs, dt, forked, special, scratch);
+            callbuiltin(sh, bi, name, argv, compargs, forked, special, scratch);
         }
         sh->redirs = redirs;
         // bash binds $_ while a builtin's temporary bindings last (they
@@ -4060,18 +4020,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
         // Also bound in the shell while the program is looked up, as
         // bash's temporary environment: a PATH there is searched, and
         // command_not_found_handle sees them all
-        // (no setlocale warning: bash sets the locale only in the child)
-        Str *names   = alloc<Str>(&scratch, nassign);  // those bound
-        iz   npushed = 0;
-        sh->nolocwarn = 1;
-        for (iz i = 0; i < nassign; i++) {
-            Str value = as[i].bound;
-            if (pushtemp(sh, scratch, as[i].name, value)) {
-                names[npushed++]   = as[i].name;
-                tb->names[tb->n++] = as[i].name;
-            }
-        }
-        sh->nolocwarn = 0;
+        Str *names   = tb ? tb->names : 0;
+        iz   npushed = tb ? tb->n : 0;
         env = envlastarg(sh, a, env, name);
         sh->childsig = 0;
         sh->spawnto = direct;

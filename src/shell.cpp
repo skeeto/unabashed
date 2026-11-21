@@ -398,7 +398,6 @@ struct Var;
 struct Func;
 struct Value;
 struct PcCur;       // pcomplete.cpp
-struct DeclTrace;   // exec.cpp
 
 struct Args {        // positional parameters
     Str *v;
@@ -851,9 +850,9 @@ struct Shell {
     iz       stackmax;     // usable stack below it
     i32      optchar;      // getopts: next option letter in $OPTIND's word
     b32      ingetopts;    // its own OPTIND updates keep the position
-    Slice<u8> compargs;    // declaration builtin: which args are name=(...)
-    DeclTrace *decltrace;  // and its xtrace line, while it waits (set
-                           // before each builtin runs)
+    Slice<u8> compargs;    // which args are name[sub] references (runsimple1)
+    Str     *keptnames;    // a forked builtin's temporary bindings, still
+    iz       nkept;        // bound (keeptemps)
     u8       cmdname[32];  // bash's this_command_name: a function's name
     i32      tracefd;      // BASH_XTRACEFD, or 2 (or 0 when never set)
     Str      lastarg;      // $_, in a store buffer of lastargcap bytes,
