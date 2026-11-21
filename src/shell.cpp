@@ -738,6 +738,11 @@ struct Shell {
     i32      funcdepth;
     i32      levelfuncs;   // funcdepth where this (sub)shell began
     Lexer   *levellexer;   // and its parser then, outside its own parses
+    i32      penest;       // its parses not a reader's (eval, source, -c,
+    i32      peline;       // ...) running, and the line at the outermost's
+                           // start, which bash's puts back as it exits
+    i32      exitline;     // plus one: the line where bash's exit_shell
+                           // ran the EXIT trap at once, unwinding nothing
     Redirs   redirs;       // the innermost such call
     i32      funcline;     // the running function's body starts here
     b32      nowriteerr;   // the builtin ignores a failed write (help)
@@ -1212,6 +1217,7 @@ static void reportexit(Shell *sh)
         sh->status     = sh->status ? sh->status : 1;
         sh->exiting    = 1;
         sh->exitcalled = 1;
+        sh->exitline   = sh->line + 1;
         escape(sh, ESC_EXIT);
     }
 }

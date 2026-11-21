@@ -477,6 +477,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->exitran   = 0;
     c->levelfuncs = c->funcdepth;
     c->levellexer = 0;
+    c->penest     = 0;
     c->redirs     = {};
     c->errundo    = 0;
     c->intrap   = 0;

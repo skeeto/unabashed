@@ -734,6 +734,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sh->exitran  &= j->comsub;  // bash's comsub in an EXIT action runs none
     sh->levelfuncs = sh->funcdepth;
     sh->levellexer = sh->lexer;
+    sh->penest     = 0;
     sh->redirs     = {};
     sh->jobctl   &= j->comsub;  // as bash, which keeps it in a comsub
     sh->incomsub |= j->comsub;
@@ -767,6 +768,8 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     Undo *body = sh->undo;  // set -e undoes what lies past the capture
     if (!jmpset(e.jmp)) {
         runjob(sh, j, scratch);
+        // bash's line, put back after each command, as only some set it
+        if (j->kind == SUB_NODE) sh->line = sh->ctlline;
     } else if (e.why==ESC_ABORT && (j->kind==SUB_SOURCE || sh->cflag)) {
         // As bash, whose comsub (and -c) text is abandoned with status
         // 1, while a script's reader keeps the command's
@@ -2873,6 +2876,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->exitran   = 0;
         sh->levelfuncs = 0;
         sh->levellexer = sh->lexer;
+        sh->penest     = 0;
         sh->redirs     = {};
         sh->catchfatal = 1;
         sh->subchild   = 1;
@@ -2953,6 +2957,7 @@ static void checkerrexit(Shell *sh)
     if (sh->status && sh->opt[O_ERREXIT] && !sh->noerrexit && !sh->exiting) {
         sh->exiting   = 1;
         sh->errexited = ERREXIT_ALL;
+        sh->line      = sh->ctlline;  // bash's, put back after the command
         if (sh->traps) errexittrap(sh);
         escape(sh, ESC_EXIT);
     }
@@ -5438,7 +5443,8 @@ static void checkcomplist(Shell *sh, Arena scratch, Str body)
 // the parse in runsource1, whose frame it would otherwise grow. The
 // control line and ERR's line that its commands set go back too, as
 // bash protects line_number and line_number_for_err_trap there (on an
-// escape, the catcher's Escape state puts the control line back).
+// escape, the catcher's Escape state puts the control line back). So
+// does the line, as runsource1 does when it returns.
 static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i32 line,
                      b32 (*fill)(void *, Lexer *), void *fillctx, b32 comsub, b32 hist)
 {
@@ -5455,6 +5461,8 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
     }
     Lexer  *outer   = sh->lexer;
     Str     oname   = sh->iname;
+    i32     oline   = sh->line;
+    i32     nest    = sh->penest;
     i32     ctlline = sh->ctlline;
     i32     errline = sh->errline;
     CmdSave cmd     = savecmd(sh, &scratch);
@@ -5464,6 +5472,8 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
         escleave(sh, e);
         sh->lexer   = outer;
         sh->iname   = oname;
+        sh->line    = oline;  // as runsource1's normal end
+        sh->penest  = nest;
         sh->errline = errline;
         restorecmd(sh, cmd);
         if (e->why==ESC_EXIT && errexitdue(sh, 0)) {
@@ -5528,6 +5538,9 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     L->prompt  = reader && fill && sh->interactive;
     L->reader  = reader;
     L->undo    = sh->undo;
+    // As bash's parse_and_execute, the line goes back when it ends
+    i32 entryline = sh->line;
+    if (!reader && !sh->penest++) sh->peline = entryline;
     b32 prettynl = 0;
     for (;;) {
         Arena unit = *L->a;  // reset after each complete line
@@ -5556,7 +5569,10 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
         if (r.status==PARSE_EOF && sh->prettyprint && !outer && !prettynl) {
             fdwrite(sh, 1, "\n");
         }
-        if (r.status == PARSE_EOF) break;
+        if (r.status == PARSE_EOF) {
+            if (reader) sh->line = L->lineno;  // past the end, as bash's
+            break;
+        }
         if (r.status == PARSE_ERROR) {
             if (L->overflow) {
                 sh->status = 139;
@@ -5680,7 +5696,11 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     if (reader || !outer) {
         keepcmdtext(sh, beg, end);  // else runsource puts back its own
     }
-    sh->lexer = outer;
-    sh->iname = oname;
+    sh->lexer  = outer;
+    sh->iname  = oname;
+    if (!reader) {
+        sh->penest--;
+        sh->line = entryline;
+    }
     return sh->status;
 }

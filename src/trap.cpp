@@ -268,8 +268,9 @@ static void copytraps(Shell *c, Shell *sh)
 // no EXIT action, if this is its).
 static void trapsigexit(Shell *sh, i32 status)
 {
-    sh->status  = status ? status : 1;
-    sh->exiting = 1;
+    sh->status   = status ? status : 1;
+    sh->exiting  = 1;
+    sh->exitline = sh->line + 1;  // its EXIT action runs at this line
     escape(sh, ESC_EXIT);
 }
 
@@ -328,8 +329,12 @@ static i32 runtrap(Shell *sh, i32 idx)
     if (!escaped) {
         if (!trapsig && sh->opt[O_ERREXIT]) trapsigexit(sh, status);
         // As bash, a signal's action is numbered from line 1, but DEBUG,
-        // ERR and RETURN go on from the current line
-        runsource(sh, cmd, sh->iname, a, 0, idx>=TRAP_DEBUG ? sh->line : 1);
+        // ERR and RETURN go on from the current line; its syntax errors
+        // name the kind of trap
+        Str name = idx==TRAP_DEBUG  ? Str("debug trap")  :
+                   idx==TRAP_ERR    ? Str("error trap")  :
+                   idx==TRAP_RETURN ? Str("return trap") : Str("trap");
+        runsource(sh, cmd, name, a, 0, idx>=TRAP_DEBUG ? sh->line : 1);
     }
     i32 own = sh->status;
     escleave(sh, &e);
@@ -383,7 +388,11 @@ static b32 signoop(Shell *sh, i32 sig)
 {
     switch (sig) {
     case 9: case 16: case 27: case 29: case 30: break;
-    default: if (sig < 32) runexittrap(sh, scratch);
+    default:
+        if (sig < 32) {
+            sh->exitline = sh->line + 1;  // where it is: nothing unwound
+            runexittrap(sh, scratch);
+        }
     }
     sh->killsig = sig;
     sh->status  = 128 + sig;
@@ -696,13 +705,21 @@ static void runexittrap(Shell *sh, Arena)
     sh->trapstatus = status;
     sh->trapfuncs  = sh->funcdepth;
     sh->intrap++;
+    // Each parse_and_execute bash left on its way here (-c, eval,
+    // source, a command substitution) put back the line it began at,
+    // unless its exit_shell ran this at once (report_error, a signal)
+    if (sh->exitline) {
+        sh->line = sh->exitline - 1;
+    } else if (sh->penest) {
+        sh->line = sh->peline;
+    }
     i32 line    = sh->line;
     b32 trapsig = pushtemp(sh, scratch, "BASH_TRAPSIG", "0", 1);
     b32 errexit = sh->opt[O_ERREXIT];
     b32 escaped = jmpset(e.jmp);
     if (!escaped) {
         if (!trapsig && errexit) trapsigexit(sh, status);
-        runsource(sh, cmd, sh->iname, scratch, 0, 1);  // as bash: line 1
+        runsource(sh, cmd, "exit trap", scratch, 0, 1);  // as bash: line 1
     }
     // However the action ended: the depth, intrap and the rest go back
     escresume(sh, &e);

@@ -762,7 +762,10 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
     i32 status = 0;
     if (jmpset(e->jmp)) {
         escleave(sh, e);
-        if (e->why==ESC_EXIT && sh->exitcalled) {
+        // Out of any function, a parse_and_execute around the file (-c,
+        // eval) that exit leaves pops it first, unlike bash's reader
+        b32 popped = !sh->funcdepth && sh->penest && !sh->exitline;
+        if (e->why==ESC_EXIT && sh->exitcalled && !popped) {
             // As bash, exit runs the EXIT trap still in the file: its
             // BASH_SOURCE and positional parameters
             sh->exitcalled = 0;
