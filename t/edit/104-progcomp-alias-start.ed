@@ -1,0 +1,15 @@
+# With point at the start of the command name (after blanks) no compspec
+# runs, as bash's: here progcomp_alias once shifted point before the
+# line's start and crashed. Past the name, the alias's value takes its
+# place and point moves with the text after it.
+size 10 70
+rc PS1='$ '
+rc shopt -s progcomp_alias; alias listing=ls
+rc f() { calls+="[$1 $COMP_POINT $COMP_LINE]"; COMPREPLY=(zz); }; complete -F f ls lst
+keys   listing\C-a\C-f\C-f\t
+snap
+keys \C-e x\t
+snap
+keys \C-a\C-k  lst\C-a\C-f\C-f\t
+keys \C-a\C-k
+keys echo "$calls"\r

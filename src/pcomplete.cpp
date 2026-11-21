@@ -1453,8 +1453,13 @@ static PcLive pcrun(Shell *sh, Arena *a, PcCtx *x)
             iz  n = 0;
             while (n<v.len && !compin("()<>;&| \t\n", v[n])) n = pcscan(v, n);
             if (!n) break;
+            // Point past the name moves with the text after it; one
+            // within the name (pclive passes none) stays within the
+            // new command name
+            iz point  = x->point;
+            x->point  = point>=x->cmd.len ? point + v.len - x->cmd.len
+                      : point<n           ? point : n;
             x->line   = concat(a, v, cuthead(x->line, x->cmd.len));
-            x->point += v.len - x->cmd.len;
             x->cmd    = takehead(v, n);
             continue;
         }
@@ -1531,8 +1536,8 @@ static PcLive pclive(Editor *ed, Shell *sh, Comp *c, b32 *cmdpos)
         *cmdpos = 1;  // before the command name, at column 0
     } else if (!word.len && !point && (hasname ? s1>0 : !assign && !s)) {
         key = pckeys[1];  // an empty line, or blanks then a command
-    } else if (!word.len && hasname && point<s1) {
-        // in the blanks before the command name
+    } else if (!word.len && hasname && point<=s1) {
+        // in the blanks before the command name, or at its start
     } else if (hasname && s1==ws && e1==point && e==line.len &&
                line.len && !pcspace(line[line.len-1])) {
         *cmdpos = name == word;  // the command name itself, at the end

@@ -1,0 +1,11 @@
+== snap 1
+$   listing
+@ 0,4 bell 1
+== snap 2
+$   listing zz
+@ 0,15 bell 1
+== snap 3
+$ echo "$calls"
+[ls 4 ls x]
+$
+@ 2,2 bell 2
