@@ -931,6 +931,17 @@ static void printfunc(Shell *sh, Arena *a, Str name, Func *f)
     if (f->attrs) printfuncname(sh, a, name, f);
 }
 
+// The compargs flag of the running builtin's args[i]. Flags follow the
+// whole command's words, which command and builtin pass on shifted;
+// other arguments have none.
+static u8 compflag(Shell *sh, Str *args, iz i)
+{
+    Str *all = sh->bltargs;
+    if (!all || args<all || args>=all+sh->nbltargs) return 0;
+    iz k = args - all + i;
+    return k<sh->compargs.len ? sh->compargs[k] : 0;
+}
+
 // declare, typeset, local, export and readonly share this.
 static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                        u32 baseon, b32 local)
@@ -1204,7 +1215,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             continue;
         }
         Str  val      = eq<a.len ? cuthead(a, eq+1) : Str{};
-        b32  wordcomp = i<sh->compargs.len && sh->compargs[i];
+        b32  wordcomp = compflag(sh, args, i) == 1;
         if (name=="export" || name=="readonly") {
             // As bash, -a and -A make or convert an array only with a
             // value: export -a x and readonly -A x leave x as it is
@@ -1670,7 +1681,7 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
         Str rn0, rs0;
         b32 valid = validvarname(base) && (!br.ok || splitref(name, &rn0, &rs0));
         if (!valid && vars) {
-            if (i<sh->compargs.len && sh->compargs[i]==2) {
+            if (compflag(sh, args, i) == 2) {
                 // its subscript was quoted as it expanded: show it bare
                 Buf b(&scratch, name.len);
                 for (iz k = 0; k < name.len; k++) {
@@ -1700,7 +1711,7 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
         Str rn, rs;
         if (br.ok && splitref(name, &rn, &rs) && !refs) {
             b32 raw = sh->shopt[S_ARRAY_EXPAND_ONCE] &&
-                      !(i<sh->compargs.len && sh->compargs[i]==2);
+                      compflag(sh, args, i)!=2;
             status |= unsetelem(sh, scratch, rn, rs, raw);
             continue;
         }
