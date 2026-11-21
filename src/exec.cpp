@@ -3193,13 +3193,31 @@ static b32 forksfirst(Shell *sh, Slice<Str> argv, iz ex)
 // $_: after each simple command, its last word (empty for assignments
 // alone), never exported. The dynamic variable _ reads it from a buffer,
 // so binding is a copy; only after a script assigned, unset or declared
-// _ is the variable itself made dynamic again, as bash rebinds it.
+// _ is the variable itself made dynamic again (or assigned), as bash
+// rebinds it.
 static void bindlastarg(Shell *sh, Arena scratch, Str last)
 {
+    Store *st = sh->store;
+    // Given attributes that change an assignment, _ is no longer the
+    // dynamic $_ but assigned each time as any variable, as bash does:
+    // through a nameref, to element 0 of an array, converted (-i, -u,
+    // -l, -c), and not over a readonly one, which is reported. Made so,
+    // the dynamic one keeps its value (readonly _).
+    b32 assign = 0;
+    if (sh->lastargdirty) {
+        u32    conv = V_READONLY|V_INTEGER|V_LOWER|V_UPPER|V_CAPITAL|V_NAMEREF;
+        Value *raw  = rawlookup(sh, "_");
+        assign = raw && (raw->arr || (raw->attrs & conv));
+        if (assign && raw->dyn==DYN_UNDERSCORE) {
+            raw = ownvalue(sh, &findvar(sh, "_")->top);
+            raw->str = sclone(st, sh->lastarg.data ? sh->lastarg : Str(""));
+            raw->dyn = 0;
+        }
+    }
+
     // A buffer below the store's mark belongs to the level around a
     // synchronous subshell, which gets it back as it was: replace it
-    Store *st  = sh->store;
-    b32    own = sh->lastarg.data && (byte *)sh->lastarg.data>=st->mark;
+    b32 own = sh->lastarg.data && (byte *)sh->lastarg.data>=st->mark;
     if (!own || last.len>sh->lastargcap) {
         if (own) sfree(st, sh->lastarg.data, sh->lastargcap);
         // Doubling grows this level's own buffer: a fresh one in a
@@ -3212,20 +3230,30 @@ static void bindlastarg(Shell *sh, Arena scratch, Str last)
     }
     copybytes(sh->lastarg.data, last.data, last.len);
     sh->lastarg.len = last.len;
-    if (sh->lastargdirty) {
-        sh->lastargdirty = 0;
+    if (assign) {
+        // It stays so (lastargdirty), and as bash, the variable assigned
+        // is unexported. The word may view a variable that -i's
+        // evaluation, running code, changes: a copy.
+        Str word = clone(&scratch, last);
+        setvar(sh, scratch, "_", word);
         Value *v = lookup(sh, "_");
-        if (v && (v->attrs & V_READONLY)) return;
-        if (!v || v->arr) {
-            unsetvar(sh, "_");
-            v = setattrs(sh, "_", 0, 0);
-        } else {
-            // A binding the level around a subshell owns gets a copy
+        if (v && (v->attrs & V_EXPORT)) {
             Str name = "_";
             if (rawlookup(sh, name) != v) name = resolveref(sh, name, 0, 1).name;
             Value **slot = &findvar(sh, name)->top;
             while (*slot != v) slot = &(*slot)->below;
-            v = ownvalue(sh, slot);
+            ownvalue(sh, slot)->attrs &= ~V_EXPORT;
+            sh->exportgen++;
+        }
+    } else if (sh->lastargdirty) {
+        sh->lastargdirty = 0;
+        // Unset, or a plain scalar (neither nameref nor array)
+        Value *v = rawlookup(sh, "_");
+        if (!v) {
+            v = setattrs(sh, "_", 0, 0);
+        } else {
+            // A binding the level around a subshell owns gets a copy
+            v = ownvalue(sh, &findvar(sh, "_")->top);
         }
         Str old = v->str;
         v->str    = {};

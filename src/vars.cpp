@@ -1395,6 +1395,9 @@ static Value *setattrs(Shell *sh, Str name, u32 on, u32 off)
     if ((on|off) & V_EXPORT) {
         sh->exportgen++;
     }
+    if (name.len==1 && name[0]=='_') {
+        sh->lastargdirty = 1;  // readonly _ and the like: see bindlastarg
+    }
     return val;
 }
 

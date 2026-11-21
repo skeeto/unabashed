@@ -734,7 +734,10 @@ What the pass changed, besides small fixes (see the commit log):
   buffer that `bindlastarg` overwrites after each simple command (never
   in place when the buffer belongs to the level around a synchronous
   subshell, below the store's mark). Assigning, unsetting or declaring
-  `_` makes it plain until the next binding restores it. Programs get
+  `_` makes it plain until the next binding restores it. Given
+  attributes that change an assignment (nameref, array, readonly, -i,
+  -u, -l, -c), it stays plain and each binding assigns it as bash's
+  `bind_variable` does, unexporting the variable assigned. Programs get
   `_=PATH` in their environment.
 - **extdebug**: a DEBUG action returning non-zero skips the command (2
   also returns from a function); DEBUG runs as a function starts and
