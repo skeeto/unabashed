@@ -3519,9 +3519,12 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
                     }
                 }
             } else {
+                // One that fails (readonly) is not bound, nor unbound
+                // after: that would unbind an outer binding of the name
                 Str value = tempvalue(sh, &scratch, as[i]);
-                pushtemp(sh, scratch, as[i].name, value);
-                tb->names[tb->n++] = as[i].name;
+                if (pushtemp(sh, scratch, as[i].name, value)) {
+                    tb->names[tb->n++] = as[i].name;
+                }
             }
         }
         if (fn) {
@@ -3592,6 +3595,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         Slice<Str> env = makeenv(sh, a);
         for (iz i = 0; i < nassign; i++) {
             Str tname = tempname(sh, as[i].name);  // what a nameref names
+            Value *cur = rawlookup(sh, tname);
+            if (cur && (cur->attrs & V_READONLY)) continue;  // its binding fails below
             Str entry = concat3(a, tname, "=", tempvalue(sh, a, as[i]));
             b32 replaced = 0;
             for (iz k = 0; k < env.len; k++) {
@@ -3607,11 +3612,15 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         // bash's temporary environment: a PATH there is searched, and
         // command_not_found_handle sees them all
         // (no setlocale warning: bash sets the locale only in the child)
+        Str *names   = alloc<Str>(&scratch, nassign);  // those bound
+        iz   npushed = 0;
         sh->nolocwarn = 1;
         for (iz i = 0; i < nassign; i++) {
             Str value = tempvalue(sh, &scratch, as[i]);
-            pushtemp(sh, scratch, as[i].name, value);
-            tb->names[tb->n++] = as[i].name;
+            if (pushtemp(sh, scratch, as[i].name, value)) {
+                names[npushed++]   = as[i].name;
+                tb->names[tb->n++] = as[i].name;
+            }
         }
         sh->nolocwarn = 0;
         // As bash, a program finds its own path in $_
@@ -3630,10 +3639,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         sh->childsig = 0;
         sh->spawnto = direct;
         sh->attail  = n==sh->tailnode && sh->taillevel==sh->subshell+1;
-        Str *names = alloc<Str>(&scratch, nassign);
-        for (iz i = 0; i < nassign; i++) names[i] = as[i].name;
         sh->undonames = names;
-        sh->nundo     = nassign;
+        sh->nundo     = npushed;
         sh->undoargv  = argv.data;
         if (tb) {
             tb->n    = 0;  // runprogram's to undo now (undotemps)
@@ -3646,7 +3653,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             // Not spawned here: a stage that ends in the program, as
             // bash's child that execs, never restores (and so is quiet)
             sh->nolocwarn = !!direct;
-            for (iz i = nassign-1; i >= 0; i--) poptemp(sh, as[i].name);
+            for (iz i = npushed-1; i >= 0; i--) poptemp(sh, names[i]);
             sh->nolocwarn = 0;
             sh->nundo     = 0;
         }
