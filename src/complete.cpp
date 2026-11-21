@@ -1412,6 +1412,24 @@ static u8 compmode(Editor *ed, i32 fn)
     return CM_TAB;
 }
 
+// What menu-complete keeps across keys: the attempt's strings, copied
+// out of the scratch arena it ran in
+static void compkeep(Comp *c, Arena *a)
+{
+    c->a      = a;
+    c->line   = clone(a, c->line);
+    c->word   = clone(a, c->word);
+    c->udir   = clone(a, c->udir);
+    c->odir   = clone(a, c->odir);
+    c->lcd    = clone(a, c->lcd);
+    c->breaks = clone(a, c->breaks);
+    Slice<Str> m = {};
+    m.data = alloc<Str>(a, c->m.len);
+    m.len  = m.cap = c->m.len;
+    for (iz i = 0; i < m.len; i++) m[i] = clone(a, c->m[i]);
+    c->m = m;
+}
+
 // menu-complete and menu-complete-backward (§8), and bash's
 // dabbrev-expand, which also continues a menu-complete
 static void edmenu(Editor *ed, Shell *sh, i32 fn, i32 count)
@@ -1425,11 +1443,13 @@ static void edmenu(Editor *ed, Shell *sh, i32 fn, i32 count)
             : ed->shellline         ? CX_SHELL
             :                         CX_FILE;
     if (!ed->menu) ed->menu = alloc<Comp>(&ed->perm);
+    // Each key works in the scratch arena; only what later keys use is
+    // kept in cmem (compkeep), not the generation's temporaries
+    Arena scratch = *scratchat(sh, sh->capdepth);  // claimed by edcomplete
     if (!cont) {
-        ed->cmem = {(byte *)(ed->cmem.mem+1), ed->cmem.end, ed->cmem.mem};
         Comp *c = ed->menu;
         *c = {};
-        c->a      = &ed->cmem;
+        c->a      = &scratch;
         c->line   = {ed->line.data, ed->point};
         c->append = ' ';
         c->breaks = compbreaks(sh, c->a);
@@ -1441,6 +1461,9 @@ static void edmenu(Editor *ed, Shell *sh, i32 fn, i32 count)
         c->word = cuthead(c->line, c->start);
         c->m = compgenerate(ed, sh, c, gen);
         compprocess(ed, sh, c);
+        ed->cmem = {(byte *)(ed->cmem.mem+1), ed->cmem.end, ed->cmem.mem};
+        compkeep(c, &ed->cmem);
+        c->a = &scratch;  // for the rest of this key
         ed->menudone = 0;
         ed->menuidx  = 0;
         if (!c->m.len) {
@@ -1477,6 +1500,7 @@ static void edmenu(Editor *ed, Shell *sh, i32 fn, i32 count)
     i32 total = (i32)c->m.len + 1;
     ed->menuidx = ((ed->menuidx + count) % total + total) % total;
     Comp t = *c;
+    t.a     = &scratch;
     t.end   = ed->point;
     t.quote = c->quote;
     if (ed->menuidx == 0) {
