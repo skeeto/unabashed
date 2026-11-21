@@ -3236,6 +3236,20 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
     checksigs(sh, scratch);
 }
 
+// Does a command word name a builtin whose name[sub] arguments are
+// array references, bash's arrayvar_builtins?
+static b32 arrayvarbuiltin(Shell *sh, Str name)
+{
+    static Str names[] = {
+        "declare", "let", "local", "printf", "read", "test", "[",
+        "typeset", "unset", "wait",
+    };
+    for (iz i = 0; i < countof(names); i++) {
+        if (name == names[i]) return !!usablebuiltin(sh, tablebuiltin(name));
+    }
+    return 0;
+}
+
 static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
 {
     // A direct pipeline stage's program starts without waiting, but not
@@ -3301,8 +3315,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     Slice<Str> argv = {};
     Slice<u8>  compargs = {};
     b32 decl = 0;
-    // The registry entry for argv[0], found once for the declaration
-    // check and for running it, when the first word expands to argv[0]
+    // The registry entry for argv[0], found once for running it, when
+    // the first word expands to argv[0]
     Builtin *entry = 0;
     b32      named = 0;
     u32      nsubst = sh->nsubst;  // with no command, the words' comsubs count
@@ -3313,8 +3327,19 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         first = expandwords(sh, a, &one, 0);
         named = first.len > 0;
         entry = named ? tablebuiltin(first[0]) : 0;
-        Builtin *b = usablebuiltin(sh, entry);
+        // As bash (fix_assignment_words, fix_arrayref_words), the command
+        // word as written decides how the arguments expand, not what it
+        // expands to: $e unset, or "unset", is not unset here. Words
+        // "command" before it are passed over, by assignments only in
+        // POSIX mode.
+        Word *cw = rest;
+        while (cw && cw->text=="command" && sh->opt[O_POSIX]) cw = cw->next;
+        Builtin *b = !cw ? 0 : named && cw->text==first[0] ? usablebuiltin(sh, entry)
+                   : usablebuiltin(sh, tablebuiltin(cw->text));
         decl = b && (b->flags & B_DECL);
+        while (cw && cw->text=="command") cw = cw->next;
+        b32 refs  = cw && arrayvarbuiltin(sh, cw->text);
+        b32 unset = refs && cw->text=="unset";
         argv = first;
         for (Word *w = rest->next; w; w = w->next) {
             Word one2 = *w;
@@ -3330,14 +3355,14 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             } else if (decl && (w->flags & W_ASSIGNMENT)) {
                 // Brace expanded, but not split or globbed
                 more = expandwords(sh, a, &one2, XW_NOSPLIT|XW_NOGLOB|XW_ASSIGN);
-            } else if (argv.len && argv[0]=="unset" && arrayrefword(sh, *a, w->text)) {
+            } else if (unset && arrayrefword(sh, *a, w->text)) {
                 // compargs 2: its subscript was expanded and quoted
                 more = expandwords(sh, a, &one2, XW_SUBQ);
                 while (compargs.len < argv.len) compargs = push(a, compargs, (u8)0);
                 for (iz i = 0; i < more.len; i++) compargs = push(a, compargs, (u8)2);
             } else {
                 more = expandwords(sh, a, &one2, 0);
-                if (more.len==1 && b && !decl && arrayrefword(sh, *a, w->text)) {
+                if (more.len==1 && refs && !decl && arrayrefword(sh, *a, w->text)) {
                     // compargs 3: an unquoted name[sub] word, which
                     // assoc_expand_once takes whole
                     while (compargs.len < argv.len) compargs = push(a, compargs, (u8)0);
