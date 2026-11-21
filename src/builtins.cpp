@@ -937,7 +937,7 @@ static void printfuncname(Shell *sh, Arena *a, Str name, Func *f)
 // A function's body, then its attributes if it has any.
 static void printfunc(Shell *sh, Arena *a, Str name, Func *f)
 {
-    bprint(sh, printfunction(a, name, f->body, sh->opt[O_POSIX]));
+    bprint(sh, printfunction(a, name, f->body, sh->opt[O_POSIX], shellguard(sh)));
     bprint(sh, "\n");
     if (f->attrs) printfuncname(sh, a, name, f);
 }
@@ -1121,7 +1121,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 printfunc(sh, &scratch, args[i], f);
             } else {
                 // as bash, the body alone when named without -p
-                bprint(sh, printfunction(&scratch, args[i], f->body, sh->opt[O_POSIX]));
+                bprint(sh, printfunction(&scratch, args[i], f->body, sh->opt[O_POSIX],
+                                         shellguard(sh)));
                 bprint(sh, "\n");
             }
         }
@@ -3921,7 +3922,7 @@ static b32 describe(Shell *sh, Arena *a, Str name, u8 mode, b32 all, b32 nofuncs
             else {
                 bprint(sh, name);
                 bprint(sh, " is a function\n");
-                bprint(sh, printfunction(a, name, f->body, sh->opt[O_POSIX]));
+                bprint(sh, printfunction(a, name, f->body, sh->opt[O_POSIX], shellguard(sh)));
                 bprint(sh, "\n");
             }
         } else {

@@ -35,7 +35,7 @@ static Job *copyjobs(Store *, Job *);  // jobs.cpp
 static void closecoproc(Shell *);
 static void orphanjobs(Shell *);
 static void detachcaptures(Shell *, Shell *);  // jobs.cpp
-static Node *bgnode(Shell *, Arena *, Node *, b32 keepjobs = 0);  // jobs.cpp
+static Node *bgnode(Shell *, Arena *, Node *, Stackguard *, b32 keepjobs = 0);  // jobs.cpp
 static Task *spawnwaiter(Sched *, Handle, b32);  // jobs.cpp
 static Job  *newjob(Shell *, Arena, Node *, Task *, i64 pid, b32 coproc);
 static i32   fgstop(Shell *, Arena, Job *);      // jobs.cpp
@@ -111,7 +111,7 @@ static b32 lastingcode(Code *c)
 }
 
 // Copy a body into store st, in a block of the same size.
-static Code *copycode(Store *st, Code *c)
+static Code *copycode(Store *st, Code *c, Stackguard *g)
 {
     Arena block = {};
     block.beg = (byte *)salloc(st, c->size);
@@ -119,7 +119,7 @@ static Code *copycode(Store *st, Code *c)
     Code *r = alloc<Code>(&block);
     r->store = st;
     r->size  = c->size;
-    r->body  = copynode(&block, c->body);
+    r->body  = copynode(&block, c->body, g);
     r->file  = clone(&block, c->file);
     r->src   = clone(&block, c->src);
     r->line  = c->line;
@@ -127,7 +127,7 @@ static Code *copycode(Store *st, Code *c)
 }
 
 // With all, every body is copied (an image shares nothing).
-static Func *copyfuncs(Store *st, Func *f, b32 all)
+static Func *copyfuncs(Store *st, Func *f, b32 all, Stackguard *g)
 {
     if (!f) return 0;
     Func *c = (Func *)salloc(st, sizeof(Func));
@@ -136,13 +136,13 @@ static Func *copyfuncs(Store *st, Func *f, b32 all)
     c->code  = f->code;
     c->attrs = f->attrs;
     if (c->code && (all || !lastingcode(c->code))) {
-        c->code = copycode(st, c->code);
+        c->code = copycode(st, c->code, g);
         c->body = c->body ? c->code->body : 0;
     } else if (c->code) {
         c->code->refs++;
     }
     for (i32 i = 0; i < 4; i++) {
-        c->child[i] = copyfuncs(st, f->child[i], all);
+        c->child[i] = copyfuncs(st, f->child[i], all, g);
     }
     return c;
 }
@@ -386,7 +386,8 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
 
     c->vars    = copyvars(st, sh->vars);
     c->ifs     = 0;
-    c->funcs   = copyfuncs(st, sh->funcs, image);
+    Stackguard g = shellguard(sh);
+    c->funcs   = copyfuncs(st, sh->funcs, image, &g);
     c->aliases = copyaliases(st, sh->aliases, sh->lexer);
     c->comps   = compscopy(st, sh->comps);
     c->compcur = pccurcopy(st, sh->compcur);
@@ -560,7 +561,8 @@ static Image imagebuild(Shell *sh, Node *n, ImageRef im, b32 keepjobs = 0)
     img.head->magic = IMAGEMAGIC;
     img.head->build = imagebuild_();
     img.head->sh    = c;
-    img.head->node  = bgnode(c, &st->a, n, keepjobs);
+    Stackguard g    = shellguard(sh);
+    img.head->node  = bgnode(c, &st->a, n, &g, keepjobs);
     img.ref     = im;
     img.ref.len = st->a.beg - im.base;
     mem->os     = 0;  // the child's
@@ -671,7 +673,8 @@ static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops
         c->subchild   = 1;
     }
     c->simplestages += node->kind == N_SIMPLE;
-    m->node = copynode(&m->perm, node);
+    Stackguard g = shellguard(sh);
+    m->node = copynode(&m->perm, node, &g);
     // A simple command, or the last of a ( list ), is what bash would
     // exec in the forked stage: not a { list }'s
     c->tailnode  = node->kind==N_SIMPLE ? m->node : 0;

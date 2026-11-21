@@ -403,10 +403,27 @@ struct Lexer {
     b32      overflow;   // the limit was hit
 };
 
+// The stack a walk of a tree may use. The parse bounds a tree's depth,
+// but its copies and printed forms may be made far deeper in the stack
+// (a function body copied for a pipeline stage deep in a recursion):
+// past floor, overflow is called, which does not return. A null floor
+// is no limit.
+struct Stackguard {
+    byte  *floor;
+    void (*overflow)(void *ctx);
+    void  *ctx;
+};
+
+static void guardstack(Stackguard *g)
+{
+    byte here = 0;
+    if (STACKAT(here) < g->floor) g->overflow(g->ctx);
+}
+
 static void   synerror(Lexer *);
 static Lexer *newlexer(Arena *, Str);
 static Node  *parsecomlist(Lexer *);
-static Str    printcomsub(Arena *, Node *);
+static Str    printcomsub(Arena *, Node *, Stackguard);
 
 static void message(Lexer *L, i32 line, Str text, i32 kind = MSG_ERROR)
 {
@@ -434,6 +451,25 @@ static void checkstack(Lexer *L)
         L->overflow = 1;
         parsefail(L);
     }
+}
+
+static void parseoverflow(void *ctx)
+{
+    Lexer *L = (Lexer *)ctx;
+    L->overflow = 1;
+    parsefail(L);
+}
+
+// The parse's limits, for walking a tree it built (printing a command
+// substitution's body)
+static Stackguard parseguard(Lexer *L)
+{
+    Stackguard g = {};
+    g.floor    = L->stackmax ? L->stacktop-L->stackmax : 0;
+    g.floor    = g.floor>L->stackfloor ? g.floor : L->stackfloor;
+    g.overflow = parseoverflow;
+    g.ctx      = L;
+    return g;
 }
 
 
@@ -3461,22 +3497,23 @@ static Node *parsecase(Parser *p)
     return n;
 }
 
-static Node *parseif(Parser *p)  // after IF or ELIF
+// Each elif arm is the else part of the arm before it, as in bash, but
+// the arms are a flat sequence parsed in a loop: a chain of any length
+// costs the stack of one arm.
+static void parseif(Parser *p, Node *n)  // at IF, into n
 {
-    Lexer *L = p->L;
-    Node  *n = newnode(L, N_IF);
-    advance(p);  // if or elif
-    n->a = parsecompound(p);
-    expect(p, T_THEN);
-    n->b = parsecompound(p);
-    i32 t = peek(p);
-    if (t == T_ELSE) {
-        advance(p);
-        n->c = parsecompound(p);
-    } else if (t == T_ELIF) {
-        n->c = parseif(p);
+    for (;; n = n->c = newnode(p->L, N_IF)) {
+        advance(p);  // if or elif
+        n->a = parsecompound(p);
+        expect(p, T_THEN);
+        n->b = parsecompound(p);
+        i32 t = peek(p);
+        if (t == T_ELSE) {
+            advance(p);
+            n->c = parsecompound(p);
+        }
+        if (t != T_ELIF) return;
     }
-    return n;
 }
 
 static Node *parseshell(Parser *p)
@@ -3502,7 +3539,8 @@ static Node *parseshell(Parser *p)
         popnest(L);
         return n;
     case T_IF:
-        n = parseif(p);
+        n = newnode(L, N_IF);
+        parseif(p, n);
         expect(p, T_FI);
         popnest(L);
         return n;
@@ -3695,7 +3733,7 @@ static Matched parsecomsub(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
     }
     restorelex(L, &saved);
 
-    Str text = printcomsub(L->a, body);
+    Str text = printcomsub(L->a, body, parseguard(L));
     Tokbuf t = {};
     if (open == '(') {
         if (text.len && text[0]=='(') {
@@ -3853,13 +3891,14 @@ static Redir *copyredirs(Arena *a, Redir *r)
     return head;
 }
 
-static Cond *copycond(Arena *a, Cond *c)
+static Cond *copycond(Arena *a, Cond *c, Stackguard *g)
 {
     if (!c) return 0;
+    guardstack(g);
     Cond *r = alloccopy(a, c);
     r->op    = copyword(a, c->op);
-    r->left  = copycond(a, c->left);
-    r->right = copycond(a, c->right);
+    r->left  = copycond(a, c->left, g);
+    r->right = copycond(a, c->right, g);
     return r;
 }
 
@@ -3877,57 +3916,83 @@ static iz wordsbytes(Word *w)  // as copywords: the list
     return r;
 }
 
-static iz condbytes(Cond *c)
+static iz condbytes(Cond *c, Stackguard *g)
 {
     if (!c) return 0;
+    guardstack(g);
     return (iz)(sizeof(Cond) + alignof(Cond)) + wordbytes(c->op) +
-           condbytes(c->left) + condbytes(c->right);
+           condbytes(c->left, g) + condbytes(c->right, g);
 }
 
-// Lists nest down their left operands, a ; b ; c as ((a ; b) ; c), so
-// nodebytes and copynode follow first children in a loop rather than
-// by recursion: a list of any length costs no stack.
-static iz nodebytes(Node *n)
+// The child in which n's kind chains: lists nest down their left
+// operands, a ; b ; c as ((a ; b) ; c), pipelines down their right, a |
+// (b | c), and elif arms down the else parts. nodebytes and copynode
+// follow it in a loop rather than by recursion, so that a chain of any
+// length costs no stack; what truly nests recurses, within g.
+static b32 chainsright(Node *n)
+{
+    return n->kind==N_CONNECT && n->connector=='|';
+}
+
+static Node *chainnext(Node *n)
+{
+    return n->kind==N_IF ? n->c : chainsright(n) ? n->b : n->a;
+}
+
+static iz nodebytes(Node *n, Stackguard *g)
 {
     iz r = 0;
-    for (; n; n = n->a) {
+    for (; n; n = chainnext(n)) {
+        guardstack(g);
         r += (iz)(sizeof(Node) + alignof(Node));
-        r += nodebytes(n->b) + nodebytes(n->c);
+        r += n->kind==N_IF   ? nodebytes(n->a, g) : nodebytes(n->c, g);
+        r += chainsright(n) ? nodebytes(n->a, g) : nodebytes(n->b, g);
         r += wordsbytes(n->words) + wordbytes(n->name) + wordsbytes(n->arith);
-        r += condbytes(n->cond);
+        r += condbytes(n->cond, g);
         for (Redir *d = n->redirs; d; d = d->next) {
             r += (iz)(sizeof(Redir) + alignof(Redir));
             r += wordbytes(d->srcvar) + wordbytes(d->word) + d->body.len + d->eof.len;
         }
         for (Case *c = n->cases; c; c = c->next) {
             r += (iz)(sizeof(Case) + alignof(Case));
-            r += wordsbytes(c->patterns) + nodebytes(c->body);
+            r += wordsbytes(c->patterns) + nodebytes(c->body, g);
         }
     }
     return r;
 }
 
-static Node *copynode(Arena *a, Node *n)
+static Node *copynode(Arena *a, Node *n, Stackguard *g)
 {
     Node  *head = 0;
     Node **link = &head;
-    for (; n; n = n->a) {
+    for (; n; n = chainnext(n)) {
+        guardstack(g);
         Node *r = alloccopy(a, n);
         *link = r;
-        link  = &r->a;
-        r->b      = copynode(a, n->b);
-        r->c      = copynode(a, n->c);
+        if (n->kind == N_IF) {
+            link = &r->c;
+            r->a = copynode(a, n->a, g);
+            r->b = copynode(a, n->b, g);
+        } else if (chainsright(n)) {
+            link = &r->b;
+            r->a = copynode(a, n->a, g);
+            r->c = copynode(a, n->c, g);
+        } else {
+            link = &r->a;
+            r->b = copynode(a, n->b, g);
+            r->c = copynode(a, n->c, g);
+        }
         r->words  = copywords(a, n->words);
         r->name   = copyword(a, n->name);
         r->redirs = copyredirs(a, n->redirs);
-        r->cond   = copycond(a, n->cond);
+        r->cond   = copycond(a, n->cond, g);
         r->arith  = copywords(a, n->arith);
         Case **tail = &r->cases;
         *tail = 0;
         for (Case *c = n->cases; c; c = c->next) {
             Case *d = alloc<Case>(a);
             d->patterns = copywords(a, c->patterns);
-            d->body     = copynode(a, c->body);
+            d->body     = copynode(a, c->body, g);
             d->term     = c->term;
             *tail = d;
             tail  = &d->next;

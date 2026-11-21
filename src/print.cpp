@@ -21,6 +21,7 @@ struct Printer {
     b32    posix;
     b32    external;    // declare -f form: bash removes internal escapes
     Redir *deferred;    // here-document bodies yet to print
+    Stackguard guard;   // printing recurses as deep as the tree nests
 };
 
 static Printer *newprinter(Arena *a)
@@ -303,6 +304,7 @@ static void printcmd(Printer *p, Node *n);
 
 static void printcond(Printer *p, Cond *c)
 {
+    guardstack(&p->guard);
     if (c->invert) {
         put(p, "! ");
     }
@@ -469,6 +471,7 @@ static void printcmd(Printer *p, Node *n)
     if (!n) {
         return;
     }
+    guardstack(&p->guard);
     if (p->skipindent) {
         p->skipindent--;
     } else {
@@ -677,21 +680,23 @@ static void printcmd(Printer *p, Node *n)
 }
 
 // Command substitution body as reparsed text.
-static Str printcomsub(Arena *a, Node *n)
+static Str printcomsub(Arena *a, Node *n, Stackguard guard)
 {
     Printer *p = newprinter(a);
     p->comsub = 1;
+    p->guard  = guard;
     printcmd(p, n);
     return finish(&p->b);
 }
 
 // A function definition as printed by declare -f, without the final
 // newline.
-static Str printfunction(Arena *a, Str name, Node *body, b32 posix)
+static Str printfunction(Arena *a, Str name, Node *body, b32 posix, Stackguard guard = {})
 {
     Printer *p = newprinter(a);
     p->posix    = posix;
     p->external = 1;
+    p->guard    = guard;
     if (name.len) {
         if (!validfuncname(name, posix)) {
             put(p, "function ");

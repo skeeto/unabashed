@@ -768,6 +768,75 @@ static void test_plainbrace(Test *t)
     expectint(t, "plainbrace agrees", bad, 0);
 }
 
+static JmpBuf treejmp;
+static void treeoverflow(void *) { jmpback(treejmp); }
+
+// Size, copy and (with print) print tree n within guard g: how many of
+// these walks overflowed it
+static i32 treewalks(Arena *a, Node *n, Stackguard g, b32 print)
+{
+    volatile i32 over = 0;
+    if (jmpset(treejmp)) over = over + 1; else nodebytes(n, &g);
+    if (jmpset(treejmp)) over = over + 1; else copynode(a, n, &g);
+    if (!print) return over;
+    if (jmpset(treejmp)) over = over + 1; else printfunction(a, "f", n, 0, g);
+    return over;
+}
+
+static Parsed parsetext(Arena *a, Str src, iz stackmax)
+{
+    Lexer *L = newlexer(a, src);
+    L->stackmax = stackmax;
+    return parseunit(L);
+}
+
+// Chains of any length, elif arms and pipeline stages, cost the parser
+// and the tree walkers no stack, while what truly nests calls the
+// guard's overflow when walked past it, rather than overflowing the
+// real stack: 50000 elif arms fail no 64 KiB parse, and a deeply nested
+// body is sized, copied and printed within 16 KiB or not at all.
+static void test_treestack(Test *t)
+{
+    Os *os = t->os;
+    heapreset(os);
+    Arena a = newarena(os, (iz)1<<27);
+    byte here = 0;
+    Stackguard g = {};
+    g.overflow = treeoverflow;
+
+    Buf b(&a, (iz)1<<20);
+    print(&b, "if false; then :; ");
+    for (i32 i = 0; i < 50000; i++) print(&b, "elif false; then :; ");
+    print(&b, "else :; fi\n");
+    Parsed p = parsetext(&a, finish(&b), (iz)1<<16);
+    expectint(t, "elif chain parses", p.status, PARSE_OK);
+    g.floor = STACKAT(here) - ((iz)1<<16);
+    if (p.status == PARSE_OK) {
+        expectint(t, "elif chain walks", treewalks(&a, p.cmd, g, 0), 0);
+    }
+
+    b = Buf(&a, (iz)1<<16);
+    for (i32 i = 0; i < 5000; i++) print(&b, ": | ");
+    print(&b, ":\n");
+    p = parsetext(&a, finish(&b), 0);
+    expectint(t, "long pipeline parses", p.status, PARSE_OK);
+    if (p.status == PARSE_OK) {
+        expectint(t, "long pipeline walks", treewalks(&a, p.cmd, g, 0), 0);
+    }
+
+    b = Buf(&a, (iz)1<<16);
+    for (i32 i = 0; i < 2000; i++) print(&b, "{ if :; then ");
+    print(&b, ":");
+    for (i32 i = 0; i < 2000; i++) print(&b, "; fi; }");
+    print(&b, "\n");
+    p = parsetext(&a, finish(&b), 0);
+    expectint(t, "nested body parses", p.status, PARSE_OK);
+    g.floor = STACKAT(here) - ((iz)1<<14);
+    if (p.status == PARSE_OK) {
+        expectint(t, "nested body walks", treewalks(&a, p.cmd, g, 1), 3);
+    }
+}
+
 // The vos's open, refusing one file, for test_vtable
 static Opened refuseopen(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
@@ -2229,6 +2298,7 @@ int main(int argc, char **argv)
     test_jobctl(&t);
     test_pathmodes(&t);
     test_plainbrace(&t);
+    test_treestack(&t);
     test_vtable(&t);
 
     if (argc>3 && (!strcmp(argv[1], "--oracle") || !strcmp(argv[1], "--oracle-v"))) {

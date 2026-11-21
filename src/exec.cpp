@@ -169,7 +169,7 @@ static void reportchild(Shell *sh, Arena scratch, Node *n)
     if (sh->noreport) return;
     Node c = *n;
     c.flags &= ~(CMD_INVERT|CMD_TIME|CMD_TIMEPOSIX);
-    Printer *p = newprinter(&scratch);
+    Printer *p = shellprinter(sh, &scratch);
     printcmd(p, &c);
     reportsig(sh, scratch, sig, sh->childpid, finish(&p->b));
 }
@@ -4164,6 +4164,7 @@ static i32 condregex(Shell *sh, Arena a, Str s, Str re)
 // false, as bash does.
 static i32 condeval(Shell *sh, Arena *a, Cond *c)
 {
+    checkstack(sh);  // it recurses as deep as the expression nests
     i32 r = 1;
     switch (c->kind) {
     case C_AND:
@@ -5546,7 +5547,7 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
             // blank line for a run of empty ones
             if (r.cmd) {
                 Arena t = *L->a;
-                Printer *p = newprinter(&t);
+                Printer *p = shellprinter(sh, &t);
                 p->posix    = 1;
                 p->external = 1;
                 printcmd(p, r.cmd);

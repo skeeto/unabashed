@@ -452,7 +452,7 @@ static Job *newjob(Shell *sh, Arena scratch, Node *n, Task *t, i64 pid, b32 copr
     j->jc    = sh->jobctl;
     Node c = *n;
     c.flags &= ~(CMD_TIME|CMD_TIMEPOSIX);
-    Printer *p = newprinter(&scratch);
+    Printer *p = shellprinter(sh, &scratch);
     if (coproc) put(p, "coproc ");
     printcmd(p, &c);
     j->text  = sclone(sh->store, finish(&p->b));
@@ -835,7 +835,7 @@ static File *devnull(Shell *sh, Arena scratch)
 // Make background subshell c, a copy of its parent's state, ready to
 // run a copy of n in arena a, which it returns. keepjobs: a pipeline's
 // simple command, which lists its parent's jobs, as bash's does.
-static Node *bgnode(Shell *c, Arena *a, Node *n, b32 keepjobs)
+static Node *bgnode(Shell *c, Arena *a, Node *n, Stackguard *g, b32 keepjobs)
 {
     c->loopdepth = 0;
     if (!keepjobs) {
@@ -843,7 +843,7 @@ static Node *bgnode(Shell *c, Arena *a, Node *n, b32 keepjobs)
         c->curjob = c->prevjob = 0;
         c->bgstats = 0;
     }
-    Node *r = copynode(a, n);
+    Node *r = copynode(a, n, g);
     c->tailnode = n->kind==N_SIMPLE ? r : 0;
     if (r->kind == N_SUBSHELL) {
         r->kind = N_GROUP;
@@ -1119,7 +1119,8 @@ static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid,
     c->subchild   |= n->kind != N_SIMPLE;
     closecoproc(c);
     detachcaptures(sh, c);
-    m->node = bgnode(c, &m->perm, n);
+    Stackguard g = shellguard(sh);
+    m->node = bgnode(c, &m->perm, n, &g);
     *pid = c->bashpid;
     sh->sched->nbg++;
     return taskspawn(sh->sched, vprocmain, m, BIGSTACK);

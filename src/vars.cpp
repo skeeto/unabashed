@@ -451,13 +451,38 @@ static Str fmti64(Arena *a, i64 v)
     return finish(&b);
 }
 
+static void checkstack(Shell *);
+
+static void guardoverflow(void *ctx)
+{
+    checkstack((Shell *)ctx);
+}
+
+// For walking a tree within the shell's own stack limit: past it, this
+// level dies as by checkstack.
+static Stackguard shellguard(Shell *sh)
+{
+    Stackguard g = {};
+    g.floor    = sh->stackmax ? sh->stacktop-sh->stackmax : 0;
+    g.overflow = guardoverflow;
+    g.ctx      = sh;
+    return g;
+}
+
+static Printer *shellprinter(Shell *sh, Arena *a)
+{
+    Printer *p = newprinter(a);
+    p->guard = shellguard(sh);
+    return p;
+}
+
 // The simple command being run, or the last one, as BASH_COMMAND.
 static Str cmdtext(Shell *sh, Arena *a)
 {
     if (!sh->cmdnode) return sh->cmdtext.data ? sh->cmdtext : Str("");
     Node n = *sh->cmdnode;
     n.flags &= ~(CMD_INVERT|CMD_TIME|CMD_TIMEPOSIX);
-    Printer *p = newprinter(a);
+    Printer *p = shellprinter(sh, a);
     printcmd(p, &n);
     return finish(&p->b);
 }
@@ -1625,7 +1650,8 @@ static Code *newcode(Shell *sh, Arena, Node *body)
 {
     // alloc refuses the final object of a full arena, so leave room for
     // one more of the largest type
-    iz size = (iz)(sizeof(Code) + alignof(Code)) + nodebytes(body) +
+    Stackguard g = shellguard(sh);
+    iz size = (iz)(sizeof(Code) + alignof(Code)) + nodebytes(body, &g) +
               (iz)sizeof(Node) + (iz)sizeof(Redir);
     // As bash 5.3 names its origin: a sourced file, "environment" for
     // an import, "main" when interactive, else $0 (empty)
@@ -1641,7 +1667,7 @@ static Code *newcode(Shell *sh, Arena, Node *body)
     Code *c = alloc<Code>(&block);
     c->store = sh->store;
     c->size  = size;
-    c->body = copynode(&block, body);
+    c->body = copynode(&block, body, &g);
     c->file = clone(&block, sh->srcname);
     c->src  = clone(&block, src);
     c->line = sh->defsrc.len ? 0 : body->line;  // imports: 0, as bash
@@ -1710,11 +1736,11 @@ static void collectexports(Shell *sh, Var *v, Arena *a, Slice<Str> *out)
 }
 
 // Exported functions, as bash passes them: BASH_FUNC_name%%=() {...}
-static void exportfuncs(Func *f, Arena *a, Slice<Str> *out)
+static void exportfuncs(Func *f, Arena *a, Slice<Str> *out, Stackguard g)
 {
     if (!f) return;
     if (f->body && (f->attrs & V_EXPORT)) {
-        Str text = printfunction(a, {}, f->body, 0);
+        Str text = printfunction(a, {}, f->body, 0, g);
         // bash joins the first body line to the brace
         Str head = "() \n{ \n";
         if (startswith(text, head)) {
@@ -1731,7 +1757,7 @@ static void exportfuncs(Func *f, Arena *a, Slice<Str> *out)
         *out = push(a, *out, finish(&b));
     }
     for (i32 i = 0; i < 4; i++) {
-        exportfuncs(f->child[i], a, out);
+        exportfuncs(f->child[i], a, out, g);
     }
 }
 
@@ -1741,7 +1767,7 @@ static Slice<Str> makeenv(Shell *sh, Arena *a)
     Slice<Str> env = {};
     collectexports(sh, sh->vars, a, &env);
     for (iz i = 0; i < sh->nbadenv; i++) env = push(a, env, sh->badenv[i]);
-    if (!sh->restricted) exportfuncs(sh->funcs, a, &env);  // as bash
+    if (!sh->restricted) exportfuncs(sh->funcs, a, &env, shellguard(sh));  // as bash
     sort(env.data, env.len, envless, *a);
     return env;
 }

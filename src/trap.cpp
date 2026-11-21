@@ -1229,7 +1229,7 @@ static void reportpipeline(Shell *sh, Arena scratch, Node **stages, i32 n, i32 *
     if (!longreport(sh, sig)) {
         Node c = *job;
         c.flags &= ~(CMD_INVERT|CMD_TIME|CMD_TIMEPOSIX);
-        Printer *p = newprinter(&scratch);
+        Printer *p = shellprinter(sh, &scratch);
         printcmd(p, &c);
         reportsig(sh, scratch, sig, pids[n-1], finish(&p->b));
         return;
@@ -1257,7 +1257,7 @@ static void reportpipeline(Shell *sh, Arena scratch, Node **stages, i32 n, i32 *
         print(&b, desc);
         for (iz i = desc.len; i < 27; i++) putbyte(&b, ' ');
         if (k) print(&b, "| ");
-        Printer *pr = newprinter(&scratch);
+        Printer *pr = shellprinter(sh, &scratch);
         printcmd(pr, stages[k]);
         print(&b, finish(&pr->b));
         putbyte(&b, '\n');
