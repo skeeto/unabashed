@@ -54,6 +54,7 @@ static void freehistent(Shell *sh, HistEnt *e)
 static void histremove(Shell *sh, iz i, iz n)
 {
     Hist *h = &sh->hist;
+    assert(i>=0 && n>=0 && i+n<=h->len);
     histown(sh, 0);
     for (iz k = 0; k < n; k++) freehistent(sh, h->ents[i+k]);
     for (iz k = i; k+n < h->len; k++) h->ents[k] = h->ents[k+n];
@@ -723,7 +724,7 @@ static i32 b_history(Shell *sh, Str *args, iz nargs, Arena scratch)
         i64 idx = 0;
         if (del.len && del[0]=='-') {
             idx = h->len + v;
-            if (idx < 0) {
+            if (idx<0 || idx>=h->len) {  // -0 too
                 Str msg = concat(&scratch, del, ": history position out of range");
                 builtinerror(sh, scratch, "history", msg);
                 return 1;
