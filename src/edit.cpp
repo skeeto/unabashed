@@ -704,8 +704,7 @@ struct Editor {
     b32      hscroll;   // TERM=dumb: one row, scrolled sideways
     i32      lmargin;   // hscroll: the first column shown
     i32      hshown;    // hscroll: columns drawn
-    Str      hlast;     // notty: what was drawn, and the cursor in it
-    iz       hlastcur;
+    Str      hlast;     // hscroll: what was drawn
     b32      notty;     // input not a terminal, read with the editor
     Layout   shown;
     i32      crow;      // where the cursor is, relative to the prompt's row
@@ -1686,6 +1685,12 @@ static void edupdate(Editor *ed, Shell *sh, Layout *nl)
             if (same==w->ncells && same==o->ncells) continue;
         }
         if (same < w->ncells) {
+            if (ed->pending && ed->crow==row-1 && !cellcol(w, same)) {
+                // As readline: past a full row the text itself wraps
+                ed->crow    = row;
+                ed->ccol    = 0;
+                ed->pending = 0;
+            }
             edmove(ed, row, cellcol(w, same));
             edwrite(ed, w, same);
         }
@@ -1704,13 +1709,54 @@ static void edupdate(Editor *ed, Shell *sh, Layout *nl)
     ed->shown = *nl;
 }
 
+// hredisplay: to column col of what is shown (vis, its cells ending at
+// vend bytes and cend columns), as readline's _rl_move_cursor_relative:
+// by CR first when going to the start or when that is shorter
+// (CR_FASTER), then forward by writing what is there, or back by
+// backspaces. In a multibyte locale readline knows no place in the
+// text to write from but the start: forward is by CR (again) and all
+// that comes before col.
+static void hmove(Editor *ed, Str vis, iz *vend, i32 *cend, i32 n, i32 col, b32 mb)
+{
+    i32 cur = ed->ccol;
+    if (col == cur) return;
+    if (!col || col+1<cur-col) {
+        edput(ed, "\r");
+        cur = 0;
+    }
+    if (cur<col && mb) {
+        edput(ed, "\r");
+        cur = 0;
+    }
+    if (cur < col) {
+        iz beg = -1, end = -1;
+        for (i32 i = 0; i < n; i++) {
+            i32 c0 = i ? cend[i-1] : 0;
+            if (c0 == cur && beg<0) beg = i ? vend[i-1] : 0;
+            if (cend[i] == col) end = vend[i];
+        }
+        if (beg<0 || end<beg) {
+            // Not on a cell's edge (a wide character): from the start
+            edput(ed, "\r");
+            beg = 0;
+            for (i32 i = 0; i < n && end<0; i++) end = cend[i]==col ? vend[i] : -1;
+        }
+        print(&ed->out_, {vis.data+beg, (end<0 ? vis.len : end)-beg});
+    } else {
+        for (i32 i = col; i < cur; i++) edput(ed, "\b");
+    }
+    ed->ccol = col;
+}
+
 // A terminal that cannot move the cursor up (TERM=dumb), as readline
 // draws for it: the line on one row, scrolled sideways to keep the
 // cursor about two thirds of the way across once it would leave the
 // screen, '<' and '>' over the first and last columns where the line
-// goes on past them. Drawn again whole from the left margin with CR,
-// spaces over what is left of the old, and the text up to the cursor.
-static void hredisplay(Editor *ed, Layout *nl, Arena *a)
+// goes on past them. As readline's update_line on such a terminal, what
+// is shown changes from its first difference with what was: there the
+// rest is written, then spaces over what is left of the old, then the
+// cursor goes back.
+static void hredisplay(Editor *ed, Layout *nl, Arena *a, b32 mb)
 {
     DRow *r     = nl->rows;
     i32   w     = ed->tty.cols - 1;
@@ -1719,7 +1765,6 @@ static void hredisplay(Editor *ed, Layout *nl, Arena *a)
     i32   total = r->width;
     i32   phys  = cpos - ed->lmargin;
     i32   lm    = ed->lmargin;
-    i32   oldlm = lm;
     if (phys > w-2) {
         lm = cpos - 2*t;
         lm = lm<0 ? 0 : lm;
@@ -1732,52 +1777,52 @@ static void hredisplay(Editor *ed, Layout *nl, Arena *a)
     }
     ed->lmargin = lm;
 
+    i32 n = 0;  // cells shown
+    for (i32 i = 0; i < r->ncells; i++) {
+        n += cellcol(r, i)>=lm && r->cols[i]<=lm+w;
+    }
     Buf  vis(a, 64);  // with the layout: hlast while it is shown
-    iz   atcur = -1;  // bytes of vis before the cursor
+    iz  *vend = alloc<iz>(a, n+1);
+    i32 *cend = alloc<i32>(a, n+1);
+    n = 0;
     for (i32 i = 0; i < r->ncells; i++) {
         i32 beg = cellcol(r, i);
-        if (beg == cpos) atcur = atcur<0 ? vis.len : atcur;
         if (beg<lm || r->cols[i]>lm+w) continue;
         i32 ob = i ? r->ends[i-1] : 0;
         Str cell = {r->text.data+ob, r->ends[i]-ob};
         if (beg==lm && lm>0) cell = "<";
         if (r->cols[i]==lm+w && lm+w<total) cell = ">";
         print(&vis, cell);
+        vend[n] = vis.len;
+        cend[n] = r->cols[i] - lm;
+        n++;
     }
-    if (atcur < 0) atcur = vis.len;
     i32 shown = (total<lm+w ? total : lm+w) - lm;
-    Str now = {vis.data, vis.len};
-    if (ed->notty && lm==oldlm && ed->hlastcur==ed->hlast.len &&
-            atcur==now.len && startswith(now, ed->hlast)) {
-        // As readline, which draws only what changed: what was added at
-        // the end (input that is no terminal shows these bytes)
-        print(&ed->out_, cuthead(now, ed->hlast.len));
-        ed->hlast    = now;
-        ed->hlastcur = atcur;
-        ed->hshown   = shown;
-        ed->crow     = 0;
-        ed->ccol     = cpos - lm;
-        return;
+    Str now   = {vis.data, vis.len};
+    Str old   = ed->hlast;
+
+    // The first cell that differs, and its column (a zero-width cell
+    // goes with the one before it)
+    i32 d = 0;
+    for (; d < n; d++) {
+        iz b0 = d ? vend[d-1] : 0;
+        if (vend[d] > old.len) break;
+        if (Str{now.data+b0, vend[d]-b0} != Str{old.data+b0, vend[d]-b0}) break;
     }
-    ed->hlast    = now;
-    ed->hlastcur = atcur;
-    edput(ed, "\r");
-    print(&ed->out_, {vis.data, vis.len});
-    for (i32 i = shown; i < ed->hshown; i++) edput(ed, " ");
-    // To the cursor as readline's _rl_move_cursor_relative: not at all
-    // when there already, else by CR and the text before it when that
-    // is shorter (CR_FASTER), else by backspaces
-    i32 col = shown>ed->hshown ? shown : ed->hshown;
-    i32 to  = cpos - lm;
-    if (to!=col && (!to || to>col || to+1<col-to)) {
-        edput(ed, "\r");
-        print(&ed->out_, {vis.data, atcur});
-    } else {
-        for (i32 i = to; i < col; i++) edput(ed, "\b");
+    while (d>0 && d<n && cend[d]==(d ? cend[d-1] : 0)) d--;
+    iz  db   = d ? vend[d-1] : 0;
+    i32 dcol = d ? cend[d-1] : 0;
+    if (d<n || old.len!=now.len || ed->hshown!=shown) {
+        hmove(ed, now, vend, cend, n, dcol, mb);
+        print(&ed->out_, cuthead(now, db));
+        ed->ccol = shown;
+        for (i32 i = shown; i < ed->hshown; i++) edput(ed, " ");
+        ed->ccol = shown>ed->hshown ? shown : ed->hshown;
     }
+    ed->hlast  = now;
     ed->hshown = shown;
     ed->crow   = 0;
-    ed->ccol   = cpos - lm;
+    hmove(ed, now, vend, cend, n, cpos - lm, mb);
 }
 
 static void redisplay(Editor *ed, Shell *sh)
@@ -1806,7 +1851,7 @@ static void redisplay(Editor *ed, Shell *sh)
     Layout nl = layout(a, prompt, line, point, ed->hscroll ? 1<<30 : ed->width,
                        rbeg, rend, ed->tty.rows-1, ed->hscroll ? ed->tty.cols : 0);
     if (ed->hscroll) {
-        hredisplay(ed, &nl, a);
+        hredisplay(ed, &nl, a, sh->utf8 && !ed->vars.byteoriented);
     } else {
         edupdate(ed, sh, &nl);
     }
@@ -1821,6 +1866,8 @@ static void redisplay(Editor *ed, Shell *sh)
 static void edredraw(Editor *ed, Shell *sh)
 {
     ed->shown   = {};
+    ed->hlast   = {};
+    ed->hshown  = 0;
     ed->crow    = 0;
     ed->ccol    = 0;
     ed->pending = 0;
@@ -4959,7 +5006,18 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
             ed->point = back ? q : p;
         } else {
             iz q = back ? edprev(ed, p) : ednext(ed, p);
+            u8 c = ed->line.data[q<p ? q : p];
             eddelete(ed, q<p ? q : p, q<p ? p : q);
+            if (back && p==len && ed->hscroll && (!sh->utf8 || ed->vars.byteoriented) &&
+                    c>=0x20 && c<0x7f && ed->ccol>0 && ed->hlast.len && ed->hshown) {
+                // As readline's rubout at the end of the line, single-byte
+                // locales only: erased there and then, so that a scroll
+                // the redisplay makes comes after
+                edput(ed, "\b \b");
+                ed->hlast.len--;
+                ed->hshown--;
+                ed->ccol--;
+            }
         }
     } break;
     case EF_KILL_LINE:
@@ -6169,10 +6227,12 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     if (!os_isatty(sh->os, ed->out) && os_isatty(sh->os, ed->in)) ed->ttyout = ed->in;
     ed->tty   = edraw(ed, sh);
     ed->notty = 0;
+    b32 dumb  = eddumb(sh, ed->linemem);
     if (ed->tty.err) {
         // The shell's input that is no terminal is still read with the
-        // editor, as bash's readline does, drawing as on a dumb
-        // terminal COLUMNS wide
+        // editor, as bash's readline does, drawing for the terminal
+        // TERM names, COLUMNS wide: sideways on a dumb one, else lines
+        // that wrap by themselves (am and xenl), all as typed
         if (!opts->shell || os_isatty(sh->os, ed->in)) {
             sh->capdepth = depth - 1;
             return ED_NOTTY;
@@ -6188,6 +6248,7 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
         }
         if (v > 1) t.cols = (i32)v;
         t.rows = 24;
+        t.xenl = !dumb;
         ed->tty   = t;
         ed->notty = 1;
     } else {
@@ -6204,11 +6265,10 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     ed->silent  = opts->silent;
     ed->deadline = opts->deadline;
     ed->timedout = 0;
-    ed->hscroll = ed->notty || ed->tty.rows<=1 || eddumb(sh, ed->linemem);
+    ed->hscroll = ed->tty.rows<=1 || dumb;
     ed->lmargin = ed->hshown = 0;
     if (ed->busy == 1) ed->unread = 0;  // a nested call reads on
     ed->hlast   = {};
-    ed->hlastcur = 0;
     if (!ed->inited) {
         ed->inited = 1;
         if (ed->hscroll) ed->vars.bracketpaste = ed->vars.activeregion = 0;
@@ -6268,7 +6328,7 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     }
     // Bracketed paste, as readline's enable-bracketed-paste, except where
     // there are no escape sequences
-    ed->paste = !ed->hscroll && !ed->tty.legacy && ed->vars.bracketpaste;
+    ed->paste = !ed->hscroll && !ed->notty && !ed->tty.legacy && ed->vars.bracketpaste;
     if (ed->paste) {
         edput(ed, "\x1b[?2004h");
         edraw(ed, sh);
@@ -6363,8 +6423,10 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
         // past a full one is already past the line
         edmove(ed, l->nrows-1, 0);
         crlf = 0;
-    } else {
-        edmove(ed, l->nrows-1, l->lastwidth);
+    } else if (ed->crow < l->nrows-1) {
+        // As readline's _rl_update_final: down to the last row, not
+        // along it
+        edmove(ed, l->nrows-1, 0);
     }
     // read -e: the shell's interrupt writes the newline
     if (crlf && !(ed->result==ED_INTR && isread)) {

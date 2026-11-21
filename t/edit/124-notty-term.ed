@@ -1,0 +1,30 @@
+# An interactive shell reading input that is no terminal echoes it as
+# readline draws for the terminal TERM names. For one that moves the
+# cursor (xterm): on lines that wrap by themselves, with no bracketed
+# paste, and accepted with a newline where the cursor is. For a dumb
+# one: sideways, each change written from its first difference, then
+# spaces over the rest of the old, then the cursor moved back (CR when
+# shorter, backspaces, or forward by writing); in a single-byte locale
+# a rubout at the end erases there and then, before any scroll. It
+# once scrolled sideways for any TERM, and drew each change from the
+# left margin, and a prompt wider than the screen began with a CR.
+# (COLUMNS is the screen's width: bash with a controlling terminal
+# takes its size.)
+size 24 80
+rc PS1='$ '
+rc t() { printf "$2" 0 | LANG=${L:-C.UTF-8} TERM=$1 COLUMNS=80 PS1="${P:-> }" bash --norc -i 2>&1 | sed '/terminal process group/d; /no job control/d; /^> exit$/d' | cat -v; }
+keys t xterm 'echo %085d\\n'\r
+keys t xterm 'echo ab\\002X\\n'\r
+keys t dumb 'echo %085d\\n'\r
+keys t dumb 'echo ab\\002X\\n'\r
+keys t dumb 'abc def ghi\\001\\033f\\033d\\033c\\n'\r
+snap
+keys \C-l
+keys t dumb '%085d\\001\\006\\033f\\005\\n'\r
+keys L=C t dumb '%080d\\010\\010\\010\\010\\010\\010\\n'\r
+keys t dumb '%080d\\010\\010\\010\\010\\010\\010\\n'\r
+snap
+keys \C-l
+keys P=$(printf '%0100d> ' 0) t dumb 'echo hi\\001\\006\\n'\r
+keys P=$(printf '%0100d> ' 0) t xterm 'echo hi\\n'\r
+snap
