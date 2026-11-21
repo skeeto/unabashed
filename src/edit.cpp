@@ -2158,9 +2158,10 @@ static void edkill(Editor *ed, iz from, iz to)
     iz  end  = from<to ? to : from;
     Str text = {ed->line.data+beg, end-beg};
 
-    // Compact into the other arena when this one has grown
+    // Compact into the other arena when this one is half used
     Arena *k = &ed->kmem[ed->kcur];
-    if (k->end-k->beg < ((iz)1<<23)) {
+    Mem   *m = k->mem;
+    if (m->limit-k->beg < (m->limit-(byte *)(m+1))/2) {
         ed->kcur = !ed->kcur;
         Arena *n = &ed->kmem[ed->kcur];
         *n = {(byte *)(n->mem+1), n->end, n->mem};
