@@ -1,0 +1,27 @@
+# A background job's compound command (not a pipeline) runs in bash's
+# child as not interactive, which numbers a function's lines as written,
+# not from the body's first; ERR's action shows the same. A background
+# pipeline in a function runs no ERR action under set -E.
+size 24 60
+rc PS1='$ '
+rc set +m
+rc :
+rc f() {
+rc   { echo a $LINENO; } & wait
+rc   ( echo b $LINENO ) & wait
+rc   echo c $LINENO & wait
+rc   echo d $LINENO | cat & wait
+rc   [[ 1 ]] && echo e $LINENO & wait
+rc   ( echo g $LINENO ); { echo h $LINENO; } | cat
+rc }
+rc set -E; trap 'echo ERR $LINENO' ERR
+rc k() { : | false & wait; }
+rc m() { { false; } & wait; }
+keys :\r
+keys f 2>/dev/null\r
+pause 500
+keys k 2>/dev/null\r
+pause 500
+keys m 2>/dev/null\r
+pause 500
+snap

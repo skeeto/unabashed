@@ -1,0 +1,30 @@
+== snap 1
+$ :
+$ f 2>/dev/null
+a 5
+b 6
+c 4
+d 5
+e 9
+g 7
+h 7
+$ k 2>/dev/null
+$ m 2>/dev/null
+ERR 14
+$
+@ 12,2
+== snap 2
+$ :
+$ f 2>/dev/null
+a 5
+b 6
+c 4
+d 5
+e 9
+g 7
+h 7
+$ k 2>/dev/null
+$ m 2>/dev/null
+ERR 14
+$
+@ 12,2

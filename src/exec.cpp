@@ -645,10 +645,11 @@ static i32 comsubline(Shell *sh, i32 first)
 // shell outside a sourced file numbers a function's lines from its
 // body's (a ${ ...; } counts as a function, though it leaves the body
 // line alone), but only for simple commands, (( )), [[ ]] and the
-// first expression of an arithmetic for.
+// first expression of an arithmetic for; not in a background job's
+// compound command, which bash's child runs as not interactive.
 static i32 fnline(Shell *sh, i32 line)
 {
-    if (sh->funcdepth && sh->interactive && !sh->sourcedepth) {
+    if (sh->funcdepth && sh->interactive && !sh->sourcedepth && !sh->asyncsub) {
         line -= sh->funcline - 1;
         line  = line>0 ? line : 1;
     }

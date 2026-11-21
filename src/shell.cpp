@@ -887,6 +887,8 @@ struct Shell {
                            // comsub or compound command catches it
     b32      subchild;     // in bash's child for a ( ), comsub, procsub or
                            // compound command, which is not interactive
+    b32      asyncsub;     // in bash's child for a compound command run
+                           // with &, which numbers lines as not (fnline)
     b32      forked;       // the next simple command is a stage or job
                            // bash forks first: %N is no command there
     b32      forkstage;    // a stage, whose builtin or function bash runs

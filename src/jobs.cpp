@@ -1107,10 +1107,19 @@ static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid,
                      Arena scratch)
 {
     materializefds(sh, scratch, in!=0);
-    i64   proc = spawnimage(sh, n, in, out, pid, scratch);
-    if (proc >= 0) return spawnwaiter(sh->sched, (Handle)proc, sh->spawngrp!=0);
+    // bash runs a compound command (not a pipeline) with & in a child
+    // that is not interactive ("doubly async"): it numbers a function's
+    // lines as written
+    b32 async = sh->asyncsub;
+    sh->asyncsub |= n->kind!=N_SIMPLE && (n->kind!=N_CONNECT || n->connector!='|');
+    i64 proc = spawnimage(sh, n, in, out, pid, scratch);
+    if (proc >= 0) {
+        sh->asyncsub = async;
+        return spawnwaiter(sh->sched, (Handle)proc, sh->spawngrp!=0);
+    }
     Vproc *m = vprocwith(sh, in, out, scratch);
     Shell *c = m->sh;
+    sh->asyncsub = async;
     c->catchfatal |= n->kind != N_SIMPLE;  // as imagebuild
     c->subchild   |= n->kind != N_SIMPLE;
     closecoproc(c);
