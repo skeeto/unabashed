@@ -2055,7 +2055,9 @@ static i32 b_fc(Shell *sh, Str *args, iz nargs, Arena scratch)
             builtinerror(sh, scratch, "fc", "too many arguments");
             return 1;
         }
-        Str cmd = h->ents[e]->line;
+        // A copy: replacing the fc command in the history, or erasedups
+        // adding this one, may free the entry
+        Str cmd = clone(&scratch, h->ents[e]->line);
         for (iz k = 0; k < npairs; k++) {
             cmd = fcreplace(&scratch, cmd, pats[k], reps[k]);
         }
