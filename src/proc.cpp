@@ -415,14 +415,19 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->bltargs    = 0;
     c->nbltargs   = 0;
     // The printer's temporaries go where a allocates next, which in an
-    // image is the store's own arena: the text is moved past them before
-    // the store takes its copy, and none of them is left in the region
-    // (their pointers into sh's memory would break the image's closure)
-    Arena tmp = *a;
-    Str   txt = cmdtext(sh, &tmp);
-    txt = clone(&tmp, txt);
-    c->cmdtext    = sclone(st, txt);
-    if (tmp.beg > a->beg) __builtin_memset(a->beg, 0, (uz)(tmp.beg - a->beg));
+    // image is the store's own arena, where the store's copy of the text
+    // goes too, zeroed before it is filled: so the text is printed once
+    // for its length and again past the copy to fill it, and none of the
+    // temporaries is left in the region (their pointers into sh's memory
+    // would break the image's closure)
+    Arena tmp   = *a;
+    iz    len   = cmdtext(sh, &tmp).len;
+    byte *dirty = tmp.beg;
+    c->cmdtext  = {(u8 *)salloc(st, len?len:1), len};
+    tmp = *a;
+    copybytes(c->cmdtext.data, cmdtext(sh, &tmp).data, len);
+    dirty = dirty>tmp.beg ? dirty : tmp.beg;
+    if (dirty > a->beg) __builtin_memset(a->beg, 0, (uz)(dirty - a->beg));
     c->cmdnode    = 0;
     c->frame      = copyframes(c, a, sh->frame, image);
     c->srcframes  = copysrcframes(a, sh->srcframes, sh->frame, c->frame, image);
