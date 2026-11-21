@@ -1,0 +1,24 @@
+== snap 1
+one two three four
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+x
+a long command, longer than the first
+$ : short
+$ bind '"\C-xm": "a longer macro"'
+$ : a longer macro
+$ bind '"\C-xm": "mid"'
+$ : mid
+@ 9,7
+== snap 2
+one two three four
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+x
+a long command, longer than the first
+$ : short
+$ bind '"\C-xm": "a longer macro"'
+$ : a longer macro
+$ bind '"\C-xm": "mid"'
+$ : mid
+@ 9,7

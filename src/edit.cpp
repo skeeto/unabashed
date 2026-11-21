@@ -460,6 +460,7 @@ struct KeyNode {
     KeyNode *kids;
     KeyNode *sib;
     Str      macro; // EF_MACRO: the text; EF_SHELLCMD: the command
+    iz       cap;   // the bytes at macro.data, its own (keymacro)
     i32      fn;    // EF_*, or EF_NONE
     u8       key;
 };
@@ -483,6 +484,18 @@ static KeyNode *keyget(Arena *a, KeyNode *n, u8 key)
         n->kids = k;
     }
     return k;
+}
+
+// Set a node's macro, into the storage of the last when it fits, so a
+// key bound again and again (a loop, a prompt command) takes no more
+static void keymacro(Arena *a, KeyNode *n, Str s)
+{
+    if (s.len > n->cap) {
+        n->cap = n->cap*2>s.len ? n->cap*2 : s.len;
+        n->macro.data = alloc<u8>(a, n->cap);
+    }
+    if (s.len) copybytes(n->macro.data, s.data, s.len);
+    n->macro.len = s.len;
 }
 
 static void keybind(Arena *a, KeyNode *root, Str seq, i32 fn)
@@ -520,6 +533,7 @@ static KeyNode *keycopy(Arena *a, KeyNode *n)
         for (KeyNode *s = t.from; s; s = s->sib) {
             KeyNode *c = alloc<KeyNode>(a);
             c->macro = edclone(a, s->macro);
+            c->cap   = c->macro.len;
             c->fn    = s->fn;
             c->key   = s->key;
             *tail = c;
@@ -678,6 +692,8 @@ struct Editor {
     b32      rlreading; // messages give the file and line
     b32      ifoff;     // in a false $if
     Slice<b32> ifstack; // the enclosing $ifs' ifoff, never reset
+    Buf      varbufs[7]; // perm: where string settings are copied, used
+                         // again, in edvarbuf's order
     u8       ttysaved[4];  // the terminal's erase, kill, lnext, werase
                            // as last bound
     // The line being edited
@@ -2034,6 +2050,20 @@ static Str edkeepstr(Arena *a, Buf *b, Str s, Str head = {})
     print(b, head);
     print(b, s);
     return finish(b);
+}
+
+// Where a string setting is copied, used again (edkeepstr), so setting
+// it again and again takes no more memory
+static Buf *edvarbuf(Editor *ed, Str *v)
+{
+    Str *vars[] = {&ed->vars.comment, &ed->vars.isterm, &ed->vars.regionstart,
+                   &ed->vars.regionend, &ed->vars.emacsstr, &ed->vars.vicmdstr,
+                   &ed->vars.viinsstr};
+    for (iz i = 0; i < countof(vars); i++) {
+        if (vars[i] == v) return ed->varbufs + i;
+    }
+    assert(0);
+    return 0;
 }
 
 // The longest line, past which an insert fails with the bell: the line
@@ -3788,6 +3818,7 @@ static void edshellcmd(Editor *ed, Shell *sh, Str cmd)
 
     i32   depth = ++sh->capdepth;
     Arena a     = *scratchat(sh, depth);
+    cmd = clone(&a, cmd);  // binding its key again reuses the storage
     Str   names[] = {"READLINE_LINE", "READLINE_POINT", "READLINE_MARK",
                      "READLINE_ARGUMENT"};
     setvar(sh, a, names[0], edtext(ed));
@@ -6526,6 +6557,7 @@ static void edkeep(Editor *to, Editor *from)
     to->nonincbuf   = from->nonincbuf;
     to->kbdbuf      = from->kbdbuf;
     to->macrobuf    = from->macrobuf;
+    copybytes(to->varbufs, from->varbufs, sizeof(to->varbufs));
     to->nonincpos   = from->nonincpos;
     to->vars        = from->vars;
     to->vilastcmd    = from->vilastcmd;

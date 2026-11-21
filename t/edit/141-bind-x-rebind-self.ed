@@ -1,0 +1,20 @@
+# A bind -x command that binds its own key again runs to its end as it
+# was, its later lines too, the new command shorter or longer, and the
+# key then runs that; a macro bound again, longer then shorter, types
+# its new text
+size 14 60
+rc PS1='$ '
+rc long='echo bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+rc bind -x $'"\\C-t": : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nbind -x "\\"\\\\C-t\\": $long"\necho one two three four'
+rc bind -x '"\C-xr": bind -x "\"\\C-xr\": echo a long command, longer than the first"; echo x'
+rc bind '"\C-xm": "short"'
+keys \C-t
+keys \C-t
+keys \C-xr
+keys \C-xr
+keys : \C-xm\r
+keys bind '"\\C-xm": "a longer macro"'\r
+keys : \C-xm\r
+keys bind '"\\C-xm": "mid"'\r
+keys : \C-xm
+snap

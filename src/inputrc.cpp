@@ -252,32 +252,26 @@ static KeyNode *rlkeymap(Editor *ed, i32 km)
 static void rlbind(Editor *ed, Str seq, i32 fn, Str macro)
 {
     if (!seq.len) return;
-    Arena *a = &ed->perm;
-    b32 conv = ed->vars.convertmeta || ed->vars.forcemeta;
-    Buf b(a, seq.len*2);
+    Arena   *a    = &ed->perm;
+    b32      conv = ed->vars.convertmeta || ed->vars.forcemeta;
+    KeyNode *n    = rlkeymap(ed, ed->vars.keymap);
     for (iz i = 0; i < seq.len; i++) {
         u8 c = seq[i];
-        if (conv && c>=0x80) {
-            putbyte(&b, 0x1b);
-            putbyte(&b, c & 0x7f);
-        } else {
-            putbyte(&b, c);
+        u8 keys[2] = {0x1b, (u8)(c & 0x7f)};
+        Str s = conv && c>=0x80 ? Str{keys, 2} : Str{&seq.data[i], 1};
+        for (iz j = 0; j < s.len; j++) {
+            KeyNode *k = keychild(n, s[j]);
+            if (!k) {
+                // A binding of the prefix stays as its shadow, except
+                // do-lowercase-version
+                if (n->fn == EF_DO_LOWERCASE_VERSION) n->fn = EF_NONE;
+                k = keyget(a, n, s[j]);
+            }
+            n = k;
         }
     }
-    Str s = finish(&b);
-    KeyNode *n = rlkeymap(ed, ed->vars.keymap);
-    for (iz i = 0; i < s.len; i++) {
-        KeyNode *k = keychild(n, s[i]);
-        if (!k) {
-            // A binding of the prefix stays as its shadow, except
-            // do-lowercase-version
-            if (n->fn == EF_DO_LOWERCASE_VERSION) n->fn = EF_NONE;
-            k = keyget(a, n, s[i]);
-        }
-        n = k;
-    }
-    n->fn    = fn;
-    n->macro = macro.len ? clone(a, macro) : Str{};
+    n->fn = fn;
+    keymacro(a, n, macro);
 }
 
 static i32 rlfunction(Str name)
@@ -522,7 +516,7 @@ static void rlset(Editor *ed, Shell *sh, RlRead *r, Str s, Arena a)
         if (!value.len) {
             ok = 0;
         } else {
-            *(Str *)v.p = clone(&ed->perm, value);
+            *(Str *)v.p = edkeepstr(&ed->perm, edvarbuf(ed, (Str *)v.p), value);
         }
         break;
     case RV_SEQ:
@@ -539,7 +533,8 @@ static void rlset(Editor *ed, Shell *sh, RlRead *r, Str s, Arena a)
             }
             value = t;
         }
-        *(Str *)v.p = rlkeyseq(&ed->perm, value);
+        *(Str *)v.p = edkeepstr(&ed->perm, edvarbuf(ed, (Str *)v.p),
+                                rlkeyseq(&a, value));
         break;
     case RV_BELL:
         if (!value.len || rlequal(value, "audible") || rlequal(value, "on")) {
@@ -1029,9 +1024,7 @@ static b32 bindcommand(Editor *ed, Shell *sh, Str arg, Arena a)
     if (cmd.len>=2 && (cmd[0]=='"' || cmd[0]=='\'') && cmd[cmd.len-1]==cmd[0]) {
         cmd = span(cmd.data+1, cmd.data+cmd.len-1);
     }
-    rlbind(ed, seq, EF_SHELLCMD, {});
-    KeyNode *n = rlnode(rlkeymap(ed, ed->vars.keymap), seq);
-    if (n) n->macro = clone(&ed->perm, cmd);
+    rlbind(ed, seq, EF_SHELLCMD, cmd);
     return 1;
 }
 
@@ -1177,8 +1170,8 @@ static i32 b_bind(Shell *sh, Str *args, iz nargs, Arena scratch)
         Str      seq = rlkeyseq(a, remove);
         KeyNode *n   = seq.len ? rlnode(map, seq) : 0;
         if (n) {
-            n->fn    = EF_NONE;
-            n->macro = {};
+            n->fn        = EF_NONE;
+            n->macro.len = 0;  // its storage kept (keymacro)
         }
     }
     if (hasx && !bindcommand(ed, sh, command, scratch)) status = 1;
