@@ -762,7 +762,8 @@ static b32 argsviewed(Shell *sh)
 }
 
 // Set the bottom of BASH_ARGV from the positional parameters, once:
-// when first read by name, or when extdebug is turned on, as bash.
+// when first read by name outside functions, by source outside them,
+// or when extdebug is turned on, as bash.
 static void initbashargv(Shell *sh)
 {
     if (sh->argvinit) return;
@@ -785,7 +786,9 @@ static Array *argvarray(Shell *sh, Arena *a, i32 d)
         r->isset = 1;
         return r;
     }
-    initbashargv(sh);
+    // As bash, a read in a function does not set it up either: until
+    // then the bottom holds nothing, not even its count
+    if (!sh->funcdepth || sh->shopt[S_EXTDEBUG]) initbashargv(sh);
     iz n = 1;
     for (Frame *f = sh->frame; f; f = f->up) n += f->argpushed ? f->args.n+1 : 0;
     for (Srcframe *s = sh->srcframes; s; s = s->up) n += s->argpushed ? s->args.n+1 : 0;
@@ -798,7 +801,7 @@ static Array *argvarray(Shell *sh, Arena *a, i32 d)
     Srcframe *s = sh->srcframes;
     for (;;) {
         Args args   = sh->argvbase;
-        b32  pushed = 1;
+        b32  pushed = sh->argvinit;
         b32  last   = 0;
         if (s && s->frame==f) {
             args   = s->args;

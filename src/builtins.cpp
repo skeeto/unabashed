@@ -697,19 +697,21 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     return sourcetext(sh, args+i, nargs-i, src, scratch, 0);
 }
 
-// As bash: a sourced file's arguments end with it, unless it set its
-// own outside a function and was not sourced from one. What set made
-// for the file (Shell.argsown), or the caller's, goes with them.
-static void sourceargs(Shell *sh, iz nargs, Args saved, Args own, b32 wasset)
+// As bash: a sourced file's arguments end with it, unless set replaced
+// them outside a function since the last function call or source, and
+// the file was not sourced from a function. What set made for the file
+// (Shell.argsown), or the caller's, goes with them.
+static void sourceargs(Shell *sh, iz nargs, Args saved, Args own)
 {
-    if (nargs>1 && (sh->funcdepth || !sh->argsset)) {
+    if (nargs < 2) return;
+    if (sh->funcdepth || !sh->argsset) {
         freeargs(sh->store, sh->argsown);
         sh->args    = saved;
         sh->argsown = own;
-    } else if (nargs > 1) {
+    } else {
         freeargs(sh->store, own);  // replaced for good
     }
-    sh->argsset = nargs>1 ? 0 : wasset|sh->argsset;
+    sh->argsset = 0;
 }
 
 // Run a sourced file's text: args[0] is its name, any others the
@@ -721,13 +723,14 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
     Str  file  = args[0];
     Args saved = sh->args;
     Args own   = sh->argsown;
-    b32  wasset = sh->argsset;
     sh->argsset = 0;
     if (nargs > 1) {
         sh->args.v = args + 1;
         sh->args.n = nargs - 1;
         sh->argsown = {};
     }
+    // As bash's _evalfile, which looks BASH_ARGV up
+    if (!sh->funcdepth) initbashargv(sh);
     sh->sourcedepth++;
     sh->status = 0;
     i32 line = sh->line;
@@ -767,7 +770,7 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
         trapunhide(sh, TRAP_DEBUG, sf.debug);
         sh->srcframes = sf.up;
         sh->srcname   = srcname;
-        sourceargs(sh, nargs, saved, own, wasset);
+        sourceargs(sh, nargs, saved, own);
         escape(sh, e->why);
     }
     status = runsource(sh, src, file, scratch);
@@ -790,7 +793,7 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
     }
     sh->line = line;
     sh->sourcedepth--;
-    sourceargs(sh, nargs, saved, own, wasset);
+    sourceargs(sh, nargs, saved, own);
     return status;
 }
 

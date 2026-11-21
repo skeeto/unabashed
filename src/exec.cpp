@@ -2744,6 +2744,8 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->argv0  = {};
         sh->frame  = 0;
         sh->srcframes = 0;  // nor sourcing: BASH_SOURCE is its own
+        sh->argvinit  = 0;  // and BASH_ARGV, set up anew
+        sh->argvbase  = {};
         sh->funcdepth = 0;
         sh->funcs  = 0;
         sh->srcname     = {};
@@ -2977,6 +2979,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     freeargs(sh->store, sh->argsown);  // what set made in the call
     sh->args    = saved;
     sh->argsown = own;
+    sh->argsset = 0;  // as bash's pop_dollar_vars
     if (escaped) {
         escape(sh, e->why);
     }

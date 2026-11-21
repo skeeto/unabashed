@@ -727,8 +727,9 @@ struct Shell {
     i32      rawstatus;    // the running builtin's internal status, as
                            // bash's EX_BADASSIGN (260) or EX_UTILERROR
                            // (263): its forked child exits with it
-    b32      argsset;      // set replaced $@ outside functions, which a
-                           // sourced file with arguments then keeps
+    b32      argsset;      // set replaced $@ outside functions since the
+                           // last function call or source began, which
+                           // a sourced file with arguments then keeps
     b32      exiting;
     b32      interactive;
     b32      login;        // a login shell (logout, ~/.bash_logout)
