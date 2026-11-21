@@ -445,7 +445,10 @@ static Arith arithrun(Shell *sh, Arena *a, Str expr, b32 *readonly, Str who = {}
         env.cur   = up->cur;
     }
     sh->arith = &env;
+    // A variable's value is parsed in place, and may assign the variable
+    storehold(sh->store);
     Arith r = arith(&env, a, expr);
+    storeunhold(sh->store);
     sh->arith = up;
     if (!r.ok && r.unbound) {
         fatalerror(sh, *a, r.err);  // set -u: fatal, with no prefix

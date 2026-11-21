@@ -1517,12 +1517,8 @@ static PcLive pclive(Editor *ed, Shell *sh, Comp *c, b32 *cmdpos)
 // pclive, guarded: an expansion error abandons the completion
 static PcLive pclivesafe(Editor *ed, Shell *sh, Comp *c, b32 *cmdpos)
 {
-    Escape e = {};
-    e.up    = sh->esc;
-    e.bout  = sh->bout;
-    e.undo  = sh->undo;
-    e.frame = sh->frame;
-    sh->esc = &e;
+    Escape e;
+    escenter(sh, &e);
     i32 depth  = sh->capdepth;
     i32 status = sh->status;  // $? and PIPESTATUS kept, as bash's
     i32 npstat = sh->npstat;
@@ -1531,15 +1527,14 @@ static PcLive pclivesafe(Editor *ed, Shell *sh, Comp *c, b32 *cmdpos)
     PcLive r = {};
     if (!jmpset(e.jmp)) {
         r = pclive(ed, sh, c, cmdpos);
+        escleave(sh, &e);
     } else {
-        unwind(sh, e.undo);
-        sh->esc      = e.up;
+        escresume(sh, &e);
         sh->capdepth = depth;
         if (e.why==ESC_EXIT || e.why==ESC_INTR) escape(sh, e.why);
         r = {};
         r.found = 1;  // nothing, and no other completion
     }
-    sh->esc    = e.up;
     sh->status = status;
     if (!sh->pstatdirty) {
         copybytes(newpstat(sh, npstat), pstat, npstat);

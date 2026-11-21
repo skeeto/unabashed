@@ -264,21 +264,17 @@ static Str compexpdir(Shell *sh, Arena *a, Str dir)
         if (dir[i+1]=='{' && i+2<dir.len && compin(" \t\n|", dir[i+2])) return dir;
     }
     if (compexists(sh, *a, dir)) return dir;
-    Escape e = {};
-    e.up    = sh->esc;
-    e.bout  = sh->bout;
-    e.undo  = sh->undo;
-    e.frame = sh->frame;
-    sh->esc = &e;
+    Escape e;
+    escenter(sh, &e);
     i32 status = sh->status;
     Str r = {};
     if (!jmpset(e.jmp)) {
         r = expandstring(sh, a, dir, XC_NOPSUB);
+        escleave(sh, &e);
     } else {
-        unwind(sh, e.undo);
+        escresume(sh, &e);
         r = dir;
     }
-    sh->esc    = e.up;
     sh->status = status;
     return r;
 }

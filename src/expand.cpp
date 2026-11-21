@@ -2189,7 +2189,7 @@ static Str arithtext(Shell *sh, Arena *a, Str body)
     return finish(&b);
 }
 
-static void expandinto(X *x, Str s, i32 ctx)
+static void expandtext(X *x, Str s, i32 ctx)
 {
     Shell *sh = x->sh;
     if (ctx & XC_ASSIGNW) {
@@ -2488,6 +2488,17 @@ static void expandinto(X *x, Str s, i32 ctx)
         i++;
     }
     x->text = outer;
+}
+
+// Expand text into x. Views of store memory taken meanwhile stay valid
+// while the code they lead to runs, as ${x:(x=5)} or a value that is
+// an expression assigning itself: the store is held.
+static void expandinto(X *x, Str s, i32 ctx)
+{
+    Store *st = x->sh->store;
+    storehold(st);
+    expandtext(x, s, ctx);
+    storeunhold(st);
 }
 
 

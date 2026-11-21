@@ -23,6 +23,7 @@
 #include <sys/mman.h>
 #endif
 #define EDIT_CHECK 1
+#define STORE_POISON 1
 #include "src/unabashed.cpp"
 #include "src/fibers.cpp"
 #include "src/check.cpp"

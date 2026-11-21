@@ -9,6 +9,16 @@
 // are set aside meanwhile so the child never reuses memory the parent
 // still references.
 //
+// Lookups return a variable's own string, not a copy, so a reader may
+// hold a view of store memory while the code it runs reassigns or
+// unsets the variable. Word expansion and arithmetic, the readers that
+// run code, hold the store meanwhile (storehold): a block freed while
+// any holder is on the stack stays intact on a deferred list, and the
+// last holder to finish releases it. With no holder, frees take effect
+// at once, so a loop at any depth stays flat. A subshell starts with no
+// holder, and a site that carries on after an escape puts back the
+// count its escape point recorded (Escape.hold, escresume).
+//
 // This is free and unencumbered software released into the public domain.
 
 
@@ -97,6 +107,15 @@ struct Journal {
     uz       old;
 };
 
+enum { NDEFER = 448 };
+
+struct Defer {      // blocks freed while the store was held: 4 KiB
+    Defer *next;
+    iz     len;
+    void  *p[NDEFER];
+    u8     c[NDEFER];  // their size classes
+};
+
 struct Store {
     Arena    a;
     byte    *base;          // start of the store's memory
@@ -106,6 +125,8 @@ struct Store {
     u32      serial;        // innermost subshell, for deduplication
     byte    *floor;         // outermost subshell's watermark, or 0
     b32      vproc;         // a vproc's: may end before vprocs it starts
+    i32      hold;          // holders of views at this level: frees wait
+    Defer   *defer;         // what they wait to free, newest first
 };
 
 static i32 sizeclass(iz size)
@@ -129,17 +150,96 @@ static byte *salloc(Store *st, iz size)
     return (byte *)alloc<Block>(&st->a, (real + 15)/16);
 }
 
-// Return a block to its free list. Memory the parent of the current
-// subshell still owns is left alone: rollback may need it.
+// Put a block on its free list, for the next salloc of its class. Test
+// builds fill it first, so that a reader still holding a view of it
+// sees garbage at once rather than whenever the block is reused.
+static void sput(Store *st, void *p, i32 c)
+{
+    #ifdef STORE_POISON
+    __builtin_memset(p, 0x55, (uz)16<<c);
+    #endif
+    Free *f = (Free *)p;
+    f->next = st->free[c];
+    st->free[c] = f;
+}
+
+static void sdefer(Store *, void *, i32);
+
+// Free a block. Memory the parent of the current subshell still owns
+// is left alone: rollback may need it. While the store is held, some
+// reader up the stack may have a view of the block (a variable's value
+// that the code it runs reassigns), so the block waits, intact and not
+// reusable, until the last holder lets go. Otherwise it is free at
+// once, and a loop of assignments reuses the same few blocks.
 static void sfree(Store *st, void *p, iz size)
 {
     i32 c = sizeclass(size);
     if (!p || c>=NFREE || (byte *)p<st->mark) {
         return;
+    } else if (st->hold) {
+        sdefer(st, p, c);
+        return;
     }
-    Free *f = (Free *)p;
-    f->next = st->free[c];
-    st->free[c] = f;
+    sput(st, p, c);
+}
+
+// Remember a block to free once the store is no longer held. The list
+// lives apart from the blocks, which readers go on reading.
+[[gnu::noinline]]
+static void sdefer(Store *st, void *p, i32 c)
+{
+    Defer *d = st->defer;
+    if (!d || d->len==NDEFER) {
+        d = (Defer *)salloc(st, sizeof(Defer));
+        d->next   = st->defer;
+        st->defer = d;
+    }
+    d->p[d->len] = p;
+    d->c[d->len] = (u8)c;
+    d->len++;
+}
+
+// Free what waited, and the lists themselves, which no reader knows,
+// but the newest, kept empty for the next hold: getting a fresh one
+// clears 4 KiB, which a loop of arithmetic assignments would pay on
+// every evaluation.
+[[gnu::noinline]]
+static void sflush(Store *st)
+{
+    i32    dc   = sizeclass(sizeof(Defer));
+    Defer *keep = st->defer;
+    for (Defer *d = st->defer, *next; d; d = next) {
+        for (iz i = 0; i < d->len; i++) {
+            sput(st, d->p[i], d->c[i]);
+        }
+        next = d->next;
+        if (d != keep) sput(st, d, dc);
+    }
+    keep->next = 0;
+    keep->len  = 0;
+}
+
+// Hold the store around a reader that keeps views of store memory while
+// it runs code that may free them. Every storehold has its storeunhold,
+// unless an escape unwinds past both: then escrestore sets the count
+// back to what escenter recorded (Escape.hold). Until then the count is
+// too high, which only defers frees; it is never too low.
+static void storehold(Store *st)
+{
+    st->hold++;
+}
+
+static void storeunhold(Store *st)
+{
+    if (!--st->hold && st->defer && st->defer->len) sflush(st);
+}
+
+// Set the count back to what an escape point recorded: the holders
+// between here and there are gone with their frames.
+static void storerehold(Store *st, i32 hold)
+{
+    st->hold = hold;
+    if (!hold && st->defer && st->defer->len) sflush(st);
 }
 
 static Str sclone(Store *st, Str s)
@@ -185,8 +285,14 @@ struct Watermark {
     Journal *log;
     Free    *free[NFREE];
     u32      serial;
+    i32      hold;
+    Defer   *defer;
 };
 
+// The child starts unheld, so that its loops free as they go, with a
+// deferred list of its own. The parent's deferred blocks are below the
+// mark, which the child never frees, and wait for the parent's holders;
+// the child's are above it and go with the reset.
 static Watermark storeenter(Store *st)
 {
     Watermark w = {};
@@ -194,6 +300,8 @@ static Watermark storeenter(Store *st)
     w.mark   = st->mark;
     w.log    = st->log;
     w.serial = st->serial;
+    w.hold   = st->hold;
+    w.defer  = st->defer;
     for (i32 i = 0; i < NFREE; i++) {
         w.free[i]   = st->free[i];
         st->free[i] = 0;
@@ -202,6 +310,8 @@ static Watermark storeenter(Store *st)
     st->floor = st->floor ? st->floor : st->mark;
     st->log   = 0;
     st->serial++;
+    st->hold  = 0;
+    st->defer = 0;
     return w;
 }
 
@@ -218,6 +328,8 @@ static void storeleave(Store *st, Watermark *w)
     for (i32 i = 0; i < NFREE; i++) {
         st->free[i] = w->free[i];
     }
+    st->hold   = w->hold;
+    st->defer  = w->defer;
 }
 
 
@@ -368,6 +480,7 @@ struct Escape {
     i32       trapbusy;
     i32       trapstatus;
     i32       trapfuncs;
+    i32       hold;     // the store's hold count (storerehold)
     b32       inchld;
     b32       nolocwarn;
     b32       attail;
@@ -1350,6 +1463,7 @@ static void escenter(Shell *sh, Escape *e)
     e->trapbusy   = sh->trapbusy;
     e->trapstatus = sh->trapstatus;
     e->trapfuncs  = sh->trapfuncs;
+    e->hold       = sh->store->hold;
     e->inchld     = sh->inchld;
     e->nolocwarn  = sh->nolocwarn;
     e->attail     = sh->attail;
@@ -1391,6 +1505,7 @@ static void escrestore(Shell *sh, Escape *e)
     sh->trapbusy   = e->trapbusy;
     sh->trapstatus = e->trapstatus;
     sh->trapfuncs  = e->trapfuncs;
+    storerehold(sh->store, e->hold);  // the abandoned holders are gone
     sh->inchld     = e->inchld;
     sh->nolocwarn  = e->nolocwarn;
     sh->attail     = e->attail;

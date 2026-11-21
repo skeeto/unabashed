@@ -3126,23 +3126,19 @@ static void edshellexpand(Editor *ed, Shell *sh)
     Word w = {};
     w.text = clone(&a, edtext(ed));
     Slice<Str> fields = {};
-    Escape e = {};
-    e.up    = sh->esc;
-    e.bout  = sh->bout;
-    e.undo  = sh->undo;
-    e.frame = sh->frame;
-    sh->esc = &e;
+    Escape e;
+    escenter(sh, &e);
     i32  status = sh->status;
     b32  ok     = 0;
     HistEnt *at = edhistmark(ed, sh);  // a funsub may change the history
     if (!jmpset(e.jmp)) {
         fields = expandwords(sh, &a, &w, XW_NOBRACE|XW_NOGLOB);
         ok = 1;
+        escleave(sh, &e);
     } else {
-        unwind(sh, e.undo);
+        escresume(sh, &e);
     }
     edshellend(ed, sh, at);
-    sh->esc      = e.up;
     sh->status   = status;
     sh->capdepth = depth - 1;
     if (!ok) {

@@ -141,7 +141,7 @@ Research and design reports (about 440 KB, our own summaries with bash source li
 - **Ownership:**
   - Every Value owns its buffer. Assignments and positional parameters copy.
   - `s+=x` appends in place within `cap`, then doubles.
-  - Freed buffers go on a **deferred** list that is released at the next statement boundary. This keeps zero-copy `"$x"` expansions valid while the same command reassigns `x`.
+  - Readers that keep zero-copy views while running code (word expansion, arithmetic) **hold** the store. A buffer freed while any holder is on the stack goes, intact, on a **deferred** list, released when the last holder lets go. This keeps `${x:(x=5)}` and a value that assigns itself valid; with no holder a free takes effect at once, so loops stay flat at any depth. A synchronous subshell starts unheld with its own list; a site that carries on after an escape puts back the count its escape point saved (`Escape.hold`, via `escresume`); until then the count is only too high, which defers frees. Code run inside a holder in the current shell (a `${ ...; }` funsub) defers until it ends.
   - Shared AST nodes never point into transient memory. Node caches (compiled pattern, arithmetic text cache, re-parsed comsub) use fixed slots or per-vproc side tables reset together with scratch.
 - **Reservations** (reserve, then commit lazily):
   - 64-bit: store 16 GiB, scratch 4 GiB.
