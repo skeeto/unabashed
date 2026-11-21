@@ -691,6 +691,14 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     return sourcetext(sh, args+i, nargs-i, src, scratch, 0);
 }
 
+// As bash: a sourced file's arguments end with it, unless it set its
+// own outside a function and was not sourced from one.
+static void sourceargs(Shell *sh, iz nargs, Args saved, b32 wasset)
+{
+    if (nargs>1 && (sh->funcdepth || !sh->argsset)) sh->args = saved;
+    sh->argsset = nargs>1 ? 0 : wasset|sh->argsset;
+}
+
 // Run a sourced file's text: args[0] is its name, any others the
 // positional parameters while it runs. A startup file (bash's own,
 // not the source builtin's) ended by return leaves the status from
@@ -728,20 +736,24 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
         for (i32 k = 0; k < 3; k++) sf.trapat[k] = sh->traps[TRAP_DEBUG+k].data;
     }
     sh->srcframes = &sf;
-    // Pop the frame on the way out of an escape too (exit in the file,
-    // then an EXIT action that reads BASH_SOURCE)
-    Escape e = {};
-    e.up    = sh->esc;
-    e.bout  = sh->bout;
-    e.undo  = sh->undo;
-    e.frame = sh->frame;
-    sh->esc = &e;
+    // Pop the frame and the arguments on the way out of an escape too,
+    // as bash unwinds them
+    Escape *e = alloc<Escape>(&scratch);  // recursion stacks up this frame
+    escenter(sh, e);
     i32 status = 0;
-    if (jmpset(e.jmp)) {
-        sh->esc = e.up;
+    if (jmpset(e->jmp)) {
+        escleave(sh, e);
+        if (e->why==ESC_EXIT && sh->exitcalled) {
+            // As bash, exit runs the EXIT trap still in the file: its
+            // BASH_SOURCE and positional parameters
+            sh->exitcalled = 0;
+            if (!sh->execed && !sh->killsig) runexittrap(sh, scratch);
+        }
         sh->srcframes = sf.up;
         sh->retsrc    = 0;
-        escape(sh, e.why);
+        sh->srcname   = srcname;
+        sourceargs(sh, nargs, saved, wasset);
+        escape(sh, e->why);
     }
     status = runsource(sh, src, file, scratch);
     sh->lexeof    = 0;  // bash pretends the file ended in a newline
@@ -756,7 +768,7 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
         sh->retsrc = 0;
         status = sh->status;
     }
-    sh->esc = e.up;
+    escleave(sh, e);
     if (sh->flow == FLOW_RETURN) {
         // Functions have taken their own returns: this one is the file's
         sh->flow = FLOW_NONE;
@@ -764,10 +776,7 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
     }
     sh->line = line;
     sh->sourcedepth--;
-    // As bash: arguments end with the file, unless it set its own
-    // outside a function and was not sourced from one
-    if (nargs>1 && (sh->funcdepth || !sh->argsset)) sh->args = saved;
-    sh->argsset = nargs>1 ? 0 : wasset|sh->argsset;
+    sourceargs(sh, nargs, saved, wasset);
     return status;
 }
 
