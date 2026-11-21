@@ -550,6 +550,12 @@ static int check(char *argv0, int quick)
         {"kill 0", "kill 0; echo no", UB_SIGNALED|(128+SIGTERM)},
         {"kill -0 group and host", "kill -0 0 && kill -0 $PPID && echo ok", 0, "ok"},
         {"kill -64 0", "trap 'echo t' 64; kill -64 0; echo after", 0, "t\nafter"},
+        #if __APPLE__
+        // Linux's signal 64, which macOS lacks: the executable's status
+        {"kill -64 0 untrapped", "kill -64 0; echo no", 128+64},
+        #else
+        {"kill -64 0 untrapped", "kill -64 0; echo no", UB_SIGNALED|(128+64)},
+        #endif
         {"kill -1, host refused",
          "kill -TERM -1 2>/dev/null; echo a=$?; kill $PPID 2>/dev/null; echo b=$?", 0,
          "a=1\nb=1"},

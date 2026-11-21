@@ -1052,7 +1052,11 @@ static i32 librun(Lib *l, ub_cmd const *cmd)
         if (l->why) {
             r = -l->why;
         } else if (l->status & WSIGNALED) {
-            r = WSIGNALED | (128 + hostsig((l->status & 255) - 128));
+            // In host numbering, or, for one of Linux's the host lacks
+            // (the core numbers as Linux), the plain status that the
+            // executable, unable to die by it, exits with (exitwith)
+            i32 hsig = hostsig((l->status & 255) - 128);
+            r = hsig ? WSIGNALED | (128 + hsig) : l->status & 255;
         } else {
             r = l->status & 255;
         }
