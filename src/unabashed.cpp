@@ -422,7 +422,7 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
     if (!exportablefunc(name) || (sh->opt[O_POSIX] && !validvarname(name))) return;
     if (sh->rshell) return;  // restricted: no functions from outside
     Lexer *L = newlexer(&scratch, concat3(&scratch, name, " ", value));
-    L->stackmax = (iz)1<<20;
+    parselimit(sh, L);
     Parsed p = parseunit(L);
     Node  *n = p.cmd;
     if (p.status!=PARSE_OK || !n || n->kind!=N_FUNCDEF || !(n->name->text == name) ||

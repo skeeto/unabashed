@@ -852,6 +852,16 @@ static Str readwholefile(Shell *, Arena *, Str, i32 *);
 
 static Str redirtarget(Shell *, Arena *, Word *, b32 *);
 
+// The stack a parse the shell starts may use: 1 MiB from its entry,
+// which bounds the depth of the tree for the code that walks it, and
+// never past the shell's own limit, which a parse begun deep in a
+// recursion, or on a fiber's smaller stack, would otherwise overrun.
+static void parselimit(Shell *sh, Lexer *L)
+{
+    L->stackmax   = (iz)1<<20;
+    L->stackfloor = sh->stackmax ? sh->stacktop-sh->stackmax : 0;
+}
+
 // The file word of $(< file), or null if src is not that form.
 static Word *fileread(Shell *sh, Arena *a, Str src)
 {
@@ -859,7 +869,7 @@ static Word *fileread(Shell *sh, Arena *a, Str src)
     if (!t.len || t[0]!='<') return {};
     Arena tmp = *a;
     Lexer *L = newlexer(&tmp, t);
-    L->stackmax = (iz)1<<20;
+    parselimit(sh, L);
     Parsed p = parseunit(L);
     Node *n = p.cmd;
     if (p.status!=PARSE_OK || !n || n->kind!=N_SIMPLE || n->words || !n->redirs ||
@@ -5304,7 +5314,7 @@ static void checkcomplist(Shell *sh, Arena scratch, Str body)
 {
     Str    src = concat3(&scratch, "A=(", body, ")");
     Lexer *L   = newlexer(&scratch, src);
-    L->stackmax = (iz)1<<20;
+    parselimit(sh, L);
     L->extglob  = L->extglobopt = sh->shopt[S_EXTGLOB];
     L->posix    = sh->opt[O_POSIX];
     L->extquote = sh->shopt[S_EXTQUOTE];
@@ -5414,7 +5424,7 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     L->newunit       = 1;
     L->lineno        = line - 1;
     L->aliases       = &sh->aliases;
-    L->stackmax      = (iz)1<<20;
+    parselimit(sh, L);
     L->expandaliases = L->aliasopt = sh->shopt[S_EXPAND_ALIASES];
     L->extglob       = L->extglobopt = sh->shopt[S_EXTGLOB];
     L->posix         = sh->opt[O_POSIX];

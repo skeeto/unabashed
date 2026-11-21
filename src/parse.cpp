@@ -398,6 +398,8 @@ struct Lexer {
     // Recursion limit: bash has none and crashes on absurd nesting
     byte    *stacktop;   // stack position at entry to the parse
     iz       stackmax;   // bytes of stack the parse may use, 0 for any
+    byte    *stackfloor; // and the lowest address it may reach, if any:
+                         // the shell's own limit, wherever the parse starts
     b32      overflow;   // the limit was hit
 };
 
@@ -427,7 +429,8 @@ static void message(Lexer *L, i32 line, Str text, i32 kind = MSG_ERROR)
 static void checkstack(Lexer *L)
 {
     byte here = 0;
-    if (L->stackmax && L->stacktop-STACKAT(here) > L->stackmax) {
+    byte *at  = STACKAT(here);
+    if ((L->stackmax && L->stacktop-at > L->stackmax) || at < L->stackfloor) {
         L->overflow = 1;
         parsefail(L);
     }
@@ -3244,6 +3247,7 @@ static iz skipexpansion(Lexer *outer, Str s, iz i, b32 dquote, b32 *ended = 0)
     L->utf8     = outer->utf8;
     L->stacktop = outer->stacktop;
     L->stackmax = outer->stackmax;
+    L->stackfloor = outer->stackfloor;
     if (jmpset(L->jmp)) {
         if (L->overflow) {
             outer->overflow = 1;
