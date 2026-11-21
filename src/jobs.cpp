@@ -1139,18 +1139,25 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     // forks, and not again in the job (debugdone, under functrace)
     if (stagedebug(sh, n, sh->status, scratch)) return;
     b32 debugged = n->kind==N_SIMPLE && sh->traps && sh->traps[TRAP_DEBUG].len;
-    if (!sh->opt[O_FUNCTRACE]) {
-        // and each simple stage of a pipeline, which the job (with no
-        // DEBUG then) runs without it, as runpipeline flattens it
-        i32 before = sh->status;
-        for (Node *c = n; c->kind==N_CONNECT && c->connector=='|';) {
-            if (stagedebug(sh, c->a, before, scratch)) return;
-            c = c->b;
-            if (c->flags || c->redirs) break;
-            if (c->kind!=N_CONNECT || c->connector!='|') {
-                if (stagedebug(sh, c, before, scratch)) return;
+    // and each simple stage of a pipeline, as runpipeline flattens it,
+    // which the job (with no DEBUG then) runs without it. Under
+    // functrace the job runs DEBUG for them, but here BASH_COMMAND is
+    // still the last simple stage, as stagedebug leaves it.
+    i32 before = sh->status;
+    for (Node *c = n; c->kind==N_CONNECT && c->connector=='|';) {
+        Node *stage = c->a;
+        Node *next  = c->b;
+        b32   end   = next->kind!=N_CONNECT || next->connector!='|' ||
+                      next->flags || next->redirs;
+        for (i32 i = 0; i <= end; i++, stage = next) {
+            if (!sh->opt[O_FUNCTRACE]) {
+                if (stagedebug(sh, stage, before, scratch)) return;
+            } else if (stage->kind==N_SIMPLE && !sh->intrap) {
+                sh->cmdnode = stage;
             }
         }
+        if (end) break;
+        c = next;
     }
     // Without job control, or in a subshell, its input is /dev/null
     // unless redirected, here or around it; as bash, never a pipeline's

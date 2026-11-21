@@ -1037,13 +1037,15 @@ static b32 stagedebug(Shell *sh, Node *stage, i32 before, Arena scratch,
                       Stages *started = 0)
 {
     if (sh->flow) return 1;
+    // As bash, which prints a simple command for BASH_COMMAND before it
+    // forks for it, the last such stage started stays BASH_COMMAND here
+    if (stage->kind==N_SIMPLE && !sh->intrap) sh->cmdnode = stage;
     if (stage->kind!=N_SIMPLE || !sh->traps || !sh->traps[TRAP_DEBUG].len) {
         return 0;
     }
     sh->status  = before;
     sh->line    = stage->line;
     sh->current = stage;
-    if (!sh->intrap) sh->cmdnode = stage;
     b32 skip = started ? stagesdebugtrap(sh, scratch, started)
                        : rundebugtrap(sh, scratch);
     if (!sh->flow) sh->status = before;
