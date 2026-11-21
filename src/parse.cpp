@@ -266,8 +266,9 @@ struct Alias {
     Alias *child[4];
     Str    name;
     Str    value;
-    b32    expanding;  // currently being expanded
     uz     seq;        // order of definition, for BASH_ALIASES
+    b32    inherited;  // a vproc's copy of one its starter was expanding,
+                       // whose parse does not go on here
 };
 
 // Look up an alias by name. Returns null if not found or unaliased.
@@ -322,6 +323,9 @@ struct Lexer {
                          // line looking past it (end-of-file errors)
     i32      ungot;      // pushed-back character after the line
     Pushed  *pushed;
+    Lexer   *up;         // the parse this one is nested in (eval, source,
+                         // a trap action): its aliases being expanded
+                         // are not expanded here either
     i32      lineno;
     b32      unquotedbs; // unquoted_backslash
     b32      heredocstring;  // reading a here-document from alias text
@@ -667,7 +671,6 @@ static void pushstring(Lexer *L, Str s, Alias *alias, b32 dparen)
     L->line   = clone(L->a, s);
     L->idx    = 0;
     if (alias) {
-        alias->expanding = 1;
         p->expandnext = alias->value.len && shellblank(alias->value[alias->value.len-1]);
     }
 }
@@ -677,9 +680,6 @@ static void popstring(Lexer *L)
     Pushed *p = L->pushed;
     if (p->expandnext) {
         L->pst |= PST_ALEXPNEXT;
-    }
-    if (p->alias) {
-        p->alias->expanding = 0;
     }
     L->line   = p->line;
     L->idx    = p->idx;
@@ -703,6 +703,19 @@ static i32 currentdelim(Lexer *L)
 {
     i32 d = L->ddepth;
     return d && d<=(i32)sizeof(L->dstack) ? L->dstack[d-1] : 0;
+}
+
+// Is this alias being expanded, by this parse or one it is nested in?
+// Only the input stacks say so, so that an abandoned parse, whose stack
+// is dropped, leaves nothing behind.
+static b32 aliasbusy(Lexer *L, Alias *al)
+{
+    for (; L; L = L->up) {
+        for (Pushed *p = L->pushed; p; p = p->next) {
+            if (p->alias == al) return 1;
+        }
+    }
+    return al->inherited;
 }
 
 static b32 expandingalias(Lexer *L)
@@ -1988,7 +2001,7 @@ gottoken:
     if (L->expandaliases && !quoted && L->aliases &&
             ((L->pst & PST_ALEXPNEXT) || assignok(L, L->last))) {
         Alias *al = findalias(*L->aliases, text);
-        if (al && !al->expanding) {
+        if (al && !aliasbusy(L, al)) {
             pushstring(L, al->value, al, 0);
             return T_ERROR - 1;  // re-read
         }

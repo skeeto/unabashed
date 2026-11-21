@@ -614,6 +614,7 @@ static void runjob(Shell *sh, SubJob *j, Arena scratch)
     case SUB_SOURCE:
         // Parsed again at run time, so its syntax errors are its own
         sh->tracedepth++;  // restored with the subshell
+        sh->lexfloor = sh->lexer;  // its aliases may expand here (runsource1)
         runsource(sh, j->src, "command substitution", scratch, 0, j->line,
                   0, 0, j->comsub);
         break;
@@ -4993,6 +4994,9 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     }
     Lexer *outer = sh->lexer;
     Str    oname = sh->iname;
+    // Aliases the parse around it is expanding stay unexpanded, but in
+    // a command substitution, whose parser bash's child resets
+    L->up      = outer!=sh->lexfloor ? outer : 0;
     sh->lexer  = L;
     sh->iname  = iname;
     sh->lexeof = 0;

@@ -160,15 +160,18 @@ static void releasefuncs(Shell *sh, Func *f)
 
 static CompTable *compscopy(Store *, CompTable *);  // pcomplete.cpp
 
-static Alias *copyaliases(Store *st, Alias *a)
+// The copy remembers which aliases the parse running at the copy was
+// expanding: as in bash's child, they stay unexpanded.
+static Alias *copyaliases(Store *st, Alias *a, Lexer *L)
 {
     if (!a) return 0;
     Alias *c = (Alias *)salloc(st, sizeof(Alias));
     c->name  = sclone(st, a->name);
     c->value = sclone(st, a->value);
     c->seq   = a->seq;
+    c->inherited = aliasbusy(L, a);
     for (i32 i = 0; i < 4; i++) {
-        c->child[i] = copyaliases(st, a->child[i]);
+        c->child[i] = copyaliases(st, a->child[i], L);
     }
     return c;
 }
@@ -383,7 +386,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->vars    = copyvars(st, sh->vars);
     c->ifs     = 0;
     c->funcs   = copyfuncs(st, sh->funcs, image);
-    c->aliases = copyaliases(st, sh->aliases);
+    c->aliases = copyaliases(st, sh->aliases, sh->lexer);
     c->comps   = compscopy(st, sh->comps);
     c->compcur = 0;
     c->compcurkey = {};
@@ -456,6 +459,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->arith    = 0;
     c->bout     = 0;
     c->lexer    = 0;
+    c->lexfloor = 0;
     c->current  = 0;
     c->compargs = {};
     c->capdepth = 0;

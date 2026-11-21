@@ -520,6 +520,7 @@ struct Shell {
     Store   *store;
     Fdtab   *fds;
     Lexer   *lexer;        // the innermost parser, for its options
+    Lexer   *lexfloor;     // the parser around a command substitution
     BOut    *bout;
     Spawnto *spawnto;      // start the next program without waiting
     Arena   *pool[NPOOL];  // scratch arenas for nested captures, by depth
