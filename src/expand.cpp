@@ -2155,13 +2155,25 @@ static Str userhome(Shell *sh, Arena *a, Str user)
     return pwfield(sh, a, user, 5);
 }
 
-// The shell's own user's name, as bash's \u takes it from getpwuid and
-// not from USER: from the password file, else (an account it lacks, as
-// on macOS, or Windows) the name the environment gave at startup.
+// The shell's own user's name, as bash's \u takes it from getpwuid,
+// on first use, and not from USER: from the platform's user database,
+// with bash's stand-in where it lacks the account; else from the
+// password file, else (Windows) the name the environment gave.
 static Str ownuser(Shell *sh, Arena *a)
 {
-    Str name = pwfield(sh, a, {}, 0);
-    return name.data ? name : sh->user;
+    if (!sh->ownnamed) {
+        UserName u    = os_username(sh->os, a);
+        Str      name = u.name;
+        if (u.err == E_NOENT) {
+            name = "I have no name!";
+        } else if (u.err) {
+            name = pwfield(sh, a, {}, 0);
+            if (!name.data) name = sh->user;
+        }
+        sh->ownname  = sclone(sh->store, name);
+        sh->ownnamed = 1;
+    }
+    return sh->ownname;
 }
 
 static Str tildeprefix(X *x, Str prefix, b32 *ok)

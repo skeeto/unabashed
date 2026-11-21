@@ -418,6 +418,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image, u32 skip = 0)
     }
     c->host       = sclone(st, sh->host);
     c->user       = sclone(st, sh->user);
+    c->ownname    = sclone(st, sh->ownname);
     c->hosts      = sclone(st, sh->hosts);
     c->badenv     = (Str *)salloc(st, (sh->nbadenv ? sh->nbadenv : 1)*(iz)sizeof(Str));
     for (iz i = 0; i < sh->nbadenv; i++) c->badenv[i] = sclone(st, sh->badenv[i]);

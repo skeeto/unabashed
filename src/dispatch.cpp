@@ -266,6 +266,11 @@ static Str os_localtz(Os *os, Arena *a)
     return osvtable(os)->localtz(os, a);
 }
 
+static UserName os_username(Os *os, Arena *a)
+{
+    return osvtable(os)->username(os, a);
+}
+
 static void os_tasktag(Os *os, u64 tag, iz ntasks, u64 group)
 {
     osvtable(os)->tasktag(os, tag, ntasks, group);

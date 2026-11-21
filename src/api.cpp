@@ -99,6 +99,11 @@ struct ClipText {
     i32 err;
 };
 
+struct UserName {
+    Str name;
+    i32 err;  // E_NOENT: no such account; E_NOSYS: no user database
+};
+
 struct OsPipe {
     Handle r;
     Handle w;
@@ -511,6 +516,12 @@ static i32     os_clipset(Os *, Arena scratch, Str text);
 // environment, in TZ's own syntax: a POSIX TZ string ("EST5EDT,M3.2.0,
 // M11.1.0"), or ':' and the absolute path of a zoneinfo file.
 static Str     os_localtz(Os *, Arena *);
+// The name of the account the shell runs as (OsInfo.uid), as the
+// system's user database gives it (getpwuid). Asked only when wanted,
+// as it may take a while (macOS asks a daemon). err E_NOENT where the
+// database lacks the account, E_NOSYS where the platform has none to
+// ask (the core then reads /etc/passwd, else takes USER).
+static UserName os_username(Os *, Arena *);
 // The currently running fiber, converting the thread on first use.
 static Fiber  *os_self(Os *);
 // Create a suspended fiber running fn(os, arg), which must never
@@ -584,7 +595,8 @@ static Str     lib_root(Os *);
 // 5: os_close returns a gathered write's failure
 // 6: os_getcwd
 // 7: os_tty's TTY_RAWSIG and Tty.mode
-enum : i32 { OSVTABLE_VERSION = 7 };
+// 8: os_username
+enum : i32 { OSVTABLE_VERSION = 8 };
 
 struct OsVtable {
     i32 version;  // the OSVTABLE_VERSION it implements
@@ -642,6 +654,7 @@ struct OsVtable {
     decltype(os_tasktag)    *tasktag;
     decltype(os_racy)       *racy;
     decltype(os_writeerr)   *writeerr;
+    decltype(os_username)   *username;
 };
 // Entry point, called by the platform after it fills in OsInfo. Given a
 // table of another OSVTABLE_VERSION, it writes a message to std[2]

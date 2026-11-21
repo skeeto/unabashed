@@ -947,6 +947,37 @@ static void test_vtable(Test *t)
     expectint(t, "vtable version status", r.status, 126);
 }
 
+// A user database for test_username, counting the lookups
+static i32 usernames;
+static i32 usernameerr;
+static UserName countusername(Os *, Arena *)
+{
+    usernames++;
+    return {usernameerr ? Str{} : Str("dbname"), usernameerr};
+}
+
+// \u asks the platform's user database once, on first use (never at
+// startup), whatever USER says; an account it lacks is bash's stand-in
+static void test_username(Test *t)
+{
+    Os *os = t->os;
+    static OsVtable filter;
+    filter          = vosvtable;
+    filter.username = countusername;
+    os->vt          = &filter;
+    usernames   = 0;
+    usernameerr = 0;
+    Result r = runc(t, "echo hi");
+    expectint(t, "username not at startup", usernames, 0);
+    r = runc(t, "p='[\\u]'; echo \"${p@P} ${p@P}\"; USER=x; echo \"${p@P}\"");
+    expect(t, "username", r.out, "[dbname] [dbname]\n[dbname]\n");
+    expectint(t, "username once", usernames, 1);
+    usernameerr = E_NOENT;
+    r = runc(t, "p='\\u'; echo \"${p@P}\"");
+    expect(t, "username none", r.out, "I have no name!\n");
+    os->vt = 0;
+}
+
 static void test_arena(Test *t)
 {
     Os *os = t->os;
@@ -2393,6 +2424,7 @@ int main(int argc, char **argv)
     test_treestack(&t);
     test_vtable(&t);
     test_latewrite(&t);
+    test_username(&t);
 
     if (argc>3 && (!strcmp(argv[1], "--oracle") || !strcmp(argv[1], "--oracle-v"))) {
         // --oracle SUITEDIR NAME...: bash test suite runs on the vos

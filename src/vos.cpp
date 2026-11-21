@@ -2094,6 +2094,9 @@ static u64 vos_entropy(Os *os)
     return vmix(p->lid ? p->lid : (u64)p->pid, ++p->entropies);
 }
 
+// No user database but the virtual /etc/passwd, which the core reads
+static UserName vos_username(Os *, Arena *) { return {{}, E_NOSYS}; }
+
 // The system zone: UTC as in the oracle's container, unless a test
 // configures another (a spec's "# localtz:" line).
 static Str vos_localtz(Os *os, Arena *)
@@ -4507,6 +4510,7 @@ static OsVtable const vosvtable = {
     .tasktag    = vos_tasktag,
     .racy       = vos_racy,
     .writeerr   = vos_writeerr,
+    .username   = vos_username,
 };
 
 static i32 os_umask(Os *)

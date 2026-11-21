@@ -2121,6 +2121,19 @@ static Str plt_localtz(Os *, Arena *)
     return ":/etc/localtime";
 }
 
+// getpwuid's name, as bash takes it: macOS keeps its accounts out of
+// /etc/passwd, and Linux may keep some elsewhere (NSS)
+static UserName plt_username(Os *, Arena *a)
+{
+    struct passwd pw, *p = 0;
+    for (iz cap = 1<<10; cap <= 1<<20; cap *= 2) {
+        char *buf = (char *)allocbytes(a, cap);
+        if (getpwuid_r(getuid(), &pw, buf, (size_t)cap, &p) != ERANGE) break;
+    }
+    if (!p || !p->pw_name) return {{}, E_NOENT};
+    return {fromcstr(p->pw_name), 0};
+}
+
 // The platform table (api.cpp, OsVtable)
 static constexpr OsVtable pltvtable = {
     .version    = OSVTABLE_VERSION,
@@ -2178,6 +2191,7 @@ static constexpr OsVtable pltvtable = {
     .tasktag    = plt_tasktag,
     .racy       = plt_racy,
     .writeerr   = plt_writeerr,
+    .username   = plt_username,
 };
 
 

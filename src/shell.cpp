@@ -836,6 +836,8 @@ struct Shell {
                            // to copy them to (low ulimit -n): it fails
     Str      host;         // the host's name, as the shell started
     Str      user;         // USER (Windows: USERNAME) as the shell started
+    Str      ownname;      // \u's name (ownuser), once looked up
+    b32      ownnamed;
     Str      hosts;        // completion's host names, one per line,
     b32      hostsread;    // kept from HOSTFILE once there are any
     Str     *dirs;         // the directory stack under the working

@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
+#include <pwd.h>
 #include <sched.h>
 #include <signal.h>
 #include <spawn.h>
