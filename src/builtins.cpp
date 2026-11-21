@@ -4969,7 +4969,7 @@ static Builtin builtins[] = {
     {".",        b_source,   B_SPECIAL},
     {":",        b_colon,    B_SPECIAL|B_NOHELP},
     {"[",        b_test,     B_NOHELP},
-    {"alias",    b_alias,    0},
+    {"alias",    b_alias,    B_ASSIGN},
     {"bg",       b_bg,       0},
     {"bind",     b_bind,     0},
     {"break",    b_break,    B_SPECIAL},

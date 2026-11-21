@@ -18,6 +18,7 @@ enum : i32 {
     B_MSYS    = 1<<2,  // msys mode only (cygpath)
     B_NOHELP  = 1<<3,  // --help is an ordinary argument
     B_NATIVE  = 1<<4,  // native mode only (title)
+    B_ASSIGN  = 1<<5,  // assignment arguments, but not a declaration (alias)
 };
 
 static Builtin *findbuiltin(Shell *, Str name);
@@ -3424,8 +3425,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     // Procsubs in the words close with the command's redirections
     Undo *mark = sh->undo;
 
-    // Is the command a declaration builtin? Then its assignment-looking
-    // arguments expand as assignments.
+    // Is the command a declaration builtin, or alias? Then its
+    // assignment-looking arguments expand as assignments.
     Slice<Str> argv = {};
     Slice<u8>  compargs = {};
     b32 decl = 0;
@@ -3451,6 +3452,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         Builtin *b = !cw ? 0 : named && cw->text==first[0] ? usablebuiltin(sh, entry)
                    : usablebuiltin(sh, tablebuiltin(cw->text));
         decl = b && (b->flags & B_DECL);
+        b32 asgn = b && (b->flags & (B_DECL|B_ASSIGN));
         while (cw && cw->text=="command") cw = cw->next;
         b32 refs  = cw && arrayvarbuiltin(sh, cw->text);
         b32 unset = refs && cw->text=="unset";
@@ -3466,7 +3468,31 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
                 compargs = push(a, compargs, (u8)1);
                 argv = push(a, argv, w->text);
                 continue;
-            } else if (decl && (w->flags & W_ASSIGNMENT)) {
+            } else if (asgn && (w->flags & W_COMPASSIGN)) {
+                // alias name=(...): as bash's assignment builtins, the
+                // shell assigns the array first (to the visible variable,
+                // as declare -gG), abandons the command if that fails,
+                // and passes on only the name
+                iz  eq     = assignment(w->text, 0);
+                Str vname  = takehead(w->text, eq);
+                b32 append = vname.len && vname[vname.len-1]=='+';
+                if (append) vname = cuttail(vname, 1);
+                Str base, sub;
+                if (splitref(vname, &base, &sub)) {
+                    Arena t = *a;
+                    Str msg = concat(&t, vname, ": cannot assign list to array member");
+                    shellerror(sh, t, msg);
+                    sh->status = 1;
+                    escape(sh, ESC_DISCARD);
+                }
+                Str body = cuttail(cuthead(w->text, eq+2), 1);
+                if (!assigncompound(sh, *a, vname, body, append ? SV_APPEND : 0, 1)) {
+                    sh->status = 1;
+                    escape(sh, ESC_DISCARD);
+                }
+                argv = push(a, argv, vname);
+                continue;
+            } else if (asgn && (w->flags & W_ASSIGNMENT)) {
                 // Brace expanded, but not split or globbed
                 more = expandwords(sh, a, &one2, XW_NOSPLIT|XW_NOGLOB|XW_ASSIGN);
             } else if (unset && arrayrefword(sh, *a, w->text)) {
