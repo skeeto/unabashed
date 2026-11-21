@@ -1,0 +1,51 @@
+== stdout 200
+1 [file ]
+2 [piped ]
+3 [piped ]
+4 []
+5 []
+6 []
+7 []
+8 [piped ]
+9 [cp ]
+== after { :; } < /dev/null
+s1 [input ]
+s2 []
+s3 []
+s4 []
+s5 []
+s6 [input ]
+s7 [input ]
+s8 [hi ]
+s9 []
+s10 []
+s11 [here ]
+s12 []
+
+== stderr 0
+
+== merged 200
+1 [file ]
+2 [piped ]
+3 [piped ]
+4 []
+5 []
+6 []
+7 []
+8 [piped ]
+9 [cp ]
+== after { :; } < /dev/null
+s1 [input ]
+s2 []
+s3 []
+s4 []
+s5 []
+s6 [input ]
+s7 [input ]
+s8 [hi ]
+s9 []
+s10 []
+s11 [here ]
+s12 []
+
+== status 0

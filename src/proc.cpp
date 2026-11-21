@@ -618,7 +618,6 @@ static Vproc *vprocwith(Shell *sh, File *in, File *out)
     if (in) {
         fileunref(c, t->fd[0]);
         t->fd[0] = copyfile(c, in);
-        c->stdinredir = 1;
     }
     if (out) {
         fileunref(c, t->fd[1]);
@@ -810,6 +809,7 @@ static Str procsubst(Shell *sh, Arena *a, Str body, b32 output)
     m->src = clone(&m->perm, body);
     m->sh->noreport = 1;  // nothing it runs is reported, as in bash
     m->sh->subchild = 1;
+    m->sh->stdinredir |= output;  // its input is the pipe
     Task *task = taskspawn(sh->sched, vprocmain, m, BIGSTACK);
     task->pid   = m->sh->bashpid;
     task->group = task->tag;  // tracing: not waited for in place

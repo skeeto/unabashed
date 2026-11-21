@@ -1389,7 +1389,15 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
         mine.rfd  = fds[0];
         mine.wfd  = fds[3];
         sh->coprocs = &mine;  // the vproc closes the shell's ends
+        // As bash's child, its command reads the pipe, but a ( list )
+        // only by its own redirections, and those of another compound
+        // command, applied before it runs, leave that
+        b32 redir = sh->stdinredir;
+        sh->stdinredir = body->kind==N_SUBSHELL ? stdinredirects(body->redirs) : 1;
+        sh->forkstdin  = body->redirs && body->kind!=N_SIMPLE && body->kind!=N_CONNECT;
         task = spawnbg(sh, body, r2, w1, &pid, scratch);
+        sh->stdinredir = redir;
+        sh->forkstdin  = 0;
         sh->coprocs = mine.next;
     }
     fileunref(sh, r2);
