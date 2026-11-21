@@ -3603,9 +3603,14 @@ static Hidden hidelocal(Shell *sh, Str name, i32 flags)
     return r;
 }
 
+// What was visible meanwhile is what the local now hides: the code the
+// expansion ran may have unset the old binding and freed it.
 static void unhide(Hidden h)
 {
-    if (h.var) h.var->top = h.top;
+    if (h.var) {
+        h.top->below = h.var->top;
+        h.var->top   = h.top;
+    }
 }
 
 // The table an associative append goes to, looked up again after each
