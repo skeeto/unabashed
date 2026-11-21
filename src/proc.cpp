@@ -1055,15 +1055,16 @@ static b32 stagesdebugtrap(Shell *sh, Arena scratch, Stages *p)
 // the stage does not run it again (debugdone). Returns whether extdebug
 // skips the stage, which then does not start. If the action returns
 // from a function (sh->flow), no further stage starts either. With
-// started, the pipeline's stages so far, should the action escape.
+// started, the pipeline's stages so far, should the action escape. With
+// ran, a job's stage whose DEBUG its parent ran: only BASH_COMMAND.
 static b32 stagedebug(Shell *sh, Node *stage, i32 before, Arena scratch,
-                      Stages *started = 0)
+                      Stages *started = 0, b32 ran = 0)
 {
     if (sh->flow) return 1;
     // As bash, which prints a simple command for BASH_COMMAND before it
     // forks for it, the last such stage started stays BASH_COMMAND here
     if (stage->kind==N_SIMPLE && !sh->intrap) sh->cmdnode = stage;
-    if (stage->kind!=N_SIMPLE || !sh->traps || !sh->traps[TRAP_DEBUG].len) {
+    if (ran || stage->kind!=N_SIMPLE || !sh->traps || !sh->traps[TRAP_DEBUG].len) {
         return 0;
     }
     sh->status  = before;
@@ -1213,7 +1214,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     for (i32 k = 0; k+1 < nstages; k++) {
         if (!sh->flow) sh->status = before;
         statuses[k] = 0;
-        b32 skip  = stagedebug(sh, stages[k], before, scratch, &started);
+        b32 skip  = stagedebug(sh, stages[k], before, scratch, &started, bg);
         b32 retry = !skip;
         ran[k] = !skip;
         sh->debugdone = stages[k]->kind == N_SIMPLE;
@@ -1275,9 +1276,9 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     // The last stage here, reading the previous stage's output
     i32   last  = nstages - 1;
     Node *stage = stages[last];
-    b32   inhere = sh->shopt[S_LASTPIPE] && !sh->jobctl;
+    b32   inhere = sh->shopt[S_LASTPIPE] && !sh->jobctl && !bg;
     b32   skip   = (!inhere || sh->flow) &&
-                   stagedebug(sh, stage, before, scratch, &started);
+                   stagedebug(sh, stage, before, scratch, &started, bg);
     i32   flowed = sh->flow ? sh->status : -1;  // the action's return
     ran[last] = !skip;
     Undo *mark  = sh->undo;
