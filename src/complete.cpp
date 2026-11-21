@@ -115,10 +115,12 @@ static b32 compeq(Editor *ed, Str a, Str b, iz len)
     return 1;
 }
 
+// A copy: quoting uses it after a completion function, which may
+// assign it, has run, and menu-complete keeps it across keys
 static Str compbreaks(Shell *sh, Arena *a)
 {
     Got g = getvar(sh, a, "COMP_WORDBREAKS");
-    if (g.set) return g.value;
+    if (g.set) return clone(a, g.value);
     return wordbreaks(sh, sh->shopt[S_HOSTCOMPLETE]);
 }
 

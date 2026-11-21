@@ -511,7 +511,8 @@ static Slice<Str> pcjobs(Shell *sh, Arena *a, i32 which)
         Str t = j->text;
         iz  e = 0;
         for (; e<t.len && t[e]!=' ' && t[e]!='\t'; e++) {}
-        m = push(a, m, takehead(t, e));
+        // copied: a -F function may free the job (disown, wait)
+        m = push(a, m, clone(a, takehead(t, e)));
     }
     return m;
 }

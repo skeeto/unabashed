@@ -1,0 +1,15 @@
+# What a completion keeps while its function runs is its own copy:
+# COMP_WORDBREAKS as it was (quoting used the string the function's
+# assignment freed), and -j's job names (a function's disown -a freed
+# the job's text), each freed block then reused by assignments
+size 10 70
+rc PS1='$ '
+rc COMP_WORDBREAKS=$' \t\n"\'><=;|&(:'; x=1
+rc f() { COMP_WORDBREAKS=' '; x=abcdefghijklmno; COMPREPLY=('abc def'); compopt -o filenames; }
+rc complete -F f foo
+rc g() { disown -a; v1=XXXXXXXXX; v2=YYYYYYYYY; v3=ZZZZZZZZZ; }
+rc complete -j -F g bar
+rc { sleep 30 & } 2>/dev/null
+keys foo abc\t
+snap
+keys \C-a\C-kbar sl\t

@@ -1,0 +1,6 @@
+== snap 1
+$ foo abc\ def
+@ 0,15
+== snap 2
+$ bar sleep
+@ 0,12
