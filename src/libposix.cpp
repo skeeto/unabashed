@@ -562,8 +562,6 @@ static Io *libwait(Os *os, i64 deadline)
 {
     Lib *l = (Lib *)os;
     if (deadline != WAIT_POLL) flushw(os);
-    enum { MAXPOLL = 256 };
-    struct pollfd fds[MAXPOLL];
     for (i32 backoff = 1;; backoff = backoff<64 ? backoff*2 : 64) {
         checkhard(l);
         Io *done = takeproc(os);
@@ -574,8 +572,10 @@ static Io *libwait(Os *os, i64 deadline)
 
         b32 procs   = 0;  // a pending program not watched
         b32 watched = 0;
-        b32 trunc   = 0;
-        i32 n = 0;
+        iz  max     = 2;
+        for (Io *io = os->pending; io; io = io->next) max += !isproc(io);
+        struct pollfd *fds = pollroom(os, max);
+        iz n = 0;
         fds[n].fd        = os->wakefd[0];
         fds[n].events    = POLLIN;
         fds[n++].revents = 0;
@@ -590,10 +590,6 @@ static Io *libwait(Os *os, i64 deadline)
                 procs   |= !w;
                 continue;
             }
-            if (n == MAXPOLL) {
-                trunc = 1;
-                continue;
-            }
             fds[n].fd        = (i32)io->h;
             fds[n].events    = io->op==IO_READ ? POLLIN : POLLOUT;
             fds[n++].revents = 0;
@@ -606,7 +602,7 @@ static Io *libwait(Os *os, i64 deadline)
             i64 left = (deadline - plt_now(os) + 999999) / 1000000;
             timeout = left<0 ? 0 : left>(1<<30) ? (1<<30) : (i32)left;
         }
-        if ((procs || trunc || named) && (timeout<0 || timeout>backoff)) {
+        if ((procs || named) && (timeout<0 || timeout>backoff)) {
             timeout = backoff;
         }
         if (!watched) fds[1].fd = -1;  // ignored
@@ -620,7 +616,7 @@ static Io *libwait(Os *os, i64 deadline)
         checkhard(l);
         if (os->sigbits || os->grpbits) return 0;  // the core first
 
-        i32 k = 2;
+        iz k = 2;
         for (Io **p = &os->pending; *p && k<n; p = &(*p)->next) {
             Io *io = *p;
             if (isproc(io)) continue;
@@ -1118,6 +1114,7 @@ static void libfree(Lib *l)
     close(l->os.wakefd[0]);
     close(l->os.wakefd[1]);
     if (l->waitfd >= 0) close(l->waitfd);  // macOS's kqueue
+    if (l->os.pollv) munmap(l->os.pollv, (uz)l->os.pollcap*sizeof(struct pollfd));
     munmap(l, sizeof(Lib));
 }
 

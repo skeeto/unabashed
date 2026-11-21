@@ -37,6 +37,9 @@ struct Os {
     u8     wkind[256];  // per descriptor: FK_* (fdkind)
     u8     wbuf[1<<14];
     u64    entropyn;    // os_entropy's fallback counter
+    struct pollfd *pollv;  // os_wait's records past pollfix (pollroom)
+    iz     pollcap;
+    struct pollfd pollfix[64];
     u64 volatile sigbits;  // caught signals not yet taken
     u64 volatile grpbits;  // the terminal's, sent to its foreground group
 };
@@ -1604,6 +1607,24 @@ static i32 pollnow(Io *io, i32 timeout)
     return r>0 ? p.revents : 0;
 }
 
+// Room for n records for poll, one for every pending operation however
+// many: pollfix, or past that a mapping, kept for later waits.
+static struct pollfd *pollroom(Os *os, iz n)
+{
+    if (n <= countof(os->pollfix)) return os->pollfix;
+    if (n > os->pollcap) {
+        iz cap = os->pollcap ? os->pollcap : countof(os->pollfix);
+        for (; cap < n; cap *= 2) {}
+        uz size = (uz)cap * sizeof(struct pollfd);
+        void *p = mmap(0, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANON, -1, 0);
+        if (p == MAP_FAILED) os_oom();
+        if (os->pollv) munmap(os->pollv, (uz)os->pollcap*sizeof(struct pollfd));
+        os->pollv   = (struct pollfd *)p;
+        os->pollcap = cap;
+    }
+    return os->pollv;
+}
+
 static void plt_submit(Os *os, Io *io)
 {
     flushw(os);
@@ -1627,8 +1648,6 @@ static void plt_submit(Os *os, Io *io)
 static Io *plt_wait(Os *os, i64 deadline)
 {
     if (deadline != WAIT_POLL) flushw(os);  // it may block
-    enum { MAXPOLL = 256 };
-    struct pollfd fds[MAXPOLL];
     i32 backoff = 1;  // named FIFOs: 1 to 64 ms (fifoends)
     for (;;) {
         // Process exits first: the self-pipe only says "look again"
@@ -1643,11 +1662,14 @@ static Io *plt_wait(Os *os, i64 deadline)
         b32 named = 0;
         Io *ended = fifoends(os, &named);
         if (ended) return ended;
-        i32 n = 0;
+        iz max = 1;
+        for (Io *io = os->pending; io; io = io->next) max += !isproc(io);
+        struct pollfd *fds = pollroom(os, max);
+        iz n = 0;
         fds[n].fd      = os->wakefd[0];
         fds[n].events  = POLLIN;
         fds[n++].revents = 0;
-        for (Io *io = os->pending; io && n<MAXPOLL; io = io->next) {
+        for (Io *io = os->pending; io; io = io->next) {
             if (isproc(io)) continue;
             fds[n].fd      = (i32)io->h;
             fds[n].events  = io->op==IO_READ ? POLLIN : POLLOUT;
@@ -1672,7 +1694,7 @@ static Io *plt_wait(Os *os, i64 deadline)
             while (read(os->wakefd[0], buf, sizeof(buf)) > 0) {}
         }
         if (os->sigbits || os->grpbits || levelhead!=leveltail) return 0;  // the core first
-        i32 k = 1;
+        iz k = 1;
         for (Io **p = &os->pending; *p; p = &(*p)->next) {
             Io *io = *p;
             if (isproc(io)) continue;
