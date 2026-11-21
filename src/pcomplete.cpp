@@ -196,6 +196,7 @@ static void pcinsert(Shell *sh, Str key, CompSpec *cs)
 
 static b32 pcremove(Shell *sh, Str key)
 {
+    if (!sh->comps) return 1;  // as bash, anything goes before a first insert
     if (!pcfind(sh->comps, key)) return 0;
     CompTable *t = compsown(sh);
     u32 h = hashkey(key);
@@ -635,6 +636,7 @@ static Slice<Str> pcdirs(Editor *ed, Shell *sh, Arena *a, Str word, PcRes *r)
 {
     Comp c = {};
     c.a = a;
+    c.dirhook = 1;  // bash's directory hook expands $D/ to read it
     Str w = pcdequote(a, word);
     Slice<Str> f = compfiles(ed, sh, &c, w, 1);
     Slice<Str> m = {};
@@ -649,6 +651,7 @@ static Slice<Str> pcaction(Editor *ed, Shell *sh, Arena *a, i32 act, Str word, P
 {
     Comp c = {};
     c.a = a;
+    c.dirhook = 1;  // compgen and complete set bash's filename hooks
     Str w = pcdequote(a, word);
     switch (act) {
     case PA_COMMAND:
@@ -1239,6 +1242,7 @@ static i32 b_compgen(Shell *sh, Str *args, iz nargs, Arena scratch)
     if (!m.len && (o.cs.options & ((uz)1<<PO_DEFAULT))) {
         Comp c = {};
         c.a = a;
+        c.dirhook = 1;
         m = compfiles(editor(sh), sh, &c, word, 1);
     }
 
