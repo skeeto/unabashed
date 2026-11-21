@@ -1,0 +1,47 @@
+== snap 1
+$ : one
+$ : two
+$ : three
+$ : two
+@ 3,7
+== snap 2
+$ : four
+$ : five
+(failed reverse-i-search)`abcdefghijklmnopqrstuvwxyz':
+@ 2,55 bell 26
+== snap 3
+$ : six
+$ : two
+@ 1,7 bell 27
+== snap 4
+$ : seven
+$ : two
+@ 1,7 bell 27
+== snap 5
+$ : eight
+$ : two
+@ 1,7 bell 27
+== snap 6
+$ history
+    1  : one
+    2  : two
+    3  history
+$
+@ 4,2 bell 27
+== snap 7
+$ echo 'set history-size 2' >~/ir
+$ INPUTRC=~/ir
+$ echo 'set history-size 2' >~/ir
+@ 2,33 bell 28
+== snap 8
+$ history
+    4  INPUTRC=~/ir
+    5  history
+$
+@ 3,2 bell 28
+== snap 9
+$ history
+    4  INPUTRC=~/ir
+    5  history
+$
+@ 3,2 bell 28

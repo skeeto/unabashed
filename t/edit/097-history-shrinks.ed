@@ -1,0 +1,34 @@
+# Shell code the editor runs may shrink the history under the line:
+# bind -x, a completion function, the WINCH trap, a funsub in
+# shell-expand-line, history-size in a re-read init file. Up then goes
+# to what remains, and an incremental search stays in the list.
+size 24 60
+rc PS1='$ '
+rc bind -x '"\C-t": history -d -1'
+rc bind -x '"\C-xd": history -d -2--1'
+rc f() { history -d -1; COMPREPLY=(xyz); }; complete -F f foo
+rc trap 'history -d -1' WINCH
+keys : one\r: two\r: three\r
+keys \C-t\e[A
+snap
+keys \C-u\C-l: four\r: five\r
+keys \C-xd\C-rabcdefghijklmnopqrstuvwxyz
+snap
+keys \C-g\C-u\C-l: six\r
+keys foo \t\C-u\e[A
+snap
+keys \C-u\C-l: seven\r
+resize 24 61
+keys \e[A
+snap
+keys \C-u\C-l: eight\r
+keys echo ${ history -d -1; }\e\C-e\C-u\e[A
+snap
+keys \C-u\C-lhistory\r
+snap
+keys \C-lecho 'set history-size 2' >~/ir\r
+keys INPUTRC=~/ir\r
+keys \C-x\C-r\e[A\e[A\e[A
+snap
+keys \C-u\C-lhistory\r
+snap

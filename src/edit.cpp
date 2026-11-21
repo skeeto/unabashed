@@ -641,6 +641,7 @@ struct Editor {
                         // the last column)
     b32      paste;     // bracketed paste is on
     b32      shellcmd;  // a bind -x command is running
+    b32      incmd;     // a command is running: a WINCH trap waits
     Buf      out_;      // output for one redisplay
     b32      done;
     i32      result;    // ED_*
@@ -666,6 +667,8 @@ struct Editor {
     b32      lastkill;  // the last command killed: kills join it
     // History
     iz       hpos;      // the entry edited, or the list's length
+    HistEnt *hmark;     // hpos's entry while shell code runs
+    b32      hmarked;   // shell code is running: hmark is set
     b32      hsaved;    // the new line, kept while on an entry
     Str      hsavedline;
     EdUndo    *hsavedundo;
@@ -1549,13 +1552,21 @@ static void edresize(Editor *ed, Shell *sh)
 // A WINCH trap runs as soon as the size is taken, as readline calls the
 // shell's handler from its own: its output lands at the cursor, and the
 // line is not drawn again. Other traps wait for the line to be done.
+// One taken while a command reads keys (i-search, a numeric argument)
+// waits for its end, so no command finds the history changed under
+// what it holds.
+static HistEnt *edhistmark(Editor *, Shell *);
+static void     edhistsync(Editor *, Shell *, HistEnt *);
+
 static void edwinch(Editor *ed, Shell *sh)
 {
     u64 bit = sigbit(28);
-    if (!(sh->sig->pending & bit) || !trapset(sh, 28)) return;
+    if (ed->incmd || !(sh->sig->pending & bit) || !trapset(sh, 28)) return;
     sh->sig->pending &= ~bit;
     edflush(ed, sh);
+    HistEnt *at = edhistmark(ed, sh);
     runtrap(sh, 28);
+    edhistsync(ed, sh, at);
 }
 
 
@@ -1834,6 +1845,30 @@ static b32 edkeepline(Editor *ed, Shell *sh)  // true if it did
     if (h->ents[ed->hpos]->undo == ed->undo) return 0;
     histedit(sh, ed->hpos, edtext(ed), ed->undo);
     return 1;
+}
+
+// Shell code the editor runs (bind -x, a completion function, the WINCH
+// trap, a funsub in shell-expand-line, history-size in a re-read init
+// file) may change the history under hpos: the entry being edited,
+// marked before, is found again where it now is, or the line becomes
+// the new one past the list's end. The mark is also kept in the Editor
+// for editline's catch, should the shell code escape. A freed entry's
+// memory may come back as a new entry: hpos then lands on that one, as
+// readline's plain index would.
+static HistEnt *edhistmark(Editor *ed, Shell *sh)
+{
+    ed->hmark   = ed->hpos<sh->hist.len ? sh->hist.ents[ed->hpos] : 0;
+    ed->hmarked = 1;
+    return ed->hmark;
+}
+
+static void edhistsync(Editor *ed, Shell *sh, HistEnt *at)
+{
+    Hist *h = &sh->hist;
+    iz    i = ed->hpos<h->len ? ed->hpos : h->len-1;
+    for (; at && i>=0 && h->ents[i]!=at; i--) {}  // entries only move down
+    ed->hpos    = at && i>=0 ? i : h->len;
+    ed->hmarked = 0;
 }
 
 static void edload(Editor *ed, Shell *sh, iz i)
@@ -2200,6 +2235,14 @@ static void edcomplete(Editor *, Shell *, i32 fn, i32 count);  // complete.cpp
 static void rlinit(Editor *, Shell *);       // inputrc.cpp
 static void rlstart(Editor *, Shell *);
 static void rlttychars(Editor *);
+
+// Completion, whose functions are shell code
+static void edcompleting(Editor *ed, Shell *sh, i32 fn, i32 count)
+{
+    HistEnt *at = edhistmark(ed, sh);
+    edcomplete(ed, sh, fn, count);
+    edhistsync(ed, sh, at);
+}
 
 // Bracketed paste: the bytes up to ESC [ 201 ~, CR as LF.
 static Str edpaste(Editor *ed, Shell *sh, Arena *a)
@@ -2897,12 +2940,14 @@ static void edshellexpand(Editor *ed, Shell *sh)
     sh->esc = &e;
     i32  status = sh->status;
     b32  ok     = 0;
+    HistEnt *at = edhistmark(ed, sh);  // a funsub may change the history
     if (!jmpset(e.jmp)) {
         fields = expandwords(sh, &a, &w, XW_NOBRACE|XW_NOGLOB);
         ok = 1;
     } else {
         unwind(sh, e.undo);
     }
+    edhistsync(ed, sh, at);
     sh->esc      = e.up;
     sh->status   = status;
     sh->capdepth = depth - 1;
@@ -3154,7 +3199,9 @@ static void edshellcmd(Editor *ed, Shell *sh, Str cmd)
     b32 lexeof = sh->lexeof;
     sh->evaldepth++;
     ed->shellcmd = 1;  // an escape still unsets the variables (editline)
+    HistEnt *at = edhistmark(ed, sh);
     runsource(sh, cmd, "bash_execute_unix_command", a);
+    edhistsync(ed, sh, at);
     ed->shellcmd = 0;
     sh->evaldepth--;
     sh->line   = line;
@@ -4183,7 +4230,7 @@ static void vicomplete(Editor *ed, Shell *sh, i32 fn, u8 key)
         case '=': f = EF_POSSIBLE_COMPLETIONS; break;
         }
     }
-    edcomplete(ed, sh, f, ed->argset ? ed->count : 1);
+    edcompleting(ed, sh, f, ed->argset ? ed->count : 1);
     if (key=='*' || key=='\\') {
         vistartins(ed, key, fn==EF_BASH_VI_COMPLETE ? 1 : ed->count<0 ? -1 : 1);
     }
@@ -4218,16 +4265,18 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
     case EF_MENU_COMPLETE_BACKWARD:
     case EF_DABBREV_EXPAND:
     case EF_EXPORT_COMPLETIONS:
-        edcomplete(ed, sh, fn, ed->argset ? ed->count : 1);
+        edcompleting(ed, sh, fn, ed->argset ? ed->count : 1);
         break;
-    case EF_RE_READ_INIT_FILE:
+    case EF_RE_READ_INIT_FILE: {
+        HistEnt *at = edhistmark(ed, sh);  // history-size may stifle it
         rlinit(ed, sh);
-        break;
+        edhistsync(ed, sh, at);
+    } break;
     case EF_DELETE_CHAR_OR_LIST:
         if (ed->point<ed->line.len || !ed->line.len) {
             edrun(ed, sh, EF_DELETE_CHAR, key);
         } else {
-            edcomplete(ed, sh, fn, 1);
+            edcompleting(ed, sh, fn, 1);
         }
         break;
     default:
@@ -4684,7 +4733,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         }
     } break;
     case EF_OLD_MENU_COMPLETE:
-        edcomplete(ed, sh, EF_MENU_COMPLETE, ed->argset ? ed->count : 1);
+        edcompleting(ed, sh, EF_MENU_COMPLETE, ed->argset ? ed->count : 1);
         break;
     case EF_ALIAS_EXPAND_LINE:
         edexpandaliases(ed, sh, 0);
@@ -5276,6 +5325,8 @@ static b32 eddispatch(Editor *ed, Shell *sh)
         return 1;
     }
     ed->curkey = s.key;
+    b32 outer  = !ed->incmd;  // not the key after a numeric argument
+    ed->incmd  = 1;
     switch (s.fn) {
     case EF_DIGIT_ARGUMENT:
         edarg(ed, sh, s.key);
@@ -5312,6 +5363,10 @@ static b32 eddispatch(Editor *ed, Shell *sh)
             s.in==&ed->vimove && vitextmod(s.key)) {
             visetlast(ed, s.key, ed->count);
         }
+    }
+    if (outer) {
+        ed->incmd = 0;
+        edwinch(ed, sh);  // one that waited for the command
     }
     return 1;
 }
@@ -5486,7 +5541,7 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     prompt      = clone(&ed->linemem, prompt);
     Str init    = clone(&ed->linemem, opts->init);
     ed->out_  = Buf(&ed->linemem, 256);
-    ed->paste = ed->shellcmd = 0;
+    ed->paste = ed->shellcmd = ed->incmd = ed->hmarked = 0;
     ed->in  = fin->h;
     ed->out = ferr->h;
     ed->tty   = edraw(ed, sh);
@@ -5753,6 +5808,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
         for (i32 i = 0; i < countof(names); i++) unsetvar(sh, names[i], 1);
     }
 
+    if (ed->hmarked) edhistsync(ed, sh, ed->hmark);  // skipped by the escape
     edleave(ed, sh, 1);
     if (ed->paste) edput(ed, "\x1b[?2004l\r");
     ed->paste = 0;
