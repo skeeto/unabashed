@@ -771,6 +771,10 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
         sh->srcframes = sf.up;
         sh->srcname   = srcname;
         sourceargs(sh, nargs, saved, own);
+        if (e->why==ESC_EXIT && errexitdue(sh, 0)) {
+            escrestore(sh, e);
+            errexitcall(sh);  // as callfunction's: this is the builtin
+        }
         escape(sh, e->why);
     }
     status = runsource(sh, src, file, scratch);

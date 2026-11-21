@@ -418,6 +418,7 @@ struct Frame {       // a function call
     b32    optsaved;
     Str    trapsaved[3];  // DEBUG, ERR and RETURN actions the call put
                           // aside (traphide), in the store
+    Lexer *lexer;    // the parse it was called from
 };
 
 struct Srcframe {    // a file being sourced: a frame of FUNCNAME ("source"),
@@ -432,6 +433,12 @@ struct Srcframe {    // a file being sourced: a frame of FUNCNAME ("source"),
 
 enum : i32 {
     FLOW_NONE, FLOW_BREAK, FLOW_CONTINUE, FLOW_RETURN,
+};
+
+enum : i32 {  // set -e is ending the level (Shell.errexited); its end
+    ERREXIT_ALL = 1,  // undoes every redirection before the EXIT trap,
+    ERREXIT_TO,       // those since errundo,
+    ERREXIT_NONE,     // or none
 };
 
 enum : i32 {  // reasons to unwind to an escape point
@@ -456,6 +463,13 @@ struct BOut {         // output of the running builtin
 // the positional parameters of source, BASH_COMMAND's node, files) is
 // the job of the frame that made the change, which catches the escape,
 // cleans up and passes it on.
+struct Redirs {       // a builtin or function call whose command has
+    i32       call;   // redirections, which set -e unwinds first, as
+    Undo     *mark;   // bash: the call's funcdepth (-1-funcdepth for a
+    Lexer    *lexer;  // builtin), the redirections before it, and the
+    Srcframe *src;    // parse and sourced file it ran in
+};
+
 struct Escape {
     JmpBuf  jmp;
     i32     why;      // ESC_*
@@ -487,6 +501,7 @@ struct Escape {
     i32       trapfuncs;
     i32       hold;     // the store's hold count (storerehold)
     i32       ctlline;
+    Redirs    redirs;
     b32       inchld;
     b32       nolocwarn;
     b32       attail;
@@ -711,6 +726,9 @@ struct Shell {
                            // shared current_token): see resumeaftereof
     i32      sourcedepth;
     i32      funcdepth;
+    i32      levelfuncs;   // funcdepth where this (sub)shell began
+    Lexer   *levellexer;   // and its parser then, outside its own parses
+    Redirs   redirs;       // the innermost such call
     i32      funcline;     // the running function's body starts here
     b32      nowriteerr;   // the builtin ignores a failed write (help)
     b32      viacommand;   // a builtin started by `command`, until it
@@ -892,7 +910,8 @@ struct Shell {
     b32      execed;       // replaced by exec: no EXIT trap
     b32      exitcalled;   // the exit builtin: EXIT trap in the function
     b32      execing;      // exec's program may replace the process
-    b32      errexited;    // set -e is ending this level
+    i32      errexited;    // set -e is ending this level: ERREXIT_*
+    Undo    *errundo;      // the redirections that stay for the EXIT trap
     i32      writeerr;     // why the last fdwrite failed
 };
 
@@ -1484,6 +1503,7 @@ static void escenter(Shell *sh, Escape *e)
     e->trapfuncs  = sh->trapfuncs;
     e->hold       = sh->store->hold;
     e->ctlline    = sh->ctlline;
+    e->redirs     = sh->redirs;
     e->inchld     = sh->inchld;
     e->nolocwarn  = sh->nolocwarn;
     e->attail     = sh->attail;
@@ -1529,6 +1549,7 @@ static void escrestore(Shell *sh, Escape *e)
     sh->trapfuncs  = e->trapfuncs;
     storerehold(sh->store, e->hold);  // the abandoned holders are gone
     sh->ctlline    = e->ctlline;
+    sh->redirs     = e->redirs;
     sh->inchld     = e->inchld;
     sh->nolocwarn  = e->nolocwarn;
     sh->attail     = e->attail;

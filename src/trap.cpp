@@ -682,6 +682,125 @@ static void runexittrap(Shell *sh, Arena)
     sh->exiting = 1;
 }
 
+// Is u among the redirections in force (null: below them all)?
+static b32 undoheld(Shell *sh, Undo *u)
+{
+    for (Undo *p = sh->undo; p; p = p->next) {
+        if (p == u) return 1;
+    }
+    return !u;
+}
+
+// As bash's reset_local_contexts: every function's locals go, though
+// the calls stay. The values are left for the level's end to drop.
+static void hidelocals(Shell *sh)
+{
+    i32 depth = sh->funcdepth;
+    for (Frame *f = sh->frame; f && depth>0; f = f->up, depth--) {
+        for (iz i = 0; i < f->nlocals; i++) {
+            Var *v = f->locals[i];
+            Value **slot = &v->top;
+            while (*slot && (*slot)->depth>depth) {
+                slot = &(*slot)->below;
+            }
+            Value *top = *slot;
+            if (top && top->depth==depth && !(top->attrs & V_TEMP)) {
+                if (top->attrs & V_EXPORT) sh->exportgen++;
+                jset(sh->store, slot, top->below);
+                varchanged(sh, v->name);
+            }
+        }
+    }
+}
+
+// set -e is ending the level, which has an EXIT trap: run it where bash
+// does. bash jumps to its innermost parse_and_execute (eval, source, a
+// command substitution, -c) or reader loop, unwinding nothing in a
+// function but every local variable (not even that from a subshell's
+// own code): the action runs in the function, with its FUNCNAME,
+// BASH_SOURCE, positional parameters and redirections. Out of one, the
+// parse_and_execute levels undo the redirections made in them, which is
+// left to the level's end (errexitundo). Before the jump bash unwinds
+// the innermost builtin or function call whose command has redirections
+// (Shell.redirs): the catch of the call, or of the parse or file of the
+// builtin, carries on (errexitcall). What bash unwinds otherwise is not
+// copied: a builtin's call that runs code another way (command f >x),
+// and calls or redirections between two parse_and_execute levels, which
+// the outer one pops. The level's end runs the action then, after
+// unwinding everything.
+static void errexittrap(Shell *sh)
+{
+    if (!trapset(sh, TRAP_EXIT) || sh->execed || sh->killsig) return;
+    Lexer *p1 = 0, *pk = 0;
+    b32 reader = 0;
+    for (Lexer *L = sh->lexer; L && L!=sh->levellexer; L = L->up) {
+        if (L->reader) {
+            reader = 1;
+        } else {
+            p1 = p1 ? p1 : L;
+            pk = L;
+        }
+    }
+    if (sh->redirs.call) {
+        return;  // errexitcall
+    } else if (!sh->funcdepth) {
+        sh->errexited = pk ? ERREXIT_TO : ERREXIT_NONE;
+        sh->errundo   = pk ? pk->undo : 0;
+        return;
+    }
+    if (p1) {
+        if (p1->undo != pk->undo) return;
+        Frame *f = sh->frame;
+        for (i32 d = sh->funcdepth; d>sh->levelfuncs && f; d--, f = f->up) {
+            for (Lexer *L = f->lexer; L && L!=p1 && L!=sh->levellexer; L = L->up) {
+                if (!L->reader) return;
+            }
+        }
+    }
+    i32 depth = sh->funcdepth;
+    if (p1 || (reader && !sh->opt[O_POSIX])) {
+        hidelocals(sh);
+        sh->funcdepth = 0;  // nor may it make any, as bash
+    }
+    runexittrap(sh, {});
+    sh->funcdepth = depth;
+    sh->errexited = ERREXIT_NONE;
+}
+
+// Has set -e unwound the call errexittrap left to its catch, here? fn:
+// callfunction's, else a builtin's parse or sourced file.
+static b32 errexitdue(Shell *sh, b32 fn)
+{
+    Redirs *r = &sh->redirs;
+    if (!sh->errexited || !r->call) {
+        return 0;
+    } else if (fn) {
+        return r->call == sh->funcdepth+1;
+    }
+    return r->call==-1-sh->funcdepth && r->lexer==sh->lexer && r->src==sh->srcframes;
+}
+
+// There, as bash's frame for the call's redirections: undo them, then
+// carry on as from set -e here.
+static void errexitcall(Shell *sh)
+{
+    Undo *mark = sh->redirs.mark;
+    sh->redirs = {};
+    if (undoheld(sh, mark)) unwind(sh, mark);
+    errexittrap(sh);
+}
+
+// At the level's end, before its EXIT trap: the redirections set -e
+// would have undone, back to base for all.
+static void errexitundo(Shell *sh, Undo *base)
+{
+    if (sh->errexited == ERREXIT_ALL) {
+        unwind(sh, base);
+    } else if (sh->errexited==ERREXIT_TO && undoheld(sh, sh->errundo)) {
+        unwind(sh, sh->errundo);
+    }
+}
+
 // As bash, a function call or sourced file that does not inherit DEBUG,
 // ERR or RETURN starts with it unset: it puts the caller's action aside
 // and, as it returns, puts it back if the trap is still unset. An action

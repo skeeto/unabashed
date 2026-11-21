@@ -462,10 +462,21 @@ under lastpipe.
 
 **EXIT** (`runexittrap`): at `sh_main`'s end, at the end of a sync
 subshell or vproc whose own table has one, and from `sigdie`. Not after
-exec (`Shell.execed`). After set -e (`Shell.errexited`) the abandoned
-commands' redirections are undone first (`unwindtemp`, keeping exec's
-in a subshell, `Undo.keep`); after `exit` they stay in force, as in
-bash. A script without `#!` run in-process (`runexternal`) starts as a
+exec (`Shell.execed`). `exit` in a function or sourced file runs it
+there, redirections in force, as bash. After set -e (`Shell.errexited`,
+`errexittrap`) it runs where bash's jump to its innermost
+parse_and_execute (eval, source, comsub, -c; `Lexer.reader` false) or
+reader loop would: in a function, nothing unwound (FUNCNAME, positional
+parameters, redirections stay) but every local, unless no such parse
+lies inside the level (`Shell.levellexer`; a ( ) or & subshell's own
+code) or a POSIX-mode script's reader; out of one, at the level's end,
+with the redirections made since the outermost such parse undone
+(`errundo`; none in a script). First, the innermost builtin or function
+call whose command has redirections (`Shell.redirs`, bash's
+saved-redirects frame) is unwound with them, from the call's catch (or
+its eval's parse, or its source's). What bash's outer
+parse_and_execute pops in between (calls or redirections between two of
+them) is not copied: the level's end then unwinds all. A script without `#!` run in-process (`runexternal`) starts as a
 new shell: what its parent ignores is ignored on entry, caught traps
 reset, only its own listed; it runs its own EXIT trap.
 

@@ -64,6 +64,10 @@ static void     hidecoproc(Shell *, Arena *);
 // Signals and traps (trap.cpp)
 static void     checksigs(Shell *, Arena);
 static void     runerrtrap(Shell *);
+static void     errexittrap(Shell *);
+static b32      errexitdue(Shell *, b32 fn);
+static void     errexitcall(Shell *);
+static void     errexitundo(Shell *, Undo *);
 static b32      rundebugtrap(Shell *, Arena);
 static b32      trapset(Shell *, i32 idx);
 static void     runreturntrap(Shell *, Arena);
@@ -679,6 +683,9 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sh->psubs   = 0;
     sh->killsig   = 0;
     sh->errexited = 0;
+    sh->levelfuncs = sh->funcdepth;
+    sh->levellexer = sh->lexer;
+    sh->redirs     = {};
     sh->jobctl   &= j->comsub;  // as bash, which keeps it in a comsub
     sh->incomsub |= j->comsub;
     // a simple command (a stage, a job) is transparent, as bash's child
@@ -707,6 +714,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
         out->cap = cap;
         fdset(sh, 1, out, 0, &scratch);
     }
+    Undo *body = sh->undo;  // set -e undoes what lies past the capture
     if (!jmpset(e.jmp)) {
         runjob(sh, j, scratch);
     } else if (e.why==ESC_ABORT && (j->kind==SUB_SOURCE || sh->cflag)) {
@@ -716,7 +724,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     }
     storerehold(sh->store, e.hold);  // the level's own: its EXIT trap frees
     if (!sh->execed && !sh->killsig && sh->traps) {
-        if (sh->errexited) unwind(sh, saved->undo);
+        errexitundo(sh, body);
         runexittrap(sh, scratch);
     }
     i32 status = sh->status;
@@ -2766,6 +2774,9 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->hardign  |= ignoredsigs(sh);
         sh->killsig   = 0;
         sh->errexited = 0;
+        sh->levelfuncs = 0;
+        sh->levellexer = sh->lexer;
+        sh->redirs     = {};
         sh->catchfatal = 1;
         sh->subchild   = 1;
         subshelltraps(sh);
@@ -2778,7 +2789,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         }
         storerehold(sh->store, e.hold);  // as subshell's, for its EXIT trap
         if (!sh->execed && !sh->killsig && sh->traps) {
-            if (sh->errexited) unwind(sh, saved->undo);
+            errexitundo(sh, saved->undo);
             runexittrap(sh, *scratchat(sh, sh->capdepth));
         }
         i32 status = sh->status;
@@ -2841,7 +2852,8 @@ static void checkerrexit(Shell *sh)
     }
     if (sh->status && sh->opt[O_ERREXIT] && !sh->noerrexit && !sh->exiting) {
         sh->exiting   = 1;
-        sh->errexited = 1;
+        sh->errexited = ERREXIT_ALL;
+        if (sh->traps) errexittrap(sh);
         escape(sh, ESC_EXIT);
     }
 }
@@ -2912,6 +2924,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     f.args.v    = argv + 1;
     f.args.n    = argc - 1;
     f.argpushed = sh->shopt[S_EXTDEBUG];
+    f.lexer     = sh->lexer;
     // As bash, it inherits DEBUG and RETURN with set -T or declare -ft
     // (RETURN not while DEBUG runs), and ERR with set -E
     b32 traced = sh->opt[O_FUNCTRACE] || (fn->attrs & V_TRACE);
@@ -2982,6 +2995,12 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     sh->args    = saved;
     sh->argsown = own;
     sh->argsset = 0;  // as bash's pop_dollar_vars
+    if (escaped && e->why==ESC_EXIT && errexitdue(sh, 1)) {
+        // set -e unwound this call, whose command has redirections, as
+        // bash's frame for them: its EXIT action is due from here
+        escrestore(sh, e);
+        errexitcall(sh);
+    }
     if (escaped) {
         escape(sh, e->why);
     }
@@ -3566,6 +3585,15 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     }
 
     if (fn || bi) {
+        // As bash's frame for a builtin's or function's redirections:
+        // set -e in what it runs unwinds the call first (errexittrap)
+        Redirs redirs = sh->redirs;
+        if (n->redirs && !execonly) {
+            sh->redirs.call  = fn ? sh->funcdepth+1 : -1-sh->funcdepth;
+            sh->redirs.mark  = mark;
+            sh->redirs.lexer = sh->lexer;
+            sh->redirs.src   = sh->srcframes;
+        }
         // Temporary bindings for builtins and functions
         b32 persist = special && sh->opt[O_POSIX];
         for (iz i = 0; i < nassign; i++) {
@@ -3657,6 +3685,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
                 sh->status = 1;
             }
         }
+        sh->redirs = redirs;
         poptemps(sh, tb);
     } else {
         // bash redirects a program in its forked child, so a procsub
@@ -5167,6 +5196,12 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
         sh->lexer = outer;
         sh->iname = oname;
         restorecmd(sh, cmd);
+        if (e->why==ESC_EXIT && errexitdue(sh, 0)) {
+            // set -e unwound the builtin that parsed this (eval), whose
+            // command has redirections: as callfunction's
+            escrestore(sh, e);
+            errexitcall(sh);
+        }
         escape(sh, e->why);
     }
     i32 status = runsource1(sh, src, iname, scratch, reader, line, fill, fillctx, comsub, hist);
@@ -5213,6 +5248,8 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     sh->lexeof = 0;
     L->dump    = sh->dumpstrings;
     L->prompt  = reader && fill && sh->interactive;
+    L->reader  = reader;
+    L->undo    = sh->undo;
     b32 prettynl = 0;
     for (;;) {
         Arena unit = *L->a;  // reset after each complete line

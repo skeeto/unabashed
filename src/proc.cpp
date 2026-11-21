@@ -230,7 +230,8 @@ static Frame *copyframes(Shell *c, Arena *a, Frame *f, b32 image)
         }
         // Only the call itself puts its saved trap actions back
         for (i32 k = 0; k < 3; k++) r->trapsaved[k] = {};
-        r->def = image ? 0 : f->def;
+        r->def   = image ? 0 : f->def;
+        r->lexer = 0;  // the parent's: outside the copy's own parses
         *tail = r;
         tail  = &r->up;
     }
@@ -464,6 +465,10 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->killsig  = 0;
     c->childsig = 0;
     c->errexited = 0;
+    c->levelfuncs = c->funcdepth;
+    c->levellexer = 0;
+    c->redirs     = {};
+    c->errundo    = 0;
     c->intrap   = 0;
     c->trapbusy = 0;
     c->intrread = 0;
@@ -583,7 +588,7 @@ static void vprocmain(Task *t)
     if (!sh->execed && !sh->killsig) {
         // Its own EXIT trap, set in the vproc
         sh->esc = &top;
-        if (sh->errexited) unwind(sh, 0);
+        errexitundo(sh, 0);
         if (!jmpset(top.jmp)) {
             runexittrap(sh, *scratchat(sh, 0));
         }

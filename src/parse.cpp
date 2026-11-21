@@ -96,6 +96,7 @@ enum : i32 {  // case clause terminators
 };
 
 struct Node;
+struct Undo;
 
 struct Case {
     Case *next;
@@ -368,6 +369,9 @@ struct Lexer {
     b32      extglobopt; // extglob as set by shopt
     b32      comsuberr;  // syntax error inside a command substitution
     b32      prompt;     // reading at an interactive shell's prompt
+    b32      reader;     // bash's reader loop (a script, the prompt), not
+                         // its parse_and_execute (eval, source, -c, ...)
+    Undo    *undo;       // the shell's redirections when it began
     b32      staleline;  // a leading word gets line -1 (resumeaftereof)
 
     Redir   *heredocs[HEREDOCMAX];
