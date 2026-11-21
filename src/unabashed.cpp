@@ -1625,10 +1625,11 @@ static void startdebugger(Shell *sh, Arena scratch)
 }
 
 // Stack that shell recursion may use of the OsInfo stack: all but 64K
-// for the frames between checks, or half of a small one (a low ulimit -s)
+// (unoptimized, more) for the frames between checks, or half of a small
+// one (a low ulimit -s)
 static iz stackroom(iz stack)
 {
-    iz margin = (iz)1<<16;
+    iz margin = ((iz)1<<16)*STACKSCALE;
     return !stack ? (iz)1<<19 : stack>2*margin ? stack-margin : stack/2;
 }
 

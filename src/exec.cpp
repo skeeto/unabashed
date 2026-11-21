@@ -852,13 +852,14 @@ static Str readwholefile(Shell *, Arena *, Str, i32 *);
 
 static Str redirtarget(Shell *, Arena *, Word *, b32 *);
 
-// The stack a parse the shell starts may use: 1 MiB from its entry,
-// which bounds the depth of the tree for the code that walks it, and
-// never past the shell's own limit, which a parse begun deep in a
-// recursion, or on a fiber's smaller stack, would otherwise overrun.
+// The stack a parse the shell starts may use: 1 MiB from its entry (as
+// frames scale), which bounds the depth of the tree for the code that
+// walks it, and never past the shell's own limit, which a parse begun
+// deep in a recursion, or on a fiber's smaller stack, would otherwise
+// overrun.
 static void parselimit(Shell *sh, Lexer *L)
 {
-    L->stackmax   = (iz)1<<20;
+    L->stackmax   = ((iz)1<<20)*STACKSCALE;
     L->stackfloor = sh->stackmax ? sh->stacktop-sh->stackmax : 0;
 }
 

@@ -117,6 +117,10 @@ function(shell name source)  # name, then compile options
 endfunction()
 
 shell(unabashed main_${UNABASHED_OS}.cpp -O2)
+# The debug build's frames are up to ten times larger: its fibers grow
+# to match (STACKSCALE), its main thread is the process's, so run it
+# under ulimit -s 65520 (macOS's ceiling) to reach bash's recursion
+# limits, in arithmetic for one, rather than its simulated SIGSEGV.
 shell(debug main_${UNABASHED_OS}.cpp ${DEBUG})
 target_link_options(unabashed PRIVATE -s)
 if(NOT WIN32)

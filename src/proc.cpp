@@ -578,7 +578,7 @@ static void vprocmain(Task *t)
     escenter(sh, &top);  // the outermost: the copy has no escape point
     byte stackmark = 0;
     sh->stacktop = STACKAT(stackmark);
-    iz room = t->stack - ((iz)1<<16);  // the parent's limit, if smaller
+    iz room = t->stack - ((iz)1<<16)*STACKSCALE;  // the parent's limit, if smaller
     sh->stackmax = sh->stackmax<room ? sh->stackmax : room;
     m->sig.task = t;
     if (jmpset(top.jmp)) {

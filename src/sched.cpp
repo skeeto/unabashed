@@ -81,7 +81,7 @@ struct Pipe {
 
 enum : iz {
     PIPECAP    = (iz)1<<16,  // as a Linux pipe
-    BIGSTACK   = (iz)8<<20,  // vprocs: shell code recurses
+    BIGSTACK   = ((iz)8<<20)*STACKSCALE,  // vprocs: shell code recurses
     SMALLSTACK = (iz)1<<18,  // pumps
 };
 

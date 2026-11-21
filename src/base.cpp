@@ -44,6 +44,17 @@ void *operator new(uz, T *p) noexcept { return p; }
 #  define STACKAT(local)  (&(local))
 #endif
 
+// Unoptimized frames (the -O0 debug build, with UBSan) are several times
+// the size of optimized ones, so that the stack sizes and margins made
+// for those scale up, where 64-bit address space leaves room: a fiber's
+// stack is only reserved until used. The main thread's is the process's
+// (ulimit -s).
+#if __OPTIMIZE__
+enum : iz { STACKSCALE = 1 };
+#else
+enum : iz { STACKSCALE = sizeof(void *)==8 ? 8 : 1 };
+#endif
+
 // Non-local exits: jmpset(b) returns 0, then 1 again when jmpback(b)
 // unwinds to it. Callers keep to __builtin_setjmp's rules: jmpback only
 // from a deeper frame, never from the function that called jmpset.
