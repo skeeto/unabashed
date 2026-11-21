@@ -1494,9 +1494,10 @@ static void readahead(Wobj *w, uz h, Io *io)
     io->err = 0;
 }
 
-// The library: an Io that found no helper waits at the head of its
-// object's queue until one is free (helperdone). The object is listed
-// as hungry, since it may already be closed, out of the table.
+// An interposition's pump that found no helper (lend), or the library's
+// Io, which waits at the head of its object's queue, starts once one
+// is free (helperdone). The object is listed as hungry, since it may
+// already be closed, out of the table.
 static void listhungry(Os *os, Wobj *w)
 {
     for (Hent *e = os->hungry; e; e = e->next) {
@@ -1704,27 +1705,25 @@ static void helperdone(Os *os, Helper *hp)
         os->idle = hp;
     }
     runqueue(os, w);
-    if constexpr (LIBMODE) {
-        // Ios that found no helper. One that starves again lists its
-        // object anew, and only once no helper is idle; a busy object
-        // runs its queue when its own helper is done.
-        while (os->hungry && os->idle) {
-            Hent *e = os->hungry;
-            Wobj *w = e->obj;
-            os->hungry   = e->next;
-            e->next      = os->freehent;
-            os->freehent = e;
-            Interpose *ip = w->ip;
-            if (ip && !ip->started && ip->iw && !w->helper && w->own) {
-                if (issue(os, w, w->own, H_PUMP, 0, ip->iw)) {
-                    ip->iw = 0;
-                    ip->started = 1;
-                } else {
-                    listhungry(os, w);  // no helper idle after all
-                }
+    // Pumps and (the library's) Ios that found no helper. One that
+    // starves again lists its object anew, and only once no helper is
+    // idle; a busy object runs its queue when its own helper is done.
+    while (os->hungry && os->idle) {
+        Hent *e = os->hungry;
+        Wobj *w = e->obj;
+        os->hungry   = e->next;
+        e->next      = os->freehent;
+        os->freehent = e;
+        Interpose *ip = w->ip;
+        if (ip && !ip->started && ip->iw && !w->helper && w->own) {
+            if (issue(os, w, w->own, H_PUMP, 0, ip->iw)) {
+                ip->iw = 0;
+                ip->started = 1;
+            } else {
+                listhungry(os, w);  // no helper idle after all
             }
-            if (w->queue && !busy(w)) runqueue(os, w);
         }
+        if (w->queue && !busy(w)) runqueue(os, w);
     }
 }
 
@@ -2009,7 +2008,7 @@ static uz lend(Os *os, uz h, Wobj **out, b32 *viaip)
             if (issue(os, w, h, H_PUMP, 0, iw)) {
                 ip->iw = 0;
                 ip->started = 1;
-            } else if constexpr (LIBMODE) {
+            } else {
                 listhungry(os, w);  // all helpers busy: helperdone starts it
             }
         }
