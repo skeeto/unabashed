@@ -472,6 +472,7 @@ struct Escape {
     Str      *bltargs;
     iz        nbltargs;
     Slice<u8> compargs;
+    ArithEnv *arith;
     i32       noerrexit;
     i32       evaldepth;
     i32       sourcedepth;
@@ -1429,9 +1430,11 @@ static iz fdread(Shell *sh, i32 fd, u8 *buf, iz len)
 [[noreturn]] static void escape(Shell *sh, i32 why)
 {
     closegate(sh);  // a grouped pipeline's stages run on
-    // A builtin's output buffer lives in its frame, which is now gone
+    // A builtin's output buffer lives in its frame, which is now gone,
+    // as do the evaluations it leaves: those around the escape point
+    // go on, even where nothing else is put back
     sh->bout     = sh->esc->bout;
-    sh->arith    = 0;  // the evaluations it leaves are gone
+    sh->arith    = sh->esc->arith;
     sh->esc->why = why;
     jmpback(sh->esc->jmp);
 }
@@ -1455,6 +1458,7 @@ static void escenter(Shell *sh, Escape *e)
     e->bltargs    = sh->bltargs;
     e->nbltargs   = sh->nbltargs;
     e->compargs   = sh->compargs;
+    e->arith      = sh->arith;
     e->noerrexit  = sh->noerrexit;
     e->evaldepth  = sh->evaldepth;
     e->sourcedepth = sh->sourcedepth;
@@ -1497,6 +1501,7 @@ static void escrestore(Shell *sh, Escape *e)
     sh->bltargs    = e->bltargs;
     sh->nbltargs   = e->nbltargs;
     sh->compargs   = e->compargs;
+    sh->arith      = e->arith;
     sh->noerrexit  = e->noerrexit;
     sh->evaldepth  = e->evaldepth;
     sh->sourcedepth = e->sourcedepth;
