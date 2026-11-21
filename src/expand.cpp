@@ -2065,6 +2065,9 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         }
         return;
     }
+    if (op=='@' && !p.list && !p.set) {
+        return;  // as bash, an unset value is not transformed, nor checked
+    }
     badsubst(x, whole);
 }
 
