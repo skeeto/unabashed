@@ -1,0 +1,16 @@
+== snap 1
+$ foo
+$
+@ 1,2
+== snap 2
+$ foo
+$ echo $?
+1
+$ goo ab^Mc
+@ 3,12
+== snap 3
+$ foo
+$ echo $?
+1
+$ goo ab^Mc
+@ 3,12

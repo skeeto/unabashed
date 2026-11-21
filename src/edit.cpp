@@ -1909,6 +1909,18 @@ static Tty edcooked(Editor *ed, Shell *sh)
     return os_tty(sh->os, ed->in, ed->ttyout, TTY_RESTORE);
 }
 
+// Shell code the editor runs (bind -x, completion, the WINCH trap) has
+// the terminal as readline leaves it for such code: no echo, no lines,
+// but a typed interrupt is a signal, as at the shell's prompt. True if
+// it was raw, to be made so again afterward (edraw).
+static b32 edshellmode(Editor *ed, Shell *sh)
+{
+    if (!ed->raw) return 0;
+    ed->raw = 0;
+    os_tty(sh->os, ed->in, ed->ttyout, TTY_RAWSIG | (ed->paste ? TTY_PASTE : 0));
+    return 1;
+}
+
 // The terminal may have a new size (SIGWINCH): as readline does, clear
 // the rows of the line from its last up to its first, then draw it all
 // again for the new width from there.
@@ -1939,9 +1951,11 @@ static void edwinch(Editor *ed, Shell *sh)
     if (ed->incmd || !(sh->sig->pending & bit) || !trapset(sh, 28)) return;
     sh->sig->pending &= ~bit;
     edflush(ed, sh);
-    HistEnt *at = edhistmark(ed, sh);
+    HistEnt *at  = edhistmark(ed, sh);
+    b32      raw = edshellmode(ed, sh);
     runtrap(sh, 28);
     edshellend(ed, sh, at);
+    if (raw) edraw(ed, sh);
 }
 
 
@@ -3761,7 +3775,7 @@ static void edshellcmd(Editor *ed, Shell *sh, Str cmd)
     }
     for (i32 i = 0; i < nvars; i++) setattrs(sh, names[i], V_EXPORT, 0);
 
-    edcooked(ed, sh);
+    edshellmode(ed, sh);
     i32 line   = sh->line;
     b32 lexeof = sh->lexeof;
     sh->evaldepth++;

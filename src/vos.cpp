@@ -177,7 +177,7 @@ struct VTty {
     b32    eof;         // cooked: ^D on an empty line, not yet read
     b32    settling;    // vothersready: leave the terminal out
     b32    legacy;      // a console without VT: drawn with os_con
-    i64    active;      // the clock at its last output or read
+    i64    active;      // the clock at its last output, read or key
     i64    fgpgrp;      // the foreground process group, 0 for the
                         // outermost shell's
     // The editor's check (edcheck)
@@ -986,7 +986,22 @@ static void vttysignal(Os *os, Vos *v, i32 sig)
 
 static b32 vnocanon(VTty *y)
 {
-    return y->mode==TTY_RAW || y->mode==TTY_CHARS || y->mode==TTY_CHARSNOECHO;
+    return y->mode==TTY_RAW || y->mode==TTY_CHARS || y->mode==TTY_CHARSNOECHO ||
+           y->mode==TTY_RAWSIG;
+}
+
+// A typed ^C or ^Z in a mode that takes signals from keys, the line
+// being typed and the keys typed ahead gone; echoed only if asked.
+static b32 vsigkey(Os *os, Vos *v, u8 c, b32 echo)
+{
+    VTty *y = &v->tty;
+    i32 sig = c==0x03 ? 2 : c==0x1a ? 20 : 0;
+    if (!sig) return 0;
+    if (echo) vttyout(v, c==0x03 ? (u8 *)"^C" : (u8 *)"^Z", 2);
+    y->linelen = 0;
+    if (y->mode == TTY_RAWSIG) y->readylen = 0;
+    vttysignal(os, v, sig);
+    return 1;
 }
 
 static void vttyecho(Vos *v, u8 c)
@@ -1015,22 +1030,23 @@ static void vttyrubout(Vos *v)
     y->linelen = beg;
 }
 
+// The line being typed, ready to be read.
+static void vlineready(VTty *y)
+{
+    iz n = y->linelen;
+    n = n<countof(y->ready)-y->readylen ? n : countof(y->ready)-y->readylen;
+    copybytes(y->ready+y->readylen, y->line, n);
+    y->readylen += n;
+    y->linelen   = 0;
+}
+
 // One byte typed at the terminal in its cooked mode.
 static void vcooked(Os *os, Vos *v, u8 c)
 {
     VTty *y = &v->tty;
     c = c=='\r' ? '\n' : c;
+    if (vsigkey(os, v, c, 1)) return;
     switch (c) {
-    case 0x03:
-        vttyout(v, (u8 *)"^C", 2);
-        y->linelen = 0;
-        vttysignal(os, v, 2);
-        return;
-    case 0x1a:
-        vttyout(v, (u8 *)"^Z", 2);
-        y->linelen = 0;
-        vttysignal(os, v, 20);
-        return;
     case 0x04:
         if (!y->linelen) {
             y->eof = 1;
@@ -1052,11 +1068,17 @@ static void vcooked(Os *os, Vos *v, u8 c)
         vttyecho(v, c);
         if (c != '\n') return;
     }
-    iz n = y->linelen;
-    n = n<countof(y->ready)-y->readylen ? n : countof(y->ready)-y->readylen;
-    copybytes(y->ready+y->readylen, y->line, n);
-    y->readylen += n;
-    y->linelen   = 0;
+    vlineready(y);
+}
+
+// One byte typed at the terminal in TTY_RAWSIG: as typed, unless a
+// signal's. Unechoed, it still starts ptyrun's quiet wait.
+static void vrawsig(Os *os, Vos *v, u8 c)
+{
+    VTty *y = &v->tty;
+    y->active = v->clock;
+    if (vsigkey(os, v, c, 0)) return;
+    if (y->readylen < countof(y->ready)) y->ready[y->readylen++] = c;
 }
 
 static b32 vready(Vos *, VProc *);
@@ -1080,7 +1102,7 @@ static b32 vttyready(Vos *v)
 {
     VTty *y = &v->tty;
     if (!y->term || y->settling) return 0;
-    if (!vnocanon(y) && (y->readylen || y->eof)) return 1;
+    if (y->readylen || (!vnocanon(y) && y->eof)) return 1;
     if (y->next >= y->nkeys) return 1;
     VKey *k = y->keys + y->next;
     if (k->kind != VKEY_PAUSE) return 1;
@@ -1095,7 +1117,8 @@ static b32 vttyhas(Vos *v)
 {
     VTty *y = &v->tty;
     if (!y->term || y->settling) return 0;
-    if (!vnocanon(y)) return y->readylen || y->eof;
+    if (y->readylen) return 1;
+    if (!vnocanon(y)) return y->eof;
     for (iz i = y->next; i < y->nkeys; i++) {
         VKey *k = y->keys + i;
         if (k->kind != VKEY_TEXT) return 0;
@@ -1106,13 +1129,14 @@ static b32 vttyhas(Vos *v)
 
 // Typing ahead: while no process reads the terminal, as when they all
 // wait for something else or a shell is busy, its line discipline
-// takes the script's keys in its cooked mode (echo, ^C), the pauses
-// passing in virtual time, up to anything that needs a reader (a
-// snapshot, a resize, other modes). True if it took any.
+// takes the script's keys in its cooked mode (echo, ^C) or TTY_RAWSIG
+// (^C), the pauses passing in virtual time, up to anything that needs
+// a reader (a snapshot, a resize, other modes). True if it took any.
 static b32 vtyping(Vos *v)
 {
     VTty *y = &v->tty;
-    if (!y->term || y->settling || (y->mode && y->mode!=TTY_NOECHO)) return 0;
+    if (!y->term || y->settling) return 0;
+    if (y->mode && y->mode!=TTY_NOECHO && y->mode!=TTY_RAWSIG) return 0;
     for (i32 i = 0; i < v->nprocs; i++) {
         VProc *p = v->procs + i;
         if (p->state==VP_BLOCK && p->wait==VW_TTY) return 0;
@@ -1139,7 +1163,12 @@ static b32 vtype(Os *os, Vos *v)
             y->next++;
         } else if (k->kind == VKEY_TEXT) {
             if (y->pos < k->text.len) {
-                vcooked(os, v, k->text[y->pos++]);
+                u8 c = k->text[y->pos++];
+                if (y->mode == TTY_RAWSIG) {
+                    vrawsig(os, v, c);
+                } else {
+                    vcooked(os, v, c);
+                }
             } else {
                 y->pos = 0;
                 y->next++;
@@ -1159,7 +1188,7 @@ static iz vttyget(Os *os, Vos *v, u8 *buf, iz len)
     VTty *y = &v->tty;
     y->active = v->clock;
     for (;;) {
-        if (!vnocanon(y) && y->readylen) {
+        if (y->readylen) {
             iz n = len<y->readylen ? len : y->readylen;
             copybytes(buf, y->ready, n);
             y->readylen -= n;
@@ -1190,6 +1219,12 @@ static iz vttyget(Os *os, Vos *v, u8 *buf, iz len)
                 copybytes(buf, k->text.data+y->pos, n);
                 y->pos += n;
                 return n;
+            } else if (y->mode == TTY_RAWSIG) {
+                // the reader sees its signal before more keys
+                u8 c = k->text[y->pos++];
+                if (vsigkey(os, v, c, 0)) return -2;
+                buf[0] = c;
+                return 1;
             } else if (vnocanon(y)) {
                 // A byte at a time, with ^C, CR as \n and the echo
                 u8 c = k->text[y->pos++];
@@ -1300,11 +1335,15 @@ static Tty vos_tty(Os *os, Handle in, Handle out, i32 how)
         r.err = E_NOTTY;
         return r;
     }
+    b32 canon = !vnocanon(y);
     if (how == TTY_RESTORE) {
         y->mode = 0;
     } else if (how != TTY_QUERY) {
         y->mode = how;
     }
+    // Without lines, what was typed of one can be read
+    if (canon && vnocanon(y)) vlineready(y);
+    r.mode   = y->mode;
     r.rows   = y->term->rows;
     r.cols   = y->term->cols;
     r.xenl   = y->term->xenl;

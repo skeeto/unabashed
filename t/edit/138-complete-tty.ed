@@ -1,0 +1,16 @@
+# A completion function runs with the terminal as bind -x's command
+# does: a typed ^C is a signal, echoed as nothing, that abandons the
+# completion and the line, and read takes the bytes as typed
+size 12 60
+rc PS1='$ '
+rc f() { sleep 3; COMPREPLY=(done); }; complete -F f foo
+rc g() { read x; COMPREPLY=("$x"); }; complete -F g goo
+keys foo \t
+pause 300
+keys \C-c
+snap
+keys echo $?\r
+keys goo \t
+pause 200
+keys ab\rc\n
+snap

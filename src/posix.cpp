@@ -831,7 +831,7 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
         return r;
     }
     if (how!=TTY_QUERY && how!=TTY_RESTORE) {
-        os->ttypaste = paste && how==TTY_RAW;
+        os->ttypaste = paste && (how==TTY_RAW || how==TTY_RAWSIG);
     }
     if (how==TTY_RAW && os->ttyraw==TTY_RAW) {
         t = os->ttysave;  // already
@@ -857,6 +857,17 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
         case TTY_CHARSNOECHO:
             m.c_lflag &= ~(tcflag_t)(ICANON|ECHO|ECHOE|ECHOK|ECHONL);
             break;
+        case TTY_RAWSIG:
+            // readline's prepare_terminal_settings, with ^O bound
+            m.c_lflag &= ~(tcflag_t)(ICANON|ECHO);
+            m.c_lflag |= ISIG;
+            m.c_iflag &= ~(tcflag_t)(ICRNL|INLCR);
+            m.c_cc[VLNEXT]   = _POSIX_VDISABLE;
+            m.c_cc[VDISCARD] = _POSIX_VDISABLE;
+            #ifdef VDSUSP
+            m.c_cc[VDSUSP]   = _POSIX_VDISABLE;
+            #endif
+            break;
         }
         m.c_cc[VMIN]  = 1;
         m.c_cc[VTIME] = 0;
@@ -880,6 +891,7 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
     } else if (os->ttyraw) {
         t = os->ttysave;
     }
+    r.mode = os->ttyraw;
     winsize ws = {};
     if (!ioctl((i32)out, TIOCGWINSZ, &ws)) {
         r.rows = ws.ws_row;

@@ -690,7 +690,7 @@ struct Os {
     i32        nbgjobs;
     i32        nkilled;
     uz         jobport;    // job messages for watched programs
-    b32        ttyraw;     // os_tty: the console's modes were changed
+    i32        ttyraw;     // os_tty: the mode set (TTY_*), 0 if none
     i32        ttykeys;    // atomic: reads give keys (TK_*), not lines
     i32        ttyinmode;  // and its modes before
     i32        ttyoutmode;
@@ -1144,7 +1144,8 @@ static void conctrlc(Os *os)
 // else key events turned into them (conkey). A resize raises SIGWINCH
 // and the read goes on. -1 on error with *code set. A high surrogate
 // last in one call waits in Os.conhi for its low one in the next.
-static iz conkeys(Os *os, uz h, u8 *out, i32 *code, b32 vtin)
+// With once, events that make no keys return 0 instead of waiting.
+static iz conkeys(Os *os, uz h, u8 *out, i32 *code, b32 vtin, b32 once = 0)
 {
     InputRecord recs[64];
     for (;;) {
@@ -1179,7 +1180,7 @@ static iz conkeys(Os *os, uz h, u8 *out, i32 *code, b32 vtin)
                 len += m;
             }
         }
-        if (len) {
+        if (len || once) {
             *code = 0;
             return len;
         }
@@ -1887,6 +1888,28 @@ static iz mainread(Os *os, uz h, u8 *buf, iz len)
     return code==ERROR_BROKEN_PIPE ? 0 : -1;
 }
 
+// Keys from a console in TTY_RAWSIG on the main thread, as conkeys,
+// waiting for them or a signal (-1): a typed Ctrl-C, processed, is no
+// key and ends no read.
+static iz conrawsig(Os *os, uz h, u8 *out, i32 *code)
+{
+    b32 vtin = __atomic_load_n(&os->ttykeys, __ATOMIC_SEQ_CST) == TK_VT;
+    for (;;) {
+        if (sigwaiting(os)) {
+            *code = ERROR_OPERATION_ABORTED;
+            return -1;
+        }
+        i32 n = 0;
+        if (!GetNumberOfConsoleInputEvents(h, &n) || n) {
+            iz len = conkeys(os, h, out, code, vtin, 1);
+            if (len) return len;
+            continue;
+        }
+        uz hs[2] = {h, os->wake};
+        WaitForMultipleObjects(2, hs, 0, INFINITE);
+    }
+}
+
 // Read a console line into the read-ahead on the main thread: its
 // length, 0 at end of file, -1 for Ctrl-C or an error. Ctrl-C typed at
 // the console ends the read. A Ctrl-C event sent another way does not
@@ -1897,7 +1920,8 @@ static iz conread(Os *os, Wobj *w, uz h)
 {
     reserveahead(os, w, 3*CONUNITS);
     i32 code = 0;
-    iz  n    = conline(os, h, w->ahead+w->alen, &code);
+    iz  n    = os->ttyraw==TTY_RAWSIG ? conrawsig(os, h, w->ahead+w->alen, &code)
+             : conline(os, h, w->ahead+w->alen, &code);
     if (n<0 && code==ERROR_OPERATION_ABORTED) {
         // The control handler runs on a thread of its own, perhaps not
         // yet: give it a moment to note the signal
@@ -3597,13 +3621,13 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
     }
     if (how!=TTY_QUERY && how!=TTY_RESTORE) {
         if (!os->ttyraw) {
-            os->ttyraw     = 1;
             os->ttyinmode  = imode;
             os->ttyoutmode = omode;
             os->ttyin      = in;
             os->ttyout     = out;
         }
-        os->ttypaste = paste && how==TTY_RAW;
+        os->ttyraw   = how;
+        os->ttypaste = paste && (how==TTY_RAW || how==TTY_RAWSIG);
         i32 base = os->ttyinmode;
         switch (how) {
         case TTY_RAW: {
@@ -3631,6 +3655,19 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
             SetConsoleMode(in, base & ~(CM_PROCESSED_INPUT|CM_LINE_INPUT|CM_ECHO_INPUT));
             r.noecho = how == TTY_CHARS;
             break;
+        case TTY_RAWSIG: {
+            // Keys as in raw mode, but Ctrl-C a signal to the console's
+            // processes, as at the shell's prompt (conrawsig); output as
+            // it was before the editor
+            i32 raw = (base & ~(CM_LINE_INPUT|CM_ECHO_INPUT)) | CM_PROCESSED_INPUT;
+            i32 keys = TK_VT;
+            if (!SetConsoleMode(in, raw|CM_VT_INPUT)) {
+                SetConsoleMode(in, raw);
+                keys = TK_EVENTS;
+            }
+            __atomic_store_n(&os->ttykeys, keys, __ATOMIC_SEQ_CST);
+            SetConsoleMode(out, os->ttyoutmode);
+        } break;
         }
     } else if (how==TTY_RESTORE && os->ttyraw) {
         os->ttyraw   = 0;
@@ -3640,6 +3677,7 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
         SetConsoleMode(out, os->ttyoutmode);
     }
     GetConsoleMode(out, &omode);
+    r.mode   = os->ttyraw;
     r.cols   = ci.width;
     r.rows   = ci.bottom - ci.top + 1;
     r.legacy = !(omode & CM_VT_OUTPUT);

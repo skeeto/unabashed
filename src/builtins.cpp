@@ -3393,6 +3393,11 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         File *ferr = sh->fds->fd[2];
         ttyout = ferr && ferr->kind==F_OS ? ferr->h : in->h;
+        // bash changes the mode the terminal has, and in the one bind -x
+        // runs with neither echo nor lines are left to take away
+        if (ttymode && os_tty(sh->os, in->h, ttyout, TTY_QUERY).mode==TTY_RAWSIG) {
+            ttymode = 0;
+        }
     }
     Escape te;
     if (ttymode) {

@@ -1,0 +1,41 @@
+# bind -x runs its command with the terminal as readline leaves it: no
+# echo and no lines (CR stays CR, ^U and DEL arrive as bytes), but a
+# typed ^C is a signal, echoed as nothing, that abandons the command
+# and the line; read's -s and -n change nothing in it, a program reads
+# the same bytes, and keys typed meanwhile reach the line afterward
+size 24 60
+rc PS1='$ '
+rc bind -x '"\C-t": sleep 5; echo after'
+rc bind -x '"\C-xr": read x; printf "<%q>\\n" "$x"'
+rc bind -x '"\C-xs": read -s x; printf "<%q>\\n" "$x"'
+rc bind -x '"\C-xn": read -n 3 x; printf "<%q>\\n" "$x"; read y; printf "<%q>\\n" "$y"'
+rc bind -x '"\C-xh": head -c 4 | od -c | head -2'
+rc bind -x '"\C-xi": read x; echo "after $?"'
+rc bind -x '"\C-xw": sleep 1'
+keys abc\C-t
+pause 300
+keys \C-c
+snap
+keys echo $?\r
+keys \C-xr
+pause 200
+keys hi\rthere\C-u\x7fq\n
+keys \C-xs
+pause 200
+keys ab\rc\n
+snap
+keys \C-xn
+pause 200
+keys wxyz\n
+keys \C-xh
+pause 200
+keys k\rl\x7f
+snap
+keys \C-xi
+pause 200
+keys zz\C-c
+snap
+keys \C-xw
+keys echo typed\r
+pause 1500
+snap

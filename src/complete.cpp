@@ -759,7 +759,9 @@ static Slice<Str> compgenerate(Editor *ed, Shell *sh, Comp *c, i32 gen)
     if (ed->ps1) {
         // Programmable completion (pcomplete.cpp)
         i32 how = 0;
+        b32 raw = edshellmode(ed, sh);
         Slice<Str> m = pcomplete(ed, sh, c, &cmdpos, &how);
+        if (raw) edraw(ed, sh);
         if (how == 1) return m;
     }
     // Variables after programmable completion, as bash's order

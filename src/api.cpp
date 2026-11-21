@@ -283,15 +283,21 @@ enum : i32 {  // os_tty
     TTY_NOECHO,   // lines, not echoed (read -s)
     TTY_CHARS,    // each byte as typed, echoed (read -n, -d)
     TTY_CHARSNOECHO,  // each byte as typed, not echoed (read -sn)
+    // For shell code the editor runs (bind -x): readline's own mode, in
+    // which bash runs it. As TTY_RAW, but keys still raise signals (a
+    // typed interrupt echoes nothing) and output is as the terminal had
+    // it; the read builtin's modes change nothing in it.
+    TTY_RAWSIG,
 };
 // Should the process die of a signal's default action or run out of
 // memory while the mode is changed, the platform restores it first, as
-// readline's handlers do. TTY_PASTE, or'd with TTY_RAW, says the caller
-// turned on bracketed paste: it is turned off then too.
+// readline's handlers do. TTY_PASTE, or'd with TTY_RAW or TTY_RAWSIG,
+// says the caller turned on bracketed paste: it is turned off then too.
 enum : i32 { TTY_PASTE = 1<<8 };
 
 struct Tty {
     i32 err;    // E_NOTTY if in and out are not one terminal
+    i32 mode;   // the mode os_tty set (TTY_*), 0 if none since TTY_RESTORE
     i32 rows;   // size, 0 if unknown
     i32 cols;
     b32 xenl;   // deferred wrap: a write to the last column leaves the
@@ -577,7 +583,8 @@ static Str     lib_root(Os *);
 // 4: os_writeerr
 // 5: os_close returns a gathered write's failure
 // 6: os_getcwd
-enum : i32 { OSVTABLE_VERSION = 6 };
+// 7: os_tty's TTY_RAWSIG and Tty.mode
+enum : i32 { OSVTABLE_VERSION = 7 };
 
 struct OsVtable {
     i32 version;  // the OSVTABLE_VERSION it implements
