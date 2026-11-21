@@ -3872,45 +3872,54 @@ static iz condbytes(Cond *c)
            condbytes(c->left) + condbytes(c->right);
 }
 
+// Lists nest down their left operands, a ; b ; c as ((a ; b) ; c), so
+// nodebytes and copynode follow first children in a loop rather than
+// by recursion: a list of any length costs no stack.
 static iz nodebytes(Node *n)
 {
-    if (!n) return 0;
-    iz r = (iz)(sizeof(Node) + alignof(Node));
-    r += nodebytes(n->a) + nodebytes(n->b) + nodebytes(n->c);
-    r += wordsbytes(n->words) + wordbytes(n->name) + wordsbytes(n->arith);
-    r += condbytes(n->cond);
-    for (Redir *d = n->redirs; d; d = d->next) {
-        r += (iz)(sizeof(Redir) + alignof(Redir));
-        r += wordbytes(d->srcvar) + wordbytes(d->word) + d->body.len + d->eof.len;
-    }
-    for (Case *c = n->cases; c; c = c->next) {
-        r += (iz)(sizeof(Case) + alignof(Case));
-        r += wordsbytes(c->patterns) + nodebytes(c->body);
+    iz r = 0;
+    for (; n; n = n->a) {
+        r += (iz)(sizeof(Node) + alignof(Node));
+        r += nodebytes(n->b) + nodebytes(n->c);
+        r += wordsbytes(n->words) + wordbytes(n->name) + wordsbytes(n->arith);
+        r += condbytes(n->cond);
+        for (Redir *d = n->redirs; d; d = d->next) {
+            r += (iz)(sizeof(Redir) + alignof(Redir));
+            r += wordbytes(d->srcvar) + wordbytes(d->word) + d->body.len + d->eof.len;
+        }
+        for (Case *c = n->cases; c; c = c->next) {
+            r += (iz)(sizeof(Case) + alignof(Case));
+            r += wordsbytes(c->patterns) + nodebytes(c->body);
+        }
     }
     return r;
 }
 
 static Node *copynode(Arena *a, Node *n)
 {
-    if (!n) return 0;
-    Node *r = alloccopy(a, n);
-    r->a      = copynode(a, n->a);
-    r->b      = copynode(a, n->b);
-    r->c      = copynode(a, n->c);
-    r->words  = copywords(a, n->words);
-    r->name   = copyword(a, n->name);
-    r->redirs = copyredirs(a, n->redirs);
-    r->cond   = copycond(a, n->cond);
-    r->arith  = copywords(a, n->arith);
-    Case **tail = &r->cases;
-    *tail = 0;
-    for (Case *c = n->cases; c; c = c->next) {
-        Case *d = alloc<Case>(a);
-        d->patterns = copywords(a, c->patterns);
-        d->body     = copynode(a, c->body);
-        d->term     = c->term;
-        *tail = d;
-        tail  = &d->next;
+    Node  *head = 0;
+    Node **link = &head;
+    for (; n; n = n->a) {
+        Node *r = alloccopy(a, n);
+        *link = r;
+        link  = &r->a;
+        r->b      = copynode(a, n->b);
+        r->c      = copynode(a, n->c);
+        r->words  = copywords(a, n->words);
+        r->name   = copyword(a, n->name);
+        r->redirs = copyredirs(a, n->redirs);
+        r->cond   = copycond(a, n->cond);
+        r->arith  = copywords(a, n->arith);
+        Case **tail = &r->cases;
+        *tail = 0;
+        for (Case *c = n->cases; c; c = c->next) {
+            Case *d = alloc<Case>(a);
+            d->patterns = copywords(a, c->patterns);
+            d->body     = copynode(a, c->body);
+            d->term     = c->term;
+            *tail = d;
+            tail  = &d->next;
+        }
     }
-    return r;
+    return head;
 }

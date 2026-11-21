@@ -1101,12 +1101,26 @@ static void runasync1(Shell *, Node *, Arena);
 // bash, "a & b &" is two jobs, but "a && b &" one.
 static void runasync(Shell *sh, Node *n, Arena scratch)
 {
-    if (n->kind==N_CONNECT && n->connector=='&' && !n->redirs && !n->flags) {
-        runasync(sh, n->a, scratch);
-        if (n->b) runasync(sh, n->b, scratch);
+    // "a & b & c &" nests down the left operands, (((a & b) & c) &), so
+    // those are followed in a loop, innermost first: no stack per job
+    iz len = 0;
+    for (Node *c = n; c->kind==N_CONNECT && c->connector=='&' && !c->redirs && !c->flags; c = c->a) {
+        len++;
+    }
+    if (!len) {
+        runasync1(sh, n, scratch);
         return;
     }
-    runasync1(sh, n, scratch);
+    Node **spine = alloc<Node *>(&scratch, len);
+    Node  *first = n;
+    for (iz i = len-1; i >= 0; i--) {
+        spine[i] = first;
+        first    = first->a;
+    }
+    runasync1(sh, first, scratch);
+    for (iz i = 0; i < len; i++) {
+        if (spine[i]->b) runasync(sh, spine[i]->b, scratch);
+    }
 }
 
 static void runasync1(Shell *sh, Node *n, Arena scratch)

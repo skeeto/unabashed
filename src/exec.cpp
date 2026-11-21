@@ -4507,6 +4507,33 @@ static void execcond(Shell *sh, Node *n, Arena scratch)
     checkerrexit(sh);
 }
 
+// A list its enclosing list runs in its own loop (executelist): one of
+// ; newline && ||, with no flags or redirections of its own.
+static b32 islist(Node *n)
+{
+    if (!n || n->kind!=N_CONNECT || n->flags || n->redirs) {
+        return 0;
+    }
+    i32 c = n->connector;
+    return c==';' || c=='\n' || c==T_ANDAND || c==T_OROR;
+}
+
+// After list n's left operand has run, at the noerrexit level it had
+// there: whether its right operand runs next.
+static b32 listnext(Shell *sh, Node *n, Arena scratch)
+{
+    if (n->connector==T_ANDAND || n->connector==T_OROR) {
+        sh->noerrexit--;
+        if (sh->flow || sh->exiting) return 0;
+        return (n->connector==T_ANDAND) == (sh->status==0);
+    }
+    listnotify(sh, scratch);
+    reachtail(sh, n->b);
+    return 1;
+}
+
+static void executelist(Shell *, Node *, Arena);
+
 // Groups, if branches and the right sides of lists are followed in a
 // loop rather than by recursion, so that each level of shell function
 // calls costs as little stack as possible.
@@ -4554,14 +4581,20 @@ static void executenode(Shell *sh, Node *n, Arena scratch)
             case T_ANDAND:
             case T_OROR:
                 sh->noerrexit++;
-                execute(sh, n->a, scratch);
-                sh->noerrexit--;
-                if (sh->flow || sh->exiting) return;
-                if ((n->connector==T_ANDAND) != (sh->status==0)) return;
+                if (islist(n->a)) {
+                    executelist(sh, n->a, scratch);
+                } else {
+                    execute(sh, n->a, scratch);
+                }
+                if (!listnext(sh, n, scratch)) return;
                 n = n->b;
                 continue;
             default:
-                execute(sh, n->a, scratch);
+                if (islist(n->a)) {
+                    executelist(sh, n->a, scratch);
+                } else {
+                    execute(sh, n->a, scratch);
+                }
                 listnotify(sh, scratch);
                 reachtail(sh, n->b);
                 n = n->b;
@@ -4572,6 +4605,37 @@ static void executenode(Shell *sh, Node *n, Arena scratch)
         break;
     }
     executeone(sh, n, scratch);
+}
+
+// Run list n as execute would. Lists nest down their left operands,
+// a ; b ; c as ((a ; b) ; c), so those below n are followed in a loop,
+// innermost first, rather than by recursion: a generated script's list
+// of any length costs the stack of a short one.
+[[gnu::noinline]]
+static void executelist(Shell *sh, Node *n, Arena scratch)
+{
+    sh->intwho = {};
+    if (sh->exiting || sh->flow) {
+        return;
+    }
+    iz len = 0;
+    for (Node *c = n; islist(c); c = c->a) {
+        len++;
+    }
+    Node **spine = alloc<Node *>(&scratch, len);  // innermost first
+    Node  *first = n;
+    for (iz i = len-1; i >= 0; i--) {
+        spine[i] = first;
+        // the first command is the left operand of each && and ||
+        sh->noerrexit += first->connector==T_ANDAND || first->connector==T_OROR;
+        first = first->a;
+    }
+    execute(sh, first, scratch);
+    for (iz i = 0; i < len; i++) {
+        if (listnext(sh, spine[i], scratch)) {
+            executenode(sh, spine[i]->b, scratch);
+        }
+    }
 }
 
 static void executeone(Shell *sh, Node *n, Arena scratch)

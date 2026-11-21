@@ -384,6 +384,86 @@ static void printfuncdef(Printer *p, Node *f)
     printfuncbody(p, f->a);
 }
 
+// A connector, then its right operand.
+static void printright(Printer *p, Node *n)
+{
+    i32 c = n->connector;
+    switch (c) {
+    case '&':
+    case '|': {
+        u8  buf[2] = {' ', (u8)c};
+        printdeferred(p, Str{buf, 2});
+        if (c!='&' || n->b) {
+            put(p, " ");
+            p->skipindent++;
+        }
+    } break;
+    case T_ANDAND:
+        printdeferred(p, " && ");
+        if (n->b) p->skipindent++;
+        break;
+    case T_OROR:
+        printdeferred(p, " || ");
+        if (n->b) p->skipindent++;
+        break;
+    case ';':
+    case '\n': {
+        u8  sep        = p->comsub ? (u8)c : ';';
+        b32 wasnewline = !p->deferred && !p->washeredoc && c=='\n';
+        if (!p->deferred) {
+            if (!p->washeredoc) {
+                put(p, Str{&sep, 1});
+            } else {
+                p->washeredoc = 0;
+            }
+        } else {
+            printdeferred(p, p->insidefunc ? Str("") : Str(";"));
+        }
+        if (p->insidefunc) {
+            put(p, "\n");
+        } else if (p->comsub && c=='\n' && !wasnewline) {
+            put(p, "\n");
+        } else {
+            if (c == ';') put(p, " ");
+            if (n->b) p->skipindent++;
+        }
+    } break;
+    }
+    printcmd(p, n->b);
+    if (p->connection == 1) {
+        maybedeferred(p, "");
+    }
+    p->connection--;
+}
+
+// Lists nest down their left operands, a ; b ; c as ((a ; b) ; c), so
+// those below n with nothing of their own to print (flags,
+// redirections) are followed in a loop, innermost first, rather than by
+// recursion: a list of any length costs no stack. Each would skip its
+// indent and add its own, and each counts as a connection.
+static void printlist(Printer *p, Node *n)
+{
+    iz    len   = 1;
+    Node *first = n->a;
+    for (; first && first->kind==N_CONNECT && !first->flags && !first->redirs; first = first->a) {
+        len++;
+    }
+    Node **spine = &n;
+    if (len > 1) {
+        spine = alloc<Node *>(p->a, len);  // innermost first
+        Node *c = n;
+        for (iz i = len-1; i >= 0; i--, c = c->a) {
+            spine[i] = c;
+        }
+    }
+    p->skipindent++;
+    p->connection += (i32)len;
+    printcmd(p, first);
+    for (iz i = 0; i < len; i++) {
+        printright(p, spine[i]);
+    }
+}
+
 static void printcmd(Printer *p, Node *n)
 {
     if (!n) {
@@ -540,58 +620,9 @@ static void printcmd(Printer *p, Node *n)
         }
         return;  // redirections already printed
 
-    case N_CONNECT: {
-        p->skipindent++;
-        p->connection++;
-        printcmd(p, n->a);
-        i32 c = n->connector;
-        switch (c) {
-        case '&':
-        case '|': {
-            u8  buf[2] = {' ', (u8)c};
-            printdeferred(p, Str{buf, 2});
-            if (c!='&' || n->b) {
-                put(p, " ");
-                p->skipindent++;
-            }
-        } break;
-        case T_ANDAND:
-            printdeferred(p, " && ");
-            if (n->b) p->skipindent++;
-            break;
-        case T_OROR:
-            printdeferred(p, " || ");
-            if (n->b) p->skipindent++;
-            break;
-        case ';':
-        case '\n': {
-            u8  sep        = p->comsub ? (u8)c : ';';
-            b32 wasnewline = !p->deferred && !p->washeredoc && c=='\n';
-            if (!p->deferred) {
-                if (!p->washeredoc) {
-                    put(p, Str{&sep, 1});
-                } else {
-                    p->washeredoc = 0;
-                }
-            } else {
-                printdeferred(p, p->insidefunc ? Str("") : Str(";"));
-            }
-            if (p->insidefunc) {
-                put(p, "\n");
-            } else if (p->comsub && c=='\n' && !wasnewline) {
-                put(p, "\n");
-            } else {
-                if (c == ';') put(p, " ");
-                if (n->b) p->skipindent++;
-            }
-        } break;
-        }
-        printcmd(p, n->b);
-        if (p->connection == 1) {
-            maybedeferred(p, "");
-        }
-        p->connection--;
-    } break;
+    case N_CONNECT:
+        printlist(p, n);
+        break;
 
     case N_FUNCDEF:
         printfuncdef(p, n);
