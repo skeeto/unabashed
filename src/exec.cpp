@@ -4190,9 +4190,28 @@ static void execfuncdef(Shell *sh, Node *n, Arena scratch)
     sh->status = 0;
 }
 
+// Do redirections change standard input, as bash's stdin_redirects
+// counts them for &? Any input redirection, to whatever descriptor, and
+// a duplication or close of 0, but none with a {var}.
+static b32 stdinredirects(Redir *r)
+{
+    for (; r; r = r->next) {
+        if (r->srcvar) continue;
+        switch (r->op) {
+        case R_INPUT: case R_INOUT: case R_HEREDOC: case R_HEREDOCSTRIP:
+        case R_HERESTRING:
+            return 1;
+        case R_DUPIN: case R_DUPINWORD: case R_CLOSE:
+            if (r->src == 0) return 1;
+        }
+    }
+    return 0;
+}
+
 [[gnu::noinline]]
 static void execsubshell(Shell *sh, Node *n, Arena scratch)
 {
+    sh->stdinredir = stdinredirects(n->redirs);  // as bash's ( ) child
     if (fgjobctl(sh) && runfgimage(sh, n, scratch)) return;
     SubJob j = {};
     j.kind = SUB_NODE;
@@ -4515,12 +4534,12 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     // apply in it only.
     b32 stdinredir = sh->stdinredir;
     b32 inner      = n->kind==N_SUBSHELL || n->kind==N_COPROC;
+    b32 forked     = sh->forkstdin;  // its own do not count (forkedstdin)
+    sh->forkstdin  = 0;
     if (n->kind!=N_SIMPLE && n->kind!=N_CONNECT && n->kind!=N_FUNCDEF && n->redirs) {
-        b32 in = 0;
-        for (Redir *r = n->redirs; r; r = r->next) {
-            in |= r->src==0 && !r->srcvar;  // & reads it then
+        if (!forked) {
+            sh->stdinredir = stdinredirects(n->redirs) || (inner && stdinredir);
         }
-        sh->stdinredir = in || (inner && stdinredir);
         // As bash, a compound command's redirections are at its line
         // as only some commands set it: that of the enclosing for,
         // case, select or call, else where the parser finished the

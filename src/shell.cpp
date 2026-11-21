@@ -698,6 +698,8 @@ struct Shell {
     Coproc  *coprocs;      // coprocesses, newest first
     b32      stdinredir;   // input is a pipe or redirected: & keeps it,
                            // rather than reading /dev/null
+    b32      forkstdin;    // the next compound command is a forked one's
+                           // (forkedstdin): its redirections leave that
     b32      jobctl;       // job control is active: set -m, but not in a
                            // subshell other than a command substitution
     b32      incomsub;     // in a command substitution: fg and bg find

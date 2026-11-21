@@ -632,6 +632,20 @@ static Vproc *vprocwith(Shell *sh, File *in, File *out)
     return m;
 }
 
+// Set standard input up for & in a forked command (a pipeline stage, a
+// job) as bash's child finds it: a ( list ) decides by its own
+// redirections and an input pipe, any other keeps the shell's unless
+// piped into, and a compound command's redirections, applied before it
+// runs, leave that (forkstdin). Returns the value to restore once the
+// child has started.
+static b32 forkedstdin(Shell *sh, Node *n, b32 piped)
+{
+    b32 old = sh->stdinredir;
+    sh->stdinredir = n->kind==N_SUBSHELL ? piped || stdinredirects(n->redirs) : old || piped;
+    sh->forkstdin  = n->redirs && n->kind!=N_SIMPLE && n->kind!=N_CONNECT;
+    return old;
+}
+
 static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops)
 {
     Vproc *m = vprocwith(sh, in, out);
@@ -1153,6 +1167,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         ran[k] = !skip;
         sh->debugdone = stages[k]->kind == N_SIMPLE;
         sh->forked    = stages[k]->kind == N_SIMPLE;
+        b32 redir = forkedstdin(sh, stages[k], k>0);
         if (!skip && ext[k] && directstage(sh, scratch, stages[k], !k)) {
             u64 group = setgroup(s, nexttag(s));  // tracing: as a stage task
             sh->spawngrp = grouped ? (grp ? grp : -1) : 0;
@@ -1187,8 +1202,10 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             sh->forked    = 0;
             yield(s);
         }
-        sh->debugdone = 0;
-        sh->forked    = 0;
+        sh->debugdone  = 0;
+        sh->forked     = 0;
+        sh->stdinredir = redir;
+        sh->forkstdin  = 0;
         // Drop the parent's ends at once: a later direct stage whose
         // words read its input expands here (a comsub runscode missed),
         // and would wait forever on a writer held here
@@ -1206,8 +1223,8 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     i32   flowed = sh->flow ? sh->status : -1;  // the action's return
     ran[last] = !skip;
     Undo *mark  = sh->undo;
-    b32   redir = sh->stdinredir;
-    sh->stdinredir = 1;
+    // as bash, lastpipe runs it here with no input pipe to keep
+    b32   redir = inhere ? sh->stdinredir : forkedstdin(sh, stage, 1);
     sh->status = before;
     fdset(sh, 0, in[last], 0, &scratch);
     i32   depth = ++sh->capdepth;
@@ -1302,6 +1319,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     closegate(sh);  // also when the last stage was skipped
     sh->capdepth = depth - 1;
     sh->stdinredir = redir;
+    sh->forkstdin  = 0;
     unwind(sh, mark);
     i32 lastsig = escaped ? 0 : sh->childsig;
     pids[last]  = sh->childpid;

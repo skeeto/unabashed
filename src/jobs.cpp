@@ -1139,8 +1139,10 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
         }
     }
     // Without job control, or in a subshell, its input is /dev/null
-    // unless redirected
-    b32   nullin = !sh->stdinredir && (sh->subshell || !sh->jobctl);
+    // unless redirected, here or around it; as bash, never a pipeline's
+    b32   piped  = n->kind==N_CONNECT && n->connector=='|';
+    b32   nullin = !sh->stdinredir && (sh->subshell || !sh->jobctl) &&
+                   !stdinredirects(n->redirs) && !piped;
     File *in     = nullin ? devnull(sh, scratch) : 0;
     Task *t      = 0;
     i64   pid    = 0;
@@ -1166,9 +1168,12 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     if (retry) {
         sh->debugdone = debugged;
         sh->forked    = n->kind == N_SIMPLE;
+        b32 redir = forkedstdin(sh, n, 0);
         t = spawnbg(sh, n, in, 0, &pid, scratch);
-        sh->debugdone = 0;
-        sh->forked    = 0;
+        sh->debugdone  = 0;
+        sh->forked     = 0;
+        sh->stdinredir = redir;
+        sh->forkstdin  = 0;
     }
     sh->spawngrp = 0;
     fileunref(sh, in);
