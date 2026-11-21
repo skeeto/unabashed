@@ -3263,6 +3263,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     sh->spawnto = 0;
     b32 debugdone = sh->debugdone;  // a pipeline stage's, by its parent
     sh->debugdone = 0;
+    // bash's forked child exits with the status of the whole command it
+    // runs: no ERR action or set -e for it, only for what it runs
     b32 forked = sh->forked;
     b32 async  = sh->asyncpct;
     sh->forked   = 0;
@@ -3397,7 +3399,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         if (!redirected) {
             unwind(sh, mark);
             sh->status = sh->redirfail;
-            checkerrexit(sh);
+            if (!forked) checkerrexit(sh);
             return;
         }
         if (child) laststatus = 0;
@@ -3408,7 +3410,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         } else if (!ok) {
             escape(sh, ESC_DISCARD);  // as bash abandons the command
         }
-        checkerrexit(sh);
+        if (!forked) checkerrexit(sh);
         return;
     }
 
@@ -3532,7 +3534,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             sh->exiting = 1;  // as bash: a special builtin's, fatal
             escape(sh, ESC_EXIT);
         }
-        checkerrexit(sh);
+        if (!forked) checkerrexit(sh);
         return;
     }
     if (execonly) {
@@ -3728,7 +3730,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         reportchild(sh, scratch, n);
     }
     unwind(sh, mark);
-    if (sh->flow != FLOW_RETURN) {
+    if (sh->flow!=FLOW_RETURN && !forked) {
         checkerrexit(sh);
     }
 }

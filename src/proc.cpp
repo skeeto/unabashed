@@ -1389,6 +1389,13 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     if (sh->opt[O_PIPEFAIL] && !status) {
         sh->status = failed;
     }
-    checkerrexit(sh);
+    // As a background job, the pipeline is bash's parent starting each
+    // stage, which never looks at their status: no ERR, no set -e. Else
+    // bash waits for a ( list ) as the last stage as for one alone, and
+    // gets the pipeline's status: ERR runs for it first, then again.
+    if (n != sh->keepredirs) {
+        if (stage->kind==N_SUBSHELL && !inhere && ran[last]) checkerrexit(sh);
+        checkerrexit(sh);
+    }
     checksigs(sh, scratch);
 }
