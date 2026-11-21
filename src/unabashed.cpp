@@ -251,16 +251,14 @@ static void localewarn(Shell *sh, Str name)
 {
     if (sh->pathmode!=PM_POSIX || sh->nolocwarn) return;
     if (name!="LC_ALL" && sh->lcall) return;  // setlocale not called
-    byte  mem[512];
-    Arena a = {mem, mem+sizeof(mem)};
-    Got   g = getvar(sh, &a, name);
+    Arena a = *scratchat(sh, sh->capdepth+1);
+    Got   g = getplain(sh, &a, name);
     if (!g.set || localeok(g.value)) return;
-    Str v = g.value.len>200 ? takehead(g.value, 200) : g.value;
     Buf b(&a, 300);
     print(&b, "warning: setlocale: ");
     print(&b, name);
     print(&b, ": cannot change locale (");
-    print(&b, v);
+    print(&b, g.value);
     print(&b, "): No such file or directory");
     shellerror(sh, a, finish(&b));
 }
@@ -355,12 +353,9 @@ static void varchanged(Shell *sh, Str name)
         if (g.value.len && parsei64(g.value, &fd) && fd>=0 && fd<FDMAX && sh->fds->fd[fd]) {
             sh->tracefd = (i32)fd;
         } else if (g.value.len) {
-            byte  mem[512];
-            Arena scratch = {mem, mem+sizeof(mem)};
-            if (g.value.len > 256) g.value = takehead(g.value, 256);
-            Str msg = concat3(&scratch, "BASH_XTRACEFD: ", g.value,
-                                            Str(": invalid value for trace file descriptor"));
-            shellerror(sh, scratch, msg);
+            Str msg = concat3(&a, "BASH_XTRACEFD: ", g.value,
+                                  Str(": invalid value for trace file descriptor"));
+            shellerror(sh, a, msg);
         }
     } else if (name == "IGNOREEOF") {
         sh->opt[O_IGNOREEOF] = !!lookup(sh, name);  // set or not

@@ -164,9 +164,10 @@ static b32 splitref(Str s, Str *name, Str *sub);
 
 static void refwarning(Shell *sh, Str name, Str msg)
 {
-    byte  mem[1024];
-    Arena a = {mem, mem+sizeof(mem)};
-    if (name.len > 256) name = takehead(name, 256);
+    // Any lookup may warn, with no arena at hand, and a pool arena may
+    // hold the caller's own data: the store's free end serves, as nothing
+    // is allocated from the store until the message is written
+    Arena a = sh->store->a;
     Str msg2 = concat3(&a, "warning: ", name, msg);
     shellerror(sh, a, msg2);
 }
