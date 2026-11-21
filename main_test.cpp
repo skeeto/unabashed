@@ -928,6 +928,35 @@ static void test_arena(Test *t)
     copy = m;
     skipmsg(&copy, clone(&other, "elsewhere"));
     expectint(t, "skipmsg elsewhere", copy.beg == m.beg, 1);
+
+    // concat extends a string that ends at the tip, so the message may
+    // start below the copy and end above it: skipped all the same
+    Str name = clone(&m, "ro");
+    copy = m;
+    msg  = concat(&m, name, ": readonly variable");
+    expectint(t, "skipmsg straddles", msg.data == name.data, 1);
+    skipmsg(&copy, msg);
+    expectint(t, "skipmsg straddles", copy.beg == (byte *)(msg.data+msg.len), 1);
+
+    // Wholly below the copy, static, or empty: the copy stays put
+    msg  = clone(&m, "below");
+    copy = m;
+    skipmsg(&copy, msg);
+    expectint(t, "skipmsg below", copy.beg == m.beg, 1);
+    skipmsg(&copy, "static");
+    expectint(t, "skipmsg static", copy.beg == m.beg, 1);
+    skipmsg(&copy, Str{});
+    skipmsg(&copy, Str{(u8 *)m.beg+1, 0});
+    expectint(t, "skipmsg empty", copy.beg == m.beg, 1);
+
+    // A fixed block is its own limit
+    static byte block[256];
+    Arena fixed = {block, block+countof(block)};
+    name = clone(&fixed, "ro");
+    copy = fixed;
+    msg  = concat(&fixed, name, ": readonly variable");
+    skipmsg(&copy, msg);
+    expectint(t, "skipmsg fixed", copy.beg == (byte *)(msg.data+msg.len), 1);
 }
 
 // f80digits has room for every integer digit it stores, 9 a division,
