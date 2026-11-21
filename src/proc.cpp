@@ -281,13 +281,19 @@ static PathCtx *copypaths(Arena *a, PathCtx *p)
 
 // A File of vproc c for the same object as f: a duplicate handle, the
 // same capture buffer or clipboard file, a copy of the text, or another
-// end of the pipe.
+// end of the pipe. Null, the descriptor closed in c, where no handle is
+// left to duplicate to (a low ulimit -n).
 static File *copyfile(Shell *c, File *f)
 {
+    Handle h = BADHANDLE;
+    if (f->kind == F_OS) {
+        h = os_dup(c->os, f->h);
+        if (h == BADHANDLE) return 0;
+    }
     File *r = newfile(c, f->kind, f->flags);
     switch (f->kind) {
     case F_OS:
-        r->h    = os_dup(c->os, f->h);
+        r->h    = h;
         r->full = f->full;
         break;
     case F_CAPTURE:
@@ -334,7 +340,7 @@ static Fdtab *copyfdtab(Shell *c, Arena *a, Fdtab *t)
             continue;
         }
         r->fd[fd] = copyfile(c, f);
-        if (n < countof(from)) {
+        if (r->fd[fd] && n<countof(from)) {
             from[n] = f;
             to[n++] = r->fd[fd];
         }

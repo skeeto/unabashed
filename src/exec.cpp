@@ -1873,20 +1873,25 @@ static Stat pathstat(Shell *sh, Arena a, Str path, b32 follow)
 // place: the File then reads through the handle, so that what the
 // program leaves unread stays for whoever reads next, as with bash's
 // pipe or file. (An in-memory pipe gets an OS form shared by all its
-// Files instead: pipeosread.) False on failure.
-static b32 materialize(Shell *sh, Arena a, File *f)
+// Files instead: pipeosread.) False on failure, the reason in *err.
+static b32 materialize(Shell *sh, Arena a, File *f, i32 *err = 0)
 {
+    i32 none;
+    err = err ? err : &none;
+    *err = E_MFILE;
     Handle h = BADHANDLE;
     if (f->kind == F_MEM) {
         Str rest = cuthead(f->mem, f->pos<f->mem.len ? f->pos : f->mem.len);
         switch (memfiletype(sh, f)) {
         case FT_CHAR: {
             Opened o = os_open(sh->os, a, "/dev/null", OF_READ, 0);
+            *err = o.err;
             if (o.err) return 0;
             h = o.h;
         } break;
         case FT_PIPE: {
             OsPipe p = os_pipe(sh->os);
+            *err = p.err;
             if (p.err) return 0;
             os_write(sh->os, p.w, rest.data, rest.len);  // it fits
             os_close(sh->os, p.w);
@@ -1894,9 +1899,12 @@ static b32 materialize(Shell *sh, Arena a, File *f)
         } break;
         case FT_FILE: {
             Opened o = os_tempfile(sh->os, a);
+            *err = o.err;
             if (o.err) return 0;
             if (!os_write(sh->os, o.h, f->mem.data, f->mem.len) ||
                     os_seek(sh->os, o.h, f->pos, 0) < 0) {
+                *err = E_NOSPC;
+                if (i32 e = os_writeerr(sh->os)) *err = e;
                 os_close(sh->os, o.h);
                 return 0;
             }
@@ -2185,6 +2193,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     Handle  capread = BADHANDLE;
     Task   *cappumps[16];  // other captures', joined with it
     i32     ncappumps = 0;
+    i32     fderr = 0;  // a descriptor it cannot have: it does not run
     for (i32 fd = 0; fd < t->top; fd++) {
         File *f = t->fd[fd];
         if (!f) continue;
@@ -2218,20 +2227,26 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
             sf.h = f->h;
             break;
         case F_MEM:
-            if (!materialize(sh, a, f)) continue;
+            if (!materialize(sh, a, f, &fderr)) continue;
             sf.h = f->h;
             break;
         case F_CAPTURE: {
             if (sh->spawnto) {
                 // Not waited for here: a pump fills the capture
                 sf.h = capturewriter(sh, f, 0);
-                if (sf.h == BADHANDLE) continue;
+                if (sf.h == BADHANDLE) {
+                    fderr = E_MFILE;
+                    continue;
+                }
                 closeafter[nclose++] = sf.h;
                 break;
             }
             if (capfile && ncappumps==countof(cappumps)) continue;
             OsPipe p = os_pipe(sh->os);
-            if (p.err) continue;
+            if (p.err) {
+                fderr = p.err;
+                continue;
+            }
             sf.h = p.w;
             closeafter[nclose++] = p.w;
             if (!capfile) {
@@ -2251,13 +2266,19 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         case F_PIPE: {
             if (f->flags & OF_READ) {
                 sf.h = pipeosread(s, f->pipe);
-                if (sf.h == BADHANDLE) continue;
+                if (sf.h == BADHANDLE) {
+                    fderr = E_MFILE;
+                    continue;
+                }
                 break;
             }
             // Output is pumped while the program runs, and joined after
             if (npumps == countof(pumps)) continue;
             OsPipe p = os_pipe(sh->os);
-            if (p.err) continue;
+            if (p.err) {
+                fderr = p.err;
+                continue;
+            }
             Pump *pp = newpump(s);  // may outlive this call
             pp->pipe = f->pipe;
             pp->kind = PUMP_FROMHANDLE;
@@ -2320,7 +2341,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     b32 jobtail = !execing && sh->attail && sh->subshell==sh->procbase &&
                   sh->procbase && sh->taillevel==sh->procbase+1 && s->cur==&s->main;
     if ((execing || jobtail) && sh->subshell==sh->procbase && !sh->capdepth &&
-            !capfile && !sh->spawnto && !br.n) {
+            !capfile && !sh->spawnto && !br.n && !fderr) {
         // exec at the process's outermost level: become the program (it
         // keeps the shell's pid). While other tasks run, a copy of the
         // process forked first keeps them, as bash's procsubs and jobs
@@ -2385,7 +2406,10 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         }
     }
     clipsettle(s);
-    Spawned r = os_spawn(sh->os, a, &sp);
+    Spawned r = {};
+    r.proc = BADHANDLE;
+    r.err  = fderr;
+    if (!fderr) r = os_spawn(sh->os, a, &sp);
     if (stops) closegate(sh);  // the group is whole: its stages may run
     for (i32 i = 0; i < nclose; i++) {
         os_close(sh->os, closeafter[i]);

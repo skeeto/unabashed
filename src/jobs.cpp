@@ -846,6 +846,7 @@ struct BgFds {
     iz       nclose;
     Task    *caps[8];  // capture pumps, owned by the job once started
     i32      ncaps;
+    b32      failed;   // a descriptor it cannot have (a low ulimit -n)
 };
 
 static BgFds bgfds(Shell *sh, Arena *a, File *in, File *out)
@@ -878,24 +879,36 @@ static BgFds bgfds(Shell *sh, Arena *a, File *in, File *out)
             sf.h = f->h;
             break;
         case F_MEM:
-            if (!materialize(sh, *a, f)) continue;
+            if (!materialize(sh, *a, f)) {
+                r.failed = 1;
+                continue;
+            }
             sf.h = f->h;
             break;
         case F_CAPTURE: {
             if (r.ncaps == countof(r.caps)) continue;
             sf.h = capturewriter(sh, f, 0);
-            if (sf.h == BADHANDLE) continue;
+            if (sf.h == BADHANDLE) {
+                r.failed = 1;
+                continue;
+            }
             r.close[r.nclose++] = sf.h;
             r.caps[r.ncaps++] = ((Capture *)f->cap)->pumps;
         } break;
         case F_PIPE: {
             if (f->flags & OF_READ) {
                 sf.h = pipeosread(s, f->pipe);
-                if (sf.h == BADHANDLE) continue;
+                if (sf.h == BADHANDLE) {
+                    r.failed = 1;
+                    continue;
+                }
                 break;
             }
             OsPipe p = os_pipe(sh->os);
-            if (p.err) continue;
+            if (p.err) {
+                r.failed = 1;
+                continue;
+            }
             Pump *pp = newpump(s);
             pp->pipe = f->pipe;
             pp->kind = PUMP_FROMHANDLE;
@@ -952,7 +965,11 @@ static i64 spawnimage(Shell *sh, Node *n, File *in, File *out, i64 *pid,
     sp.gater  = sh->gate.r;
     sp.gatew  = sh->gate.w;
     if (!grp) sp.sigign |= (u64)1<<1 | (u64)1<<2;  // INT, QUIT
-    Spawned r = os_spawn(sh->os, scratch, &sp);
+    // Lacking a descriptor, it runs as a vproc instead, as if the
+    // platform could not, rather than with that descriptor closed
+    Spawned r = {};
+    r.err = E_MFILE;
+    if (!fds.failed) r = os_spawn(sh->os, scratch, &sp);
     for (iz i = 0; i < fds.nclose; i++) {
         os_close(sh->os, fds.close[i]);
     }
