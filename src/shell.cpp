@@ -833,6 +833,8 @@ struct Shell {
     b32      wdlost;       // getcwd failed for pwd: bash has no name for
                            // its directory until it finds one (realwd)
     b32      wddot;        // bash then names it "." once cd'd to (cdlost)
+    i32      fdlost;       // a vproc's descriptors left closed, no handle
+                           // to copy them to (low ulimit -n): it fails
     Str      host;         // the host's name, as the shell started
     Str      user;         // USER (Windows: USERNAME) as the shell started
     Str      hosts;        // completion's host names, one per line,

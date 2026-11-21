@@ -1052,18 +1052,29 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
         if constexpr (LIBMODE) setsid();  // away from the host's terminal
         joingroup(0, p->pgid, p->fg, p->tty);
         // Move the pipe and the sources out of the way first, then
-        // install the map
+        // install the map; one already at its own number stays, as no
+        // other target is it. Where a low `ulimit -n` leaves no room it
+        // fails as an exec would, the map not yet touched.
         i32 n    = p->nfds;
         i32 base = fdbase(p->dst, n);
         i32 w    = fdaside(sync[1], base, p->dst, n, F_DUPFD_CLOEXEC);
         for (i32 i = 0; i < n; i++) {
-            if (p->src[i]>=0 && p->src[i]<base) {
+            if (p->src[i]>=0 && p->src[i]<base && p->src[i]!=p->dst[i]) {
                 p->src[i] = fdaside(p->src[i], base, p->dst, n, F_DUPFD);
+                if (p->src[i] < 0) {
+                    err = errno;
+                    if (write(w>=0 ? w : sync[1], &err, sizeof(err))) {}
+                    _exit(127);
+                }
             }
         }
         closeexcept(p->src, n, w);
         for (i32 i = 0; i < n; i++) {
-            if (p->src[i] >= 0) dup2(p->src[i], p->dst[i]);
+            if (p->src[i] == p->dst[i]) {
+                fcntl(p->src[i], F_SETFD, 0);  // as dup2 would leave it
+            } else if (p->src[i] >= 0) {
+                dup2(p->src[i], p->dst[i]);
+            }
         }
         closeexcept(p->dst, n, w);
         // Every handler of the shell's goes too, as an exec would take
@@ -1307,6 +1318,25 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
     }
     i32 nfds = (i32)s->nfds;
 
+    // Sources below a target move above them all first, here, where
+    // a low `ulimit -n` leaving no room fails the spawn (the caller then
+    // runs it otherwise) rather than the child losing the descriptor;
+    // one already at its own number stays, as no other target is it
+    i32 base = fdbase(dst, nfds);
+    i32 err  = 0;
+    for (i32 i = 0; i < nfds; i++) {
+        if (src[i]<0 || src[i]>=base || src[i]==dst[i] || err) continue;
+        src[i] = fdaside(src[i], base, dst, nfds, F_DUPFD_CLOEXEC);
+        if (src[i] < 0) err = coreerr(errno);
+    }
+    if (err) {
+        for (i32 i = 0; i < nfds; i++) {
+            if (src[i]>=0 && src[i]!=(i32)s->fds[i].h) close(src[i]);
+        }
+        r.err = err;
+        return r;
+    }
+
     sigset_t all, old;
     sigfillset(&all);
     sigprocmask(SIG_SETMASK, &all, &old);
@@ -1322,15 +1352,13 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         // cannot enter it, but its own pin is only good while the map
         // leaves it: it holds the directory again from inside
         b32 entered = !enterdir(cwdfd, cwd);
-        i32 base = fdbase(dst, nfds);
-        for (i32 i = 0; i < nfds; i++) {
-            if (src[i]>=0 && src[i]<base) {
-                src[i] = fdaside(src[i], base, dst, nfds, F_DUPFD);
-            }
-        }
         closeexcept(src, nfds);
         for (i32 i = 0; i < nfds; i++) {
-            if (src[i] >= 0) dup2(src[i], dst[i]);
+            if (src[i] == dst[i]) {
+                fcntl(src[i], F_SETFD, 0);  // as dup2 would leave it
+            } else if (src[i] >= 0) {
+                dup2(src[i], dst[i]);
+            }
         }
         closeexcept(dst, nfds);
         for (i32 i = 0; i < NPIN; i++) os->pins[i].fd = 0;
@@ -1401,6 +1429,9 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
     i32 e = pid<0 ? coreerr(errno) : 0;
     if (pid > 0) joingroup(pid, s->pgid, s->fg, (i32)s->tty);
     sigprocmask(SIG_SETMASK, &old, 0);
+    for (i32 i = 0; i < nfds; i++) {
+        if (src[i]>=0 && src[i]!=(i32)s->fds[i].h) close(src[i]);
+    }
     if (e) {
         r.err = e;
         return r;

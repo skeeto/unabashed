@@ -320,7 +320,9 @@ static File *copyfile(Shell *c, File *f)
     return r;
 }
 
-static Fdtab *copyfdtab(Shell *c, Arena *a, Fdtab *t)
+// The descriptors for vproc c, but those in skip (bits 0 and 1, about
+// to be replaced); each that cannot be copied counts in c->fdlost.
+static Fdtab *copyfdtab(Shell *c, Arena *a, Fdtab *t, u32 skip)
 {
     Fdtab *r = alloc<Fdtab>(a);
     File  *from[64];
@@ -328,7 +330,7 @@ static Fdtab *copyfdtab(Shell *c, Arena *a, Fdtab *t)
     i32    n = 0;
     for (i32 fd = 0; fd < t->top; fd++) {
         File *f = t->fd[fd];
-        if (!f) continue;
+        if (!f || (fd<2 && skip>>fd&1)) continue;
         // Descriptors sharing a File share its copy too
         File *same = 0;
         for (i32 i = 0; i < n; i++) {
@@ -340,6 +342,7 @@ static Fdtab *copyfdtab(Shell *c, Arena *a, Fdtab *t)
             continue;
         }
         r->fd[fd] = copyfile(c, f);
+        c->fdlost += !r->fd[fd];
         if (r->fd[fd] && n<countof(from)) {
             from[n] = f;
             to[n++] = r->fd[fd];
@@ -376,10 +379,11 @@ static Hist copyhist(Store *st, Hist h)
 // st and a, which may then be one arena (notes/m5b.md). Its fdtab is
 // empty, its descriptors given to the process, and it has no Sched,
 // Os or Sigproc until the process adopts it.
-static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
+static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image, u32 skip = 0)
 {
     Shell *c  = alloc<Shell>(a);
     *c = *sh;
+    c->fdlost  = 0;
     c->store   = st;
     c->reserve = sh->sched->reserve;
     for (i32 i = 0; i < NPOOL; i++) c->pool[i] = 0;
@@ -454,7 +458,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
         c->stacktop = 0;
         c->tailnode = 0;
     } else {
-        c->fds      = copyfdtab(c, a, sh->fds);
+        c->fds      = copyfdtab(c, a, sh->fds, skip);
     }
 
     c->undo     = 0;
@@ -505,10 +509,11 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     return c;
 }
 
-// Deep-copy a shell's state into vproc memory m, as a subshell of it.
-static Shell *vproccopy(Shell *sh, Vproc *m)
+// Deep-copy a shell's state into vproc memory m, as a subshell of it,
+// but descriptors in skip (copyfdtab).
+static Shell *vproccopy(Shell *sh, Vproc *m, u32 skip)
 {
-    Shell *c = shellcopy(sh, &m->perm, &m->store, 0);
+    Shell *c = shellcopy(sh, &m->perm, &m->store, 0, skip);
     for (i32 i = 0; i < NPOOL; i++) c->pool[i] = m->pool[i];
     sigenter(c, &m->sig, c->bashpid, 0);
     return c;
@@ -589,6 +594,8 @@ static void vprocmain(Task *t)
         storerehold(sh->store, top.hold);
     } else if (m->sig.pending && (checksigs(sh, *scratchat(sh, 0)), sh->exiting)) {
         // killed before it ran
+    } else if (sh->fdlost) {
+        sh->status = 1;  // without its descriptors (vprocwith)
     } else if (m->node) {
         execute(sh, m->node, *scratchat(sh, 0));
     } else {
@@ -628,22 +635,35 @@ static void vprocmain(Task *t)
 // Start node running concurrently in a subshell of sh, a fiber vproc,
 // with its standard input and output replaced when in or out is given
 // (the caller keeps its references to them). The caller must join the
-// returned task, whose status is the subshell's.
-static Vproc *vprocwith(Shell *sh, File *in, File *out)
+// returned task, whose status is the subshell's. Where a descriptor
+// cannot be copied (no handle left, a low ulimit -n) the subshell fails
+// at once, reported here, as a forked child unable to set up its
+// redirections, its own standard error perhaps the one lost.
+static Vproc *vprocwith(Shell *sh, File *in, File *out, Arena scratch)
 {
     Vproc *m = newvproc(sh->sched);
-    Shell *c = vproccopy(sh, m);
+    Shell *c = vproccopy(sh, m, (in ? 1u : 0u) | (out ? 2u : 0u));
     Fdtab *t = c->fds;
     if (in) {
-        fileunref(c, t->fd[0]);
         t->fd[0] = copyfile(c, in);
+        c->fdlost += !t->fd[0];
     }
     if (out) {
-        fileunref(c, t->fd[1]);
         t->fd[1] = copyfile(c, out);
+        c->fdlost += !t->fd[1];
     }
     for (i32 fd = 0; fd < 2; fd++) {
         if (t->fd[fd] && fd>=t->top) t->top = fd + 1;
+    }
+    if (c->fdlost) {
+        // bash's words where it cannot save a descriptor (sys_error)
+        Buf b(&scratch, 64);
+        print(&b, sh->name);
+        print(&b, ": redirection error: cannot duplicate fd: ");
+        print(&b, errtext(E_MFILE));
+        putbyte(&b, '\n');
+        flushbout(sh);
+        fdwrite(sh, 2, finish(&b));
     }
     m->sh   = c;
     m->node = 0;
@@ -665,9 +685,10 @@ static b32 forkedstdin(Shell *sh, Node *n, b32 piped)
     return old;
 }
 
-static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops, i32 uncounted)
+static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops,
+                        i32 uncounted, Arena scratch)
 {
-    Vproc *m = vprocwith(sh, in, out);
+    Vproc *m = vprocwith(sh, in, out, scratch);
     Shell *c = m->sh;
     if (newloops) c->loopdepth = 0;
     if (node->kind != N_SIMPLE) {
@@ -847,7 +868,7 @@ static Str procsubst(Shell *sh, Arena *a, Str body, b32 output)
         return {};
     }
 
-    Vproc *m = vprocwith(sh, output ? theirs : 0, output ? 0 : theirs);
+    Vproc *m = vprocwith(sh, output ? theirs : 0, output ? 0 : theirs, *a);
     fileunref(sh, theirs);
     detachcaptures(sh, m->sh);  // it outlives a ${ ...; } capture
     m->src = clone(&m->perm, body);
@@ -1203,7 +1224,9 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
                     fileunref(sh, out[j]);
                 }
                 closegate(sh);
+                i32 one = 1;  // PIPESTATUS too, as bash
                 sh->status = 1;
+                setpstat(sh, &one, 1);
                 return;
             }
             in[k+1] = newfile(sh, F_OS, OF_READ);
@@ -1267,7 +1290,8 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         }
         if (retry) {
             b32 newloops = stages[k]->kind != N_SIMPLE;  // as bash: break | x is silent
-            tasks[k] = spawnvproc(sh, stages[k], in[k], out[k], newloops, bg || stages[k]->kind==N_SIMPLE);
+            tasks[k] = spawnvproc(sh, stages[k], in[k], out[k], newloops,
+                                  bg || stages[k]->kind==N_SIMPLE, scratch);
             tasks[k]->group = tasks[k]->tag;  // tracing: runs alongside the last stage
             pids[k]  = ((Vproc *)tasks[k]->arg)->sh->bashpid;
             sh->debugdone = 0;
