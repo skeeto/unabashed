@@ -519,24 +519,36 @@ static void histoption(Shell *sh, i32 opt, b32 on)
     }
 }
 
+// A default as bash's set_if_not: a variable the name finds through
+// namerefs, even one declared without a value, is kept; else the name
+// itself gets the value (null: declared without one) as a global,
+// never through a nameref, whose subscript so runs nothing. bash binds
+// it beside a global nameref, which an unset then reveals again; here
+// it takes the nameref's place.
+static void histdefault(Shell *sh, Arena a, Str name, Str value)
+{
+    if (lookup(sh, name)) return;
+    Value *v = assignslot(sh, a, name, SV_GLOBAL);
+    if (!v) return;  // a readonly nameref: reported
+    if (v->attrs & V_NAMEREF) {
+        sfreestr(sh->store, v->str);
+        v->str    = {};
+        v->attrs &= ~V_NAMEREF;
+    }
+    if (value.data) setvar(sh, a, name, value, SV_GLOBAL|SV_NOREF);
+}
+
 // Startup and set -o history: HISTSIZE defaults to 500 (1024 in native
 // mode, as w64devkit's busybox) and HISTFILESIZE to it, then the file
-// is read. An assignment may run a command substitution (a nameref's
-// subscript) at the next depth: claim this one.
+// is read. The assignments' hooks get the next depth: claim this one.
 static void histload(Shell *sh)
 {
     i32   depth = ++sh->capdepth;
     Arena a     = *scratchat(sh, depth);
-    if (!getplain(sh, &a, "HISTSIZE").set) {
-        Str n = sh->pathmode==PM_NATIVE ? Str("1024") : "500";
-        setvar(sh, a, "HISTSIZE", n);
-    }
+    histdefault(sh, a, "HISTSIZE", sh->pathmode==PM_NATIVE ? Str("1024") : "500");
     histvarchanged(sh, "HISTSIZE");
-    Got fs = getplain(sh, &a, "HISTFILESIZE");
-    if (!fs.set) {
-        Str n = clone(&a, getplain(sh, &a, "HISTSIZE").value);
-        setvar(sh, a, "HISTFILESIZE", n);
-    }
+    Got hs = getplain(sh, &a, "HISTSIZE");
+    histdefault(sh, a, "HISTFILESIZE", hs.set ? clone(&a, hs.value) : Str{});
     histfilesize(sh);
     Str file = getplain(sh, &a, "HISTFILE").value;
     if (file.len && !pathstat(sh, a, file, 1).err) {
