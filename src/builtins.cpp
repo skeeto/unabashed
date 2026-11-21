@@ -1845,8 +1845,10 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
             // what the nameref names, which may be an array element
             Ref r = resolveref(sh, base);
             if (r.hassub) {
-                // only a readonly array fails (bash unsets the element)
-                status |= unsetelem(sh, scratch, r.name, r.sub, 0, 1);
+                // only a readonly array fails (bash unsets the element);
+                // under array_expand_once its subscript is not expanded
+                b32 raw = sh->shopt[S_ARRAY_EXPAND_ONCE];
+                status |= unsetelem(sh, scratch, r.name, r.sub, raw, 1);
                 continue;
             } else if (r.name.data) {
                 base = r.name;
