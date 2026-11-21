@@ -4493,6 +4493,12 @@ static void plt_racy(Os *)
 {
 }
 
+// A failed write is told apart only by its handle (taskwrite)
+static i32 plt_writeerr(Os *)
+{
+    return 0;
+}
+
 // Self-spawning with a state image: a plain reservation, which
 // os_spawn copies into the suspended child at the same address
 // (imagecopy) and then releases.
@@ -5087,5 +5093,6 @@ static constexpr OsVtable pltvtable = {
     .localtz    = plt_localtz,
     .tasktag    = plt_tasktag,
     .racy       = plt_racy,
+    .writeerr   = plt_writeerr,
 };
 

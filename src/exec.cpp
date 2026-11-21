@@ -3740,7 +3740,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             b32 failed = (b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed;
             if (failed && !sh->nowriteerr) {
                 i32 e   = sh->writeerr;
-                b32 keep = e==E_PIPE || e==E_NOSPC || e==E_ACCES || e==E_NOMEM;
+                b32 keep = e==E_PIPE || e==E_NOSPC || e==E_ACCES || e==E_NOMEM ||
+                           e==E_FBIG || e==E_DQUOT;
                 Str why  = errtext(keep ? e : E_BADF);
                 Str msg = concat(&scratch, "write error: ", why);
                 builtinerror(sh, scratch, name, msg);

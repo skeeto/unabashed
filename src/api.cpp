@@ -72,6 +72,7 @@ enum : i32 {
     E_FBIG = 27, E_NOSPC = 28, E_SPIPE = 29, E_ROFS = 30, E_MLINK = 31,
     E_PIPE = 32, E_DOM = 33, E_RANGE = 34, E_DEADLK = 35,
     E_NAMETOOLONG = 36, E_NOSYS = 38, E_NOTEMPTY = 39, E_LOOP = 40,
+    E_DQUOT = 122,
 };
 
 enum : i32 {  // os_open flags
@@ -342,6 +343,9 @@ static b32     os_commit(Os *, byte *, iz);
 static void    os_decommit(Os *, byte *, iz);
 // Write all bytes, returning false on error.
 static b32     os_write(Os *, Handle, u8 *, iz);
+// Why the last os_write that returned false failed (E_*), or 0 where the
+// platform cannot tell.
+static i32     os_writeerr(Os *);
 // Read up to len bytes. Returns 0 at end of file, -1 on error.
 static iz      os_read(Os *, Handle, u8 *, iz);
 // Open a file by absolute path. Mode applies when creating.
@@ -560,7 +564,8 @@ static Str     lib_root(Os *);
 // 1: the first
 // 2: os_cwd, and os_spawn's working directory is never skipped
 // 3: os_cputime
-enum : i32 { OSVTABLE_VERSION = 3 };
+// 4: os_writeerr
+enum : i32 { OSVTABLE_VERSION = 4 };
 
 struct OsVtable {
     i32 version;  // the OSVTABLE_VERSION it implements
@@ -616,6 +621,7 @@ struct OsVtable {
     decltype(os_localtz)    *localtz;
     decltype(os_tasktag)    *tasktag;
     decltype(os_racy)       *racy;
+    decltype(os_writeerr)   *writeerr;
 };
 // Entry point, called by the platform after it fills in OsInfo. Given a
 // table of another OSVTABLE_VERSION, it writes a message to std[2]

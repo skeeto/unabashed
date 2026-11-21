@@ -1242,6 +1242,7 @@ static Str errtext(i32 err)
     case E_NOSYS:  return "Function not implemented";
     case E_NOTEMPTY: return "Directory not empty";
     case E_LOOP:   return "Too many levels of symbolic links";
+    case E_DQUOT:  return "Disk quota exceeded";
     }
     return "Unknown error";
 }

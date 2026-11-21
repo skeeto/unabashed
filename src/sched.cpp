@@ -689,6 +689,8 @@ static i32 taskwrite(Sched *s, Handle h, u8 *buf, iz len)
 {
     if (!LIBMODE && s->ntasks==1) {
         if (os_write(s->os, h, buf, len)) return 0;
+        i32 err = os_writeerr(s->os);
+        if (err) return err;
         Stat st = os_fstat(s->os, h);
         return st.type==FT_PIPE || st.type==FT_FIFO ? E_PIPE : E_IO;
     }

@@ -88,7 +88,8 @@ static b32 hostin(u64 set, i32 sig) { return sigin(set, sig); }
 // The core numbers errors as Linux does (api.cpp): the identity, as
 // for signals (darwin.cpp's coreerr).
 static_assert(EAGAIN==E_AGAIN && EDEADLK==E_DEADLK && ENAMETOOLONG==E_NAMETOOLONG &&
-              ENOSYS==E_NOSYS && ENOTEMPTY==E_NOTEMPTY && ELOOP==E_LOOP,
+              ENOSYS==E_NOSYS && ENOTEMPTY==E_NOTEMPTY && ELOOP==E_LOOP &&
+              EDQUOT==E_DQUOT,
               "the generic Linux numbering");
 static i32 coreerr(i32 err) { return err; }
 

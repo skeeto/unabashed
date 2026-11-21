@@ -32,11 +32,16 @@ struct Os {
     i32    ttyin;       // the terminal, while its mode is changed
     i32    ttyout;
     b32    ttypaste;    // TTY_PASTE
-    // Output to a regular file is coalesced (see os_write)
+    // Output to a regular file is coalesced (see plt_write)
     i32    wpend;       // the file's descriptor, while wlen > 0
     i32    wlen;
+    i32    wmax;        // bytes the buffer may hold for it (wroom)
     i64    wtime;       // CLOCK_MONOTONIC ns when the buffer began
+    i32    wrun;        // the last call wrote to this descriptor, and
+                        // succeeded, else -1
     i32    werrfd;      // a flush to this descriptor failed, else -1
+    i32    werr;        // why the last write failed (os_writeerr)
+    b32    wcatch;      // the deadly signals are caught (wcatchsigs)
     u8     wkind[256];  // per descriptor: FK_* (fdkind)
     u8     wbuf[1<<14];
     u64    entropyn;    // os_entropy's fallback counter
@@ -63,18 +68,20 @@ static Fibers *osfibers(Os *os)
 // Used before their definitions
 static decltype(os_now)  plt_now;
 static decltype(os_exec) plt_exec;
+static i32 coreerr(i32);
 
-static b32 writeall(i32 fd, u8 *buf, iz len)
+// Write all bytes: 0, or why not (E_*).
+static i32 writeall(i32 fd, u8 *buf, iz len)
 {
     for (iz off = 0; off < len;) {
         iz n = write(fd, buf+off, (uz)(len-off));
         if (n < 0) {
             if (errno == EINTR) continue;
-            return 0;
+            return coreerr(errno);
         }
         off += n;
     }
-    return 1;
+    return 0;
 }
 
 static i64 monons()
@@ -88,12 +95,22 @@ static i64 monons()
 // next write. Every platform call but os_write to that same file does
 // this first, so whatever can observe the file (a program, a stat,
 // another descriptor, a reader of a pipe waiting for a later write)
-// sees it, and so do exits and forks.
+// sees it, and so do exits and forks; and so does the poll for signals
+// between commands, once the output is WDELAY old, and a deadly signal
+// (wcatchsigs). Called from a signal handler too: the buffer is emptied
+// before the write, so that a handler cut in never writes it twice.
 static void flushw(Os *os)
 {
-    if (!os->wlen) return;
-    if (!writeall(os->wpend, os->wbuf, os->wlen)) os->werrfd = os->wpend;
+    os->wrun = -1;
+    i32 len = os->wlen;
+    if (!len) return;
     os->wlen = 0;
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    i32 err = writeall(os->wpend, os->wbuf, len);
+    if (err) {
+        os->werrfd = os->wpend;
+        os->werr   = err;
+    }
 }
 
 static Os *sigos;  // for the signal handler, os_oom and exits
@@ -191,17 +208,6 @@ static void plt_decommit(Os *, byte *p, iz len)
     mmap(p, (uz)len, PROT_NONE, MAP_PRIVATE|MAP_ANON|MAP_NORESERVE|MAP_FIXED, -1, 0);
 }
 
-// Output to a regular file gathers in wbuf: a write costs about as much
-// as a builtin's whole run. It goes out before any other call (flushw),
-// when full, and at the first write 100 ms after it began. Whether a
-// descriptor is a regular file is remembered until os_close frees it.
-static b32 wfailed(Os *os, i32 fd)
-{
-    if (os->werrfd != fd) return 0;
-    os->werrfd = -1;
-    return 1;
-}
-
 // What a descriptor is, remembered until os_close frees its number.
 // FK_NFIFO, a named FIFO, only on macOS, whose poll misses its end
 // (fifoends); elsewhere it is an FK_FIFO like a pipe (fifokind).
@@ -220,32 +226,85 @@ static u8 fdkind(Os *os, i32 fd)
     return kind;
 }
 
+// Output to a regular file gathers in wbuf: a write costs about as much
+// as a builtin's whole run (a loop of echos to a file takes a fifth of
+// the time). But a builtin reports its failed write, as bash's does once
+// it flushes its stdout, so only a write that should not fail waits:
+// never the first of a run of writes to the descriptor with no other
+// call between them (a lone `printf >file`), nor one after a failure,
+// nor one past what wroom allows. What fails later all the same (an
+// I/O error, a quota, a disk others filled meanwhile) shows at the
+// descriptor's next write.
+enum : i64 { WDELAY = 100000000 };  // ns before waiting output goes out
+enum : u64 { WSPARE = 1<<20 };      // free bytes below which none waits
+
+// The error of an earlier write to fd that failed as it went out, once.
+static i32 wfailed(Os *os, i32 fd)
+{
+    if (os->werrfd != fd) return 0;
+    os->werrfd = -1;
+    return os->werr;
+}
+
+// What the buffer may hold for fd, worked out as it begins: nothing on
+// a nearly full file system, and no more than the file may still grow
+// by under RLIMIT_FSIZE, so that a write that would fail is made at once.
+static i32 wroom(i32 fd, i32 cap)
+{
+    struct statvfs fs;
+    u64 bsize = 0;
+    if (!fstatvfs(fd, &fs)) bsize = fs.f_frsize ? fs.f_frsize : fs.f_bsize;
+    if (!bsize || fs.f_bavail<WSPARE/bsize) return 0;
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_FSIZE, &rl) || rl.rlim_cur==RLIM_INFINITY) return cap;
+    off_t at = lseek(fd, 0, SEEK_CUR);
+    i32   fl = fcntl(fd, F_GETFL);
+    struct stat st;
+    if (fl>=0 && (fl&O_APPEND) && !fstat(fd, &st)) at = st.st_size;
+    if (at<0 || (rlim_t)at>=rl.rlim_cur) return 0;
+    rlim_t left = rl.rlim_cur - (rlim_t)at;
+    return left<(rlim_t)cap ? (i32)left : cap;
+}
+
+static void wcatchsigs(Os *);
+
 static b32 plt_write(Os *os, Handle h, u8 *buf, iz len)
 {
-    i32 fd = (i32)h;
-    if (fdkind(os, fd) != FK_REG) {
-        flushw(os);
-        return !wfailed(os, fd) && writeall(fd, buf, len);
+    i32 fd  = (i32)h;
+    b32 run = os->wrun==fd && fdkind(os, fd)==FK_REG;
+    if (os->wlen && (os->wpend!=fd || len>os->wmax-os->wlen)) flushw(os);
+    i32 err = wfailed(os, fd);
+    if (run && !err) {
+        if (!os->wlen) {
+            os->wpend = fd;
+            os->wmax  = wroom(fd, countof(os->wbuf));
+            os->wtime = monons();
+        }
+        if (len <= os->wmax-os->wlen) {
+            copybytes(os->wbuf+os->wlen, buf, len);
+            __atomic_signal_fence(__ATOMIC_SEQ_CST);  // see flushw
+            os->wlen += (i32)len;
+            if (!os->wcatch) wcatchsigs(os);
+            if (monons()-os->wtime >= WDELAY) {
+                flushw(os);
+                err = wfailed(os, fd);
+            }
+            os->wrun = err ? -1 : fd;
+            return !err;
+        }
     }
-    if (os->wlen && os->wpend!=fd) flushw(os);
-    if (wfailed(os, fd)) return 0;
-    iz room = countof(os->wbuf) - os->wlen;
-    if (len > room) {
-        flushw(os);
-        if (wfailed(os, fd)) return 0;
-        if (len > countof(os->wbuf)/2) return writeall(fd, buf, len);
-    }
-    if (!os->wlen) {
-        os->wpend = fd;
-        os->wtime = monons();
-    }
-    copybytes(os->wbuf+os->wlen, buf, len);
-    os->wlen += (i32)len;
-    if (monons()-os->wtime >= 100000000) {
-        flushw(os);
-        if (wfailed(os, fd)) return 0;
-    }
-    return 1;
+    flushw(os);
+    if (!err) err = wfailed(os, fd);
+    i32 now = writeall(fd, buf, len);
+    err = now ? now : err;
+    os->wrun = err ? -1 : fd;
+    if (err) os->werr = err;
+    return !err;
+}
+
+static i32 plt_writeerr(Os *os)
+{
+    return os->werr;
 }
 
 static iz plt_read(Os *os, Handle h, u8 *buf, iz len)
@@ -662,9 +721,10 @@ static void ttyabandon(Os *os)
     tcsetattr(os->ttyin, TCSANOW, &os->ttysave);
 }
 
-// While the terminal's mode is changed, the signals whose default action
-// would end the process are caught instead, to restore it first, then
-// die of them as readline does.
+// While the terminal's mode is changed, or once output has waited in
+// wbuf, the signals whose default action would end the process are
+// caught instead, to restore the terminal and write out the output
+// first, then die of them as readline does.
 static int const ttydeadly[] = {
     SIGHUP, SIGINT, SIGQUIT, SIGALRM, SIGTERM, SIGUSR1, SIGUSR2, SIGXCPU,
     SIGXFSZ, SIGVTALRM,
@@ -673,6 +733,7 @@ static int const ttydeadly[] = {
 static void ondeadly(int sig)
 {
     ttyabandon(sigos);
+    flushw(sigos);
     struct sigaction sa = {};
     sa.sa_handler = SIG_DFL;
     sigaction(sig, &sa, 0);
@@ -700,6 +761,16 @@ static void ttycatch(b32 on)
         sa.sa_handler = on ? ondeadly : SIG_DFL;
         sigaction(ttydeadly[i], &sa, 0);
     }
+}
+
+// Output waits in wbuf from now on: a deadly signal writes it out, as
+// bash's would be out already. Not in the library, whose host owns the
+// signals; its output goes out at the end of the run.
+static void wcatchsigs(Os *os)
+{
+    if constexpr (LIBMODE) return;
+    os->wcatch = 1;
+    ttycatch(1);
 }
 
 static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
@@ -758,7 +829,7 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
         os->ttyraw   = 0;
         os->ttypaste = 0;
         tcsetattr((i32)in, TCSADRAIN, &os->ttysave);
-        ttycatch(0);
+        if (!os->wcatch) ttycatch(0);
         t = os->ttysave;
     } else if (os->ttyraw) {
         t = os->ttysave;
@@ -1193,9 +1264,10 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
                 signal(sig, SIG_DFL);
             }
         }
-        if (os->ttyraw) {
+        if (os->ttyraw || os->wcatch) {
             ttycatch(0);  // the parent's terminal, not this process's
             os->ttyraw = 0;
+            os->wcatch = 0;
         }
         os->changed = s->sigign & ~os->entryign;
         os->pending = 0;
@@ -1546,9 +1618,11 @@ static LevelSig plt_levelsig(Os *)
     return r;
 }
 
-// Polled between commands
+// Polled between commands: output that waited long enough goes out,
+// though the shell runs on without another call
 static u64 plt_sigpending(Os *os)
 {
+    if (os->wlen && monons()-os->wtime>=WDELAY) flushw(os);
     return bitstake(&os->sigbits);
 }
 
@@ -1597,7 +1671,7 @@ static void plt_sigmode(Os *os, i32 sig, i32 mode)
     sa.sa_flags = SA_RESTART;
     switch (mode) {
     case SIGM_DEFAULT:
-        sa.sa_handler = os->ttyraw && ttyisdeadly(hsig) ? ondeadly : SIG_DFL;
+        sa.sa_handler = (os->ttyraw || os->wcatch) && ttyisdeadly(hsig) ? ondeadly : SIG_DFL;
         break;
     case SIGM_IGNORE:
         sa.sa_handler = SIG_IGN;
@@ -1950,6 +2024,7 @@ static constexpr OsVtable pltvtable = {
     .localtz    = plt_localtz,
     .tasktag    = plt_tasktag,
     .racy       = plt_racy,
+    .writeerr   = plt_writeerr,
 };
 
 

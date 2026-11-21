@@ -515,7 +515,7 @@ static void libsubmit(Os *os, Io *io)
             if (io->op == IO_WRITE) {
                 b32 ok  = plt_write(os, io->h, io->buf, io->len);
                 io->n   = ok ? io->len : 0;
-                io->err = ok ? 0 : E_IO;
+                io->err = ok ? 0 : os->werr;
             } else {
                 iz n    = plt_read(os, io->h, io->buf, io->len);
                 io->n   = n<0 ? 0 : n;
@@ -1001,6 +1001,7 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     os->fibers  = {};
     os->pending = 0;
     os->wlen    = 0;
+    os->wrun    = -1;
     os->werrfd  = -1;
     os->ttyraw  = 0;
     os->changed = 0;

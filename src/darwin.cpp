@@ -106,6 +106,7 @@ static i32 coreerr(i32 err)
     case ENOSYS:       return E_NOSYS;
     case ENOTEMPTY:    return E_NOTEMPTY;
     case ELOOP:        return E_LOOP;
+    case EDQUOT:       return E_DQUOT;
     case EINPROGRESS:  return 115;
     case EALREADY:     return 114;
     case ENOTSOCK:     return 88;

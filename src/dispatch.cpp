@@ -26,6 +26,11 @@ static b32 os_write(Os *os, Handle h, u8 *buf, iz len)
     return osvtable(os)->write(os, h, buf, len);
 }
 
+static i32 os_writeerr(Os *os)
+{
+    return osvtable(os)->writeerr(os);
+}
+
 static iz os_read(Os *os, Handle h, u8 *buf, iz len)
 {
     return osvtable(os)->read(os, h, buf, len);

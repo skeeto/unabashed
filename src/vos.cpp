@@ -1688,6 +1688,12 @@ static OsPipe vos_pipe(Os *os)
     return r;
 }
 
+// Its failures are as taskwrite guesses them from the handle
+static i32 vos_writeerr(Os *)
+{
+    return 0;
+}
+
 static b32 vos_write(Os *os, Handle h, u8 *buf, iz len)
 {
     Vos *v = osvos(os);
@@ -4449,6 +4455,7 @@ static OsVtable const vosvtable = {
     .localtz    = vos_localtz,
     .tasktag    = vos_tasktag,
     .racy       = vos_racy,
+    .writeerr   = vos_writeerr,
 };
 
 static i32 os_umask(Os *)

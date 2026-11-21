@@ -20,6 +20,7 @@ int main(int argc, char **argv)
 {
     static Os os;
     os.werrfd = -1;
+    os.wrun   = -1;
     OsInfo info = {};
     info.reserve = (iz)1 << (sizeof(void *)==8 ? 34 : 28);
     Arena a = newarena(&os, (iz)1<<26);
