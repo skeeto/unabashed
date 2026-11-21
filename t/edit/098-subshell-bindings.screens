@@ -1,0 +1,27 @@
+== snap 1
+$ bind -v | grep bell-style; bind -s | cat
+set bell-style none
+"\C-t": "hello"
+$ (bind -s); echo "$(bind -s)"
+"\C-t": "hello"
+"\C-t": "hello"
+$
+@ 6,2
+== snap 2
+$ x=$(sb)
+$ (sb)
+$ sb | cat
+$ bind -v | grep bell-style; hello
+set bell-style none
+bash: hello: command not found
+$
+@ 6,2
+== snap 3
+$ x=$(sb)
+$ (sb)
+$ sb | cat
+$ bind -v | grep bell-style; hello
+set bell-style none
+bash: hello: command not found
+$
+@ 6,2

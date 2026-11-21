@@ -120,6 +120,8 @@ struct Sigproc {
                        // exec'd (its tail command): signals go to it
 };
 
+struct Editor;  // edit.cpp
+
 struct Sched {
     Os     *os;
     Arena   a;           // tasks, fibers and pipes; pooled, never reset
@@ -135,6 +137,7 @@ struct Sched {
     Clip   *freeclips;
     iz      nclippumps;  // pumps for clipboard files still running
     Vproc  *freevprocs;  // pooled vproc memory (proc.cpp)
+    Editor *freeeds;     // pooled line editors (edit.cpp)
     iz      reserve;     // address space for each arena of a vproc
     u64     entropy;     // the process's random base for RANDOM and
                          // SRANDOM (os_entropy once, on first use), or 0

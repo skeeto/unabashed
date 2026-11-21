@@ -1,0 +1,14 @@
+# Subshells of the interactive shell start with its bindings and
+# settings, under job control too, and what they change stays theirs
+size 24 60
+rc PS1='$ '
+rc bind 'set bell-style none'; bind '"\C-t": "hello"'
+rc sb() { bind '"\C-t": "bye"'; bind 'set bell-style visible'; }
+keys bind -v | grep bell-style; bind -s | cat\r
+keys (bind -s); echo "$(bind -s)"\r
+snap
+keys \C-lx=$(sb)\r
+keys (sb)\r
+keys sb | cat\r
+keys bind -v | grep bell-style; \C-t\r
+snap

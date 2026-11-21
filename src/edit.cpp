@@ -492,6 +492,29 @@ static void keybind(Arena *a, KeyNode *root, Str seq, i32 fn)
     n->fn = fn;
 }
 
+// A string kept unless null, for copies that keep null meaning unset
+static Str edclone(Arena *a, Str s)
+{
+    return s.data ? clone(a, s) : s;
+}
+
+// Copy a list of siblings and everything under them into a.
+static KeyNode *keycopy(Arena *a, KeyNode *n)
+{
+    KeyNode  *head = 0;
+    KeyNode **tail = &head;
+    for (; n; n = n->sib) {
+        KeyNode *c = alloc<KeyNode>(a);
+        c->macro = edclone(a, n->macro);
+        c->fn    = n->fn;
+        c->key   = n->key;
+        c->kids  = keycopy(a, n->kids);
+        *tail = c;
+        tail  = &c->sib;
+    }
+    return head;
+}
+
 // EdUndo records, as readline's: an insert, a delete with its text, and
 // the bounds of a group undone as one.
 enum : i32 { U_INSERT, U_DELETE, U_BEGIN, U_END };
@@ -584,6 +607,10 @@ struct Comp;
 
 struct Editor {
     Arena    perm;      // bindings, settings
+    byte    *permbase;  // perm's start past the Editor itself
+    i64      owner;     // the BASHPID and depth of the level it serves
+    i32      level;     // (editor); no owner in an image's copy
+    Editor  *next;      // in the Sched's pool
     Arena    lay[2];    // layouts: the one on screen and the next
     i32      cur;       // which of lay is on screen
     KeyNode  root;
@@ -1019,59 +1046,189 @@ static void edtermkeys(Editor *ed)
     }
 }
 
+// An Editor with nothing in it: from the Sched's pool, or new
+static Editor *ednew(Shell *sh)
+{
+    Sched  *s  = sh->sched;
+    Editor *ed = s->freeeds;
+    if (ed) {
+        s->freeeds = ed->next;
+        Editor old = *ed;
+        *ed = {};
+        Arena *from[] = {&old.lay[0], &old.lay[1], &old.linemem, &old.hmem,
+                         &old.kmem[0], &old.kmem[1], &old.cmem};
+        Arena *to[]   = {&ed->lay[0], &ed->lay[1], &ed->linemem, &ed->hmem,
+                         &ed->kmem[0], &ed->kmem[1], &ed->cmem};
+        for (iz i = 0; i < countof(to); i++) {
+            Mem *m = from[i]->mem;
+            *to[i] = {(byte *)(m+1), m->commit, m};
+        }
+        ed->perm     = {old.permbase, old.perm.mem->commit, old.perm.mem};
+        ed->permbase = old.permbase;
+        return ed;
+    }
+    // Each 16 MiB, or less where the shell's own are (tests, fuzzing)
+    iz    cap  = sh->reserve<((iz)1<<24) ? sh->reserve : (iz)1<<24;
+    Arena perm = newarena(sh->os, cap);
+    ed = alloc<Editor>(&perm);
+    ed->perm     = perm;
+    ed->permbase = perm.beg;
+    ed->lay[0]   = newarena(sh->os, cap);
+    ed->lay[1]   = newarena(sh->os, cap);
+    ed->linemem  = newarena(sh->os, cap);
+    ed->hmem     = newarena(sh->os, cap);
+    ed->kmem[0]  = newarena(sh->os, cap);
+    ed->kmem[1]  = newarena(sh->os, cap);
+    ed->cmem     = newarena(sh->os, cap);
+    return ed;
+}
+
+// The settings and bindings of an Editor never used
+static void eddefaults(Editor *ed, Shell *sh)
+{
+    ed->keytimeout = 500;
+    ed->hpoint     = -1;
+    ed->vars.queryitems   = 100;
+    ed->vars.pagecompl    = 1;
+    ed->vars.displaywidth = -1;
+    ed->vars.markdirs     = 1;
+    ed->vars.matchhidden  = 1;
+    ed->vars.ttyspecial   = 1;
+    ed->vars.echoctl      = 1;
+    ed->vars.activeregion = 1;
+    ed->vars.bracketpaste = 1;
+    ed->vars.metakey      = 1;
+    ed->vars.inputmeta    = 1;
+    ed->vars.outputmeta   = 1;
+    ed->vars.visiblebell  = 1;
+    // No bell in native mode, as w64devkit's busybox was built
+    ed->vars.bellstyle    = sh->pathmode==PM_NATIVE ? 0 : 2;
+    ed->vars.comment      = "#";
+    ed->vars.regionstart  = "\x1b[7m";
+    ed->vars.regionend    = "\x1b[27m";
+    ed->vars.emacsstr     = "@";
+    ed->vars.vicmdstr     = "(cmd)";
+    ed->vars.viinsstr     = "(ins)";
+    // On in readline's native Windows builds (inputrc.md §7); the mode
+    // in effect when the editor is first used
+    ed->vars.ignorecase   = sh->pathmode == PM_NATIVE;
+    ed->getnext    = -1;
+    ed->vars.vimode  = sh->opt[O_VI];
+    ed->vars.keymap  = sh->opt[O_VI] ? KM_VIINS : KM_EMACS;
+    ed->vilastcmd    = 'i';
+    ed->vilastcount  = 1;
+    ed->vilastins    = 'i';
+    ed->native       = sh->pathmode == PM_NATIVE;
+    edbindings(ed);
+}
+
+// Copy what lasts from line to line, the bindings, settings, kill ring
+// and last searches, from one Editor to a fresh one: everything into a,
+// the kill ring into k. Nothing of the line being edited comes along.
+static void edcopy(Editor *to, Arena *a, Arena *k, Editor *from)
+{
+    KeyNode *maps[][2] = {{&to->root, &from->root}, {&to->vimove, &from->vimove},
+                          {&to->viins, &from->viins}};
+    for (iz i = 0; i < countof(maps); i++) {
+        maps[i][0]->kids  = keycopy(a, maps[i][1]->kids);
+        maps[i][0]->macro = edclone(a, maps[i][1]->macro);
+        maps[i][0]->fn    = maps[i][1]->fn;
+    }
+    if (from->vireplmap) {
+        to->vireplmap = alloc<KeyNode>(a);
+        to->vireplmap->kids = keycopy(a, from->vireplmap->kids);
+        to->vireplmap->fn   = from->vireplmap->fn;
+    }
+    to->keytimeout = from->keytimeout;
+    to->kbdmacro   = edclone(a, from->kbdmacro);
+    to->inited     = from->inited;
+    to->termkeys   = from->termkeys;
+    to->rllast     = edclone(a, from->rllast);
+    to->ifoff      = from->ifoff;
+    for (iz i = 0; i < from->ifstack.len; i++) {
+        to->ifstack = push(a, to->ifstack, from->ifstack[i]);
+    }
+    copybytes(to->ttysaved, from->ttysaved, sizeof(to->ttysaved));
+    to->setrows = from->setrows;
+    to->setcols = from->setcols;
+    for (i32 i = 0; i < from->nkills; i++) to->kills[i] = clone(k, from->kills[i]);
+    to->nkills  = from->nkills;
+    to->killidx = from->killidx;
+    to->getnext = -1;
+    to->hpoint  = -1;
+    to->lastisearch = edclone(a, from->lastisearch);
+    to->noninc      = edclone(a, from->noninc);
+    to->nonincpos   = from->nonincpos;
+    to->vars = from->vars;
+    Str *strs[][2] = {
+        {&to->vars.comment,     &from->vars.comment},
+        {&to->vars.isterm,      &from->vars.isterm},
+        {&to->vars.regionstart, &from->vars.regionstart},
+        {&to->vars.regionend,   &from->vars.regionend},
+        {&to->vars.emacsstr,    &from->vars.emacsstr},
+        {&to->vars.vicmdstr,    &from->vars.vicmdstr},
+        {&to->vars.viinsstr,    &from->vars.viinsstr},
+    };
+    for (iz i = 0; i < countof(strs); i++) *strs[i][0] = edclone(a, *strs[i][1]);
+    to->vilastcmd    = from->vilastcmd;
+    to->vilastcount  = from->vilastcount;
+    to->vilastmotion = from->vilastmotion;
+    to->vilastins    = from->vilastins;
+    to->vicsdir      = from->vicsdir;
+    to->vicsorig     = from->vicsorig;
+    to->vicslen      = from->vicslen;
+    to->vireplen     = from->vireplen;
+    copybytes(to->vicschar, from->vicschar, sizeof(to->vicschar));
+    copybytes(to->virepl, from->virepl, sizeof(to->virepl));
+    to->vibuf    = clone(a, from->vibuf);
+    to->vibufcap = to->vibuf.len;
+    to->ttyvi    = from->ttyvi;
+    to->native   = from->native;
+}
+
+// The Editor of the shell's level. A subshell's, made at its first use,
+// starts as a copy of the one it inherits, with the parent's bindings
+// and settings, and what it changes stays its own, as in bash's forked
+// child. It goes back to the Sched's pool when the level ends
+// (edrelease), as an image's copy (edimage) has none of its own.
 static Editor *editor(Shell *sh)
 {
-    Editor *ed = sh->editor;  // shared by subshells
-    if (!ed) {
-        // Each 16 MiB, or less where the shell's own are (tests, fuzzing)
-        iz    cap  = sh->reserve<((iz)1<<24) ? sh->reserve : (iz)1<<24;
-        Arena perm = newarena(sh->os, cap);
-        ed = alloc<Editor>(&perm);
-        ed->perm       = perm;
-        ed->lay[0]     = newarena(sh->os, cap);
-        ed->lay[1]     = newarena(sh->os, cap);
-        ed->linemem    = newarena(sh->os, cap);
-        ed->hmem       = newarena(sh->os, cap);
-        ed->kmem[0]    = newarena(sh->os, cap);
-        ed->kmem[1]    = newarena(sh->os, cap);
-        ed->keytimeout = 500;
-        ed->hpoint     = -1;
-        ed->cmem       = newarena(sh->os, cap);
-        ed->vars.queryitems   = 100;
-        ed->vars.pagecompl    = 1;
-        ed->vars.displaywidth = -1;
-        ed->vars.markdirs     = 1;
-        ed->vars.matchhidden  = 1;
-        ed->vars.ttyspecial   = 1;
-        ed->vars.echoctl      = 1;
-        ed->vars.activeregion = 1;
-        ed->vars.bracketpaste = 1;
-        ed->vars.metakey      = 1;
-        ed->vars.inputmeta    = 1;
-        ed->vars.outputmeta   = 1;
-        ed->vars.visiblebell  = 1;
-        // No bell in native mode, as w64devkit's busybox was built
-        ed->vars.bellstyle    = sh->pathmode==PM_NATIVE ? 0 : 2;
-        ed->vars.comment      = "#";
-        ed->vars.regionstart  = "\x1b[7m";
-        ed->vars.regionend    = "\x1b[27m";
-        ed->vars.emacsstr     = "@";
-        ed->vars.vicmdstr     = "(cmd)";
-        ed->vars.viinsstr     = "(ins)";
-        // On in readline's native Windows builds (inputrc.md §7); the mode
-        // in effect when the editor is first used
-        ed->vars.ignorecase   = sh->pathmode == PM_NATIVE;
-        ed->getnext    = -1;
-        ed->vars.vimode  = sh->opt[O_VI];
-        ed->vars.keymap  = sh->opt[O_VI] ? KM_VIINS : KM_EMACS;
-        ed->vilastcmd    = 'i';
-        ed->vilastcount  = 1;
-        ed->vilastins    = 'i';
-        ed->native       = sh->pathmode == PM_NATIVE;
-        edbindings(ed);
-        sh->editor = ed;
+    Editor *up = sh->editor;
+    if (up && up->owner==sh->bashpid && up->level==sh->subshell) return up;
+    Editor *ed = ednew(sh);
+    if (up) {
+        edcopy(ed, &ed->perm, &ed->kmem[0], up);
+    } else {
+        eddefaults(ed, sh);
     }
+    ed->owner  = sh->bashpid;
+    ed->level  = sh->subshell;
+    sh->editor = ed;
     return ed;
+}
+
+// A level ends, returning to one whose Editor is up: its own goes back
+// to the pool. Its address space cannot be given back, only reused.
+static void edrelease(Shell *sh, Editor *up)
+{
+    Editor *ed = sh->editor;
+    if (!ed || ed==up || ed->owner!=sh->bashpid || ed->level!=sh->subshell) {
+        return;
+    }
+    ed->owner  = 0;
+    ed->next   = sh->sched->freeeds;
+    sh->sched->freeeds = ed;
+    sh->editor = up;
+}
+
+// An image's copy of the Editor (proc.cpp), all in a, for the child's
+// editor() to copy from in turn
+static Editor *edimage(Editor *from, Arena *a)
+{
+    if (!from) return 0;
+    Editor *to = alloc<Editor>(a);
+    edcopy(to, a, a, from);
+    return to;
 }
 
 
@@ -3365,8 +3522,8 @@ static void edoptsync(Editor *ed, Shell *sh)
 // After set -o vi or set -o emacs
 static void edmodechanged(Shell *sh)
 {
-    Editor *ed = sh->editor;
-    if (!ed) return;
+    if (!sh->editor) return;
+    Editor *ed = editor(sh);  // a subshell's own
     if (sh->opt[O_VI]) {
         ed->vars.vimode = 1;
         ed->vars.keymap = KM_VIINS;

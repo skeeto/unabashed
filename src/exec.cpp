@@ -39,6 +39,7 @@ static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i3
 static Str      runfunsub(Shell *, Arena *, Str src, Capture *, Arena);
 static i32      compatlevel(Shell *, Arena);  // builtins.cpp
 static i32      b_read(Shell *, Str *, iz, Arena);  // builtins.cpp
+static void     edrelease(Shell *, Editor *up);  // edit.cpp
 static void     joinpsubs(Shell *);
 static void     closeall(Shell *);
 
@@ -707,6 +708,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     // Keep the scratch arenas the subshell reserved for deeper levels:
     // they are not store memory, and dropping them leaks reservations
     for (i32 i = 0; i < NPOOL; i++) saved->pool[i] = sh->pool[i];
+    edrelease(sh, saved->editor);  // likewise its line editor, to reuse
     *sh = *saved;
     if (sh->frame) *sh->frame = frame;
     sh->status   = status;
@@ -2748,6 +2750,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         joinpsubs(sh);
         storeleave(sh->store, &w);
         for (i32 i = 0; i < NPOOL; i++) saved->pool[i] = sh->pool[i];
+        edrelease(sh, saved->editor);
         *sh = *saved;
         if (killed) {
             sh->childsig = killed;

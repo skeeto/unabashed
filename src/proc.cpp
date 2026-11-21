@@ -39,6 +39,8 @@ static Node *bgnode(Shell *, Arena *, Node *, b32 keepjobs = 0);  // jobs.cpp
 static Task *spawnwaiter(Sched *, Handle, b32);  // jobs.cpp
 static Job  *newjob(Shell *, Arena, Node *, Task *, i64 pid, b32 coproc);
 static i32   fgstop(Shell *, Arena, Job *);      // jobs.cpp
+static void    edrelease(Shell *, Editor *up);     // edit.cpp
+static Editor *edimage(Editor *, Arena *);         // edit.cpp
 static void reportpipeline(Shell *, Arena, Node **stages, i32 n, i32 *statuses,
                            i64 *pids, Node *job);
 
@@ -435,7 +437,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
         c->sched    = 0;
         c->paths    = copypaths(a, sh->paths);
         c->sniffs   = 0;
-        c->editor   = 0;
+        c->editor   = edimage(sh->editor, a);  // its bindings, settings
         c->fds      = alloc<Fdtab>(a);
         c->coprocs  = 0;
         c->spawnto  = 0;
@@ -596,6 +598,7 @@ static void vprocmain(Task *t)
     closeall(sh);
     joinpsubs(sh);
     releasefuncs(sh, sh->funcs);
+    edrelease(sh, 0);
     for (i32 i = 0; i < NPOOL; i++) m->pool[i] = sh->pool[i];
     Sched *s = sh->sched;
     m->next = s->freevprocs;

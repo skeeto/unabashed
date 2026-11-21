@@ -616,7 +616,8 @@ struct Shell {
     PathCtx *paths;        // the mount table and the rest, from startup
     Str      exe;          // the shell's own image, native (OsInfo.exe)
     SniffCache *sniffs;    // Windows: what files hold, shared by subshells
-    Editor     *editor;    // the line editor, made on first use (edit.cpp)
+    Editor     *editor;    // the line editor, made on first use, a
+                           // subshell's its own (edit.cpp, editor)
     CompTable  *comps;     // compspecs (pcomplete.cpp)
     CompSpec   *compcur;   // the running completion's copy, for compopt
     Str         compcurkey;
