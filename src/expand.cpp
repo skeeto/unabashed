@@ -3576,16 +3576,20 @@ static Sub evalsub(Shell *sh, Arena *a, Str name, Str sub, Str word, b32 raw = 0
 
 static b32 assignelem(Shell *sh, Arena scratch, Str name, Str sub, Str word, Str value, i32 flags)
 {
-    if (!(flags & SV_NOREF)) name = arraytarget(sh, scratch, name, &flags);
+    // A readonly array is reported by the name as written (setelem)
+    b32 byref = !(flags & SV_NOREF);
+    Str who   = name;
+    if (byref) name = arraytarget(sh, scratch, name, &flags);
     if (!name.data) return 0;
     // Copies of what may be a nameref's text: the subscript may run
     // code that frees it, and so may an integer's value, evaluated
     // before a raw key is stored
     name = clone(&scratch, name);
     sub  = clone(&scratch, sub);
+    if (!byref) who = name;
     Sub s = evalsub(sh, &scratch, name, sub, word, flags & SV_RAWKEY);
     if (!s.ok) return 0;
-    return setelem(sh, scratch, name, s.idx, s.key, value, flags & ~SV_RAWKEY);
+    return setelem(sh, scratch, name, s.idx, s.key, value, flags & ~SV_RAWKEY, who);
 }
 
 // Assign to NAME or NAME[SUB], the left side of an assignment.
@@ -3795,7 +3799,8 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
         while (cur && cur->depth) cur = cur->below;
     }
     if (cur && (cur->attrs & V_READONLY) && !(flags & SV_FORCE)) {
-        readonlyerror(sh, scratch, name);
+        // named as written, not as a nameref resolves, as bash
+        readonlyerror(sh, scratch, given);
         return 0;
     }
     if (cur && (cur->attrs & V_NOASSIGN)) return 1;

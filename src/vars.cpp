@@ -1234,16 +1234,22 @@ static void toassoc(Shell *sh, Value *val, b32 fresh)
 }
 
 // Assign one element of an array: by index, or by key when the array
-// is associative. A scalar becomes an indexed array.
-static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str value, i32 flags = 0)
+// is associative. A scalar becomes an indexed array. As bash, a readonly
+// array is reported by the name as written (who), not a nameref's target.
+static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str value,
+                   i32 flags = 0, Str who = {})
 {
     Store *st  = sh->store;
+    if (!who.data) who = name;
     if (!(flags & SV_NOREF)) name = arraytarget(sh, scratch, name, &flags);
     if (!name.data) return 0;
     Var *var = upsertvar(sh, name);
     name = var->name;  // not a nameref's text, which evaluation may free
-    Value *val = assignvar(sh, scratch, var, flags);
-    if (!val) return 0;
+    Value *val = assignvar(sh, scratch, var, flags|SV_QUIET);
+    if (!val) {
+        if (!(flags & SV_QUIET)) readonlyerror(sh, scratch, who);
+        return 0;
+    }
     if (val->attrs & V_NOASSIGN) return 1;
     switch (val->dyn) {
     case DYN_BASH_ALIASES:

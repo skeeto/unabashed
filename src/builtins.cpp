@@ -3675,12 +3675,16 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             }
         }
         i32 aflags = SV_FORCE;
+        Str given  = arrname;  // as bash, messages name it as written
         arrname = arraytarget(sh, scratch, arrname, &aflags, 1);  // namerefs
         if (!arrname.data) return 1;
-        Value *val = assignslot(sh, scratch, arrname, aflags & ~SV_FORCE);
-        if (!val) return 1;
+        Value *val = assignslot(sh, scratch, arrname, (aflags & ~SV_FORCE)|SV_QUIET);
+        if (!val) {
+            readonlyerror(sh, scratch, given);
+            return 1;
+        }
         if (val->arr && val->arr->bucket) {
-            Str msg = concat(&scratch, arrname, ": not an indexed array");
+            Str msg = concat(&scratch, given, ": not an indexed array");
             builtinerror(sh, scratch, "read", msg);
             return 1;
         }
@@ -4014,13 +4018,17 @@ static i32 b_mapfile(Shell *sh, Str *args, iz nargs, Arena scratch)
         return 1;
     }
     i32 aflags = 0;
+    Str given  = arrname;  // as bash, messages name it as written
     arrname = arraytarget(sh, scratch, arrname, &aflags, 1);  // namerefs
     if (!arrname.data) return 1;
     arrname = clone(&scratch, arrname);  // callbacks may change the nameref
-    Value *val = assignslot(sh, scratch, arrname, aflags);
-    if (!val) return 1;
+    Value *val = assignslot(sh, scratch, arrname, aflags|SV_QUIET);
+    if (!val) {
+        readonlyerror(sh, scratch, given);
+        return 1;
+    }
     if (val->arr && val->arr->bucket) {
-        Str msg = concat(&scratch, arrname, ": not an indexed array");
+        Str msg = concat(&scratch, given, ": not an indexed array");
         builtinerror(sh, scratch, name, msg);
         return 1;
     }
