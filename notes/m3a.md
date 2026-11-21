@@ -451,7 +451,12 @@ and `Shell.debugdone` keeps the stage's `runsimple1` from running it
 again under functrace. A stage extdebug skips does not start and is
 left out of PIPESTATUS; `$?` is then the last started stage's, and a
 `return` from the action (2 in a function) starts no further stage
-and becomes the pipeline's status and only PIPESTATUS entry.
+and becomes the pipeline's status and only PIPESTATUS entry. An action
+that escapes (`exit`, a fatal error) with stages started drops them on
+its way (`dropstages`): the parent's pipe ends close, programs run on
+as orphans, as bash's forked stages do, and fiber vprocs, which may
+write into the abandoned command's captures, are joined first, as
+under lastpipe.
 
 **EXIT** (`runexittrap`): at `sh_main`'s end, at the end of a sync
 subshell or vproc whose own table has one, and from `sigdie`. Not after

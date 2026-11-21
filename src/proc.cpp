@@ -949,12 +949,76 @@ static Handle spawndirect(Shell *sh, Node *stage, File *in, File *out,
     return sp.proc;
 }
 
+// What runpipeline has started and the pipe ends it still holds (null
+// once dropped), while shell code it runs before the joins (DEBUG) may
+// escape.
+struct Stages {
+    i32     n;
+    File  **in;
+    File  **out;
+    Task  **tasks;
+    Handle *procs;   // BADHANDLE if none
+    b32     grouped;
+};
+
+// Shell code run between starting a pipeline's stages and joining them
+// escaped (exit, a fatal error). As bash's forked stages, the started
+// ones run on: the parent's pipe ends close, and a program's waiter
+// becomes an orphan. A fiber vproc may write into the captures of the
+// command being abandoned, so it is joined here, as under lastpipe.
+static void dropstages(Shell *sh, Stages *p)
+{
+    Sched *s = sh->sched;
+    for (i32 k = 0; k < p->n; k++) {
+        fileunref(sh, p->in[k]);
+        fileunref(sh, p->out[k]);
+        p->in[k] = p->out[k] = 0;
+    }
+    i32 joined = 0;
+    for (i32 k = 0; k < p->n; k++) {
+        if (p->tasks[k]) {
+            taskjoin(s, p->tasks[k]);
+            joined++;
+        } else if (p->procs[k] != BADHANDLE) {
+            Task *t = spawnwaiter(s, p->procs[k], p->grouped);
+            t->sib     = s->orphans;
+            s->orphans = t;
+        }
+        p->tasks[k] = 0;
+        p->procs[k] = BADHANDLE;
+    }
+    chldreaped(sh, joined);
+}
+
+// rundebugtrap with stages started: an escape from the action drops
+// them (dropstages) on its way.
+static b32 stagesdebugtrap(Shell *sh, Arena scratch, Stages *p)
+{
+    Escape e = {};
+    e.up        = sh->esc;
+    e.bout      = sh->bout;
+    e.undo      = sh->undo;
+    e.frame     = sh->frame;
+    e.loopdepth = sh->loopdepth;
+    sh->esc = &e;
+    if (jmpset(e.jmp)) {
+        sh->esc = e.up;
+        dropstages(sh, p);
+        escape(sh, e.why);
+    }
+    b32 skip = rundebugtrap(sh, scratch);
+    sh->esc = e.up;
+    return skip;
+}
+
 // DEBUG for a simple command stage, as bash runs it: here in the parent
 // just before the stage starts, with the parent's descriptors, so that
 // the stage does not run it again (debugdone). Returns whether extdebug
 // skips the stage, which then does not start. If the action returns
-// from a function (sh->flow), no further stage starts either.
-static b32 stagedebug(Shell *sh, Node *stage, i32 before, Arena scratch)
+// from a function (sh->flow), no further stage starts either. With
+// started, the pipeline's stages so far, should the action escape.
+static b32 stagedebug(Shell *sh, Node *stage, i32 before, Arena scratch,
+                      Stages *started = 0)
 {
     if (sh->flow) return 1;
     if (stage->kind!=N_SIMPLE || !sh->traps || !sh->traps[TRAP_DEBUG].len) {
@@ -964,7 +1028,8 @@ static b32 stagedebug(Shell *sh, Node *stage, i32 before, Arena scratch)
     sh->line    = stage->line;
     sh->current = stage;
     if (!sh->intrap) sh->cmdnode = stage;
-    b32 skip = rundebugtrap(sh, scratch);
+    b32 skip = started ? stagesdebugtrap(sh, scratch, started)
+                       : rundebugtrap(sh, scratch);
     if (!sh->flow) sh->status = before;
     return skip;
 }
@@ -1041,7 +1106,8 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     Sched *s      = sh->sched;
     i32    before = sh->status;  // what $? is in every stage
     for (i32 k = 0; k < nstages; k++) {
-        ext[k] = likelyexternal(sh, stages[k]);
+        ext[k]   = likelyexternal(sh, stages[k]);
+        procs[k] = BADHANDLE;
     }
     // Under job control every stage is a process of the job's group (as
     // bash forks shell code too), joined by OS pipes
@@ -1080,11 +1146,11 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     // first, which holds the terminal, shell code in processes of their
     // own (spawnstage)
     i64    grp     = 0;
+    Stages started = {nstages, in, out, tasks, procs, grouped};
     for (i32 k = 0; k+1 < nstages; k++) {
         if (!sh->flow) sh->status = before;
-        procs[k] = BADHANDLE;
         statuses[k] = 0;
-        b32 skip  = stagedebug(sh, stages[k], before, scratch);
+        b32 skip  = stagedebug(sh, stages[k], before, scratch, &started);
         b32 retry = !skip;
         ran[k] = !skip;
         sh->debugdone = stages[k]->kind == N_SIMPLE;
@@ -1130,13 +1196,15 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         // and would wait forever on a writer held here
         fileunref(sh, in[k]);
         fileunref(sh, out[k]);
+        in[k] = out[k] = 0;
     }
 
     // The last stage here, reading the previous stage's output
     i32   last  = nstages - 1;
     Node *stage = stages[last];
     b32   inhere = sh->shopt[S_LASTPIPE] && !sh->jobctl;
-    b32   skip   = (!inhere || sh->flow) && stagedebug(sh, stage, before, scratch);
+    b32   skip   = (!inhere || sh->flow) &&
+                   stagedebug(sh, stage, before, scratch, &started);
     i32   flowed = sh->flow ? sh->status : -1;  // the action's return
     ran[last] = !skip;
     Undo *mark  = sh->undo;
