@@ -1,0 +1,26 @@
+== snap 1
+$ abreadline: maximum macro execution nesting level exceeded
+
+@ 1,0 bell 1
+== snap 2
+$ abreadline: maximum macro execution nesting level exceeded
+x
+@ 1,1 bell 1
+== snap 3
+$ abreadline: maximum macro execution nesting level exceeded
+
+@ 1,0 bell 4
+== snap 4
+$ yyyyyyyyyyyyyyyyyreadline: maximum macro execution nesting level exceeded
+
+@ 1,0 bell 6
+== snap 5
+$ yyyyyyyyyyyyyyyyyreadline: maximum macro execution nesting level exceeded
+
+$
+@ 2,2 bell 6
+== snap 6
+$ yyyyyyyyyyyyyyyyyreadline: maximum macro execution nesting level exceeded
+
+$
+@ 2,2 bell 6

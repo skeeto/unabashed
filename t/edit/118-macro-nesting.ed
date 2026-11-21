@@ -1,0 +1,20 @@
+# Macros run within macros, as readline nests them: a count runs the
+# keyboard macro that many times, each within the last, and past 17 it
+# is all given up with readline's message, the keyboard macro too.
+# M-50000 C-x e once built a copy for each time, each longer, and ran
+# the vos out of memory. A binding that runs itself again ends the same
+# way, where it once looped forever.
+rc PS1='$ '
+rc bind '"\C-xa": "y\C-xa"'
+keys ab\C-x(x\C-?\C-x)
+keys \e50000\C-xe
+snap
+keys \C-_
+snap
+keys \C-_\C-_\C-_\C-xe
+snap
+keys \C-u\r
+keys \C-l\C-xa
+snap
+keys \C-u\r
+snap

@@ -640,6 +640,8 @@ struct Editor {
     Str      macro;     // a macro's keys, read before the terminal's
     iz       macropos;
     Buf      macrobuf;  // perm: where macro is copied, used again
+    iz       macroends[17];  // where each macro running ends in it,
+    i32      macrolevel;     // the outermost first, as readline nests
     b32      kbddef;    // defining a keyboard macro
     Buf      kbdrec;    // its keys so far
     Str      kbdmacro;  // the last one defined
@@ -3727,7 +3729,8 @@ static void edshowtext(Editor *ed, Shell *sh, Str text)
 static void edabort(Editor *ed)
 {
     edbell(ed);
-    ed->macropos = ed->macro.len;
+    ed->macropos   = ed->macro.len;
+    ed->macrolevel = 0;
     ed->kbddef   = 0;
     ed->kbdmacro = {};
     ed->active   = 0;
@@ -3735,11 +3738,22 @@ static void edabort(Editor *ed)
 }
 
 // Keys to read next, count times, ahead of the rest of any running
-// macro: copied into a buffer used again. More than a sixteenth of the
-// Editor's memory is given up, with any running macro (edabort).
-static void edplay(Editor *ed, Str keys, i32 count = 1)
+// macro: copied into a buffer used again. As readline's macro input,
+// each time is a macro within those running, and past 17 of them it is
+// all given up (edabort) with readline's message. A macro still counts
+// while its last key's command runs, so one that runs itself again
+// (from a binding, or C-x e in the keyboard macro) ends there too, not
+// looping forever. Keys over a sixteenth of the Editor's memory are
+// also given up.
+static void edplay(Editor *ed, Shell *sh, Str keys, i32 count = 1)
 {
     if (count < 1) return;
+    if (count > countof(ed->macroends)-ed->macrolevel) {
+        edflush(ed, sh);
+        fdwrite(sh, 2, "readline: maximum macro execution nesting level exceeded\n");
+        edabort(ed);
+        return;
+    }
     Str rest = cuthead(ed->macro, ed->macropos);
     Mem *m   = ed->perm.mem;
     iz   max = (m->limit - (byte *)(m+1)) / 16;
@@ -3751,6 +3765,13 @@ static void edplay(Editor *ed, Str keys, i32 count = 1)
     Buf   b(&a, keys.len*count+rest.len);
     for (i32 i = 0; i < count; i++) print(&b, keys);
     print(&b, rest);
+    iz add = keys.len * count;
+    for (i32 i = 0; i < ed->macrolevel; i++) {
+        ed->macroends[i] += add - ed->macropos;
+    }
+    for (i32 i = count; i > 0; i--) {
+        ed->macroends[ed->macrolevel++] = keys.len * i;
+    }
     ed->macro    = edkeepstr(&ed->perm, &ed->macrobuf, finish(&b));
     ed->macropos = 0;
 }
@@ -4585,7 +4606,7 @@ static void vikey(Editor *ed, Shell *sh, u8 key)
     KeyNode *k   = keychild(map, key);
     i32      fn  = k ? k->fn : EF_NONE;
     if (fn == EF_MACRO) {
-        edplay(ed, k->macro);
+        edplay(ed, sh, k->macro);
         return;
     }
     if (fn == EF_SHELLCMD) fn = EF_NONE;
@@ -5118,7 +5139,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         if (ed->argset && ed->kbdmacro.len) {
             // Run again, and so kept, then added to
             print(&ed->kbdrec, ed->kbdmacro);
-            edplay(ed, ed->kbdmacro);
+            edplay(ed, sh, ed->kbdmacro);
         }
         break;
     case EF_END_KBD_MACRO:
@@ -5128,7 +5149,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         }
         ed->kbddef   = 0;
         ed->kbdmacro = edkeepstr(&ed->perm, &ed->kbdbuf, Str{ed->kbdrec.data, ed->seqstart});
-        edplay(ed, ed->kbdmacro, count-1);
+        edplay(ed, sh, ed->kbdmacro, count-1);
         break;
     case EF_CALL_LAST_KBD_MACRO:
         if (ed->kbddef) {
@@ -5137,7 +5158,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         } else if (!ed->kbdmacro.data) {
             edabort(ed);
         } else {
-            edplay(ed, ed->kbdmacro, count);
+            edplay(ed, sh, ed->kbdmacro, count);
         }
         break;
     case EF_PRINT_LAST_KBD_MACRO: {
@@ -5498,7 +5519,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         if (c <= 0) break;
         u8     name[] = {'_', (u8)c};
         Alias *al     = findalias(sh->aliases, {name, 2});
-        if (al && al->value.len) edplay(ed, al->value);
+        if (al && al->value.len) edplay(ed, sh, al->value);
     } break;
     case EF_TTY_STATUS:
         edbell(ed);  // readline's without TIOCSTAT, as on Linux
@@ -5650,6 +5671,9 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
 static i32 edkey(Editor *ed, Shell *sh, i64 timeout)
 {
     if (ed->unread) return ed->pushed[--ed->unread];
+    // Macros whose keys are all read end as the next key is read
+    i32 *lv = &ed->macrolevel;
+    while (*lv && ed->macroends[*lv-1]<=ed->macropos) --*lv;
     if (ed->macropos < ed->macro.len) return ed->macro[ed->macropos++];
     if (ed->timedout) return -1;
     if (!timeout && !taskreadable(sh->sched, ed->fin->h)) return -3;
@@ -5833,12 +5857,7 @@ static b32 eddispatch(Editor *ed, Shell *sh)
         break;
     case EF_MACRO: {
         // Its keys come next, before the rest of any running macro
-        if (ed->macropos < ed->macro.len) {
-            edplay(ed, s.macro);
-        } else {
-            ed->macro    = s.macro;
-            ed->macropos = 0;
-        }
+        edplay(ed, sh, s.macro);
     } break;
     case EF_SHELLCMD:
         edshellcmd(ed, sh, s.macro);
@@ -6319,6 +6338,8 @@ static void edkeep(Editor *to, Editor *from)
     to->unread   = from->unread;
     to->macro    = from->macro;
     to->macropos = from->macropos;
+    copybytes(to->macroends, from->macroends, sizeof(to->macroends));
+    to->macrolevel = from->macrolevel;
 }
 
 // A call within a call (read -e in bind -x, a completion function, a
