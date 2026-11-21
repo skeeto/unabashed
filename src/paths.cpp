@@ -363,6 +363,9 @@ static b32 addmount(PathCtx *ctx, Arena *a, Str native, Str posix,
         return 0;
     }
     Str n = winnorm(a, native, "C:/");
+    if (!n.data) {
+        return 0;  // a UNC path with no server ("//") names no directory
+    }
     if (n.len>1 && n[n.len-1]=='/') n.len--;
     Str p = posixnorm(a, posix);
     if (p.len>1 && p[p.len-1]=='/') p.len--;

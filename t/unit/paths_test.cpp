@@ -514,6 +514,13 @@ static void testmsys(Arena scratch)
     initmounts(&b, &a, "C:/r", "C:/s / ntfs binary,override 0 0\n");
     want(&b, a, "/x",   PK_FILE, "C:/s/x");
     want(&b, a, "/bin", PK_FILE, "C:/r/usr/bin");
+
+    // A UNC path with no server names no directory: no mount
+    initmounts(&b, &a, "C:/r", "// /unc ntfs binary 0 0\n"
+                               "\\\\ /unc2\n");
+    check(b.mounts.len == 2, 0, "fstab serverless UNC");
+    want(&b, a, "/unc/",  PK_FILE, "C:/r/unc/");
+    want(&b, a, "/unc2/", PK_FILE, "C:/r/unc2/");
 }
 
 static void testposix(Arena scratch)
