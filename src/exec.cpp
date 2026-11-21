@@ -424,6 +424,13 @@ static b32 arithliteralsub(void *ctx, Str name)
     return v && v->arr && v->arr->bucket;
 }
 
+static void checkstack(Shell *);
+
+static void arithoverflow(void *ctx)
+{
+    checkstack(((ShellArith *)ctx)->sh);
+}
+
 static Arith arithrun(Shell *sh, Arena *a, Str expr, b32 *readonly, Str who = {})
 {
     ShellArith c = {};
@@ -437,6 +444,12 @@ static Arith arithrun(Shell *sh, Arena *a, Str expr, b32 *readonly, Str who = {}
     env.set     = arithset;
     env.nounset = sh->opt[O_NOUNSET];
     if (who == "let") env.literalsub = arithliteralsub;
+    if (sh->stackmax) {
+        // As checkstack: arithmetic at its limits, deep in a recursion
+        // or in an unoptimized build, can take more than the stack left
+        env.stacklimit = sh->stacktop - sh->stackmax;
+        env.overflow   = arithoverflow;
+    }
     ArithEnv *up = sh->arith;
     if (up) {
         // Nested in an evaluation's callback, as a subscript: its

@@ -38,6 +38,12 @@ struct ArithEnv {
     // quoting, as bash skips an associative array's subscript in text
     // already expanded (let)
     b32  (*literalsub)(void *ctx, Str name);
+    // Optional: the lowest stack address evaluation may reach. Recursion
+    // past it calls overflow, which does not return, so that the caller
+    // stops it as it stops its own: the limits above bound the depth,
+    // not the stack the levels between take (subscripts' expansions).
+    byte  *stacklimit;
+    void (*overflow)(void *ctx);
 
     // Maintained by arith, so that calls nested in a callback continue
     // the recursion count; zero-initialize them.
@@ -159,8 +165,15 @@ static void aritherror(ArithExpr *x, Str msg)
     arithmessage(x->c, x, msg);
 }
 
+static void arithstack(ArithEnv *env)
+{
+    byte here = 0;
+    if (STACKAT(here) < env->stacklimit) env->overflow(env->ctx);
+}
+
 static b32 arithenter(ArithExpr *x)
 {
+    arithstack(x->c->env);
     if (++x->c->nest > ARITH_MAXNEST) {
         aritherror(x, "expression recursion level exceeded");
         return 0;
@@ -1031,6 +1044,7 @@ static i64 arithevalstr(ArithCtx *c, Str s)
         arithmessage(c, outer ? outer : &x, "expression recursion level exceeded");
         return 0;
     }
+    arithstack(env);
     env->depth++;
     env->cur = &x;
     arithreadtok(&x);

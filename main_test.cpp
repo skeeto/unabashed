@@ -2,9 +2,9 @@
 // $ g++ -std=c++20 -g3 -Og -fsanitize=undefined -fsanitize-trap -o tests main_test.cpp
 // On Windows, add -Wl,--stack,0x2000000 so that oracle runs, which nest
 // shells on one stack, have room for bash's recursion depths. -Og keeps
-// frames near their real size: specs like t/exec/945 nest subshells to
-// the vos's 1 MiB stack budget, which clang's -O0 frames, with UBSan
-// several times larger, exhaust before bash would.
+// frames near their real size: specs like t/exec/945 and 981 recurse
+// into the vos's 4 MiB stack budget (VOSSTACK), which clang's -O0
+// frames, with UBSan several times larger, exhaust before bash would.
 //
 // The shell runs repeatedly in one process. Memory comes from a fixed
 // heap that is poisoned and reset between runs, and output is captured.
@@ -237,6 +237,11 @@ static b32 expectint(Test *t, Str name, i64 got, i64 want)
     return 0;
 }
 
+// Each shell's stack budget (OsInfo.stack) otherwise: room for bash's
+// recursion limits in arithmetic, whose subscripts expand at every
+// level (t/exec/981), within the main thread's stack and a vproc's.
+enum : iz { VOSSTACK = (iz)1<<22 };
+
 // The thread's stack, for oracle runs, which give each shell what is
 // left of it rather than a fixed budget.
 static byte *stackbase;
@@ -267,7 +272,7 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     os->marks[m].dead = 0;
     os->nmarks++;
     OsInfo info = {};
-    info.stack   = stackrest ? vstack(os) - ((iz)1<<20) : 0;
+    info.stack   = stackrest ? vstack(os) - ((iz)1<<20) : VOSSTACK;
     info.chaos   = os->chaos;
     info.args    = ctx->argv;
     info.nargs   = ctx->argc;
@@ -421,7 +426,7 @@ static OsInfo baseinfo(Os *os, Str *args, iz nargs)
         info.stdflags[i] = vaccess(osvos(os), (Handle)i);  // as the vos has it
     }
     info.reserve = (iz)1<<22;
-    info.stack   = (iz)1<<20;
+    info.stack   = VOSSTACK;
     info.chaos   = os->chaos;
     return info;
 }
@@ -559,6 +564,30 @@ static void test_m0(Test *t)
     r = runshell(t, args, countof(args));
     expect(t, "-c missing", r.err, "bash: -c: option requires an argument\n");
     expectint(t, "-c missing status", r.status, 2);
+}
+
+// Arithmetic within bash's limits, but with subscripts expanding at
+// every level, takes more stack than a small budget (and than 8 MiB in
+// the -O0 debug build): it dies as by SIGSEGV, as other recursion does,
+// rather than overflowing the real stack, which for a subshell is a
+// fiber's, so that the overflow took the whole process down.
+static void test_arithstack(Test *t)
+{
+    Os *os = t->os;
+    Str script[] = {
+        "b='a[${c[$((b))]}]'; echo $((b)); echo no",
+        "( b='a[${c[$((b))]}]'; echo $((b)); echo no ); echo \"sub=$?\"",
+    };
+    Str want[] = {"", "sub=139\n"};
+    for (iz i = 0; i < countof(script); i++) {
+        Str args[] = {"bash", "-c", script[i]};
+        startrun(os, 0, {});
+        OsInfo info = baseinfo(os, args, countof(args));
+        info.stack = (iz)1<<18;
+        Result r = finishrun(os, &info);
+        expect(t, "arithmetic past the stack budget", r.out, want[i]);
+        expectint(t, "arithmetic past the stack budget, status", r.status, i ? 0 : 139);
+    }
 }
 
 static void test_fibers(Test *t)
@@ -2183,6 +2212,7 @@ int main(int argc, char **argv)
     Test t = {};
     t.os = &os;
     test_m0(&t);
+    test_arithstack(&t);
     test_fibers(&t);
     test_vterm(&t);
     test_conkey(&t);
