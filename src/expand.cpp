@@ -236,6 +236,16 @@ static iz skipdollar(Shell *sh, Arena *a, Str s, iz i, b32 dquote = 0, b32 *ende
     L->extglob = sh->shopt[S_EXTGLOB];
     L->posix   = sh->opt[O_POSIX];
     L->extquote = sh->shopt[S_EXTQUOTE];
+    // The scan parses nested substitutions by recursion, within the
+    // shell's own stack limit. Nested deeper, the substitution counts
+    // as unterminated (where bash crashes on $( and reports ${ as a
+    // bad substitution).
+    L->stacktop = sh->stacktop;
+    L->stackmax = sh->stackmax;
+    if (jmpset(L->jmp)) {  // only an overflow fails the scan's parse
+        if (ended) *ended = 0;
+        return s.len;
+    }
     return skipexpansion(L, s, i, dquote, ended);
 }
 

@@ -685,11 +685,16 @@ static Slice<Str> pcaction(Editor *ed, Shell *sh, Arena *a, i32 act, Str word, P
 
 // Splitting text into words (bash's split_at_delims, P§5.3, P§5.4)
 
-// Past a quoted string or an expansion starting at s[i]
-static iz pcskip(Str s, iz i)
+enum : i32 { PC_MAXNEST = 500 };  // nesting that pcskip follows, for the stack
+
+// Past a quoted string or an expansion starting at s[i]. Constructs
+// nested more than PC_MAXNEST deep count as unterminated.
+static iz pcskip(Str s, iz i, i32 nest = 0)
 {
     iz  n = s.len;
     u8  c = s[i];
+    if (nest >= PC_MAXNEST) return n;
+    nest++;
     if (c == '\\') return i+2<n ? i+2 : n;
     if (c == '\'') {
         iz j = i + 1;
@@ -702,7 +707,7 @@ static iz pcskip(Str s, iz i)
             if (s[j] == '\\') {
                 j += 2;
             } else if (c=='"' && (s[j]=='$' || s[j]=='`')) {
-                j = pcskip(s, j);
+                j = pcskip(s, j, nest);
             } else {
                 j++;
             }
@@ -723,7 +728,7 @@ static iz pcskip(Str s, iz i)
             while (j < n) {
                 u8 e = s[j];
                 if (e=='\\' || e=='\'' || e=='"' || e=='`' || (e=='$' && j+1<n)) {
-                    iz k = pcskip(s, j);
+                    iz k = pcskip(s, j, nest);
                     if (k > j+1 || e!='$') {
                         j = k;
                         continue;
