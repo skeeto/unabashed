@@ -333,14 +333,49 @@ struct BOut {         // output of the running builtin
     b32 failed;   // an early write failed
 };
 
+// An escape point, and the Shell's state when it was set up (escenter):
+// the state that frames change and put back as they return. A site
+// that catches an escape and carries on in the same shell puts all of
+// it back (escresume), so nothing an abandoned frame changed outlives
+// it. A field belongs here when every change to it is undone on a
+// normal return; other cleanup (temporary bindings, reference counts,
+// the positional parameters of source, BASH_COMMAND's node, files) is
+// the job of the frame that made the change, which catches the escape,
+// cleans up and passes it on.
 struct Escape {
     JmpBuf  jmp;
     i32     why;      // ESC_*
     Escape *up;
     Undo   *undo;     // redirections to keep
-    Frame  *frame;
+    Frame  *frame;    // not restored: calls pop their own frames
     i32     loopdepth;
     BOut   *bout;     // builtin output current when it was set up
+    // The rest, saved by escenter and put back by escrestore
+    Lexer    *lexer;
+    Node     *current;
+    Str       iname;
+    Str       srcname;
+    Str       bltname;
+    Str      *bltargs;
+    iz        nbltargs;
+    Slice<u8> compargs;
+    i32       noerrexit;
+    i32       evaldepth;
+    i32       sourcedepth;
+    i32       capdepth;
+    i32       tracedepth;
+    i32       promptkind;
+    i32       intrap;
+    i32       trapbusy;
+    i32       trapstatus;
+    i32       trapfuncs;
+    b32       inchld;
+    b32       nolocwarn;
+    b32       attail;
+    b32       intrread;
+    b32       ingetopts;
+    b32       listing;
+    b32       viacommand;
 };
 
 enum { NPOOL = 64 };
@@ -1276,4 +1311,93 @@ static iz fdread(Shell *sh, i32 fd, u8 *buf, iz len)
     sh->arith    = 0;  // the evaluations it leaves are gone
     sh->esc->why = why;
     jmpback(sh->esc->jmp);
+}
+
+// Set up an escape point, saving the state escrestore puts back. The
+// caller then calls jmpset(e->jmp) in its own frame. A field added to
+// Escape's saved state is saved here and restored in escrestore.
+static void escenter(Shell *sh, Escape *e)
+{
+    e->why        = 0;
+    e->up         = sh->esc;
+    e->undo       = sh->undo;
+    e->frame      = sh->frame;
+    e->loopdepth  = sh->loopdepth;
+    e->bout       = sh->bout;
+    e->lexer      = sh->lexer;
+    e->current    = sh->current;
+    e->iname      = sh->iname;
+    e->srcname    = sh->srcname;
+    e->bltname    = sh->bltname;
+    e->bltargs    = sh->bltargs;
+    e->nbltargs   = sh->nbltargs;
+    e->compargs   = sh->compargs;
+    e->noerrexit  = sh->noerrexit;
+    e->evaldepth  = sh->evaldepth;
+    e->sourcedepth = sh->sourcedepth;
+    e->capdepth   = sh->capdepth;
+    e->tracedepth = sh->tracedepth;
+    e->promptkind = sh->promptkind;
+    e->intrap     = sh->intrap;
+    e->trapbusy   = sh->trapbusy;
+    e->trapstatus = sh->trapstatus;
+    e->trapfuncs  = sh->trapfuncs;
+    e->inchld     = sh->inchld;
+    e->nolocwarn  = sh->nolocwarn;
+    e->attail     = sh->attail;
+    e->intrread   = sh->intrread;
+    e->ingetopts  = sh->ingetopts;
+    e->listing    = sh->listing;
+    e->viacommand = sh->viacommand;
+    sh->esc = e;
+}
+
+// Leave an escape point: on the normal path, or before passing the
+// escape on.
+static void escleave(Shell *sh, Escape *e)
+{
+    sh->esc = e->up;
+}
+
+// Put back the state saved at e, but neither the escape point nor the
+// redirections: by itself, for a frame that passes the escape on.
+static void escrestore(Shell *sh, Escape *e)
+{
+    sh->loopdepth  = e->loopdepth;
+    sh->bout       = e->bout;
+    sh->lexer      = e->lexer;
+    sh->current    = e->current;
+    sh->iname      = e->iname;
+    sh->srcname    = e->srcname;
+    sh->bltname    = e->bltname;
+    sh->bltargs    = e->bltargs;
+    sh->nbltargs   = e->nbltargs;
+    sh->compargs   = e->compargs;
+    sh->noerrexit  = e->noerrexit;
+    sh->evaldepth  = e->evaldepth;
+    sh->sourcedepth = e->sourcedepth;
+    sh->capdepth   = e->capdepth;
+    sh->tracedepth = e->tracedepth;
+    sh->promptkind = e->promptkind;
+    sh->intrap     = e->intrap;
+    sh->trapbusy   = e->trapbusy;
+    sh->trapstatus = e->trapstatus;
+    sh->trapfuncs  = e->trapfuncs;
+    sh->inchld     = e->inchld;
+    sh->nolocwarn  = e->nolocwarn;
+    sh->attail     = e->attail;
+    sh->intrread   = e->intrread;
+    sh->ingetopts  = e->ingetopts;
+    sh->listing    = e->listing;
+    sh->viacommand = e->viacommand;
+}
+
+// After the jump back to e, at a site that carries on in this shell:
+// leave the escape point, undo the redirections made since, and put
+// back everything else the abandoned frames changed.
+static void escresume(Shell *sh, Escape *e)
+{
+    escleave(sh, e);
+    unwind(sh, e->undo);
+    escrestore(sh, e);
 }

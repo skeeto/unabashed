@@ -2974,7 +2974,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         File *ferr = sh->fds->fd[2];
         ttyout = ferr && ferr->kind==F_OS ? ferr->h : in->h;
     }
-    Escape te = {};
+    Escape te;
     if (ttymode) {
         Tty t = os_tty(sh->os, in->h, ttyout, ttymode);
         if (t.err) {
@@ -2982,13 +2982,9 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         } else {
             // restored on the way out, however it goes
             selfecho = t.noecho;
-            te.up    = sh->esc;
-            te.bout  = sh->bout;
-            te.undo  = sh->undo;
-            te.frame = sh->frame;
-            sh->esc  = &te;
+            escenter(sh, &te);
             if (jmpset(te.jmp)) {
-                sh->esc = te.up;
+                escleave(sh, &te);
                 os_tty(sh->os, in->h, ttyout, TTY_RESTORE);
                 escape(sh, te.why);
             }
@@ -3163,7 +3159,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         if (c == -2) {
             if (ttymode) {
-                sh->esc = te.up;
+                escleave(sh, &te);
                 os_tty(sh->os, in->h, ttyout, TTY_RESTORE);
             }
             Str msg = concat(&scratch, fmti64(&scratch, fd), ": read error: Bad file descriptor");
@@ -3222,7 +3218,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         count += !sh->utf8 || charstart((u8)c, &pend);
     }
     if (ttymode) {
-        sh->esc = te.up;
+        escleave(sh, &te);
         os_tty(sh->os, in->h, ttyout, TTY_RESTORE);
     }
     if (!done) {

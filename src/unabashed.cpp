@@ -1053,35 +1053,24 @@ static Str promptstr(Shell *sh, Arena *a, Str name)
     // Native mode shows PS1 and PS2 as busybox-w32's shell does
     b32 native = sh->pathmode==PM_NATIVE && (name=="PS1" || name=="PS2");
     Str expr   = concat3(a, "${", name, "@P}");
-    Escape e = {};
-    e.up    = sh->esc;
-    e.bout  = sh->bout;
-    e.undo  = sh->undo;
-    e.frame = sh->frame;
-    sh->esc = &e;
+    Escape e;
+    escenter(sh, &e);
     i32 status = sh->status;
-    i32 kind   = sh->promptkind;
     // \! and \# differ by prompt, and HISTCMD while a prompt shows
     sh->promptkind = name=="PS1" ? 1 : name=="PS2" ? 2 : 3;
     // The caller's arena is the next depth's scratch, and a command
     // substitution in the prompt runs there: claim it
-    i32 depth = ++sh->capdepth;
+    sh->capdepth++;
     Str ps = {};
     if (!jmpset(e.jmp)) {
         ps = native ? nativeprompt(sh, a, v.value) : expandstring(sh, a, expr);
-    } else if (e.why == ESC_EXIT) {
-        // As set -e with an unbound variable or ${x?} (fatalerror)
-        sh->esc        = e.up;
-        sh->capdepth   = depth - 1;
-        sh->promptkind = kind;
-        escape(sh, e.why);
-    } else {
-        unwind(sh, e.undo);
     }
-    sh->capdepth = depth - 1;
-    sh->esc    = e.up;
+    escresume(sh, &e);  // the depth and promptkind too
+    if (e.why == ESC_EXIT) {
+        // As set -e with an unbound variable or ${x?} (fatalerror)
+        escape(sh, e.why);
+    }
     sh->status = status;
-    sh->promptkind = kind;
     return ps;
 }
 
@@ -1102,19 +1091,18 @@ static void showprompt(Shell *sh, Str name)
 static iz readstdin(Shell *sh, File *f, u8 *buf, iz len)
 {
     if (!sh->interactive) return fileread(sh, f, buf, len);
-    Escape e = {};
-    e.up    = sh->esc;
-    e.bout  = sh->bout;
-    e.undo  = sh->undo;
-    e.frame = sh->frame;
-    sh->esc = &e;
+    Escape e;
+    escenter(sh, &e);
     if (jmpset(e.jmp)) {
-        sh->esc = e.up;
-        if (e.why != ESC_INTR) escape(sh, e.why);
+        if (e.why != ESC_INTR) {
+            escleave(sh, &e);
+            escape(sh, e.why);
+        }
+        escresume(sh, &e);
         return -2;
     }
     iz n = fileread(sh, f, buf, len);
-    sh->esc = e.up;
+    escleave(sh, &e);
     return n;
 }
 

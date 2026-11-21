@@ -744,31 +744,22 @@ static i64 prompthistnum(Shell *sh, Arena scratch)
 static Str promptexpand(X *x, Str r, i32 ctx)
 {
     Shell *sh = x->sh;
-    Escape e = {};
-    e.up        = sh->esc;
-    e.bout      = sh->bout;
-    e.undo      = sh->undo;
-    e.frame     = sh->frame;
-    e.loopdepth = sh->loopdepth;
+    Escape e;
+    escenter(sh, &e);
     i32 status   = sh->status;
     u32 nsubst   = sh->nsubst;
-    i32 capdepth = sh->capdepth;
-    sh->esc = &e;
     if (!jmpset(e.jmp)) {
         Str v = expandword(x, r, ctx);
-        sh->esc    = e.up;
+        escleave(sh, &e);
         sh->status = status;
         sh->nsubst = nsubst;
         return v;
     }
-    sh->esc = e.up;
     if (e.why!=ESC_DISCARD && e.why!=ESC_FATAL && e.why!=ESC_ABORT) {
+        escleave(sh, &e);
         escape(sh, e.why);
     }
-    unwind(sh, e.undo);
-    sh->bout      = e.bout;
-    sh->loopdepth = e.loopdepth;
-    sh->capdepth  = capdepth;
+    escresume(sh, &e);
     sh->status    = status;
     sh->nsubst    = nsubst;
     return r;

@@ -606,12 +606,10 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     Shell    *saved = alloc<Shell>(&scratch);  // large: not on the stack
     *saved = *sh;
     Watermark w     = storeenter(sh->store);
-    Escape    e     = {};
-    e.up    = sh->esc;
-    e.bout  = sh->bout;
-    e.undo  = sh->undo;
-    e.frame = sh->frame;
-    sh->esc = &e;
+    // An escape ends the level: its EXIT trap runs amid what the
+    // abandoned frames left, as bash's does, then saved restores all
+    Escape    e;
+    escenter(sh, &e);
     sh->subshell++;
     sh->bashpid = newvpid(sh);
     sh->psubs   = 0;
@@ -1148,29 +1146,29 @@ static b32 applyredirs(Shell *, Redir *, Arena *, b32);
 // error (the redirections done so far are left for the caller to undo),
 // with the command's status in sh->redirfail. As bash, an expansion
 // error in a redirection, even a fatal one such as ${x?}, only fails
-// the redirection, keeping the error's status.
+// the redirection, keeping the error's status. Not inlined: its escape
+// point would grow its callers' frames, which recursion stacks up.
+[[gnu::noinline]]
 static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
 {
-    Escape e = {};
-    e.up        = sh->esc;
-    e.bout      = sh->bout;
-    e.undo      = sh->undo;
-    e.frame     = sh->frame;
-    e.loopdepth = sh->loopdepth;
-    sh->esc = &e;
+    if (!list) {
+        sh->nullchild = 0;  // as applyredirs takes it
+        return 1;
+    }
+    Escape e;
+    escenter(sh, &e);
     b32 ok = 0;
     sh->redirfail = 1;
     if (!jmpset(e.jmp)) {
         ok = applyredirs(sh, list, a, keep);
-        sh->esc = e.up;
+        escleave(sh, &e);
         return ok;
     }
-    sh->esc = e.up;
     if (e.why!=ESC_DISCARD && e.why!=ESC_FATAL && e.why!=ESC_ABORT) {
+        escleave(sh, &e);
         escape(sh, e.why);
     }
-    sh->bout      = e.bout;
-    sh->loopdepth = e.loopdepth;
+    escresume(sh, &e);  // undoing those done so far, as the caller would
     // as the shell, or the subshell that catches it, would exit
     sh->redirfail = e.why!=ESC_FATAL ? 1 : sh->catchfatal ? 1 : 127;
     return 0;
@@ -1462,22 +1460,14 @@ static Str traceprefix(Shell *sh, Arena *a)
     Str ps4 = g.value;
     b32 xtrace = sh->opt[O_XTRACE];
     i32 status = sh->status;
-    Escape e = {};
-    e.up    = sh->esc;
-    e.bout  = sh->bout;
-    e.undo  = sh->undo;
-    e.frame = sh->frame;
-    sh->esc = &e;
+    Escape e;
+    escenter(sh, &e);
     sh->opt[O_XTRACE] = 0;
-    i32 kind = sh->promptkind;
     sh->promptkind = 4;  // a prompt for \! and \#
     if (!jmpset(e.jmp)) {
         ps4 = expandstring(sh, a, "${PS4@P}");
-    } else {
-        unwind(sh, e.undo);
     }
-    sh->promptkind = kind;
-    sh->esc = e.up;
+    escresume(sh, &e);  // promptkind too
     sh->opt[O_XTRACE] = xtrace;
     sh->status = status;
     if (!ps4.len) return ps4;
@@ -2676,11 +2666,8 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         *saved = *sh;
         Fdsave fds = savefds(sh, &a);
         Watermark w = storeenter(sh->store);
-        Escape e = {};
-        e.up = sh->esc;
-        e.bout = sh->bout;
-        e.undo = sh->undo;
-        sh->esc = &e;
+        Escape e;
+        escenter(sh, &e);
         sh->args.v = argv + 1;
         sh->args.n = argc - 1;
         sh->name   = name;
@@ -2869,13 +2856,10 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
 
     // Pop this call on the way out of an escape too, so that a shell
     // that resumes after an expansion error has no stale frames
-    Escape e = {};
-    e.up    = sh->esc;
-    e.bout  = sh->bout;
-    e.undo  = sh->undo;
-    e.frame = sh->frame;
-    sh->esc = &e;
-    b32 escaped = jmpset(e.jmp);
+    // (its escape point in the arena: recursion stacks up this frame)
+    Escape *e = alloc<Escape>(&scratch);
+    escenter(sh, e);
+    b32 escaped = jmpset(e->jmp);
     if (!escaped) {
         // As bash, DEBUG runs as the function starts, at its body's
         // line, where it applies (a traced function, set -T, extdebug)
@@ -2892,8 +2876,8 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
             runreturntrap(sh, scratch);
         }
     }
-    sh->esc = e.up;
-    if (escaped && e.why==ESC_EXIT && sh->exitcalled) {
+    escleave(sh, e);
+    if (escaped && e->why==ESC_EXIT && sh->exitcalled) {
         // As bash, exit runs the EXIT trap still inside the function:
         // its FUNCNAME, locals and positional parameters
         sh->exitcalled = 0;
@@ -2913,7 +2897,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     leaveframe(sh, &f);
     sh->args = saved;
     if (escaped) {
-        escape(sh, e.why);
+        escape(sh, e->why);
     }
     return sh->status;
 }
@@ -2948,12 +2932,8 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
     i32 loopdepth = sh->loopdepth;
     sh->loopdepth = 0;
 
-    Escape e = {};
-    e.up    = sh->esc;
-    e.bout  = sh->bout;
-    e.undo  = sh->undo;
-    e.frame = sh->frame;
-    sh->esc = &e;
+    Escape e;
+    escenter(sh, &e);
     Str val = {};
     i32 tracedepth = sh->tracedepth++;
     // As in $(...): no -v, and -e only with inherit_errexit, both
@@ -2968,7 +2948,7 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
         runsource(sh, src, sh->iname, scratch, 0, comsubline(sh, 1), 0, 0, 1);
         if (valsub) val = clone(a, getvar(sh, &scratch, "REPLY").value);
     }
-    sh->esc = e.up;
+    escleave(sh, &e);
     sh->tracedepth = tracedepth;
     sh->opt[O_ERREXIT] = errexit;
     sh->opt[O_VERBOSE] = verbose;
@@ -4728,46 +4708,24 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
 // resumes after an error that abandons all -c, eval and source text.
 static void runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
 {
-    Escape e = {};
-    e.up        = sh->esc;
-    e.bout      = sh->bout;
-    e.undo      = sh->undo;
-    e.frame     = sh->frame;
-    e.loopdepth = sh->loopdepth;
-    BOut  *bout      = sh->bout;
-    Lexer *lexer     = sh->lexer;
-    Str    iname     = sh->iname;
-    Str    srcname   = sh->srcname;
-    i32    noerrexit = sh->noerrexit;
-    i32    evaldepth = sh->evaldepth;
-    i32    srcdepth  = sh->sourcedepth;
-    i32    capdepth  = sh->capdepth;
-    sh->esc = &e;
-    if (!jmpset(e.jmp)) {
+    Escape *e = alloc<Escape>(&scratch);  // eval and source recurse here
+    escenter(sh, e);
+    if (!jmpset(e->jmp)) {
         execute(sh, cmd, scratch);
-        sh->esc = e.up;
+        escleave(sh, e);
         return;
     }
-    sh->esc = e.up;
-    b32 resume = e.why==ESC_DISCARD || (e.why==ESC_ABORT && reader) ||
-                 (e.why==ESC_INTR && reader);
+    b32 resume = e->why==ESC_DISCARD || (e->why==ESC_ABORT && reader) ||
+                 (e->why==ESC_INTR && reader);
     if (!resume || sh->subshell) {
-        if (e.why==ESC_DISCARD && !reader) sh->status = 1;
-        escape(sh, e.why);
+        escleave(sh, e);
+        if (e->why==ESC_DISCARD && !reader) sh->status = 1;
+        escape(sh, e->why);
     }
-    unwind(sh, e.undo);
-    sh->status      = reader && sh->status ? sh->status : 1;
-    sh->flow        = FLOW_NONE;
-    sh->loopdepth   = e.loopdepth;
-    sh->bout        = bout;
-    sh->lexer       = lexer;
-    sh->iname       = iname;
-    sh->srcname     = srcname;
-    sh->noerrexit   = noerrexit;
-    sh->evaldepth   = evaldepth;
-    sh->sourcedepth = srcdepth;
-    sh->capdepth    = capdepth;
-    sh->current     = 0;
+    escresume(sh, e);
+    sh->status  = reader && sh->status ? sh->status : 1;
+    sh->flow    = FLOW_NONE;
+    sh->current = 0;
 }
 
 // A $"..." string the parser found under -D or --dump-po-strings,
