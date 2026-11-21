@@ -1375,6 +1375,7 @@ static Str parsematched(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
         }
 
         if (flags & P_DOLBRACE) {
+            u8 c = (u8)ch;
             if (dolstate==DB_PARAM && ch=='%' && r.len>1) {
                 dolstate = DB_QUOTE;
             } else if (dolstate==DB_PARAM && ch=='#' && r.len>1) {
@@ -1385,9 +1386,9 @@ static Str parsematched(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
                 dolstate = DB_QUOTE;
             } else if (dolstate==DB_PARAM && ch==',' && r.len>1) {
                 dolstate = DB_QUOTE;
-            } else if (dolstate==DB_PARAM && find("#%^,~:-=?+/", Str{(u8 *)&ch, 1})>=0) {
+            } else if (dolstate==DB_PARAM && find("#%^,~:-=?+/", Str{&c, 1})>=0) {
                 dolstate = DB_OP;
-            } else if (dolstate==DB_OP && find("#%^,~:-=?+/", Str{(u8 *)&ch, 1})<0) {
+            } else if (dolstate==DB_OP && find("#%^,~:-=?+/", Str{&c, 1})<0) {
                 dolstate = DB_WORD;
             }
         }
@@ -1779,8 +1780,9 @@ static i32 readtokenword(Lexer *L, i32 ch)
             // Inside a construct other than quotes (e.g. a compound
             // assignment in $( )), the next character is lexed normally.
             i32 cd = currentdelim(L);
+            u8  c  = (u8)peek;
             if (!cd || cd=='`' || (cd=='"' && peek>=0 &&
-                    find("$`\"\\\n", Str{(u8 *)&peek, 1})>=0)) {
+                    find("$`\"\\\n", Str{&c, 1})>=0)) {
                 passnext = 1;
             }
             quoted = 1;
