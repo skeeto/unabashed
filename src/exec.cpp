@@ -2604,6 +2604,7 @@ static PfZone *shellzone(Shell *sh, Arena *a)
     tz = system ? os_localtz(sh->os, a) : clone(a, tz);
     PfZone *z = alloc<PfZone>(a);
     Str name = startswith(tz, ":") ? cuthead(tz, 1) : tz;
+    name = tz.len ? name : Str("Universal");  // as glibc reads TZ=""
     if (name.len && sh->pathmode!=PM_NATIVE) {
         Str path = name;
         if (name[0] != '/') {

@@ -916,54 +916,104 @@ static b32 tzclock(Str s, iz *i, i64 maxh, i64 *secs)
     return 1;
 }
 
-static b32 tzrule(Str s, iz *i, PfRule *r)
+// An unsigned short as sscanf's %hu reads digits, wrapping. False
+// without digits.
+static b32 tzshort(Str s, iz *i, i32 *v)
 {
     iz k = *i;
-    r->secs = 7200;
-    if (byteat(s, k) == 'J') {
-        r->kind = 'J';
-        k++;
-    } else if (byteat(s, k) == 'M') {
-        r->kind = 'M';
-        k++;
-    } else {
-        r->kind = 'N';
+    if (!digit(byteat(s, k))) {
+        return 0;
     }
-    i32 v[3] = {};
-    for (i32 n = 0; n < (r->kind=='M' ? 3 : 1); n++) {
-        if (n && byteat(s, k++)!='.') {
-            return 0;
-        }
+    i32 n = 0;
+    for (; digit(byteat(s, k)); k++) {
+        n = (n*10 + s[k] - '0') & 0xffff;
+    }
+    *v = n;
+    *i = k;
+    return 1;
+}
+
+// One rule (the second with second), as glibc's parse_rule reads it:
+// a leading comma is skipped, an empty one is the United States rule,
+// and on failure the fields already read stay set, the rest as the
+// caller left them (zero: day 0 at midnight).
+static b32 tzrule(Str s, iz *i, PfRule *r, b32 second)
+{
+    iz k = *i;
+    k += byteat(s, k) == ',';
+    u8 c = byteat(s, k);
+    if (c=='J' || digit(c)) {
+        r->kind = c=='J' ? 'J' : 'N';
+        k += c == 'J';
         if (!digit(byteat(s, k))) {
             return 0;
         }
+        i32 d = 0;
         for (; digit(byteat(s, k)); k++) {
-            v[n] = v[n]<100000 ? v[n]*10 + s[k] - '0' : v[n];
+            d = d<100000 ? d*10 + s[k] - '0' : d;
         }
-    }
-    if (r->kind=='J' && (v[0]<1 || v[0]>365)) return 0;
-    if (r->kind=='N' && v[0]>365) return 0;
-    if (r->kind=='M' && (v[0]<1 || v[0]>12 || v[1]<1 || v[1]>5 || v[2]>6)) return 0;
-    r->d = r->kind=='M' ? v[2] : v[0];
-    r->m = v[0];
-    r->w = v[1];
-    if (byteat(s, k) == '/') {
+        if (d>365 || (c=='J' && !d)) {
+            return 0;  // as strtoul's value is checked before it is kept
+        }
+        r->d = d;
+    } else if (c == 'M') {
+        // sscanf's "M%hu.%hu.%hu" sets each as it is read
+        r->kind = 'M';
         k++;
-        if (!tzclock(s, &k, 167, &r->secs)) {
+        i32 *v[3] = {&r->m, &r->w, &r->d};
+        for (i32 n = 0; n < 3; n++) {
+            if ((n && byteat(s, k++)!='.') || !tzshort(s, &k, v[n])) {
+                return 0;
+            }
+        }
+        if (r->m<1 || r->m>12 || r->w<1 || r->w>5 || r->d>6) {
             return 0;
         }
+    } else if (k == s.len) {
+        PfRule us[2] = {{'M', 0, 3, 2, 0}, {'M', 0, 11, 1, 0}};
+        *r = us[second];
+    } else {
+        return 0;
+    }
+    c = byteat(s, k);
+    if (k<s.len && c!='/' && c!=',') {
+        return 0;
+    }
+    if (c != '/') {
+        r->secs = 7200;
+    } else {
+        // Unclamped, the hour 2 unless one is read, as glibc
+        if (++k == s.len) {
+            return 0;
+        }
+        i64 neg   = s[k]=='-' ? -1 : 1;
+        k        += neg < 0;
+        i32 hms[3] = {2, 0, 0};
+        for (i32 n = 0; n < 3; n++) {
+            iz j = k + (n > 0);
+            if (n && byteat(s, k)!=':') break;
+            j += byteat(s, j) == '+';
+            if (!tzshort(s, &j, hms+n)) break;
+            k = j;
+        }
+        r->secs = neg * (hms[0]*(i64)3600 + hms[1]*60 + hms[2]);
     }
     *i = k;
     return 1;
 }
 
-// Parse TZ; an empty value is glibc's "Universal".
+// Parse TZ as glibc's __tzset_parse_tz: an empty value is its
+// "Universal", a lone colon its "UTC". Anything after the standard
+// offset makes daylight saving time possible, which without a name of
+// its own is unnamed at UTC, and rules that do not parse keep what
+// glibc keeps of them (except a month out of range, which it would
+// read out of bounds: there the rule is day 0).
 static PfZone parsezone(Str tz)
 {
     PfZone z = {};
     iz i = byteat(tz, 0)==':';
     if (i == tz.len) {
-        z.name[0] = z.name[1] = "Universal";
+        z.name[0] = z.name[1] = i ? Str("UTC") : Str("Universal");
         return z;
     }
     if (!zonename(tz, &i, &z.name[0])) {
@@ -976,26 +1026,28 @@ static PfZone parsezone(Str tz)
     }
     z.ok     = 1;
     z.off[0] = z.off[1] = -off;
-    if (!zonename(tz, &i, &z.name[1])) {
-        z.name[1] = z.name[0];
+    if (i == tz.len) {
         return z;
     }
-    z.dst    = 1;
-    z.off[1] = tzclock(tz, &i, 24, &off) ? -off : z.off[0]+3600;
-    b32 ok = byteat(tz, i) == ',';
-    if (ok) {
-        i++;
-        ok = tzrule(tz, &i, &z.rule[0]) && byteat(tz, i)==',';
+    z.dst     = 1;
+    z.name[1] = Str{};
+    z.off[1]  = 0;
+    if (zonename(tz, &i, &z.name[1])) {
+        iz k = i;
+        if (tzclock(tz, &i, 24, &off)) {
+            z.off[1] = -off;
+        } else {
+            i = k + (byteat(tz, k)=='+' || byteat(tz, k)=='-');  // a sign alone
+            z.off[1] = z.off[0] + 3600;
+        }
     }
-    if (ok) {
-        i++;
-        ok = tzrule(tz, &i, &z.rule[1]);
+    if (tzrule(tz, &i, &z.rule[0], 0)) {
+        tzrule(tz, &i, &z.rule[1], 1);
     }
-    if (!ok) {
-        PfRule start = {'M', 0, 3, 2, 7200};
-        PfRule end   = {'M', 0, 11, 1, 7200};
-        z.rule[0] = start;
-        z.rule[1] = end;
+    for (i32 k = 0; k < 2; k++) {
+        if (z.rule[k].kind=='M' && (z.rule[k].m<1 || z.rule[k].m>12)) {
+            z.rule[k] = {};
+        }
     }
     return z;
 }
@@ -1031,7 +1083,8 @@ static i64 rulechange(PfRule *r, i64 year, i64 off)
         i64 first = daysfromcivil(year, r->m, 1);
         i64 dow   = (first%7 + 11) % 7;  // 1970-01-01 was a Thursday
         i64 len   = cumul[leap][r->m] - cumul[leap][r->m-1];
-        i64 d     = (r->d - dow + 7) % 7;
+        i64 d     = r->d - dow;  // past the week for a d over 6, as glibc
+        d += d<0 ? 7 : 0;
         for (i32 n = 1; n<r->w && d+7<len; n++) {
             d += 7;
         }
