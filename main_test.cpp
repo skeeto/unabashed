@@ -599,6 +599,63 @@ static void test_arithstack(Test *t)
     }
 }
 
+// The deepest shell function recursion that a stack budget holds: past
+// it the shell dies as by SIGSEGV.
+static i32 calldepth(Os *os, iz stack)
+{
+    i32 lo = 0;      // holds
+    i32 hi = 1<<14;  // does not, at under 32 bytes a level
+    while (hi-lo > 1) {
+        i32  mid = lo + (hi-lo)/2;
+        char n[16];
+        snprintf(n, sizeof(n), "%d", mid);
+        Str args[] = {
+            "bash", "-c",
+            "deep() { if (($1 > 0)); then deep $(($1-1)); fi; }; deep $1; echo ok",
+            "bash", {(u8 *)n, (iz)strlen(n)},
+        };
+        startrun(os, 0, {});
+        OsInfo info = baseinfo(os, args, countof(args));
+        info.stack   = stack;
+        info.reserve = (iz)1<<26;  // the arena outlasts the stack
+        Result r = finishrun(os, &info);
+        if (r.out == "ok\n") {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+// A level of shell function recursion takes no more stack than bash's
+// (about 1 KiB), so that a stack holds as many: measured, apart from
+// the fixed cost below the first call, as the stack each further level
+// takes between two budgets. Every level passes through execute,
+// executenode, runsimple and callfunction, whose frames once grew with
+// each feature that saved a little more state in them, to 1.6 KiB with
+// clang at -O2 and -Og alike. At -Og a level now takes 688 bytes
+// with clang (arm64), 1024 with GCC (arm64) and 1310 with GCC on x86-64
+// Windows, whose ABI saves ten xmm registers in a frame: GCC's limit
+// leaves it that room, still below the 1.6 KiB of before.
+static void test_callstack(Test *t)
+{
+    Os *os = t->os;
+    iz small = (iz)1<<19;
+    iz large = (iz)1<<20;
+    i32 lo = calldepth(os, small);
+    i32 hi = calldepth(os, large);
+    iz per = hi>lo ? (large - small)/(hi - lo) : large;
+    #if __clang__
+    iz limit = 1024;
+    #else
+    iz limit = 1536;
+    #endif
+    if (per > limit) {
+        expectint(t, "stack bytes per function call level", per, limit);
+    }
+}
+
 static void test_fibers(Test *t)
 {
     Str args[] = {"bash", "--unabashed-selftest"};
@@ -2414,6 +2471,7 @@ int main(int argc, char **argv)
     t.os = &os;
     test_m0(&t);
     test_arithstack(&t);
+    test_callstack(&t);
     test_fibers(&t);
     test_vterm(&t);
     test_conkey(&t);
