@@ -31,6 +31,7 @@
 #include <sys/epoll.h>
 #include <ucontext.h>    // fibers_ucontext.cpp's, here outside the namespace
 extern "C" int rename(char const *, char const *);  // stdio.h, whose macros collide
+extern "C" unsigned long getauxval(unsigned long);  // sys/auxv.h, likewise elf.h
 extern char **environ;
 #include "unabashed.h"
 

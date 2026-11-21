@@ -92,6 +92,30 @@ static_assert(EAGAIN==E_AGAIN && EDEADLK==E_DEADLK && ENAMETOOLONG==E_NAMETOOLON
               "the generic Linux numbering");
 static i32 coreerr(i32 err) { return err; }
 
+// Bytes of the main thread's stack usable below here, within limit:
+// the kernel's strings above main and main's callers already use some.
+// The program's name is the topmost (AT_EXECFN), a pointer's width
+// below the stack's end.
+static iz mainstack(byte *here, iz limit)
+{
+    enum : u64 { AUX_PAGESZ = 6, AUX_EXECFN = 31 };  // AT_*, as the ABI has them
+    byte *top = here;
+    char *name = (char *)getauxval(AUX_EXECFN);
+    if (!name) {  // an old kernel: the environment's highest string
+        for (char **e = environ; *e; e++) name = !name || *e>name ? *e : name;
+    }
+    if (name) {
+        iz len = 0;
+        for (; name[len]; len++) {}
+        top = (byte *)name + len + 1 + sizeof(void *);
+    }
+    uz page = getauxval(AUX_PAGESZ);
+    page = page ? page : 4096;
+    top = (byte *)(((uz)top + page - 1) & ~(page - 1));
+    iz used = top - here;
+    return used>=0 && used<limit ? limit-used : 0;
+}
+
 // posix_spawn beyond POSIX, by glibc version: chdir actions (2.29),
 // closefrom (2.34), and the terminal for a new group (2.35)
 #if defined(__GLIBC_PREREQ)

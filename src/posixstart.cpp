@@ -56,18 +56,22 @@ int main(int argc, char **argv)
         info.host = fromcstr(host);
     }
     info.machtype = machtype(&a);
+    // A forked image child's fresh fiber gets the whole limit (os.stack),
+    // this thread only what argv, the environment and main's callers
+    // left of it
     struct rlimit rl;
+    iz stack = (iz)1<<23;
     if (!getrlimit(RLIMIT_STACK, &rl) && rl.rlim_cur!=RLIM_INFINITY) {
-        info.stack = (iz)rl.rlim_cur;
-    } else {
-        info.stack = (iz)1<<23;
+        stack = rl.rlim_cur<((uz)1<<(sizeof(iz)*8-2)) ? (iz)rl.rlim_cur : (iz)1<<23;
     }
+    byte here = 0;
+    info.stack = mainstack(&here, stack);
     for (i32 i = 0; i < 3; i++) {
         info.std[i]      = (Handle)i;
         info.stdflags[i] = fdaccess(i);
     }
     info.sigign = os.entryign;
     os.reserve  = info.reserve;
-    os.stack    = info.stack;
+    os.stack    = stack;
     exitwith(sh_main(&os, &info));
 }

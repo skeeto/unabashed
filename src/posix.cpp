@@ -152,6 +152,7 @@ static b32   closerange(i32 lo, i32 hi);
 static i32   hostsig(i32 sig);
 static i32   coresig(i32 sig);
 static i32   coreerr(i32 err);
+static iz    mainstack(byte *here, iz limit);
 static u64   corebit(i32 sig);
 static b32   hostin(u64 set, i32 sig);
 static b32   spawnable(SpawnPlan *);

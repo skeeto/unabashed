@@ -1563,6 +1563,14 @@ static void startdebugger(Shell *sh, Arena scratch)
     sh->status = b_source(sh, args, 2, scratch);
 }
 
+// Stack that shell recursion may use of the OsInfo stack: all but 64K
+// for the frames between checks, or half of a small one (a low ulimit -s)
+static iz stackroom(iz stack)
+{
+    iz margin = (iz)1<<16;
+    return !stack ? (iz)1<<19 : stack>2*margin ? stack-margin : stack/2;
+}
+
 // A self-spawned background shell: take over the parent's image
 // (proc.cpp, imagebuild) and run its command, as vprocmain would.
 static i32 imagemain(Os *os, OsInfo *info)
@@ -1591,7 +1599,7 @@ static i32 imagemain(Os *os, OsInfo *info)
     sh->sched->top = sig;
     byte stackmark = 0;
     sh->stacktop = STACKAT(stackmark);
-    sh->stackmax = info->stack ? info->stack - ((iz)1<<16) : (iz)1<<19;
+    sh->stackmax = stackroom(info->stack);
     startfds(sh, info);
 
     Arena scratch = newarena(os, info->reserve);
@@ -1690,7 +1698,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     sh->entryign = info->sigign;
     byte stackmark = 0;
     sh->stacktop = STACKAT(stackmark);
-    sh->stackmax = info->stack ? info->stack - ((iz)1<<16) : (iz)1<<19;
+    sh->stackmax = stackroom(info->stack);
 
     startfds(sh, info);
 

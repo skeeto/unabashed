@@ -115,6 +115,18 @@ static i32 coreerr(i32 err)
     return err;
 }
 
+// Bytes of the main thread's stack usable below here, within limit:
+// the kernel's strings above main and main's callers already use some.
+static iz mainstack(byte *here, iz limit)
+{
+    pthread_t self = pthread_self();
+    byte *top  = (byte *)pthread_get_stackaddr_np(self);
+    iz    size = (iz)pthread_get_stacksize_np(self);
+    size = size<limit ? size : limit;
+    iz used = top - here;
+    return used>=0 && used<size ? size-used : 0;
+}
+
 // posix_spawn beyond POSIX: chdir actions (10.15, named without _np
 // from 26), and close-on-exec for all but the map
 #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 260000

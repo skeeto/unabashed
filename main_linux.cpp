@@ -22,6 +22,7 @@
 #include <time.h>
 #include <unistd.h>
 extern "C" int rename(char const *, char const *);  // stdio.h, whose macros collide
+extern "C" unsigned long getauxval(unsigned long);  // sys/auxv.h, likewise elf.h
 extern char **environ;
 #include "src/unabashed.cpp"
 #if __x86_64__ && !FIBER_UCONTEXT
