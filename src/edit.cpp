@@ -667,6 +667,9 @@ struct Editor {
     b32      pending;   // the terminal has a wrap pending (crow, ccol at
                         // the last column)
     b32      paste;     // bracketed paste is on
+    b32      raw;       // the terminal is in raw mode for it
+    i32      busy;      // editline calls running, one within another
+    b32      unnested;  // one ended: the terminal is to be set again
     b32      shellcmd;  // a bind -x command is running
     b32      incmd;     // a command is running: a WINCH trap waits
     Buf      out_;      // output for one redisplay
@@ -1685,10 +1688,18 @@ static void edrefresh(Editor *ed, Shell *sh)
 static void edsize(Editor *, Shell *, Tty);
 
 // The terminal in raw mode, the platform told whether bracketed paste
-// is on, to turn it off should the process die meanwhile
+// is on, to turn it off should the process die meanwhile; and back.
 static Tty edraw(Editor *ed, Shell *sh)
 {
-    return os_tty(sh->os, ed->in, ed->out, TTY_RAW | (ed->paste ? TTY_PASTE : 0));
+    Tty t = os_tty(sh->os, ed->in, ed->out, TTY_RAW | (ed->paste ? TTY_PASTE : 0));
+    ed->raw = !t.err;
+    return t;
+}
+
+static Tty edcooked(Editor *ed, Shell *sh)
+{
+    ed->raw = 0;
+    return os_tty(sh->os, ed->in, ed->out, TTY_RESTORE);
 }
 
 // The terminal may have a new size (SIGWINCH): as readline does, clear
@@ -1713,7 +1724,7 @@ static void edresize(Editor *ed, Shell *sh)
 // waits for its end, so no command finds the history changed under
 // what it holds.
 static HistEnt *edhistmark(Editor *, Shell *);
-static void     edhistsync(Editor *, Shell *, HistEnt *);
+static void     edshellend(Editor *, Shell *, HistEnt *);
 
 static void edwinch(Editor *ed, Shell *sh)
 {
@@ -1723,7 +1734,7 @@ static void edwinch(Editor *ed, Shell *sh)
     edflush(ed, sh);
     HistEnt *at = edhistmark(ed, sh);
     runtrap(sh, 28);
-    edhistsync(ed, sh, at);
+    edshellend(ed, sh, at);
 }
 
 
@@ -2026,6 +2037,19 @@ static void edhistsync(Editor *ed, Shell *sh, HistEnt *at)
     for (; at && i>=0 && h->ents[i]!=at; i--) {}  // entries only move down
     ed->hpos    = at && i>=0 ? i : h->len;
     ed->hmarked = 0;
+}
+
+// After that shell code: the history found again, and if it ran the
+// editor itself (ednest), whose end restores the terminal, the terminal
+// as this line had it, now that the shell code's redirections are gone.
+static void edshellend(Editor *ed, Shell *sh, HistEnt *at)
+{
+    edhistsync(ed, sh, at);
+    if (!ed->unnested) return;
+    ed->unnested = 0;
+    if (ed->paste) edput(ed, "\x1b[?2004h");
+    edflush(ed, sh);
+    if (ed->raw) edraw(ed, sh);
 }
 
 static void edload(Editor *ed, Shell *sh, iz i)
@@ -2398,7 +2422,7 @@ static void edcompleting(Editor *ed, Shell *sh, i32 fn, i32 count)
 {
     HistEnt *at = edhistmark(ed, sh);
     edcomplete(ed, sh, fn, count);
-    edhistsync(ed, sh, at);
+    edshellend(ed, sh, at);
 }
 
 // Bracketed paste: the bytes up to ESC [ 201 ~, CR as LF.
@@ -3104,7 +3128,7 @@ static void edshellexpand(Editor *ed, Shell *sh)
     } else {
         unwind(sh, e.undo);
     }
-    edhistsync(ed, sh, at);
+    edshellend(ed, sh, at);
     sh->esc      = e.up;
     sh->status   = status;
     sh->capdepth = depth - 1;
@@ -3252,7 +3276,7 @@ static void ededitexec(Editor *ed, Shell *sh, b32 vi = 0, u8 key = 0)
         reallyadd(sh, clone(&ed->linemem, edtext(ed)));
         reallyadd(sh, "");
     }
-    os_tty(sh->os, ed->in, ed->out, TTY_RESTORE);
+    edcooked(ed, sh);
 
     i32   depth  = ++sh->capdepth;
     Arena a      = *scratchat(sh, depth);
@@ -3277,7 +3301,8 @@ static void ededitexec(Editor *ed, Shell *sh, b32 vi = 0, u8 key = 0)
     sh->lexeof   = lexeof;
 
     // The program may have resized the terminal
-    ed->paste = bracket;
+    ed->paste    = bracket;
+    ed->unnested = 0;  // the terminal is set again here
     Tty t = edraw(ed, sh);
     if (!t.err && t.cols>=2) {
         ed->tty.rows = t.rows;
@@ -3351,14 +3376,14 @@ static void edshellcmd(Editor *ed, Shell *sh, Str cmd)
     }
     for (i32 i = 0; i < nvars; i++) setattrs(sh, names[i], V_EXPORT, 0);
 
-    os_tty(sh->os, ed->in, ed->out, TTY_RESTORE);
+    edcooked(ed, sh);
     i32 line   = sh->line;
     b32 lexeof = sh->lexeof;
     sh->evaldepth++;
     ed->shellcmd = 1;  // an escape still unsets the variables (editline)
     HistEnt *at = edhistmark(ed, sh);
     runsource(sh, cmd, "bash_execute_unix_command", a);
-    edhistsync(ed, sh, at);
+    edshellend(ed, sh, at);
     ed->shellcmd = 0;
     sh->evaldepth--;
     sh->line   = line;
@@ -4427,7 +4452,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
     case EF_RE_READ_INIT_FILE: {
         HistEnt *at = edhistmark(ed, sh);  // history-size may stifle it
         rlinit(ed, sh);
-        edhistsync(ed, sh, at);
+        edshellend(ed, sh, at);
     } break;
     case EF_DELETE_CHAR_OR_LIST:
         if (ed->point<ed->line.len || !ed->line.len) {
@@ -5698,7 +5723,7 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     prompt      = clone(&ed->linemem, prompt);
     Str init    = clone(&ed->linemem, opts->init);
     ed->out_  = Buf(&ed->linemem, 256);
-    ed->paste = ed->shellcmd = ed->incmd = ed->hmarked = 0;
+    ed->paste = ed->shellcmd = ed->incmd = ed->hmarked = ed->unnested = 0;
     ed->in  = fin->h;
     ed->out = ferr->h;
     ed->tty   = edraw(ed, sh);
@@ -5736,7 +5761,8 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     ed->deadline = opts->deadline;
     ed->timedout = 0;
     ed->hscroll = ed->notty || ed->tty.rows<=1 || eddumb(sh, ed->linemem);
-    ed->lmargin = ed->hshown = ed->unread = 0;
+    ed->lmargin = ed->hshown = 0;
+    if (ed->busy == 1) ed->unread = 0;  // a nested call reads on
     ed->hlast   = {};
     ed->hlastcur = 0;
     if (!ed->inited) {
@@ -5766,8 +5792,9 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
         viinsmode(ed, 'i');
     }
     edresetarg(ed);
-    // EdUndo lists last while history entries keep them
-    b32 kept = 0;
+    // EdUndo lists last while history entries keep them, and while an
+    // outer line, which a nested call returns to, still edits
+    b32 kept = ed->busy > 1;
     for (iz i = 0; i < sh->hist.len; i++) kept |= !!sh->hist.ents[i]->undo;
     if (!kept) ed->hmem = {(byte *)(ed->hmem.mem+1), ed->hmem.end, ed->hmem.mem};
 
@@ -5895,9 +5922,101 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     if (ed->paste) edput(ed, "\x1b[?2004l\r");
     ed->paste = 0;
     edflush(ed, sh);
-    if (!ed->notty) edsize(ed, sh, os_tty(sh->os, ed->in, ed->out, TTY_RESTORE));
+    if (!ed->notty) edsize(ed, sh, edcooked(ed, sh));
     print(out, {ed->line.data, ed->line.len});
     return ed->result;
+}
+
+// What lasts from line to line, as a nested call (editline) left it,
+// back into the outer line's saved state: the arenas it allocates
+// from, the bindings, settings, kill ring, last searches, and the keys
+// it took from typeahead or a running macro. The same fields as
+// edcopy, there copied.
+static void edkeep(Editor *to, Editor *from)
+{
+    to->perm       = from->perm;
+    to->root       = from->root;
+    to->vimove     = from->vimove;
+    to->viins      = from->viins;
+    to->vireplmap  = from->vireplmap;
+    to->keytimeout = from->keytimeout;
+    to->kbdmacro   = from->kbdmacro;
+    to->inited     = from->inited;
+    to->termkeys   = from->termkeys;
+    to->rllast     = from->rllast;
+    to->ifoff      = from->ifoff;
+    to->ifstack    = from->ifstack;
+    copybytes(to->ttysaved, from->ttysaved, sizeof(to->ttysaved));
+    to->setrows    = from->setrows;
+    to->setcols    = from->setcols;
+    to->hmem       = from->hmem;
+    to->kmem[0]    = from->kmem[0];
+    to->kmem[1]    = from->kmem[1];
+    to->kcur       = from->kcur;
+    for (i32 i = 0; i < from->nkills; i++) to->kills[i] = from->kills[i];
+    to->nkills     = from->nkills;
+    to->killidx    = from->killidx;
+    to->lastisearch = from->lastisearch;
+    to->noninc      = from->noninc;
+    to->nonincpos   = from->nonincpos;
+    to->vars        = from->vars;
+    to->vilastcmd    = from->vilastcmd;
+    to->vilastcount  = from->vilastcount;
+    to->vilastmotion = from->vilastmotion;
+    to->vilastins    = from->vilastins;
+    to->vicsdir      = from->vicsdir;
+    to->vicsorig     = from->vicsorig;
+    to->vicslen      = from->vicslen;
+    to->vireplen     = from->vireplen;
+    copybytes(to->vicschar, from->vicschar, sizeof(to->vicschar));
+    copybytes(to->virepl, from->virepl, sizeof(to->virepl));
+    to->vibuf    = from->vibuf;
+    to->vibufcap = from->vibufcap;
+    to->ttyvi    = from->ttyvi;
+    to->native   = from->native;
+    copybytes(to->pushed, from->pushed, sizeof(to->pushed));
+    to->unread   = from->unread;
+    to->macro    = from->macro;
+    to->macropos = from->macropos;
+}
+
+// A call within a call (read -e in bind -x, a completion function, a
+// WINCH trap): the outer line's whole state is saved in a spare
+// Editor's memory, and the nested call edits in the spare's arenas for
+// its line, display and matches. Both null when not nested.
+struct EdNest {
+    Editor *spare;
+    Editor *outer;
+};
+
+static EdNest ednest(Editor *ed, Shell *sh)
+{
+    EdNest n = {};
+    if (ed->busy) {
+        n.spare = ednew(sh);
+        n.outer = alloccopy(&n.spare->perm, ed);
+        ed->lay[0]  = n.spare->lay[0];
+        ed->lay[1]  = n.spare->lay[1];
+        ed->linemem = n.spare->linemem;
+        ed->cmem    = n.spare->cmem;
+    }
+    ed->busy++;
+    return n;
+}
+
+// The nested call is done, or escaped: the outer line's state back,
+// with what lasts (edkeep), and the spare back to the pool.
+static void edunnest(Editor *ed, Shell *sh, EdNest n)
+{
+    if (!n.outer) {
+        ed->busy--;
+        return;
+    }
+    edkeep(n.outer, ed);
+    *ed = *n.outer;
+    ed->unnested = 1;  // the terminal waits for the shell code (edshellend)
+    n.spare->next = sh->sched->freeeds;
+    sh->sched->freeeds = n.spare;
 }
 
 // Read a line on the terminal with the editor, the prompt shown first.
@@ -5910,6 +6029,10 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
 // shell's own prompt nothing outside catches it, so what bash's jump
 // to the top level would abandon, the line, is given up here instead
 // (ED_ABORT), as bash then starts a new prompt.
+//
+// That shell code may call it again (read -e), within the outer line,
+// and the outer line goes on afterward as it was (ednest), successful
+// or not, which bash's readline does not manage.
 static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
 {
     EdRead none = {};
@@ -5919,7 +6042,8 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     File *fin  = sh->fds->fd[opts->fd];
     File *ferr = sh->fds->fd[2];
     if (!fin || !ferr || fin->kind!=F_OS || ferr->kind!=F_OS) return ED_NOTTY;
-    Editor *ed = editor(sh);
+    Editor *ed   = editor(sh);
+    EdNest  nest = ednest(ed, sh);
 
     Escape e = {};
     e.up        = sh->esc;
@@ -5941,6 +6065,7 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     if (!jmpset(e.jmp)) {
         i32 r = edline(sh, ed, prompt, out, opts, isread, fin, ferr);
         sh->esc = e.up;
+        edunnest(ed, sh, nest);
         return r;
     }
     sh->esc = e.up;
@@ -5970,7 +6095,8 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     if (ed->paste) edput(ed, "\x1b[?2004l\r");
     ed->paste = 0;
     edflush(ed, sh);
-    if (!ed->notty) edsize(ed, sh, os_tty(sh->os, ed->in, ed->out, TTY_RESTORE));
+    if (!ed->notty) edsize(ed, sh, edcooked(ed, sh));
+    edunnest(ed, sh, nest);
     b32 resume = e.why==ESC_DISCARD || e.why==ESC_ABORT || e.why==ESC_INTR;
     if (!resume || !opts->shell) escape(sh, e.why);
     return ED_ABORT;

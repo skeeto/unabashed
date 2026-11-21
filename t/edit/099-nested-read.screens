@@ -1,0 +1,37 @@
+== snap 1
+in> Xabc
+got[Xabc] 0
+$ echo outer
+@ 2,10
+== snap 2
+in> Xabc
+got[Xabc] 0
+$ echo outYer tail
+@ 2,18
+== snap 3
+in> Xabc
+got[Xabc] 0
+$ echo outer
+outer
+$
+@ 4,2
+== snap 4
+notty 1
+$ echo two!
+two!
+$
+@ 3,2
+== snap 5
+$ echo threew> def
+winch[def]
+!
+three!
+$
+@ 4,2
+== snap 6
+$ echo threew> def
+winch[def]
+!
+three!
+$
+@ 4,2
