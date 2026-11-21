@@ -574,7 +574,8 @@ static void plt_close(Os *os, Handle h)
 {
     flushw(os);
     if (h == BADHANDLE) return;
-    if ((i32)h < countof(os->wkind)) os->wkind[h] = 0;  // the number may come back
+    i32 fd = (i32)h;
+    if (fd>=0 && fd<countof(os->wkind)) os->wkind[fd] = 0;  // the number may come back
     if (os->werrfd == (i32)h) os->werrfd = -1;
     close((i32)h);
 }
@@ -1269,6 +1270,13 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
             os->ttyraw = 0;
             os->wcatch = 0;
         }
+        // Its descriptors are new under the old numbers: what each is,
+        // and a failure found writing to one, are the parent's (plt_spawn
+        // wrote out the buffer)
+        for (i32 i = 0; i < countof(os->wkind); i++) os->wkind[i] = 0;
+        os->wlen   = 0;
+        os->wrun   = -1;
+        os->werrfd = -1;
         os->changed = s->sigign & ~os->entryign;
         os->pending = 0;
         os->peekfd[0] = os->peekfd[1] = 0;
