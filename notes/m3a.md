@@ -462,7 +462,9 @@ under lastpipe.
 
 **EXIT** (`runexittrap`): at `sh_main`'s end, at the end of a sync
 subshell or vproc whose own table has one, and from `sigdie`. Not after
-exec (`Shell.execed`). `exit` in a function or sourced file runs it
+exec (`Shell.execed`). It runs once (`Shell.exitran`) and stays listed
+while it runs, as bash; a comsub or procsub started in it inherits the
+mark and runs no EXIT action of its own (bash's SIG_INPROGRESS). `exit` in a function or sourced file runs it
 there, redirections in force, as bash. After set -e (`Shell.errexited`,
 `errexittrap`) it runs where bash's jump to its innermost
 parse_and_execute (eval, source, comsub, -c; `Lexer.reader` false) or

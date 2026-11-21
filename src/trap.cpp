@@ -653,7 +653,7 @@ static void sigleave(Shell *sh, Sigproc *p)
 // one it started with.
 static void runexittrap(Shell *sh, Arena)
 {
-    if (!trapset(sh, TRAP_EXIT)) return;
+    if (!trapset(sh, TRAP_EXIT) || sh->exitran) return;
     // A fresh arena: the caller's may hold the commands just run, to
     // which BASH_COMMAND may still point (so keep its text first)
     keepcmdtext(sh, 0, (byte *)-1);
@@ -663,8 +663,7 @@ static void runexittrap(Shell *sh, Arena)
     i32   depth   = ++sh->capdepth;
     Arena scratch = *scratchat(sh, depth);
     Str cmd = clone(&scratch, sh->traps[TRAP_EXIT]);
-    sfreestr(sh->store, sh->traps[TRAP_EXIT]);
-    sh->traps[TRAP_EXIT] = {};
+    sh->exitran = 1;
     i32 status = sh->status;
     sh->exiting = 0;
     sh->flow    = FLOW_NONE;
@@ -730,7 +729,7 @@ static void hidelocals(Shell *sh)
 // unwinding everything.
 static void errexittrap(Shell *sh)
 {
-    if (!trapset(sh, TRAP_EXIT) || sh->execed || sh->killsig) return;
+    if (!trapset(sh, TRAP_EXIT) || sh->exitran || sh->execed || sh->killsig) return;
     Lexer *p1 = 0, *pk = 0;
     b32 reader = 0;
     for (Lexer *L = sh->lexer; L && L!=sh->levellexer; L = L->up) {

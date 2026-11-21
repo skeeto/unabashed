@@ -683,6 +683,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sh->psubs   = 0;
     sh->killsig   = 0;
     sh->errexited = 0;
+    sh->exitran  &= j->comsub;  // bash's comsub in an EXIT action runs none
     sh->levelfuncs = sh->funcdepth;
     sh->levellexer = sh->lexer;
     sh->redirs     = {};
@@ -2774,6 +2775,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->hardign  |= ignoredsigs(sh);
         sh->killsig   = 0;
         sh->errexited = 0;
+        sh->exitran   = 0;
         sh->levelfuncs = 0;
         sh->levellexer = sh->lexer;
         sh->redirs     = {};

@@ -465,6 +465,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->killsig  = 0;
     c->childsig = 0;
     c->errexited = 0;
+    c->exitran   = 0;
     c->levelfuncs = c->funcdepth;
     c->levellexer = 0;
     c->redirs     = {};
@@ -815,6 +816,7 @@ static Str procsubst(Shell *sh, Arena *a, Str body, b32 output)
     m->sh->noreport = 1;  // nothing it runs is reported, as in bash
     m->sh->subchild = 1;
     m->sh->stdinredir |= output;  // its input is the pipe
+    m->sh->exitran  = sh->exitran;  // in an EXIT action, none of its own
     Task *task = taskspawn(sh->sched, vprocmain, m, BIGSTACK);
     task->pid   = m->sh->bashpid;
     task->group = task->tag;  // tracing: not waited for in place

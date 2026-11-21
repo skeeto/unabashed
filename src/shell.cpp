@@ -908,6 +908,8 @@ struct Shell {
     i32      chldtraps;    // CHLD trap actions owed, one per child reaped
     b32      inchld;       // running one of them
     b32      execed;       // replaced by exec: no EXIT trap
+    b32      exitran;      // the EXIT action ran (or runs): not again,
+                           // though it stays listed, as bash
     b32      exitcalled;   // the exit builtin: EXIT trap in the function
     b32      execing;      // exec's program may replace the process
     i32      errexited;    // set -e is ending this level: ERREXIT_*
