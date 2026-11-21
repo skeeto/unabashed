@@ -1484,7 +1484,8 @@ static Str tempname(Shell *sh, Str name)
     return r.name.data && !r.hassub ? r.name : name;
 }
 
-static b32 pushtemp(Shell *sh, Arena scratch, Str name, Str value)
+// With noexport, it stays out of the environment (BASH_TRAPSIG).
+static b32 pushtemp(Shell *sh, Arena scratch, Str name, Str value, b32 noexport = 0)
 {
     Store *st = sh->store;
     name = tempname(sh, name);
@@ -1499,7 +1500,7 @@ static b32 pushtemp(Shell *sh, Arena scratch, Str name, Str value)
     n->depth = sh->funcdepth + 1;
     // As bash, a new variable exported and nothing more: its value is
     // the text, which only += computed with the old one's attributes
-    n->attrs = V_TEMP|V_EXPORT;
+    n->attrs = V_TEMP | (noexport ? 0u : (u32)V_EXPORT);
     jset(st, &v->top, n);
     n->str = sclone(st, value);
     sh->exportgen++;

@@ -295,11 +295,10 @@ static i32 runtrap(Shell *sh, i32 idx)
     sh->trapfuncs  = sh->funcdepth;
     sh->intrap++;
     if (idx >= TRAP_DEBUG) sh->trapbusy |= 1 << (idx-TRAP_DEBUG);
-    // BASH_TRAPSIG: the trap's number, while it runs
+    // BASH_TRAPSIG: the trap's number, while it runs (not over a
+    // readonly one, which stays as it is)
     Str num = fmti64(&a, idx);
-    pushtemp(sh, a, "BASH_TRAPSIG", num);
-    Value *v = lookup(sh, "BASH_TRAPSIG");
-    if (v) v->attrs &= ~V_EXPORT;
+    b32 trapsig = pushtemp(sh, a, "BASH_TRAPSIG", num, 1);
     sh->evaldepth++;
     b32 escaped = jmpset(e.jmp);
     if (!escaped) {
@@ -310,7 +309,7 @@ static i32 runtrap(Shell *sh, i32 idx)
     i32 own = sh->status;
     escleave(sh, &e);
     escrestore(sh, &e);
-    if (!escaped) {
+    if (!escaped && trapsig) {
         poptemp(sh, "BASH_TRAPSIG");  // an abandoned action's stays, as in bash
     }
     sh->line    = line;
@@ -672,16 +671,14 @@ static void runexittrap(Shell *sh, Arena)
     sh->trapstatus = status;
     sh->trapfuncs  = sh->funcdepth;
     sh->intrap++;
-    pushtemp(sh, scratch, "BASH_TRAPSIG", "0");
-    Value *v = lookup(sh, "BASH_TRAPSIG");
-    if (v) v->attrs &= ~V_EXPORT;
+    b32 trapsig = pushtemp(sh, scratch, "BASH_TRAPSIG", "0", 1);
     if (!jmpset(e.jmp)) {
         runsource(sh, cmd, sh->iname, scratch, 0, 1);  // as bash: line 1
         sh->status = status;
     }
     // However the action ended: the depth, intrap and the rest go back
     escresume(sh, &e);
-    poptemp(sh, "BASH_TRAPSIG");
+    if (trapsig) poptemp(sh, "BASH_TRAPSIG");
     sh->exiting = 1;
 }
 
