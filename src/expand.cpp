@@ -1227,8 +1227,9 @@ static Param getelems(X *x, Str name, Str sub, b32 length)
             r.bad = 1;
             return r;
         }
-        // the subscript (${ cmd; }) may have unset or replaced it
-        if (find(sub, "$") >= 0) arr = varray(sh, x->a, lookup(sh, name));
+        // The subscript may have run code (${ cmd; }, a[1]=7) that unset
+        // or replaced it, or in a subshell copied it to write it
+        arr = varray(sh, x->a, lookup(sh, name));
         HItem *t = arr && arr->bucket ? hfind(arr, key) : 0;
         if (t) {
             r.value = t->val;
@@ -1237,7 +1238,7 @@ static Param getelems(X *x, Str name, Str sub, b32 length)
         return r;
     }
     i64 idx = subindex(x, sub);
-    if (find(sub, "$") >= 0) arr = varray(sh, x->a, lookup(sh, name));  // as above
+    arr = varray(sh, x->a, lookup(sh, name));  // as above
     if (arr && arr->bucket) return r;
     if (idx < 0) {
         // counting back from the end of an array; a scalar has none
@@ -1624,18 +1625,9 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     if (!got) {
         p = hassub ? getelems(x, name, sub, length) : getparam(x, name);
     }
-    if (find(rest, "$") >= 0) {
-        // The operator's words may change the variable, as $((x=1)) or
-        // ${ unset x; } do, which frees the value: use copies
-        if (p.value.data) p.value = clone(x->a, p.value);
-        if (p.list && p.ln) {
-            Str *lv = alloc<Str>(x->a, p.ln);
-            for (iz k = 0; k < p.ln; k++) {
-                lv[k] = p.lv[k].data ? clone(x->a, p.lv[k]) : p.lv[k];
-            }
-            p.lv = lv;
-        }
-    }
+    // The operator's words may change the variable, as (x=1) or
+    // ${ unset x; } do, freeing the value: the expansion holds the store,
+    // so the value stays as it was until the word is done
     b32 elem = hassub && !allsub(sub);  // a single array element
 
     if (length) {
@@ -1878,10 +1870,23 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             return;
         }
         if (p.list && p.array) {
-            // ${a[@]:off:len} selects elements from index off on
+            // ${a[@]:off:len} selects elements from index off on. As
+            // bash, a negative offset counts back from the end as it was,
+            // but the elements are the array's once the offset and length
+            // are known, which may assign it (a[1]=7, ${ a=(x y); })
             b32 assoc = arr && arr->bucket;
-            Arith o = substrarith(x, uname, off);
             i64 top = assoc ? p.ln-1 : p.ln ? p.li[p.ln-1] : -1;
+            Arith o = substrarith(x, uname, off);
+            Arith l = {};
+            if (c2 >= 0) {
+                l = substrarith(x, uname, len);
+                if (l.value < 0) {
+                    Arena a = *x->a;
+                    Str msg = concat(&a, len, ": substring expression < 0");
+                    expansionerror(sh, a, msg);
+                }
+            }
+            p = hassub ? getelems(x, name, sub) : getparam(x, name);
             // bash's count of indices wraps for the largest top index,
             // and then a negative offset selects nothing
             b32 wraps = top == 0x7fffffffffffffff;
@@ -1892,35 +1897,35 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             }
             iz end = p.ln;
             if (c2 >= 0) {
-                Arith l = substrarith(x, uname, len);
-                if (l.value < 0) {
-                    Arena a = *x->a;
-                    Str msg = concat(&a, len, ": substring expression < 0");
-                    expansionerror(sh, a, msg);
-                }
                 end = l.value < p.ln-start ? start+(iz)l.value : p.ln;
             }
             putlist(x, p.lv+start, end-start, p.star, ctx);
             return;
         }
         if (p.list) {
-            // ${@:off:len} selects parameters; offset 0 is $0
-            Arith o = substrarith(x, name, off);
+            // ${@:off:len} selects parameters; offset 0 is $0. As for an
+            // array, set -- in the offset or length changes the list,
+            // but not the end a negative offset counts from
             iz n = sh->args.n + 1;
-            Str *all = alloc<Str>(x->a, n);
-            all[0] = dollar0(sh);
-            for (iz k = 0; k < sh->args.n; k++) all[k+1] = sh->args.v[k];
+            Arith o = substrarith(x, name, off);
             i64 start = o.value<0 ? n + o.value : o.value;
-            if (start < 0) start = n;  // out of range: nothing
-            if (start > n) start = n;
-            i64 end = n;
+            Arith l = {};
             if (c2 >= 0) {
-                Arith l = substrarith(x, name, len);
+                l = substrarith(x, name, len);
                 if (l.value < 0) {
                     Arena a = *x->a;
                     Str msg = concat(&a, len, ": substring expression < 0");
                     expansionerror(sh, a, msg);
                 }
+            }
+            n = sh->args.n + 1;
+            Str *all = alloc<Str>(x->a, n);
+            all[0] = dollar0(sh);
+            for (iz k = 0; k < sh->args.n; k++) all[k+1] = sh->args.v[k];
+            if (start < 0) start = n;  // out of range: nothing
+            if (start > n) start = n;
+            i64 end = n;
+            if (c2 >= 0) {
                 end = start+l.value<n ? start+l.value : n;
             }
             putlist(x, all+start, (iz)(end-start), p.star, ctx);
