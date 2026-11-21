@@ -224,11 +224,15 @@ static void checkwinsize(Shell *sh)
     Handle h = sh->sched->err;
     Tty    t = os_tty(sh->os, h, h, TTY_QUERY);
     if (t.err || t.rows<1 || t.cols<1) return;
-    Arena a = *scratchat(sh, sh->capdepth+1);
+    // An assignment may run a command substitution (a nameref's
+    // subscript) at the next depth: claim this one
+    i32   depth = ++sh->capdepth;
+    Arena a     = *scratchat(sh, depth);
     Str num = fmti64(&a, t.rows);
     setvar(sh, a, "LINES",   num);
     Str num2 = fmti64(&a, t.cols);
     setvar(sh, a, "COLUMNS", num2);
+    sh->capdepth = depth - 1;
 }
 
 // Before memory holding the BASH_COMMAND node is reused, keep its text
