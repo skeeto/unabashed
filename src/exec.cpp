@@ -3070,9 +3070,11 @@ struct Assign {
     Str name;
     Str value;
     b32 append;
+    Str bound;  // a temporary binding's value, from tempvalue once
 };
 
-static Assign splitassign(Shell *sh, Arena *a, Str text)
+// Without expand, only the name: the value is the text as written.
+static Assign splitassign(Shell *sh, Arena *a, Str text, b32 expand = 1)
 {
     Assign r = {};
     iz eq = assignment(text, 0);
@@ -3081,7 +3083,8 @@ static Assign splitassign(Shell *sh, Arena *a, Str text)
         r.append = 1;
         r.name   = cuttail(r.name, 1);
     }
-    r.value = expandstring(sh, a, cuthead(text, eq+1), XC_ASSIGN);
+    r.value = cuthead(text, eq+1);
+    if (expand) r.value = expandstring(sh, a, r.value, XC_ASSIGN);
     return r;
 }
 
@@ -3413,27 +3416,45 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
 
     if (tb) tb->names = alloc<Str>(a, nassign);  // see runsimple
 
-    // Expand assignment values now (bash does it after the words)
-    Assign *as = alloc<Assign>(a, nassign);
+    // Expand assignment values now (bash does it after the words), and
+    // compute each binding's value once, in order, as bash's
+    // assign_in_env: a readonly variable is reported before its value
+    // is expanded, and is not bound
+    Assign *as     = alloc<Assign>(a, nassign);
+    b32     rofail = 0;
     if (nassign) {
         // Each sees those before it, bound for the time being, as in
-        // K=x A=${K#?} cmd
-        Word *w = assigns;
+        // K=x A=${K#?} cmd or X=1 X+=2 cmd
+        Word *w    = assigns;
+        iz    kept = 0;
         sh->nolocwarn = 1;  // not yet the command's binding
         for (iz i = 0; i < nassign; i++, w = w->next) {
-            as[i] = splitassign(sh, a, w->text);
-            b32 later = 0;
-            for (Word *v = w->next; v && !later; v = v->next) {
-                later = find(v->text, "$")>=0 || find(v->text, "`")>=0;
+            Assign t   = splitassign(sh, a, w->text, 0);
+            Value *cur = lookup(sh, t.name);
+            if (cur && (cur->attrs & V_READONLY)) {
+                Str msg = concat(&scratch, t.name, ": readonly variable");
+                shellerror(sh, scratch, msg);
+                rofail = 1;
+                continue;
             }
-            Value *cur = lookup(sh, as[i].name);
-            if (later && !(cur && (cur->attrs & V_READONLY)) && validvarname(as[i].name)) {
-                Str value = tempvalue(sh, a, as[i]);
-                if (pushtemp(sh, *a, as[i].name, value)) {
-                    tb->names[tb->n++] = as[i].name;
-                }
+            t = splitassign(sh, a, w->text);
+            b32 valid = validvarname(t.name);
+            if (valid) t.bound = tempvalue(sh, a, t);
+            as[kept++] = t;
+            // A later word reads it by expansion, or a later += by the
+            // old value or by arithmetic
+            b32 later = 0;
+            iz  left  = nassign - i - 1;
+            for (Word *v = w->next; v && !later; v = v->next, left--) {
+                later = find(v->text, "$")>=0 || find(v->text, "`")>=0;
+                iz eq = left>0 ? assignment(v->text, 0) : 0;
+                later |= eq>0 && v->text[eq-1]=='+';
+            }
+            if (later && valid && pushtemp(sh, *a, t.name, t.bound)) {
+                tb->names[tb->n++] = t.name;
             }
         }
+        nassign = kept;
         poptemps(sh, tb);
         sh->nolocwarn = 0;
     }
@@ -3454,7 +3475,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
 
     if (sh->opt[O_XTRACE]) {
         for (iz i = 0; i < nassign; i++) {
-            traceassign(sh, scratch, as[i].name, as[i].append, as[i].value);
+            traceassign(sh, scratch, as[i].name, 0, as[i].bound);  // as bound
         }
         tracewords(sh, scratch, argv.data, argv.len);
     }
@@ -3522,19 +3543,13 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         if (!sh->opt[O_POSIX] || !haspath(sh, name)) fn = findfunc(sh, name);
     }
 
-    if (posixfatal(sh)) {
-        // As bash, an assignment that fails ends the shell before a
-        // special builtin, or abandons the command before another
-        for (iz i = 0; i < nassign; i++) {
-            Value *cur = lookup(sh, as[i].name);
-            if (cur && (cur->attrs & V_READONLY)) {
-                Str msg = concat(&scratch, as[i].name, ": readonly variable");
-                shellerror(sh, scratch, msg);
-                unwind(sh, mark);
-                sh->status = 1;
-                escape(sh, special&&!fn ? ESC_FATAL : ESC_DISCARD);
-            }
-        }
+    if (posixfatal(sh) && rofail) {
+        // As bash, an assignment that failed (reported as it expanded)
+        // ends the shell before a special builtin, or abandons the
+        // command before another
+        unwind(sh, mark);
+        sh->status = 1;
+        escape(sh, special&&!fn ? ESC_FATAL : ESC_DISCARD);
     }
 
     if (fn || bi) {
@@ -3542,13 +3557,13 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         b32 persist = special && sh->opt[O_POSIX];
         for (iz i = 0; i < nassign; i++) {
             if (persist) {
-                i32 flags = as[i].append ? SV_APPEND : 0;
-                setvar(sh, scratch, as[i].name, as[i].value, flags);
+                // the binding's value, as bash merges it into the shell
+                setvar(sh, scratch, as[i].name, as[i].bound, 0);
                 Value *v = lookup(sh, as[i].name);
                 if (v && (v->attrs & V_TEMP)) {
                     // as bash, also past a function call's temporary
                     // binding, so the value outlives the call
-                    setvar(sh, scratch, as[i].name, as[i].value, flags|SV_UNDERTEMP);
+                    setvar(sh, scratch, as[i].name, as[i].bound, SV_UNDERTEMP);
                 }
                 // and exported, as the temporary binding bash makes and
                 // then keeps is
@@ -3563,7 +3578,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             } else {
                 // One that fails (readonly) is not bound, nor unbound
                 // after: that would unbind an outer binding of the name
-                Str value = tempvalue(sh, &scratch, as[i]);
+                Str value = as[i].bound;
                 if (pushtemp(sh, scratch, as[i].name, value)) {
                     tb->names[tb->n++] = as[i].name;
                 }
@@ -3639,7 +3654,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             Str tname = tempname(sh, as[i].name);  // what a nameref names
             Value *cur = rawlookup(sh, tname);
             if (cur && (cur->attrs & V_READONLY)) continue;  // its binding fails below
-            Str entry = concat3(a, tname, "=", tempvalue(sh, a, as[i]));
+            Str entry = concat3(a, tname, "=", as[i].bound);
             b32 replaced = 0;
             for (iz k = 0; k < env.len; k++) {
                 Cut c = cut(env[k], '=');
@@ -3658,7 +3673,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         iz   npushed = 0;
         sh->nolocwarn = 1;
         for (iz i = 0; i < nassign; i++) {
-            Str value = tempvalue(sh, &scratch, as[i]);
+            Str value = as[i].bound;
             if (pushtemp(sh, scratch, as[i].name, value)) {
                 names[npushed++]   = as[i].name;
                 tb->names[tb->n++] = as[i].name;
