@@ -30,6 +30,9 @@ static void     execute(Shell *, Node *, Arena);
 static void     showps0(Shell *);  // unabashed.cpp
 static Str      histline(void *, Lexer *, Str, b32);  // history.cpp
 static void     histnative(Shell *);  // history.cpp
+[[gnu::noinline]]
+static i32      runsource1(Shell *, Str src, Str iname, Arena, b32 reader, i32 line,
+                           b32 (*fill)(void *, Lexer *), void *fillctx, b32 comsub, b32 hist);
 static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i32 line = 1,
                           b32 (*fill)(void *, Lexer *) = 0, void *fillctx = 0,
                           b32 comsub = 0, b32 hist = 0);
@@ -242,6 +245,32 @@ static void keepcmdtext(Shell *sh, byte *beg, byte *end)
     sh->cmdnode = 0;
     if ((byte *)old.data >= st->mark) {
         sfreestr(st, old);
+    }
+}
+
+// BASH_COMMAND as it was, to put back once nested code has run (as
+// bash's parse_and_execute does), however it ended: the node, or once
+// it may be freed, a copy of its text in a.
+struct CmdSave {
+    Node *node;
+    Str   text;
+};
+
+static CmdSave savecmd(Shell *sh, Arena *a)
+{
+    CmdSave c = {};
+    c.node = sh->cmdnode;
+    if (!c.node) c.text = clone(a, sh->cmdtext);
+    return c;
+}
+
+static void restorecmd(Shell *sh, CmdSave c)
+{
+    sh->cmdnode = c.node;
+    if (!c.node) {
+        Store *st = sh->store;
+        if ((byte *)sh->cmdtext.data >= st->mark) sfreestr(st, sh->cmdtext);
+        sh->cmdtext = sclone(st, c.text);
     }
 }
 
@@ -4850,8 +4879,38 @@ static void checkcomplist(Shell *sh, Arena scratch, Str body)
 // ${ ...; } body, whose aliases the parser expanded only in POSIX mode:
 // as in bash, it is parsed again with aliases only outside POSIX mode,
 // until a command changes expand_aliases.
+//
+// Nested in another parse (eval, source, a trap action, ${ cmd; }, a
+// command substitution), BASH_COMMAND goes back to the command that ran
+// it, as bash's parse_and_execute does, and the parser and its name go
+// back too, however it ends: the escape point for that is here, with
+// the parse in runsource1, whose frame it would otherwise grow.
 static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i32 line,
                      b32 (*fill)(void *, Lexer *), void *fillctx, b32 comsub, b32 hist)
+{
+    if (reader || !sh->lexer) {
+        return runsource1(sh, src, iname, scratch, reader, line, fill, fillctx, comsub, hist);
+    }
+    Lexer  *outer = sh->lexer;
+    Str     oname = sh->iname;
+    CmdSave cmd   = savecmd(sh, &scratch);
+    Escape *e     = alloc<Escape>(&scratch);
+    escenter(sh, e);
+    if (jmpset(e->jmp)) {
+        escleave(sh, e);
+        sh->lexer = outer;
+        sh->iname = oname;
+        restorecmd(sh, cmd);
+        escape(sh, e->why);
+    }
+    i32 status = runsource1(sh, src, iname, scratch, reader, line, fill, fillctx, comsub, hist);
+    escleave(sh, e);
+    restorecmd(sh, cmd);
+    return status;
+}
+
+static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i32 line,
+                      b32 (*fill)(void *, Lexer *), void *fillctx, b32 comsub, b32 hist)
 {
     byte *beg = scratch.beg;
     byte *end = scratch.mem ? scratch.mem->limit : scratch.end;
@@ -5029,7 +5088,9 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             if (!outer) arenatrim(L->a, floor);
         }
     }
-    keepcmdtext(sh, beg, end);
+    if (reader || !outer) {
+        keepcmdtext(sh, beg, end);  // else runsource puts back its own
+    }
     sh->lexer = outer;
     sh->iname = oname;
     return sh->status;
