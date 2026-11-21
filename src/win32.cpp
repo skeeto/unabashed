@@ -2872,6 +2872,7 @@ static void plt_decommit(Os *, byte *p, iz len)
 
 static b32 plt_write(Os *os, Handle h, u8 *buf, iz len)
 {
+    if (h == BADHANDLE) return 0;  // absent (see plt_dup)
     Wobj *w    = lookup(os, h);
     i32   mode = 0;
 
@@ -2967,6 +2968,7 @@ static iz rawread(uz h, u8 *buf, iz len)
 static iz plt_read(Os *os, Handle h, u8 *buf, iz len)
 {
     flushw(os);
+    if (h == BADHANDLE) return -1;  // absent (see plt_dup)
     Wobj *w = lookup(os, h);
     i32   mode = 0;
     if (!w && GetConsoleMode(h, &mode)) w = track(os, h);
@@ -3240,6 +3242,9 @@ static void plt_close(Os *os, Handle h)
 static Handle plt_dup(Os *os, Handle h)
 {
     flushw(os);
+    // An absent descriptor's BADHANDLE is also the pseudo-handle for
+    // this process, which DuplicateHandle would gladly duplicate
+    if (h == BADHANDLE) return BADHANDLE;
     uz self = GetCurrentProcess();
     uz r    = 0;
     if (!DuplicateHandle(self, h, self, &r, 0, 0, DUPLICATE_SAME_ACCESS)) {
@@ -3924,9 +3929,9 @@ static Spawned libstartproc(Os *os, Arena scratch, Spawn *s, Str16 app,
     }
     StartupInfoEx sx = {};
     sx.si.flags  = STARTF_USESTDHANDLES;
-    sx.si.input  = dups[0];
-    sx.si.output = dups[1];
-    sx.si.error  = dups[2];
+    sx.si.input  = dups[0] ? dups[0] : INVALID_HANDLE_VALUE;  // as startproc
+    sx.si.output = dups[1] ? dups[1] : INVALID_HANDLE_VALUE;
+    sx.si.error  = dups[2] ? dups[2] : INVALID_HANDLE_VALUE;
     sx.si.show   = (i32)(blob.len << 16);  // cbReserved2
     sx.si.reserved2 = blob.data;
     if (os->sharecon) {
@@ -4115,12 +4120,16 @@ static Spawned startproc(Os *os, Arena scratch, Spawn *s, b32 exec, uz *job)
         blob = encodecrtfds(&scratch, c, top, width);
     }
 
+    // A closed descriptor is INVALID_HANDLE_VALUE, not null: a program
+    // given a console of its own (CREATE_NO_WINDOW) would find that
+    // console's handles in place of null ones (Windows 8 and later), and
+    // a cat with no input would wait on its hidden console forever
     StartupInfo si = {};
     si.cb     = sizeof(si);
     si.flags  = STARTF_USESTDHANDLES;
-    si.input  = dups[0];
-    si.output = dups[1];
-    si.error  = dups[2];
+    si.input  = dups[0] ? dups[0] : INVALID_HANDLE_VALUE;
+    si.output = dups[1] ? dups[1] : INVALID_HANDLE_VALUE;
+    si.error  = dups[2] ? dups[2] : INVALID_HANDLE_VALUE;
     si.show   = (i32)(blob.len << 16);  // cbReserved2
     si.reserved2 = blob.data;
     ProcessInfo pi = {};

@@ -45,7 +45,7 @@ Useful dwCreationFlags:
 Handle inheritance:
 - bInheritHandles=TRUE makes the child inherit every handle marked inheritable. Handle values are identical in the child.
 - STARTF_USESTDHANDLES sets the child's hStdInput, hStdOutput and hStdError. The docs require those handles to be inheritable and bInheritHandles=TRUE.
-- A closed fd (bash `>&-`) is passed as NULL or INVALID_HANDLE_VALUE.
+- A closed fd (bash `>&-`) is passed as INVALID_HANDLE_VALUE, as Git Bash does. Not NULL: a console program that gets a console of its own (CREATE_NO_WINDOW, or a detached parent) finds that console's handles in place of NULL ones (observed on Windows 11), so a `cat` with no input waits on its hidden console forever. INVALID_HANDLE_VALUE is left alone, and reads and writes on it fail with EBADF.
 - The same value may arrive as two standard handles (MSDN's redirection sample passes one pipe as stdout and stderr): each descriptor needs its own duplicate, or closing one closes the other.
 - Before Win8, console handles are pseudo-handles (low bits == 3, e.g. 3/7/11), not kernel objects. DuplicateHandle special-cases them, so they can be duplicated and passed via STARTF_USESTDHANDLES, but they cannot be waited on or put in a HANDLE_LIST.
 - Recommended discipline for a single-threaded spawner:

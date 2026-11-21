@@ -1,0 +1,13 @@
+cat 1
+pipeline 1 0
+subshell 1
+read 1
+null 0
+dup 1
+closed 1
+status 0
+sh: line 1: echo: write error: Bad file descriptor
+echo 1
+program 1
+status 0
+status 0
