@@ -3737,7 +3737,10 @@ static CItem assocword(Shell *sh, Arena *a, Str w, b32 decl)
     if (it.append) lhs = cuttail(lhs, 1);
     X *x   = newx(sh, a);
     it.key = subkey(x, span(lhs.data+1, lhs.data+lhs.len-1));
-    it.val = expandstring(sh, a, cuthead(w, eq+1), XC_ASSIGN);
+    if (decl || it.key.len) {
+        // bash does not expand a bad key's value, except from declare
+        it.val = expandstring(sh, a, cuthead(w, eq+1), XC_ASSIGN);
+    }
     return it;
 }
 
@@ -3775,9 +3778,69 @@ static void tracecompound(Shell *sh, Arena *a, Str name, b32 append, Slice<Str> 
     traceline(sh, *a, line);
 }
 
-// Assign name=(body). From declare, words in messages appear quoted, as
-// bash shows them after requoting, and xtrace shows them so.
-static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flags, b32 decl = 0)
+// The words of name=(...) for an indexed array, every one expanded:
+// [sub]=value as an assignment, any other split and globbed.
+static Slice<CItem> indexeditems(Shell *sh, Arena *a, Slice<Str> words)
+{
+    Slice<CItem> items = {};
+    for (iz k = 0; k < words.len; k++) {
+        Str w  = words[k];
+        iz  eq = assignment(w, 1);
+        if (eq) {
+            CItem it = {};
+            Str lhs = takehead(w, eq);
+            it.append = lhs.len && lhs[lhs.len-1]=='+';
+            if (it.append) lhs = cuttail(lhs, 1);
+            it.word   = w;
+            Str raw   = span(lhs.data+1, lhs.data+lhs.len-1);
+            it.hassub = 1;
+            it.badsub = allsub(raw) ? 1 : !raw.len ? 2 : 0;
+            // Unlike a[sub]=v, quotes in the subscript are removed.
+            // bash then removes them once more, which drops each
+            //  (its internal escape) before the next byte. As in
+            // bash, the subscript expands with the words, before any
+            // is evaluated: [n=1]=a [$n]=b uses the old n.
+            X  *x   = newx(sh, a);
+            Str sub = expandword(x, raw, 0);
+            if (find(sub, "") >= 0) {
+                Buf b(a, sub.len);
+                for (iz i = 0; i < sub.len; i++) {
+                    if (sub[i]==1 && i+1<sub.len) i++;
+                    putbyte(&b, sub[i]);
+                }
+                sub = finish(&b);
+            }
+            it.key = sub;
+            it.val = expandstring(sh, a, cuthead(w, eq+1), XC_ASSIGN);
+            items = push(a, items, it);
+            continue;
+        }
+        Word one = {};
+        one.text = w;
+        Slice<Str> f = expandwords(sh, a, &one, 0);
+        for (iz j = 0; j < f.len; j++) {
+            CItem it = {};
+            it.word = w;
+            it.val  = f[j];
+            items = push(a, items, it);
+        }
+    }
+    return items;
+}
+
+// A declaration's expanded word in a key-value list: [key]=value as
+// bash then sees it, requoted and expanded again.
+static Str kvword(Arena *a, CItem it)
+{
+    if (!it.hassub) return it.val;
+    Str lhs = concat3(a, "[", it.key, it.append ? Str("]+=") : Str("]="));
+    return concat(a, lhs, it.val);
+}
+
+// Assign name=(body). From declare (decl 1, or 2 without -A), words in
+// messages appear quoted, as bash shows them after requoting, and xtrace
+// shows them so.
+static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flags, i32 decl = 0)
 {
     Arena *a  = &scratch;
     Store *st = sh->store;
@@ -3810,49 +3873,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
     if (!(cur && cur->arr && cur->arr->bucket)) {
         // Indexed: expand every word first
         Hidden hid = hidelocal(sh, name, flags);
-        Slice<CItem> items = {};
-        for (iz k = 0; k < words.len; k++) {
-            Str w  = words[k];
-            iz  eq = assignment(w, 1);
-            if (eq) {
-                CItem it = {};
-                Str lhs = takehead(w, eq);
-                it.append = lhs.len && lhs[lhs.len-1]=='+';
-                if (it.append) lhs = cuttail(lhs, 1);
-                it.word   = w;
-                Str raw   = span(lhs.data+1, lhs.data+lhs.len-1);
-                it.hassub = 1;
-                it.badsub = allsub(raw) ? 1 : !raw.len ? 2 : 0;
-                // Unlike a[sub]=v, quotes in the subscript are removed.
-                // bash then removes them once more, which drops each
-                //  (its internal escape) before the next byte. As in
-                // bash, the subscript expands with the words, before any
-                // is evaluated: [n=1]=a [$n]=b uses the old n.
-                X  *x   = newx(sh, a);
-                Str sub = expandword(x, raw, 0);
-                if (find(sub, "") >= 0) {
-                    Buf b(a, sub.len);
-                    for (iz i = 0; i < sub.len; i++) {
-                        if (sub[i]==1 && i+1<sub.len) i++;
-                        putbyte(&b, sub[i]);
-                    }
-                    sub = finish(&b);
-                }
-                it.key = sub;
-                it.val = expandstring(sh, a, cuthead(w, eq+1), XC_ASSIGN);
-                items = push(a, items, it);
-                continue;
-            }
-            Word one = {};
-            one.text = w;
-            Slice<Str> f = expandwords(sh, a, &one, 0);
-            for (iz j = 0; j < f.len; j++) {
-                CItem it = {};
-                it.word = w;
-                it.val  = f[j];
-                items = push(a, items, it);
-            }
-        }
+        Slice<CItem> items = indexeditems(sh, a, words);
         if (trace) {
             for (iz k = 0; k < items.len; k++) {
                 CItem it = items[k];
@@ -3908,35 +3929,52 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
     Array *own = append ? 0 : dst;
     u32    at  = val->attrs;
     b32    failed = 0;
-    b32    early  = !append || decl;
     Hidden hid = hidelocal(sh, name, flags);
-    if (words.len && !assignment(words[0], 1)) {
-        // key value key value ..., each word expanded as an assignment
-        // value is: no splitting, no globbing
-        Slice<Str> f = {};
-        for (iz k = 0; early && k < words.len; k++) {
-            f = push(a, f, expandstring(sh, a, words[k], XC_ASSIGN));
-            if (trace) traced = push(a, traced, singlequote(a, f[k]));
+    // From declare every word expands first, as bash's expand_oneword:
+    // as an indexed array's (split, globbed, and an empty unquoted one
+    // dropped) unless the declaration says -A (decl 2).
+    Slice<CItem> items = {};
+    b32 kvpair = 0;
+    if (decl == 2) {
+        items  = indexeditems(sh, a, words);
+        kvpair = items.len && !items[0].hassub;
+    } else {
+        kvpair = words.len && !assignment(words[0], 1) && !startswith(words[0], "[");
+        for (iz k = 0; decl && k < words.len; k++) {
+            if (!kvpair) {
+                items = push(a, items, assocword(sh, a, words[k], 1));
+                continue;
+            }
+            CItem it = {};
+            it.word = words[k];
+            it.val  = expandstring(sh, a, words[k], XC_ASSIGN);
+            items = push(a, items, it);
         }
-        if (trace) tracecompound(sh, a, given, append, traced);
-        iz n = words.len;
+    }
+    if (trace) {
+        for (iz k = 0; k < items.len; k++) {
+            CItem it = items[k];
+            traced = push(a, traced, traceitem(a, it.hassub, it.key, it.append, it.val));
+        }
+        tracecompound(sh, a, given, append, traced);
+    }
+    iz n = decl ? items.len : words.len;
+    if (kvpair) {
+        // key value key value ..., each word expanded as an assignment
+        // value is: no splitting, no globbing. As in bash, they expand
+        // pair by pair, a bad key reported and its value skipped.
         for (iz k = 0; k < n; k += 2) {
-            Str key, v;
-            if (!early) {
-                key = expandstring(sh, a, words[k], XC_ASSIGN);
-                v   = k+1<n ? expandstring(sh, a, words[k+1], XC_ASSIGN) : Str("");
-            } else {
-                key = f[k];
-                v   = k+1<n ? f[k+1] : Str("");
+            Str key = decl ? kvword(a, items[k]) : expandstring(sh, a, words[k], XC_ASSIGN);
+            if (!key.len) {
+                // declare shows the word requoted
+                badarraysub(sh, scratch, decl ? singlequote(a, key) : words[k]);
+                continue;
+            }
+            Str v = Str("");
+            if (k+1 < n) {
+                v = decl ? kvword(a, items[k+1]) : expandstring(sh, a, words[k+1], XC_ASSIGN);
             }
             if (append) dst = appendtarget(sh, scratch, name, flags, hid, dst, &own);
-            if (!key.len) {
-                // declare shows the word requoted, and goes on
-                badarraysub(sh, scratch, decl ? singlequote(a, key) : words[k]);
-                if (decl) continue;
-                failed = 1;
-                break;
-            }
             v = assignedvalue(sh, a, at, {}, v, 0);
             if (append && (at & V_INTEGER)) {
                 // the evaluation may have run code too
@@ -3945,14 +3983,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
             hput(st, dst, key, sclone(st, v));
         }
     } else {
-        Slice<CItem> items = {};
-        for (iz k = 0; decl && k < words.len; k++) {
-            items = push(a, items, assocword(sh, a, words[k], 1));
-            CItem it = items[k];
-            if (trace) traced = push(a, traced, traceitem(a, it.hassub, it.key, it.append, it.val));
-        }
-        if (trace) tracecompound(sh, a, given, append, traced);
-        for (iz k = 0; k < words.len; k++) {
+        for (iz k = 0; k < n; k++) {
             CItem it = decl ? items[k] : assocword(sh, a, words[k], 0);
             if (!it.hassub) {
                 Str shown = decl ? singlequote(a, it.val) : it.word;

@@ -1653,7 +1653,8 @@ static Str declcompound(Shell *sh, Arena scratch, Word *cmd, Word *w)
     // as bash, no builtin named in an element's integer error
     Str intwho = sh->intwho;
     sh->intwho = {};
-    b32 ok = assigncompound(sh, scratch, vname, body, flags, 1);
+    // without -A the words expand as an indexed array's, as bash's
+    b32 ok = assigncompound(sh, scratch, vname, body, flags, assoc ? 1 : 2);
     sh->intwho = intwho;
     if (!ok) {
         sh->status = 1;
