@@ -1685,8 +1685,7 @@ static i32 b_wait(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
     }
     if (var.data) {
-        Str rn, rs;
-        if (!validvarname(var) && !splitrefonce(sh, var, &rn, &rs)) {
+        if (!assignablename(sh, var)) {
             notident(sh, scratch, "wait", var);
             return 1;
         }

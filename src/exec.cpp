@@ -3959,7 +3959,7 @@ static b32 envvarset(void *ctx, Str name)
         return n.value>=0 && n.value<=sh->args.n;
     }
     Str rn, rs;
-    if (splitref(name, &rn, &rs)) {
+    if (splitref(name, &rn, &rs) && rs.len) {  // a[] is no element
         // In [[ ]], as bash 5.3, the subscript is not expanded again: it
         // was expanded once, its result backslash-quoted
         Arena a = *((TestCtx *)ctx)->a;

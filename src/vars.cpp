@@ -1141,11 +1141,12 @@ static b32 assignelem(Shell *, Arena, Str name, Str sub, Str lhs, Str value, i32
 static void hashenter(Shell *, Str name, Str path, uz hits);  // exec.cpp
 static Value *setattrs(Shell *, Str name, u32 on, u32 off);
 
-// Can a nameref name this: a variable or an array element?
+// Can a nameref name this: a variable or an array element? As bash's
+// valid_array_reference, a[] names no element.
 static b32 validnameref(Str s)
 {
     Str rn, rs;
-    return validvarname(s) || splitref(s, &rn, &rs);
+    return validvarname(s) || (splitref(s, &rn, &rs) && rs.len);
 }
 
 // The variable an array assignment to name goes to, after namerefs, or

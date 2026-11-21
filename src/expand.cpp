@@ -1436,6 +1436,14 @@ static b32 splitrefonce(Shell *sh, Str s, Str *name, Str *sub)
     return onewordarg(sh, s) && splitrefassoc(sh, s, name, sub);
 }
 
+// May read, printf -v or wait -p assign to s: a name, or an element
+// with a subscript (bash's valid_array_reference: a[] is no element)?
+static b32 assignablename(Shell *sh, Str s)
+{
+    Str rn, rs;
+    return validvarname(s) || (splitrefonce(sh, s, &rn, &rs) && rs.len);
+}
+
 // The list for ${name[@]@A}: declare, its options, and the assignment.
 static iz assignwords(X *x, Str name, Str *out)
 {
@@ -1569,7 +1577,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     b32 hassub = 0;
     if (i<s.len && s[i]=='[' && identstart(name[0])) {
         iz e = skipsubscript(s, i);
-        if (e == s.len) badsubst(x, whole);
+        if (e==s.len || e==i+1) badsubst(x, whole);  // nor ${a[]}
         sub    = span(s.data+i+1, s.data+e);
         hassub = 1;
         i = e + 1;
@@ -1651,7 +1659,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         for (iz k = 0; !ok && k < v.len && digit(v[k]); k++) {
             ok = k == v.len-1;
         }
-        if (!ok && splitref(v, &rn, &rs)) {
+        if (!ok && splitref(v, &rn, &rs) && rs.len) {
             ok     = 1;
             v      = rn;
             sub    = rs;

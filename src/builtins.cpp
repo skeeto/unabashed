@@ -253,8 +253,7 @@ static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         var = args[i+1];
         i += 2;
-        Str rn, rs;
-        if (!validvarname(var) && !splitrefonce(sh, var, &rn, &rs)) {
+        if (!assignablename(sh, var)) {
             notident(sh, scratch, "printf", var);  // before any output
             return 2;
         }
@@ -1260,8 +1259,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 status = 1;
                 continue;
             }
-            Str sn, ss;
-            b32 self = eq<a.len && (val==vname || (splitref(val, &sn, &ss) && sn==vname));
+            Str sn, ss;  // r[] is not r, but no name at all
+            b32 self = eq<a.len && (val==vname || (splitref(val, &sn, &ss) && ss.len && sn==vname));
             if (self && !sh->funcdepth) {
                 Str msg = concat(&scratch, vname, ": nameref variable self references not allowed");
                 builtinerror(sh, scratch, name, msg);
@@ -1275,15 +1274,23 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 shellerror(sh, scratch, msg);
             }
             Value *old = rawlookup(sh, vname);
+            Str    nv  = val;  // the name it is to have
             if (append && old && (old->attrs & V_NAMEREF) && old->str.len) {
                 // ref+=x appends to the name, which may come back to ref
-                Str nv = concat(&scratch, old->str, val);
-                if (nv==vname || (splitref(nv, &sn, &ss) && sn==vname)) {
+                nv = concat(&scratch, old->str, val);
+                if (nv==vname || (splitref(nv, &sn, &ss) && ss.len && sn==vname)) {
                     Str msg = concat(&scratch, vname, ": nameref variable self references not allowed");
                     shellerror(sh, scratch, msg);
                     status = 1;
                     continue;
                 }
+            }
+            if (append && nv.len && !validnameref(nv)) {
+                // as bash, naming only the text appended
+                Str msg = concat3(&scratch, "`", val, "': not a valid identifier");
+                builtinerror(sh, scratch, name, msg);
+                status = 1;
+                continue;
             }
             if (val.len && !append && !validnameref(val)) {
                 Str msg = concat3(&scratch, "`", val, "': invalid variable name for name reference");
@@ -1713,7 +1720,8 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
         Cut br = cut(name, '[');
         if (br.ok) base = br.head;
         Str rn0, rs0;
-        b32 valid = validvarname(base) && (!br.ok || splitref(name, &rn0, &rs0));
+        // a[] is no element (bash's valid_array_reference)
+        b32 valid = validvarname(base) && (!br.ok || (splitref(name, &rn0, &rs0) && rs0.len));
         if (!valid && vars) {
             if (compflag(sh, args, i) == 2) {
                 // its subscript was quoted as it expanded: show it bare
@@ -3119,8 +3127,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     Task *self = sh->sched->cur;
     i64 deadline = timeout ? os_now(sh->os) + timeout : 0;
     // The first name is checked now, the rest as they are assigned
-    Str rn, rs;
-    if (i<nargs && !validvarname(args[i]) && !splitrefonce(sh, args[i], &rn, &rs)) {
+    if (i<nargs && !assignablename(sh, args[i])) {
         notident(sh, scratch, "read", args[i]);
         return 1;
     }
@@ -3456,7 +3463,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (!inifs) break;
             pos++;
         }
-        if (!validvarname(args[i+v]) && !splitrefonce(sh, args[i+v], &rn, &rs)) {
+        if (!assignablename(sh, args[i+v])) {
             notident(sh, scratch, "read", args[i+v]);
             return 1;
         }
