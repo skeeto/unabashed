@@ -369,8 +369,9 @@ static void delbgstat(Shell *sh, i64 pid)
 {
     for (Bgstat **p = &sh->bgstats; *p; p = &(*p)->next) {
         if ((*p)->pid == pid) {
+            // In a command substitution the list is its parent's
             Bgstat *b = *p;
-            *p = b->next;
+            jset(sh->store, p, b->next);
             sfree(sh->store, b, sizeof(Bgstat));
             return;
         }
