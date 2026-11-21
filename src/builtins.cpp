@@ -215,8 +215,8 @@ static void pferror(void *ctx, Str msg)
     builtinerror(c->sh, *c->a, "", msg);  // msg names printf
 }
 
-// Might a printf format hold a %(...)T, flags, width and precision
-// included? Then it needs the time zone.
+// Might a printf format hold a %(...)T, flags, width, precision and
+// length modifiers included? Then it needs the time zone.
 static b32 hastimeconv(Str fmt)
 {
     for (iz i = 0; i < fmt.len; i++) {
@@ -225,7 +225,9 @@ static b32 hastimeconv(Str fmt)
         for (; j < fmt.len; j++) {
             u8 c = fmt[j];
             b32 flag = c=='-' || c=='+' || c==' ' || c=='#' || c=='\'' ||
-                       c=='.' || c=='*' || (c>='0' && c<='9');
+                       c=='.' || c=='*' || (c>='0' && c<='9') ||
+                       c=='h' || c=='j' || c=='l' || c=='L' || c=='t' ||
+                       c=='z';
             if (!flag) break;
         }
         if (j<fmt.len && fmt[j]=='(') return 1;
