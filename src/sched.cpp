@@ -360,6 +360,37 @@ static void taskinterrupt(Sched *s, Task *t, b32 all)
     if (taskfail(s, t, E_INTR)) t->intr = 1;
 }
 
+// What a read arms on its task for its own wait: its deadline and
+// interruptibility. A trap action run in the middle of the read waits
+// with them put aside (taskdisarm), as bash's read timer and EINTR
+// apply to the read's own system call only.
+struct Armed {
+    i64 deadline;
+    b32 introk;
+    b32 anysig;
+};
+
+static Armed taskdisarm(Sched *s)
+{
+    Task *t = s->cur;
+    Armed r = {t->deadline, t->introk, t->anysig};
+    t->deadline = 0;
+    t->introk   = 0;
+    t->anysig   = 0;
+    return r;
+}
+
+// Put back what taskdisarm put aside. True if the deadline passed
+// meanwhile: as bash's timer, it kept running through the action.
+static b32 taskrearm(Sched *s, Armed a)
+{
+    Task *t = s->cur;
+    t->deadline = a.deadline;
+    t->introk   = a.introk;
+    t->anysig   = a.anysig;
+    return a.deadline && os_now(s->os)>=a.deadline;
+}
+
 // Fail the wait of a blocked task, waking it: its pipe wait fails, its
 // OS operation is withdrawn with err, a join returns early. False if
 // the operation cannot be withdrawn.

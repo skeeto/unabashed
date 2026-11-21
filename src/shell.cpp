@@ -1230,10 +1230,24 @@ static iz fileread(Shell *sh, File *f, u8 *buf, iz len)
                                  : piperead(sh->sched, f->pipe, buf, len);
             // A signal may have failed the read: one that kills this
             // level does so, the read builtin runs trap actions at
-            // once, as bash, and the read resumes
-            if (n>=0 || !sigtaken(sh)) return n;
-            if (sh->intrread) runsigs(sh, {});
-            if (sh->intredit) return -4;  // the editor looks at its size
+            // once, as bash, and the read resumes. That code runs with
+            // the read's deadline and interruptibility put aside
+            if (n >= 0) return n;
+            Armed a = taskdisarm(sh->sched);
+            b32 intrread = sh->intrread;
+            b32 intredit = sh->intredit;
+            sh->intrread = sh->intredit = 0;
+            b32 taken = sigtaken(sh);
+            if (taken && intrread) runsigs(sh, {});
+            sh->intrread = intrread;
+            sh->intredit = intredit;
+            b32 late = taskrearm(sh->sched, a);
+            if (!taken) return n;
+            if (late) {
+                sh->sched->cur->timedout = 1;  // even with input waiting
+                return -1;
+            }
+            if (intredit) return -4;  // the editor looks at its size
         }
     case F_MEM: {
         iz n = f->mem.len - f->pos;
