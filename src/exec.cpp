@@ -3079,8 +3079,22 @@ static b32 doassignments(Shell *sh, Arena *a, Word *w, iz n)
     return 1;
 }
 
+// A simple command's temporary bindings (NAME=value cmd), in its arena
+// with the escape point that unbinds them if the command escapes.
+struct Temps {
+    Escape e;
+    Str   *names;  // bound now, the innermost last
+    iz     n;
+    Str   *argv;   // once runprogram undoes them, its argv (undotemps)
+};
+
+static void poptemps(Shell *sh, Temps *tb)
+{
+    while (tb && tb->n) poptemp(sh, tb->names[--tb->n]);
+}
+
 [[gnu::noinline]]
-static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last);
+static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb);
 
 // $_: after each simple command, its last word (empty for assignments
 // alone), never exported. The dynamic variable _ reads it from a buffer,
@@ -3124,13 +3138,30 @@ static void bindlastarg(Shell *sh, Arena scratch, Str last)
 static void runsimple(Shell *sh, Node *n, Arena scratch)
 {
     Str last = {};
-    runsimple1(sh, n, scratch, &last);
+    // Temporary bindings go however the command ends: an escape from an
+    // expansion, the builtin, the function or the program's lookup
+    // unbinds them too. The escape point is here, where it costs only
+    // commands with assignments, and keeps runsimple1's frame small.
+    Temps *tb = 0;
+    if (n->words && (isassignword(n->words) || sh->opt[O_KEYWORD])) {
+        tb = alloc<Temps>(&scratch);
+        escenter(sh, &tb->e);
+        if (jmpset(tb->e.jmp)) {
+            escleave(sh, &tb->e);
+            poptemps(sh, tb);
+            undotemps(sh, tb->argv);
+            sh->nolocwarn = tb->e.nolocwarn;
+            escape(sh, tb->e.why);
+        }
+    }
+    runsimple1(sh, n, scratch, &last, tb);
+    if (tb) escleave(sh, &tb->e);
     sh->cmdnamelen = 0;
     if (last.data) bindlastarg(sh, scratch, last);
     checksigs(sh, scratch);
 }
 
-static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
+static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
 {
     // A direct pipeline stage's program starts without waiting, but not
     // the programs its words or a trap run first: they finish before it
@@ -3280,13 +3311,14 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
     // longer interactive, though its words expanded while it still was
     sh->subchild |= forked;
 
+    if (tb) tb->names = alloc<Str>(a, nassign);  // see runsimple
+
     // Expand assignment values now (bash does it after the words)
     Assign *as = alloc<Assign>(a, nassign);
-    {
+    if (nassign) {
         // Each sees those before it, bound for the time being, as in
         // K=x A=${K#?} cmd
-        Word *w      = assigns;
-        b32  *pushed = alloc<b32>(a, nassign);
+        Word *w = assigns;
         sh->nolocwarn = 1;  // not yet the command's binding
         for (iz i = 0; i < nassign; i++, w = w->next) {
             as[i] = splitassign(sh, a, w->text);
@@ -3297,12 +3329,12 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             Value *cur = lookup(sh, as[i].name);
             if (later && !(cur && (cur->attrs & V_READONLY)) && validvarname(as[i].name)) {
                 Str value = tempvalue(sh, a, as[i]);
-                pushed[i] = pushtemp(sh, *a, as[i].name, value);
+                if (pushtemp(sh, *a, as[i].name, value)) {
+                    tb->names[tb->n++] = as[i].name;
+                }
             }
         }
-        for (iz i = nassign-1; i >= 0; i--) {
-            if (pushed[i]) poptemp(sh, as[i].name);
-        }
+        poptemps(sh, tb);
         sh->nolocwarn = 0;
     }
     {
@@ -3430,6 +3462,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
             } else {
                 Str value = tempvalue(sh, &scratch, as[i]);
                 pushtemp(sh, scratch, as[i].name, value);
+                tb->names[tb->n++] = as[i].name;
             }
         }
         if (fn) {
@@ -3492,9 +3525,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
                 sh->status = 1;
             }
         }
-        if (!persist) {
-            for (iz i = nassign-1; i >= 0; i--) poptemp(sh, as[i].name);
-        }
+        poptemps(sh, tb);
     } else {
         // bash redirects a program in its forked child, so a procsub
         // there does not set $! here
@@ -3521,6 +3552,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         for (iz i = 0; i < nassign; i++) {
             Str value = tempvalue(sh, &scratch, as[i]);
             pushtemp(sh, scratch, as[i].name, value);
+            tb->names[tb->n++] = as[i].name;
         }
         sh->nolocwarn = 0;
         // As bash, a program finds its own path in $_
@@ -3544,6 +3576,10 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last)
         sh->undonames = names;
         sh->nundo     = nassign;
         sh->undoargv  = argv.data;
+        if (tb) {
+            tb->n    = 0;  // runprogram's to undo now (undotemps)
+            tb->argv = argv.data;
+        }
         sh->status = runexternal(sh, scratch, argv.data, argv.len, env);
         sh->attail  = 0;
         if (!direct) chldreaped(sh, 1);
