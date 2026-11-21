@@ -4000,8 +4000,8 @@ static Spawned libstartproc(Os *os, Arena scratch, Spawn *s, Str16 app,
             break;
         }
     }
-    if (!ok && code==ERROR_DIRECTORY && cwd.data) code = cwdfailure(scratch, s->cwd);
-    b32 injob = 0;
+    b32 baddir = !ok && code==ERROR_DIRECTORY && cwd.data;  // asked outside
+    b32 injob  = 0;
     if (ok) {
         injob = AssignProcessToJobObject(os->runjob, pi.process);
         if constexpr (LIBMODE) lib_spawned(os, pi.process, pi.pid, s->sigign, shared, injob);
@@ -4013,6 +4013,7 @@ static Spawned libstartproc(Os *os, Arena scratch, Spawn *s, Str16 app,
     os->inwindow = 0;
     if constexpr (LIBMODE) lib_spawnlock(os, 0);
     if (inited) os->attrdelete(attrs);
+    if (baddir) code = cwdfailure(scratch, s->cwd);  // it allocates
 
     if (ok && os->nestedjobs && injob && noint) {
         // A background program's own job, inside the run's, so that a
