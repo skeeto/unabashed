@@ -1951,7 +1951,8 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             // ${ a=(x y); }), an offset past it selects nothing and leaves
             // the length unexpanded, and the elements are the array's
             // once the length is known. An associative array counts its
-            // elements from 1, though 0 is the first too.
+            // elements from 1, though 0 is the first too, and a length of
+            // 0 still takes the first (assoc_subrange's loop).
             b32 assoc = arr && arr->bucket;
             Arith o = substrarith(x, uname, off);
             p = hassub ? getelems(x, name, sub) : getparam(x, name);
@@ -1977,6 +1978,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
                 for (from = 0; from<p.ln && p.li[from]<e1; from++) {}
             }
             iz end = count < p.ln-from ? from+(iz)count : p.ln;
+            if (assoc && end==from && from<p.ln) end++;
             putlist(x, p.lv+from, end-from, p.star, ctx);
             return;
         }
