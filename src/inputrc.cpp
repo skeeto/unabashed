@@ -808,27 +808,59 @@ struct RlSeqs {
 
 enum : i32 { RW_FN, RW_MACRO };
 
-static void rlcollect(Arena *a, KeyNode *n, Buf *prefix, i32 how, i32 fn, RlSeqs *out)
+// The child of n with the least key past after, if any
+static KeyNode *rlnextkid(KeyNode *n, i32 after)
 {
-    KeyNode *kids[256] = {};
-    for (KeyNode *k = n->kids; k; k = k->sib) kids[k->key] = k;
-    for (i32 c = 0; c < 256; c++) {
-        KeyNode *k = kids[c];
-        if (!k) continue;
-        putbyte(prefix, (u8)c);
+    KeyNode *best = 0;
+    for (KeyNode *k = n->kids; k; k = k->sib) {
+        if (k->key>after && (!best || k->key<best->key)) best = k;
+    }
+    return best;
+}
+
+// Depth first, in key order, with its own stack: a sequence is as long
+// as a binding made it, and a frame each would overflow the thread's.
+static void rlcollect(Arena *a, KeyNode *map, Buf *prefix, i32 how, i32 fn, RlSeqs *out)
+{
+    struct Frame {
+        KeyNode *n;
+        i32      last;  // the key of the child last visited
+    };
+    iz     cap   = 16;
+    iz     depth = 0;
+    Frame *st    = alloc<Frame>(a, cap);
+    st[depth++] = {map, -1};
+    while (depth) {
+        Frame   *f = st + depth - 1;
+        KeyNode *k = rlnextkid(f->n, f->last);
+        if (!k) {
+            if (--depth) prefix->len--;  // the key into the node left
+            continue;
+        }
+        f->last = k->key;
+        putbyte(prefix, k->key);
         b32 want = k->fn==fn && (how==RW_FN || k->macro.len);
         if (want) {
             if (out->len == out->cap) {
-                iz   cap = out->cap ? out->cap*2 : 16;
-                Str *v   = alloc<Str>(a, cap);
+                iz   ncap = out->cap ? out->cap*2 : 16;
+                Str *v    = alloc<Str>(a, ncap);
                 for (iz i = 0; i < out->len; i++) v[i] = out->v[i];
                 out->v   = v;
-                out->cap = cap;
+                out->cap = ncap;
             }
             out->v[out->len++] = clone(a, Str{prefix->data, prefix->len});
         }
-        if (k->kids) rlcollect(a, k, prefix, how, fn, out);
-        prefix->len--;
+        if (!k->kids) {
+            prefix->len--;
+            continue;
+        }
+        if (depth == cap) {
+            Frame *n = alloc<Frame>(a, cap*2);
+            for (iz i = 0; i < depth; i++) n[i] = st[i];
+            st   = n;
+            cap *= 2;
+        }
+        st[depth++] = {k, -1};
     }
 }
 

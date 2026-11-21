@@ -498,20 +498,44 @@ static Str edclone(Arena *a, Str s)
     return s.data ? clone(a, s) : s;
 }
 
-// Copy a list of siblings and everything under them into a.
+// Copy a list of siblings and everything under them into a, with its
+// own stack of lists left to copy: a sequence is as long as a binding
+// made it, and a frame per key overflowed a subshell's stack. The
+// stack, pointing into the copied, is zeroed when done with, as a is
+// an image's memory, which must point only within itself.
 static KeyNode *keycopy(Arena *a, KeyNode *n)
 {
-    KeyNode  *head = 0;
-    KeyNode **tail = &head;
-    for (; n; n = n->sib) {
-        KeyNode *c = alloc<KeyNode>(a);
-        c->macro = edclone(a, n->macro);
-        c->fn    = n->fn;
-        c->key   = n->key;
-        c->kids  = keycopy(a, n->kids);
-        *tail = c;
-        tail  = &c->sib;
+    struct Todo {
+        KeyNode  *from;  // a list of siblings
+        KeyNode **to;    // where its copy goes
+    };
+    KeyNode *head = 0;
+    iz       cap  = 16;
+    iz       len  = 0;
+    Todo    *st   = alloc<Todo>(a, cap);
+    st[len++] = {n, &head};
+    while (len) {
+        Todo      t    = st[--len];
+        KeyNode **tail = t.to;
+        for (KeyNode *s = t.from; s; s = s->sib) {
+            KeyNode *c = alloc<KeyNode>(a);
+            c->macro = edclone(a, s->macro);
+            c->fn    = s->fn;
+            c->key   = s->key;
+            *tail = c;
+            tail  = &c->sib;
+            if (!s->kids) continue;
+            if (len == cap) {
+                Todo *g = alloc<Todo>(a, cap*2);
+                for (iz i = 0; i < len; i++) g[i] = st[i];
+                for (iz i = 0; i < len; i++) st[i] = {};
+                st   = g;
+                cap *= 2;
+            }
+            st[len++] = {s->kids, &c->kids};
+        }
     }
+    for (iz i = 0; i < cap; i++) st[i] = {};
     return head;
 }
 
