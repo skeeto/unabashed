@@ -1195,23 +1195,28 @@ static b32 applyredirs(Shell *, Redir *, Arena *, b32);
 
 // Apply a command's redirections. Returns false after reporting an
 // error (the redirections done so far are left for the caller to undo),
-// with the command's status in sh->redirfail. As bash, an expansion
-// error in a redirection, even a fatal one such as ${x?}, only fails
-// the redirection, keeping the error's status. Not inlined: its escape
-// point would grow its callers' frames, which recursion stacks up.
+// with the command's status in sh->redirfail. With child, these are
+// redirections bash applies in a child it forks first (a program's, a
+// subshell's, a null command's of fd 0 or with a {var}), so an
+// expansion error in them, even a fatal one such as ${x?}, ends only
+// that child: here it fails the redirection, with the status the child
+// would exit with. Otherwise the error escapes as from any other word.
+// Not inlined: its escape point would grow its callers' frames, which
+// recursion stacks up.
 [[gnu::noinline]]
-static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
+static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep, b32 child)
 {
     if (!list) {
         sh->nullchild = 0;  // as applyredirs takes it
         return 1;
     }
+    sh->redirfail = 1;
+    if (!child) return applyredirs(sh, list, a, keep);
+    b32 nullchild = sh->nullchild;
     Escape e;
     escenter(sh, &e);
-    b32 ok = 0;
-    sh->redirfail = 1;
     if (!jmpset(e.jmp)) {
-        ok = applyredirs(sh, list, a, keep);
+        b32 ok = applyredirs(sh, list, a, keep);
         escleave(sh, &e);
         return ok;
     }
@@ -1220,8 +1225,9 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
         escape(sh, e.why);
     }
     escresume(sh, &e);  // undoing those done so far, as the caller would
-    // as the shell, or the subshell that catches it, would exit
-    sh->redirfail = e.why!=ESC_FATAL ? 1 : sh->catchfatal ? 1 : 127;
+    // A fatal error ends a program's child with 127, unless in a
+    // subshell that catches it; a null command's child exits with 1
+    sh->redirfail = e.why!=ESC_FATAL || nullchild || sh->catchfatal ? 1 : 127;
     return 0;
 }
 
@@ -3128,6 +3134,19 @@ static void poptemps(Shell *sh, Temps *tb)
 [[gnu::noinline]]
 static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb);
 
+// Does bash fork before applying this command's redirections, as for a
+// program, found or not? Not for a function or a builtin; argv[ex] is
+// the name after any `command` words, which skip functions, while one
+// followed by an option of its own, or by nothing, is the builtin.
+static b32 forksfirst(Shell *sh, Slice<Str> argv, iz ex)
+{
+    if (ex == argv.len) return 0;
+    Str name = argv[ex];
+    if (ex && name.len && name[0]=='-') return 0;
+    if (findbuiltin(sh, name)) return 0;
+    return ex || (sh->opt[O_POSIX] && haspath(sh, name)) || !findfunc(sh, name);
+}
+
 // $_: after each simple command, its last word (empty for assignments
 // alone), never exported. The dynamic variable _ reads it from a buffer,
 // so binding is a copy; only after a script assigned, unset or declared
@@ -3325,7 +3344,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             child |= r->src==0 || r->srcvar;
         }
         sh->nullchild = child;  // applyredirs takes it
-        b32 redirected = !n->redirs || doredirs(sh, n->redirs, a, 0);
+        b32 redirected = !n->redirs || doredirs(sh, n->redirs, a, 0, child);
         if (!redirected) {
             unwind(sh, mark);
             sh->status = sh->redirfail;
@@ -3428,7 +3447,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     Str savedname = sh->bltname;
     if (n->redirs && findbuiltin(sh, name)) sh->bltname = name;  // for messages
     b32 keep       = (execonly && !commit) || n==sh->keepredirs;
-    b32 redirected = jobspec || doredirs(sh, n->redirs, a, keep);
+    b32 child      = n->redirs && !jobspec && forksfirst(sh, argv, ex);
+    b32 redirected = jobspec || doredirs(sh, n->redirs, a, keep, child);
     sh->bltname = savedname;
     if (!redirected) {
         unwind(sh, mark);
@@ -4561,7 +4581,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         // case, select or call, else where the parser finished the
         // top-level command
         sh->line = sh->ctlline;
-        if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs)) {
+        if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs, inner)) {
             if (inner) sh->stdinredir = stdinredir;
             unwind(sh, mark);
             sh->status = sh->redirfail;
