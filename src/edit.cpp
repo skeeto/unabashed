@@ -3926,8 +3926,15 @@ static void edselfinsert(Editor *ed, Shell *sh, u8 key, i32 count)
         edoverchar(ed, ch, count);
     } else if (count == 1) {
         edinsert(ed, ch);
+    } else if (count <= (edlinemax(ed)-ed->line.len)/len) {
+        // As readline's _rl_insert_char: at most 1024 characters per
+        // insert, each its own undo record
+        for (i32 k; count > 0; count -= k) {
+            k = count<1024 ? count : 1024;
+            edinsertn(ed, ch, k);
+        }
     } else {
-        edinsertn(ed, ch, count);
+        edbell(ed);  // past the longest line (edinsertn)
     }
 }
 

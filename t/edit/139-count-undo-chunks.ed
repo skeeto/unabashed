@@ -1,0 +1,14 @@
+# A numeric argument on a self-inserting key inserts at most 1024
+# characters at a time, as readline's _rl_insert_char, each its own
+# undo record: an undo removes the last chunk only
+size 24 200
+rc PS1='$ '
+keys x=\e2000y\C-_\C-e;echo ${#x}\r
+snap
+keys x=\e2000y\C-_\C-_\C-e;echo ${#x}\r
+snap
+keys x=\e1500y\C-_\C-e;echo ${#x}\r
+keys x=\e3000y\C-_\C-_\C-e;echo ${#x}\r
+keys x=ab\e1025y\C-_\C-e;echo ${#x}\r
+keys x=\e1030é\C-_\C-e;echo ${#x}\r
+snap
