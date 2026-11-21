@@ -1021,7 +1021,7 @@ static Array *dynarray(Shell *sh, Arena *a, Value *v)
     Srcframe *s = nsrc ? sh->srcframes : 0;
     while (f || s) {
         r->e[r->len].idx = r->len;
-        if (s && s->frame==f) {
+        if (s && (s->frame==f || !f)) {
             // started in this call (or outside any): the newer
             r->e[r->len].val = d==DYN_FUNCNAME   ? Str("source")
                              : d==DYN_BASH_LINENO ? fmti64(a, s->line)

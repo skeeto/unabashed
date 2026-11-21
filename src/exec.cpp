@@ -2677,6 +2677,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->name   = name;
         sh->argv0  = {};
         sh->frame  = 0;
+        sh->srcframes = 0;  // nor sourcing: BASH_SOURCE is its own
         sh->funcdepth = 0;
         sh->funcs  = 0;
         sh->srcname     = {};
