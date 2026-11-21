@@ -1,0 +1,14 @@
+# Descriptor 2 that is no terminal, for read -e and the shell's own
+# prompt: as readline, the line is still edited, the terminal being the
+# input's, and drawn to wherever descriptor 2 goes, here nowhere. read
+# -e once failed (status 1) without reading, and the prompt went
+# unedited, C-b inserted as a character.
+rc PS1='$ '
+keys read -e -p 'P> ' x 2>/dev/null; echo "[$x] $?"\r
+keys ab\C-bX\r
+snap
+keys exec 2>/dev/null\r
+keys echo cd\C-bY\r
+snap
+keys exec 2>&1\r
+snap

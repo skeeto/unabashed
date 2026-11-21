@@ -692,6 +692,7 @@ struct Editor {
     i32      width;     // usable columns: one less without deferred wrap
     Handle   in;
     Handle   out;
+    Handle   ttyout;    // out, or in when out is no terminal (os_tty)
     i32      setrows;   // the size last put in LINES and COLUMNS
     i32      setcols;
     // The display
@@ -1850,7 +1851,7 @@ static void edsize(Editor *, Shell *, Tty);
 // is on, to turn it off should the process die meanwhile; and back.
 static Tty edraw(Editor *ed, Shell *sh)
 {
-    Tty t = os_tty(sh->os, ed->in, ed->out, TTY_RAW | (ed->paste ? TTY_PASTE : 0));
+    Tty t = os_tty(sh->os, ed->in, ed->ttyout, TTY_RAW | (ed->paste ? TTY_PASTE : 0));
     ed->raw = !t.err;
     return t;
 }
@@ -1858,7 +1859,7 @@ static Tty edraw(Editor *ed, Shell *sh)
 static Tty edcooked(Editor *ed, Shell *sh)
 {
     ed->raw = 0;
-    return os_tty(sh->os, ed->in, ed->out, TTY_RESTORE);
+    return os_tty(sh->os, ed->in, ed->ttyout, TTY_RESTORE);
 }
 
 // The terminal may have a new size (SIGWINCH): as readline does, clear
@@ -1866,7 +1867,7 @@ static Tty edcooked(Editor *ed, Shell *sh)
 // again for the new width from there.
 static void edresize(Editor *ed, Shell *sh)
 {
-    Tty t = os_tty(sh->os, ed->in, ed->out, TTY_QUERY);
+    Tty t = os_tty(sh->os, ed->in, ed->ttyout, TTY_QUERY);
     if (t.err || t.cols<2) return;
     if (t.rows==ed->tty.rows && t.cols==ed->tty.cols) return;
     ed->tty.rows = t.rows;
@@ -6162,6 +6163,10 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     ed->paste = ed->shellcmd = ed->incmd = ed->hmarked = ed->unnested = 0;
     ed->in  = fin->h;
     ed->out = ferr->h;
+    // As readline: descriptor 2 that is no terminal is still drawn to,
+    // the terminal (its modes and size) being the input's
+    ed->ttyout = ed->out;
+    if (!os_isatty(sh->os, ed->out) && os_isatty(sh->os, ed->in)) ed->ttyout = ed->in;
     ed->tty   = edraw(ed, sh);
     ed->notty = 0;
     if (ed->tty.err) {

@@ -1,14 +1,14 @@
 # read -e within the line being edited, from bind -x or the WINCH trap:
 # it edits its own line, and the outer line goes on as it was, its
 # prompt, text, point and undo list; also when the nested read fails
-# because its descriptor 2 is no terminal. bash's readline is not
+# because its input is no terminal. bash's readline is not
 # reentrant (the outer line takes the nested call's prompt and is
 # accepted with it), so these screens come from our own POSIX build
 # (EDRECORD_SHELL), each checked by hand.
 size 24 60
 rc PS1='$ '
 rc bind -x '"\C-t": read -e -p "in> " x; echo "got[$x] $?"'
-rc bind -x '"\C-xn": read -e x 2>/dev/null; echo "notty $?"'
+rc bind -x '"\C-xn": read -e x </dev/null; echo "notty $?"'
 rc trap 'read -e -p "w> " v; echo "winch[$v]"' WINCH
 keys echo outer\C-b\C-b
 keys \C-t

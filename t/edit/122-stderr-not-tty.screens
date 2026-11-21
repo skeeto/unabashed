@@ -1,0 +1,26 @@
+== snap 1
+$ read -e -p 'P> ' x 2>/dev/null; echo "[$x] $?"
+[aXb] 0
+$
+@ 2,2
+== snap 2
+$ read -e -p 'P> ' x 2>/dev/null; echo "[$x] $?"
+[aXb] 0
+$ exec 2>/dev/null
+cYd
+
+@ 4,0
+== snap 3
+$ read -e -p 'P> ' x 2>/dev/null; echo "[$x] $?"
+[aXb] 0
+$ exec 2>/dev/null
+cYd
+$
+@ 4,2
+== snap 4
+$ read -e -p 'P> ' x 2>/dev/null; echo "[$x] $?"
+[aXb] 0
+$ exec 2>/dev/null
+cYd
+$
+@ 4,2
