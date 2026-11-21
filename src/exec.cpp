@@ -405,7 +405,16 @@ static Arith arithrun(Shell *sh, Arena *a, Str expr, b32 *readonly, Str who = {}
     env.set     = arithset;
     env.nounset = sh->opt[O_NOUNSET];
     if (who == "let") env.literalsub = arithliteralsub;
+    ArithEnv *up = sh->arith;
+    if (up) {
+        // Nested in an evaluation's callback, as a subscript: its
+        // recursion and nesting limits span this one
+        env.depth = up->depth;
+        env.cur   = up->cur;
+    }
+    sh->arith = &env;
     Arith r = arith(&env, a, expr);
+    sh->arith = up;
     if (!r.ok && r.unbound) {
         fatalerror(sh, *a, r.err);  // set -u: fatal, with no prefix
     }

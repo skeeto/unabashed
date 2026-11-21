@@ -541,6 +541,9 @@ struct Shell {
     i32      simplestages; // of which simple commands as pipeline stages,
                            // which BASH_SUBSHELL leaves out, as bash
     i32      evaldepth;
+    ArithEnv *arith;       // arithmetic being evaluated, which one nested
+                           // in it (a subscript) continues, as bash's one
+                           // expression stack; reset by an escape
     b32      lexeof;       // the last parse read its input's end (bash's
                            // shared current_token): see resumeaftereof
     i32      sourcedepth;
@@ -1253,6 +1256,7 @@ static iz fdread(Shell *sh, i32 fd, u8 *buf, iz len)
     closegate(sh);  // a grouped pipeline's stages run on
     // A builtin's output buffer lives in its frame, which is now gone
     sh->bout     = sh->esc->bout;
+    sh->arith    = 0;  // the evaluations it leaves are gone
     sh->esc->why = why;
     jmpback(sh->esc->jmp);
 }

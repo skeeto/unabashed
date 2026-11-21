@@ -448,6 +448,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
 
     c->undo     = 0;
     c->esc      = 0;
+    c->arith    = 0;
     c->bout     = 0;
     c->lexer    = 0;
     c->current  = 0;
