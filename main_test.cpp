@@ -816,6 +816,19 @@ static void test_arena(Test *t)
     c = newsniffcache(&small);
     expectint(t, "sniff cache small", c->a.end - c->base > (iz)1<<15, 1);
     expectint(t, "sniff cache small", c->a.end - c->base <= (iz)1<<16, 1);
+
+    // An error message built from the arena after the callee's copy of
+    // it was taken is skipped, though building it committed more and
+    // left the copy's end stale; one from elsewhere is not
+    Arena m    = newarena(os, (iz)1<<22);
+    Arena copy = m;
+    Str   msg  = {allocbytes(&m, (iz)1<<20), (iz)1<<20};
+    skipmsg(&copy, msg);
+    expectint(t, "skipmsg stale end", copy.beg == (byte *)(msg.data+msg.len), 1);
+    Arena other = newarena(os, (iz)1<<20);
+    copy = m;
+    skipmsg(&copy, clone(&other, "elsewhere"));
+    expectint(t, "skipmsg elsewhere", copy.beg == m.beg, 1);
 }
 
 // f80digits has room for every integer digit it stores, 9 a division,
