@@ -210,21 +210,21 @@ void mainCRTStartup()
     hostinfo(&a, &info);
 
     // Inherited standard handles are often inheritable, and would leak
-    // into every child even when redirected away.
+    // into every child even when redirected away. A value given twice
+    // (stdout and stderr one pipe, as MSDN's sample passes them) is
+    // duplicated for the second descriptor, which closes on its own.
+    uz given[3] = {};
     for (i32 i = 0; i < 3; i++) {
         uz h = GetStdHandle(-10 - i);
         h = h ? h : BADHANDLE;
-        if (h != BADHANDLE) {
+        given[i] = h;
+        b32 seen = 0;
+        for (i32 j = 0; j < i; j++) seen |= h==given[j];
+        if (h!=BADHANDLE && seen) {
+            h = plt_dup(&os, h);
+        } else if (h != BADHANDLE) {
             SetHandleInformation(h, HANDLE_FLAG_INHERIT, 0);
-            Wobj *w = 0;
-            for (i32 j = 0; j<i && !w; j++) {
-                w = info.std[j]==h ? lookup(&os, h) : 0;
-            }
-            if (w) {
-                reg(&os, h, w);  // the same handle twice: one object
-            } else {
-                track(&os, h);
-            }
+            track(&os, h);
         }
         info.std[i]      = h;
         info.stdflags[i] = h==BADHANDLE ? 0 : handleaccess(&os, h);
@@ -245,7 +245,7 @@ void mainCRTStartup()
         if (type!=FILE_TYPE_DISK && type!=FILE_TYPE_CHAR && type!=FILE_TYPE_PIPE) {
             continue;
         }
-        b32 seen = h==info.std[0] || h==info.std[1] || h==info.std[2];
+        b32 seen = h==given[0] || h==given[1] || h==given[2];
         for (iz i = 0; i < in.len; i++) seen |= h == in[i].h;
         if (seen) {
             h = plt_dup(&os, h);

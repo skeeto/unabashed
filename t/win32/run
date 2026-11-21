@@ -53,7 +53,7 @@ case $work in
 esac
 
 bin=$work/bin
-for tool in sandbox conrun; do
+for tool in sandbox conrun stdrun; do
     if [ ! -e "$bin/$tool.exe" ] || [ "$root/tools/$tool.cpp" -nt "$bin/$tool.exe" ]; then
         lib=
         [ $tool = sandbox ] && lib=-ladvapi32

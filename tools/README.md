@@ -223,6 +223,23 @@ console: it does not end a console read in progress, which a typed
 Ctrl-C does. Tests send Ctrl-C while the shell runs commands, and the
 keyboard case is checked with winctl (notes/m3b.md).
 
+## stdrun (Windows)
+
+`stdrun.cpp` runs a program with standard handles a test chooses, as a
+parent other than a shell might pass them. It is CRT-free and
+XP-capable:
+
+    cc -nostartfiles -o stdrun.exe tools/stdrun.cpp
+    stdrun [-d] [-t SECS] IN OUT ERR -- PROGRAM [ARGS...]
+
+Each of IN, OUT and ERR is `0`, `1` or `2`, stdrun's own handle of that
+number, the same value for every word naming it (`0 1 1` passes one
+handle as both output and error, as MSDN's redirection sample does), or
+`-` for none (a null handle). `-d` starts PROGRAM detached, with no
+console, so that the programs it starts get consoles of their own. The
+status is PROGRAM's, 124 if it outlives SECS (default 30) and is
+killed, 125 on an error.
+
 ## Windows integration tests (t/win32)
 
     t/win32/run [-s SHELL] [-x] [-u] WORKDIR [TEST.sh...]
@@ -230,8 +247,9 @@ keyboard case is checked with winctl (notes/m3b.md).
 Curated scripts only, never generated ones, on the real file system and
 processes, each run by the shell under test (default `unabashed.exe`)
 inside `sandbox` in `WORKDIR/NAME`, which must be outside the
-repository (use the scratchpad). `sandbox.exe` and `conrun.exe` are
-built into `WORKDIR/bin` from `tools/`. Output and errors are merged,
+repository (use the scratchpad). `sandbox.exe`, `conrun.exe` and
+`stdrun.exe` are built into `WORKDIR/bin` from `tools/`, where tests
+find them as `$BIN`. Output and errors are merged,
 `status N` appended, and compared with `NAME.out` (`-u` rewrites the
 expected outputs; check them by hand). `-x` runs every test a second
 time with `UNABASHED_XPIO=1`, which makes the Win32 layer take its XP
