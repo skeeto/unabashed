@@ -484,6 +484,7 @@ struct Escape {
     i32       trapstatus;
     i32       trapfuncs;
     i32       hold;     // the store's hold count (storerehold)
+    i32       ctlline;
     b32       inchld;
     b32       nolocwarn;
     b32       attail;
@@ -1470,6 +1471,7 @@ static void escenter(Shell *sh, Escape *e)
     e->trapstatus = sh->trapstatus;
     e->trapfuncs  = sh->trapfuncs;
     e->hold       = sh->store->hold;
+    e->ctlline    = sh->ctlline;
     e->inchld     = sh->inchld;
     e->nolocwarn  = sh->nolocwarn;
     e->attail     = sh->attail;
@@ -1513,6 +1515,7 @@ static void escrestore(Shell *sh, Escape *e)
     sh->trapstatus = e->trapstatus;
     sh->trapfuncs  = e->trapfuncs;
     storerehold(sh->store, e->hold);  // the abandoned holders are gone
+    sh->ctlline    = e->ctlline;
     sh->inchld     = e->inchld;
     sh->nolocwarn  = e->nolocwarn;
     sh->attail     = e->attail;
