@@ -3795,7 +3795,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
         while (cur && cur->depth) cur = cur->below;
     }
     if (cur && (cur->attrs & V_READONLY) && !(flags & SV_FORCE)) {
-        shellerror(sh, scratch, concat(a, name, ": readonly variable"));
+        readonlyerror(sh, scratch, name);
         return 0;
     }
     if (cur && (cur->attrs & V_NOASSIGN)) return 1;

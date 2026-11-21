@@ -720,10 +720,7 @@ static Value *assignvar(Shell *sh, Arena scratch, Var *v, i32 flags)
         while (*slot && ((*slot)->attrs & V_TEMP)) slot = &(*slot)->below;
     }
     if (*slot && ((*slot)->attrs & V_READONLY) && !(flags & SV_FORCE)) {
-        if (!(flags & SV_QUIET)) {
-            Str msg = concat(&scratch, name, ": readonly variable");
-            shellerror(sh, scratch, msg);
-        }
+        if (!(flags & SV_QUIET)) readonlyerror(sh, scratch, name);
         return 0;
     }
     if (!*slot) {

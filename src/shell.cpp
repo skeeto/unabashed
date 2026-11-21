@@ -492,6 +492,7 @@ struct Escape {
     ArithEnv *arith;
     PcCur    *compcur;
     i32       noerrexit;
+    b32       errexitoff;
     i32       evaldepth;
     i32       sourcedepth;
     i32       capdepth;
@@ -718,6 +719,9 @@ struct Shell {
     i32      flowcount;
     i32      loopdepth;
     i32      noerrexit;    // inside a condition: set -e is off
+    b32      errexitoff;   // and for the errors bash's report_error
+                           // ends the shell for, too: inside eval,
+                           // source or command run as a condition
     i32      subshell;     // subshell depth
     i32      procbase;     // subshell depth of this process's outermost
                            // level: a background job's, in its process
@@ -1194,6 +1198,31 @@ static void shellerror(Shell *sh, Arena scratch, Str msg)
     fdwrite(sh, 2, finish(&b));
 }
 
+// After an error bash reports with report_error: under set -e it ends
+// the shell then and there, in a condition too (but see errexitoff),
+// with $? or else 1, its EXIT action running where exit's does.
+static b32 reportexits(Shell *sh)
+{
+    return sh->opt[O_ERREXIT] && !sh->errexitoff;
+}
+
+static void reportexit(Shell *sh)
+{
+    if (reportexits(sh)) {
+        sh->status     = sh->status ? sh->status : 1;
+        sh->exiting    = 1;
+        sh->exitcalled = 1;
+        escape(sh, ESC_EXIT);
+    }
+}
+
+// An assignment to a readonly variable, as bash's err_readonly.
+static void readonlyerror(Shell *sh, Arena scratch, Str name)
+{
+    shellerror(sh, scratch, concat(&scratch, name, ": readonly variable"));
+    reportexit(sh);
+}
+
 // Report "NAME: line N: CMD: MSG", as builtins do.
 static void builtinerror(Shell *sh, Arena scratch, Str cmd, Str msg)
 {
@@ -1517,6 +1546,7 @@ static void escenter(Shell *sh, Escape *e)
     e->arith      = sh->arith;
     e->compcur    = sh->compcur;
     e->noerrexit  = sh->noerrexit;
+    e->errexitoff = sh->errexitoff;
     e->evaldepth  = sh->evaldepth;
     e->sourcedepth = sh->sourcedepth;
     e->capdepth   = sh->capdepth;
@@ -1565,6 +1595,7 @@ static void escrestore(Shell *sh, Escape *e)
     sh->arith      = e->arith;
     sh->compcur    = e->compcur;
     sh->noerrexit  = e->noerrexit;
+    sh->errexitoff = e->errexitoff;
     sh->evaldepth  = e->evaldepth;
     sh->sourcedepth = e->sourcedepth;
     sh->capdepth   = e->capdepth;

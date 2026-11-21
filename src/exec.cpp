@@ -40,6 +40,9 @@ static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i3
 static Str      runfunsub(Shell *, Arena *, Str src, Capture *, Arena);
 static i32      compatlevel(Shell *, Arena);  // builtins.cpp
 static i32      b_read(Shell *, Str *, iz, Arena);  // builtins.cpp
+static i32      b_eval(Shell *, Str *, iz, Arena);
+static i32      b_source(Shell *, Str *, iz, Arena);
+static i32      b_command(Shell *, Str *, iz, Arena);
 static void     edrelease(Shell *, Editor *up);  // edit.cpp
 static void     joinpsubs(Shell *);
 static void     closeall(Shell *);
@@ -421,6 +424,7 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
             return concat3(a, ref->name, "[", concat(a, ref->sub, "]: bad array subscript"));
         }
         if (!setelem(c->sh, *a, ref->name, s.idx, s.key, v, SV_QUIET)) {
+            if (reportexits(c->sh)) readonlyerror(c->sh, *a, ref->name);
             c->readonly = 1;
             return concat(a, ref->name, ": readonly variable");
         }
@@ -429,6 +433,8 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
     if (!setvar(c->sh, *a, ref->name, v, SV_QUIET)) {
         Value *t = lookup(c->sh, ref->name);
         if (!t || !(t->attrs & V_READONLY)) return {};  // reported
+        // under set -e bash's err_readonly ends the shell at once
+        if (reportexits(c->sh)) readonlyerror(c->sh, *a, ref->name);
         c->readonly = 1;
         return concat(a, ref->name, ": readonly variable");
     }
@@ -984,8 +990,10 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
     } else {
         b32 errexit = sh->opt[O_ERREXIT];
         b32 verbose = sh->opt[O_VERBOSE];
+        b32 errexitoff = sh->errexitoff;
         if (!sh->shopt[S_INHERIT_ERREXIT]) {
             sh->opt[O_ERREXIT] = 0;
+            sh->errexitoff = 0;  // set -e there counts, as in bash
         }
         sh->opt[O_VERBOSE] = 0;  // as bash, which turns off -v there
         b32 noreport = sh->noreport;
@@ -1001,6 +1009,7 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
         sh->noreport = noreport;
         sh->opt[O_ERREXIT] = errexit;
         sh->opt[O_VERBOSE] = verbose;
+        sh->errexitoff = errexitoff;
         endcapture(sh, capture, child);
     }
     sh->capdepth = depth - 1;
@@ -3143,7 +3152,11 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
     // restored afterwards
     b32 errexit = sh->opt[O_ERREXIT];
     b32 verbose = sh->opt[O_VERBOSE];
-    if (!sh->shopt[S_INHERIT_ERREXIT]) sh->opt[O_ERREXIT] = 0;
+    b32 errexitoff = sh->errexitoff;
+    if (!sh->shopt[S_INHERIT_ERREXIT]) {
+        sh->opt[O_ERREXIT] = 0;
+        sh->errexitoff = 0;
+    }
     sh->opt[O_VERBOSE] = 0;
     b32 escaped = jmpset(e.jmp);
     if (!escaped) {
@@ -3156,6 +3169,7 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
     sh->tracedepth = tracedepth;
     sh->opt[O_ERREXIT] = errexit;
     sh->opt[O_VERBOSE] = verbose;
+    sh->errexitoff = errexitoff;
 
     if (sh->flow == FLOW_RETURN) {
         sh->flow = FLOW_NONE;
@@ -3631,8 +3645,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             Assign t   = splitassign(sh, a, w->text, 0);
             Value *cur = lookup(sh, t.name);
             if (cur && (cur->attrs & V_READONLY)) {
-                Str msg = concat(&scratch, t.name, ": readonly variable");
-                shellerror(sh, scratch, msg);
+                readonlyerror(sh, scratch, t.name);
                 rofail = 1;
                 continue;
             }
@@ -3852,7 +3865,15 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             sh->bifatal    = 0;
             sh->rawstatus  = 0;
             sh->decltrace  = dt;
+            // As bash, eval, source and command run as a condition turn
+            // off set -e for report_error's errors in all they run
+            b32 errexitoff = sh->errexitoff;
+            if (sh->noerrexit && !forked &&
+                (bi->fn==b_eval || bi->fn==b_source || bi->fn==b_command)) {
+                sh->errexitoff = 1;
+            }
             sh->status = runbuiltin(sh, bi, argv.data, argv.len, scratch);
+            sh->errexitoff = errexitoff;
             if (sh->decltrace) tracedecl(sh, scratch, sh->decltrace);
             sh->decltrace = 0;
             // Only bash's forked child, which exits with the builtin's

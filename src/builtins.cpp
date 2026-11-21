@@ -1421,10 +1421,11 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 if ((cur->attrs & V_NAMEREF) && !cur->str.data && !mklocal && eq<a.len) {
                     setattrs(sh, vname, V_EMPTYREF, 0);  // see V_EMPTYREF
                 }
-                Str msg   = concat(&scratch, byref ? refname : vname, ": readonly variable");
+                Str ro    = byref ? refname : vname;
+                Str msg   = concat(&scratch, ro, ": readonly variable");
                 // export -a and readonly -a run declare, which names itself
                 if ((name=="export" || name=="readonly") && !(on & (V_ARRAY|V_ASSOC))) {
-                    shellerror(sh, scratch, msg);
+                    readonlyerror(sh, scratch, ro);  // bash's err_readonly
                 } else {
                     builtinerror(sh, scratch, name, msg);
                 }
@@ -4431,7 +4432,7 @@ static i32 getopts(Shell *sh, Str *args, iz nargs, Arena scratch)
         status |= optvar(sh, scratch, var, cs);
         if (!unsetvar(sh, "OPTARG")) {
             // only here does bash respect a readonly OPTARG
-            shellerror(sh, scratch, "OPTARG: readonly variable");
+            readonlyerror(sh, scratch, "OPTARG");
         }
     }
     if (lastchar) {
