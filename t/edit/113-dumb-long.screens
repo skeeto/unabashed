@@ -1,0 +1,19 @@
+== snap 1
+<                                                   x
+@ 0,53
+== snap 2
+$ echo                                                                        >
+@ 0,7
+== snap 3
+$
+@ 0,2
+== snap 4
+$ echo ok
+ok
+$
+@ 2,2
+== snap 5
+$ echo ok
+ok
+$
+@ 2,2

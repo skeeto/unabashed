@@ -538,14 +538,29 @@ struct DRow {
     i32 *cols;   // column after each cell
     i32  ncells;
     i32  width;
+    i32  col0;   // the column where the first cell starts
 };
 
+// A layout too big for its arena keeps only the rows near the cursor
+// (rows[0] is row first), and in horizontal-scroll mode only the cells
+// near it: partial. The rows left out stay on the screen as they are.
 struct Layout {
     DRow *rows;
     i32   nrows;
+    i32   first;
+    i32   nkept;
     i32   prow;  // the cursor's position for point
     i32   pcol;
+    i32   lastwidth;  // the last row's width and cells, kept or not
+    i32   lastcells;
+    b32   partial;
 };
+
+static DRow *layrow(Layout *l, i32 row)  // null when left out
+{
+    row -= l->first;
+    return row>=0 && row<l->nkept ? l->rows+row : 0;
+}
 
 enum : i32 { KILLMAX = 10 };
 
@@ -1237,43 +1252,56 @@ static Editor *edimage(Editor *from, Arena *a)
 
 // Layout
 
+// A layout is made in two walks over the prompt and line: the first
+// counts what it keeps, the second fills arrays of just that size, so
+// a cell costs its bytes and two i32s and nothing grows in the arena.
+// When the whole would not fit, only the rows near the cursor's are
+// kept (in horizontal-scroll mode, the cells near its column), counted
+// again for that, a pathological line drawn in part but drawn.
 struct Layouter {
-    Arena  *a;
     Layout  l;
-    i32     cap;     // rows allocated
-    Buf     text;    // the row being built
-    Buf     ends;
-    Buf     cols;
+    DRow   *row;      // filling: the row being built, if kept
+    u8     *text;     // filling: the kept cells' bytes, ends and columns
+    i32    *ends;
+    i32    *cols;
+    iz      ntext;    // kept so far
+    iz      ncells;
+    iz      rowbeg;   // ntext where the row's bytes start
+    i32     rowkept;  // cells the row keeps
+    i32     rowcells; // and has
+    b32     keeprow;
+    b32     fill;
+    i32     lo, hi;   // the rows kept
+    i32     clo, chi; // the columns kept cells start in
+    i32     rowcap;   // cells kept in a row at most
     i32     col;
     i32     width;
-    i32     vcol;    // column on the logical line, for tabs
+    i32     vcol;     // column on the logical line, for tabs
 };
 
 static void laynewrow(Layouter *y)
 {
-    if (y->l.nrows == y->cap) {
-        i32   cap  = y->cap ? y->cap*2 : 8;
-        DRow *rows = alloc<DRow>(y->a, cap);
-        for (i32 i = 0; i < y->l.nrows; i++) rows[i] = y->l.rows[i];
-        y->l.rows = rows;
-        y->cap    = cap;
+    i32 r = y->l.nrows++;
+    y->keeprow  = r>=y->lo && r<=y->hi;
+    y->rowbeg   = y->ntext;
+    y->rowkept  = y->rowcells = 0;
+    y->col      = 0;
+    y->l.partial |= !y->keeprow;
+    if (y->fill && y->keeprow) {
+        y->row = y->l.rows + (r - y->lo);
+        y->row->ends = y->ends + y->ncells;
+        y->row->cols = y->cols + y->ncells;
     }
-    y->text = Buf(y->a, 64);
-    y->ends = Buf(y->a, 64);
-    y->cols = Buf(y->a, 64);
-    y->col  = 0;
-    y->l.nrows++;
 }
 
 static void layfinish(Layouter *y)
 {
-    DRow *r   = y->l.rows + y->l.nrows - 1;
-    r->text   = finish(&y->text);
-    Str e     = finish(&y->ends);
-    Str c     = finish(&y->cols);
-    r->ends   = (i32 *)e.data;
-    r->cols   = (i32 *)c.data;
-    r->ncells = (i32)(e.len / (iz)sizeof(i32));
+    y->l.lastwidth = y->col;
+    y->l.lastcells = y->rowcells;
+    if (!y->fill || !y->keeprow) return;
+    DRow *r   = y->row;
+    r->text   = {y->text+y->rowbeg, y->ntext-y->rowbeg};
+    r->ncells = y->rowkept;
     r->width  = y->col;
 }
 
@@ -1285,13 +1313,23 @@ static void laycell(Layouter *y, Str bytes, i32 w)
         layfinish(y);
         laynewrow(y);
     }
-    print(&y->text, bytes);
+    i32 beg = y->col;
     y->col  += w;
     y->vcol += w;
-    i32 end = (i32)y->text.len;
-    i32 col = y->col;
-    print(&y->ends, {(u8 *)&end, sizeof(end)});
-    print(&y->cols, {(u8 *)&col, sizeof(col)});
+    y->rowcells++;
+    if (!y->keeprow || beg<y->clo || beg>y->chi || y->rowkept==y->rowcap) {
+        y->l.partial = 1;
+        return;
+    }
+    if (y->fill) {
+        if (!y->rowkept) y->row->col0 = beg;
+        copybytes(y->text+y->ntext, bytes.data, bytes.len);
+        y->ends[y->ncells] = (i32)(y->ntext + bytes.len - y->rowbeg);
+        y->cols[y->ncells] = y->col;
+    }
+    y->ntext += bytes.len;
+    y->ncells++;
+    y->rowkept++;
 }
 
 // Bytes that draw nothing (the prompt's invisible parts): with the
@@ -1303,8 +1341,7 @@ static void layinvisible(Layouter *y, Str bytes)
 
 // The active region, line[rbeg, rend), is drawn in standout: each of
 // its cells carries the sequences that turn it on and off, so that any
-// cell may be redrawn alone. Built in buf (24 bytes), not the arena,
-// whose buffers are growing.
+// cell may be redrawn alone. Built in buf (24 bytes).
 static Str layregion(u8 *buf, Str bytes)
 {
     Str on  = "\x1b[7m";
@@ -1323,13 +1360,9 @@ static Str layregion(u8 *buf, Str bytes)
 // that one cut short at the end of the output is not held back.
 static Str badbyte = "\xef\xbf\xbd";
 
-static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width,
-                     iz rbeg, iz rend)
+static void laywalk(Layouter *y, Str prompt, Str line, iz point, iz rbeg, iz rend)
 {
-    Layouter y = {};
-    y.a     = a;
-    y.width = width;
-    laynewrow(&y);
+    laynewrow(y);
     b32 hidden = 0;
     for (iz i = 0; i < prompt.len;) {
         u8 c = prompt[i];
@@ -1342,30 +1375,30 @@ static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width,
         i32 cp  = utf8strict(prompt, &i);
         Str s   = {prompt.data+beg, i-beg};
         if (cp<0 && !hidden) {
-            laycell(&y, badbyte, 1);
+            laycell(y, badbyte, 1);
         } else if (hidden) {
-            layinvisible(&y, s);
+            layinvisible(y, s);
         } else {
             // As readline counts the visible, a C0 control is a column;
             // C1 controls, which the terminal does not show, are bad
             i32 w = cpwidth(cp);
             if (w<0 && cp>=0x80) s = badbyte;
-            laycell(&y, s, w<0 ? 1 : w);
+            laycell(y, s, w<0 ? 1 : w);
         }
     }
-    y.l.prow = -1;
+    y->l.prow = -1;
     for (iz i = 0; i <= line.len;) {
         // Bytes typed apart may join into one character around point:
         // the cursor goes after it
-        if (y.l.prow<0 && i>=point) {
+        if (y->l.prow<0 && i>=point) {
             // The cursor goes where the next cell would: past a full
             // row, at the start of the next
-            if (y.col >= y.width) {
-                layfinish(&y);
-                laynewrow(&y);
+            if (y->col >= y->width) {
+                layfinish(y);
+                laynewrow(y);
             }
-            y.l.prow = y.l.nrows - 1;
-            y.l.pcol = y.col;
+            y->l.prow = y->l.nrows - 1;
+            y->l.pcol = y->col;
         }
         if (i == line.len) break;
         u8  c   = line[i];
@@ -1375,35 +1408,97 @@ static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width,
         u8  hbuf[24];
         if (c == '\n') {
             // A newline in the line starts a row of its own
-            layfinish(&y);
-            laynewrow(&y);
-            y.vcol = 0;
+            layfinish(y);
+            laynewrow(y);
+            y->vcol = 0;
         } else if (c == '\t') {
-            i32 n = 8 - y.vcol%8;
+            i32 n = 8 - y->vcol%8;
             for (i32 k = 0; k < n; k++) {
-                laycell(&y, hi ? layregion(hbuf, " ") : Str(" "), 1);  // as readline, may wrap
+                laycell(y, hi ? layregion(hbuf, " ") : Str(" "), 1);  // as readline, may wrap
             }
         } else if (cp < 0) {
-            laycell(&y, hi ? layregion(hbuf, badbyte) : badbyte, 1);
+            laycell(y, hi ? layregion(hbuf, badbyte) : badbyte, 1);
         } else if (c<0x20 || c==0x7f) {
             u8  buf[2] = {'^', (u8)(c==0x7f ? '?' : c|0x40)};
             Str t      = {buf, 2};
-            laycell(&y, hi ? layregion(hbuf, t) : t, 2);
+            laycell(y, hi ? layregion(hbuf, t) : t, 2);
         } else {
             i32 w = cpwidth(cp);
             Str t = {line.data+beg, i-beg};
             t = w<0 ? badbyte : t;  // a C1 control
-            laycell(&y, hi ? layregion(hbuf, t) : t, w<0 ? 1 : w);
+            laycell(y, hi ? layregion(hbuf, t) : t, w<0 ? 1 : w);
         }
     }
-    if (y.col >= y.width) {
+    if (y->col >= y->width) {
         // As readline, a full last row has an empty one after it,
         // wherever the cursor is
-        layfinish(&y);
-        laynewrow(&y);
+        layfinish(y);
+        laynewrow(y);
     }
-    layfinish(&y);
-    return y.l;
+    layfinish(y);
+}
+
+// The bytes a layout of these counts takes, alignment included
+static iz layneed(Layouter *y)
+{
+    i32 lo = y->lo<0 ? 0 : y->lo;
+    i32 hi = y->hi<y->l.nrows-1 ? y->hi : y->l.nrows-1;
+    return (iz)(hi-lo+1)*(iz)sizeof(DRow) + y->ncells*2*(iz)sizeof(i32) + y->ntext + 64;
+}
+
+// The layout of the prompt and line for a screen width columns wide.
+// Should it not fit, near rows either side of the cursor's are kept
+// (one screen less a row: drawn from the top, the cursor's row does not
+// scroll away), and with hcols (horizontal scrolling) the cells
+// starting within hcols columns either side of the cursor's.
+static Layout layout(Arena *a, Str prompt, Str line, iz point, i32 width,
+                     iz rbeg, iz rend, i32 near, i32 hcols)
+{
+    i32 big = 0x7fffffff;
+    Layouter y = {};
+    y.width  = width;
+    y.hi     = y.chi = y.rowcap = big;
+    y.clo    = -big;
+    laywalk(&y, prompt, line, point, rbeg, rend);
+
+    byte *lim  = a->mem ? a->mem->limit : a->end;
+    iz    room = lim - a->beg;
+    i32   prow = y.l.prow;
+    i32   pcol = y.l.pcol;
+    i32   k    = near>1 ? near : 1;
+    i32   cap  = 2*(hcols ? 2*hcols : width) + 64;
+    while (layneed(&y) > room && (k || cap>1)) {
+        y = {};
+        y.width  = width;
+        y.lo     = prow - k;
+        y.hi     = prow + k;
+        y.clo    = hcols ? pcol-hcols-2 : -big;
+        y.chi    = hcols ? pcol+hcols+2 : big;
+        y.rowcap = cap;
+        laywalk(&y, prompt, line, point, rbeg, rend);
+        if (k) {
+            k /= 2;
+        } else {
+            cap /= 2;
+        }
+    }
+
+    Layouter f = {};
+    f.width  = width;
+    f.lo     = y.lo<0 ? 0 : y.lo;
+    f.hi     = y.hi<y.l.nrows-1 ? y.hi : y.l.nrows-1;
+    f.clo    = y.clo;
+    f.chi    = y.chi;
+    f.rowcap = y.rowcap;
+    f.fill   = 1;
+    f.l.rows = alloc<DRow>(a, f.hi-f.lo+1);
+    f.text   = allocbytes(a, y.ntext);
+    f.ends   = alloc<i32>(a, y.ncells);
+    f.cols   = alloc<i32>(a, y.ncells);
+    laywalk(&f, prompt, line, point, rbeg, rend);
+    f.l.first = f.lo;
+    f.l.nkept = f.hi - f.lo + 1;
+    return f.l;
 }
 
 
@@ -1460,7 +1555,7 @@ static void edwrite(Editor *ed, DRow *r, i32 from)
 {
     i32 beg = from ? r->ends[from-1] : 0;
     edput(ed, {r->text.data+beg, r->text.len-beg});
-    ed->ccol = r->width;
+    ed->ccol = r->cols[r->ncells-1];  // a row cut short ends early
     if (ed->ccol >= ed->tty.cols) {
         ed->ccol    = ed->tty.cols - 1;
         ed->pending = 1;
@@ -1494,29 +1589,40 @@ static void edflush(Editor *ed, Shell *sh)
     #ifdef EDIT_CHECK
     edcheck(ed, sh, EDCHECK_WROTE);
     #endif
-    ed->out_ = Buf(&ed->linemem, 256);
+    ed->out_.len = 0;  // the buffer serves the whole line
+}
+
+// A long redisplay's output goes out in pieces, so that its buffer
+// stays small.
+static void edspill(Editor *ed, Shell *sh)
+{
+    if (ed->out_.len >= (iz)1<<16) edflush(ed, sh);
 }
 
 static i32 cellcol(DRow *r, i32 i)  // the column where cell i starts
 {
-    return i ? r->cols[i-1] : 0;
+    return i ? r->cols[i-1] : r->col0;
 }
 
-// Bring the screen from what is shown to the next layout.
-static void edupdate(Editor *ed, Layout *nl)
+// Bring the screen from what is shown to the next layout. Rows that a
+// partial layout leaves out are left as they are; one drawn where the
+// old layout left it out is cleared past its end.
+static void edupdate(Editor *ed, Shell *sh, Layout *nl)
 {
     Layout *ol = &ed->shown;
     i32 n = nl->nrows>ol->nrows ? nl->nrows : ol->nrows;
-    for (i32 row = 0; row < n; row++) {
-        DRow *o = row<ol->nrows ? ol->rows+row : 0;
-        DRow *w = row<nl->nrows ? nl->rows+row : 0;
-        if (!w) {
+    for (i32 row = 0; row < n; row++, edspill(ed, sh)) {
+        DRow *o = layrow(ol, row);
+        DRow *w = layrow(nl, row);
+        b32   known = o || row>=ol->nrows;
+        if (row >= nl->nrows) {
             // An empty row is the one past a full row: it may hold the
             // space that made the terminal wrap
             edmove(ed, row, 0);
             edput(ed, "\x1b[K");
             continue;
         }
+        if (!w) continue;
         if (!w->ncells && ed->pending && ed->crow==row-1) {
             // As readline: a space on the empty row past a full one
             // makes the terminal wrap
@@ -1549,6 +1655,12 @@ static void edupdate(Editor *ed, Layout *nl)
         if (o && o->width>w->width) {
             edmove(ed, row, w->width);
             edput(ed, "\x1b[K");
+        } else if (!known) {
+            i32 end = w->ncells ? w->cols[w->ncells-1] : 0;
+            if (end < ed->tty.cols) {
+                edmove(ed, row, end);
+                edput(ed, "\x1b[K");
+            }
         }
     }
     edmove(ed, nl->prow, nl->pcol);
@@ -1561,7 +1673,7 @@ static void edupdate(Editor *ed, Layout *nl)
 // screen, '<' and '>' over the first and last columns where the line
 // goes on past them. Drawn again whole from the left margin with CR,
 // spaces over what is left of the old, and the text up to the cursor.
-static void hredisplay(Editor *ed, Layout *nl)
+static void hredisplay(Editor *ed, Layout *nl, Arena *a)
 {
     DRow *r     = nl->rows;
     i32   w     = ed->tty.cols - 1;
@@ -1581,7 +1693,7 @@ static void hredisplay(Editor *ed, Layout *nl)
     }
     ed->lmargin = lm;
 
-    Buf  vis(&ed->linemem, 64);
+    Buf  vis(a, 64);  // with the layout: hlast while it is shown
     iz   atcur = -1;  // bytes of vis before the cursor
     for (i32 i = 0; i < r->ncells; i++) {
         i32 beg = cellcol(r, i);
@@ -1653,11 +1765,11 @@ static void redisplay(Editor *ed, Shell *sh)
     ed->starred = ed->vars.markmodified && ed->hpos<sh->hist.len && ed->undo;
     if (ed->starred) prompt = concat(a, "*", prompt);
     Layout nl = layout(a, prompt, line, point, ed->hscroll ? 1<<30 : ed->width,
-                       rbeg, rend);
+                       rbeg, rend, ed->tty.rows-1, ed->hscroll ? ed->tty.cols : 0);
     if (ed->hscroll) {
-        hredisplay(ed, &nl);
+        hredisplay(ed, &nl, a);
     } else {
-        edupdate(ed, &nl);
+        edupdate(ed, sh, &nl);
     }
     ed->cur = !ed->cur;
     edflush(ed, sh);
@@ -1687,7 +1799,7 @@ static void edrefresh(Editor *ed, Shell *sh)
     edput(ed, "\r");
     ed->ccol    = 0;
     ed->pending = 0;
-    for (i32 row = ed->shown.nrows-1; row >= 0; row--) {
+    for (i32 row = ed->shown.nrows-1; row >= 0; row--, edspill(ed, sh)) {
         edmove(ed, row, 0);
         edput(ed, "\x1b[K");
     }
@@ -3274,7 +3386,7 @@ static void ededitexec(Editor *ed, Shell *sh, b32 vi = 0, u8 key = 0)
     if (ed->hscroll) {
         edput(ed, "\r\n");
     } else {
-        edmove(ed, l->nrows-1, l->rows[l->nrows-1].width);
+        edmove(ed, l->nrows-1, l->lastwidth);
         edput(ed, "\r\n");
     }
     b32 bracket = ed->paste;
@@ -3361,7 +3473,7 @@ static void edshellcmd(Editor *ed, Shell *sh, Str cmd)
         edput(ed, "\r");
         ed->ccol    = 0;
         ed->pending = 0;
-        for (i32 row = ed->shown.nrows-1; row >= 0; row--) {
+        for (i32 row = ed->shown.nrows-1; row >= 0; row--, edspill(ed, sh)) {
             edmove(ed, row, 0);
             edput(ed, "\x1b[K");
         }
@@ -3428,7 +3540,7 @@ static void     rlputkeys(Buf *, Str);                         // inputrc.cpp
 static void edshowtext(Editor *ed, Shell *sh, Str text)
 {
     Layout *l = &ed->shown;
-    if (!ed->hscroll) edmove(ed, l->nrows-1, l->rows[l->nrows-1].width);
+    if (!ed->hscroll) edmove(ed, l->nrows-1, l->lastwidth);
     edput(ed, "\r\n");
     Buf b(&ed->linemem, text.len+16);
     for (iz i = 0; i < text.len; i++) {
@@ -5923,13 +6035,13 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
             edput(ed, "\r");
             crlf = 0;
         }
-    } else if (l->nrows>1 && !l->rows[l->nrows-1].ncells && !ed->ccol && !ed->pending) {
+    } else if (l->nrows>1 && !l->lastcells && !ed->ccol && !ed->pending) {
         // As readline: the cursor alone at the start of the empty row
         // past a full one is already past the line
         edmove(ed, l->nrows-1, 0);
         crlf = 0;
     } else {
-        edmove(ed, l->nrows-1, l->rows[l->nrows-1].width);
+        edmove(ed, l->nrows-1, l->lastwidth);
     }
     // read -e: the shell's interrupt writes the newline
     if (crlf && !(ed->result==ED_INTR && isread)) {

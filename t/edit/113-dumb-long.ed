@@ -1,0 +1,13 @@
+# A long line of tabs on a dumb terminal (scrolled sideways): on the
+# vos its layout does not fit the layout arena, so only the cells near
+# the cursor are laid out, all a sideways view draws.
+env TERM=dumb
+rc PS1='$ '
+keys echo \e60000\C-v\tx
+snap
+keys \C-a\M-f\C-f
+snap
+keys \C-e\C-u
+snap
+keys echo ok\r
+snap

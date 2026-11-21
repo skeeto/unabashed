@@ -1,0 +1,10 @@
+# A long line, 180000 characters typed with a numeric argument, then
+# killed: its layout once took about 26 bytes a character in arenas
+# sized for the vos at 4 MiB, and running out ended the shell.
+rc PS1='$ '
+keys echo \e180000x
+snap
+keys \C-u\C-l
+snap
+keys echo ok\r
+snap

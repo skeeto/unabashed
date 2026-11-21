@@ -1,0 +1,11 @@
+# A long line on a screen two columns wide, a row for each character:
+# on the vos its layout does not fit the layout arena, so only the rows
+# near the cursor are laid out and drawn, which shows the same screen.
+size 24 2
+rc PS1='$ '
+keys \e150000x
+snap
+keys \C-u\C-l
+snap
+keys ec
+snap

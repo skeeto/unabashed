@@ -1,0 +1,13 @@
+# A long line drawn again whole, over and over, by turning the active
+# region on (exchange-point-and-mark) and off (forward-char): the output
+# of every redisplay once took new line memory, which on the vos ran
+# out within a few redisplays of the line's 100000 characters.
+rc PS1='$ '
+keys \e100000x
+keys \C-x\C-x\C-f\C-x\C-x\C-f\C-x\C-x\C-f\C-x\C-x\C-f\C-x\C-x\C-f
+keys \C-x\C-x\C-f\C-x\C-x\C-f\C-x\C-x\C-f\C-x\C-x\C-f\C-x\C-x\C-f
+keys \C-x\C-x\C-f\C-x\C-x\C-f\C-x\C-x\C-f\C-x\C-x\C-f\C-x\C-x\C-f
+keys \C-e\C-u\C-l
+snap
+keys echo ok\r
+snap

@@ -1425,6 +1425,8 @@ static void edcheck(Editor *ed, Shell *sh, i32 how)
         return;
     }
     Layout *l    = &ed->shown;
+    if (l->partial) y->edlost = 1;  // rows left out of it stay as they were
+    if (y->edlost) return;
     i32     need = l->nrows;  // rows that must be on the screen
     while (need>1 && !l->rows[need-1].ncells && l->prow<need-1) {
         // Empty rows below the cursor (after a newline in the line, or
