@@ -271,7 +271,6 @@ static u8 *arithnumber(ArithExpr *x, u8 *p, i64 *val)
 // outside of a full parse.
 enum : i32 { AR_SKSUB, AR_SKDQ, AR_SKCMD, AR_SKBRACE };
 enum : i32 { AR_DBPARAM, AR_DBOP, AR_DBWORD, AR_DBQUOTE, AR_DBQUOTE2 };
-enum : i32 { AR_SKMAXDEPTH = 64 };
 
 static b32 arithdbop(u8 c)
 {
@@ -285,13 +284,13 @@ static b32 arithdbop(u8 c)
 
 // From p, just inside an opener, return the matching closer or the end
 // of the text. For AR_SKBRACE, start is just inside the outermost "${".
-static u8 *arithskip(ArithExpr *x, u8 *p, i32 mode, i32 state, u8 *start, i32 depth)
+// It recurses for each construct nested in another, as deep as the
+// stack allows, as bash's skipsubscript does.
+static u8 *arithskip(ArithExpr *x, u8 *p, i32 mode, i32 state, u8 *start)
 {
+    arithstack(x->c->env);
     Str rest = arithcstr(p, x->end);
     u8 *eot  = rest.data + rest.len;
-    if (depth > AR_SKMAXDEPTH) {
-        return eot;  // treat as unterminated
-    }
 
     i32 count = 1;  // brackets, for AR_SKSUB
     for (;;) {
@@ -332,7 +331,7 @@ static u8 *arithskip(ArithExpr *x, u8 *p, i32 mode, i32 state, u8 *start, i32 de
             if (mode == AR_SKDQ) {
                 return p;
             }
-            p = arithskip(x, p+1, AR_SKDQ, 0, 0, depth+1);
+            p = arithskip(x, p+1, AR_SKDQ, 0, 0);
             if (!arithat(x, p)) {
                 return eot;
             }
@@ -340,7 +339,7 @@ static u8 *arithskip(ArithExpr *x, u8 *p, i32 mode, i32 state, u8 *start, i32 de
             continue;
 
         } else if (c=='$' && c1=='(') {
-            p = arithskip(x, p+2, AR_SKCMD, 0, 0, depth+1);
+            p = arithskip(x, p+2, AR_SKCMD, 0, 0);
             if (!arithat(x, p)) {
                 return eot;
             }
@@ -358,7 +357,7 @@ static u8 *arithskip(ArithExpr *x, u8 *p, i32 mode, i32 state, u8 *start, i32 de
                     inner = reset ? AR_DBPARAM : state;
                     beg   = start;
                 }
-                p = arithskip(x, p+2, AR_SKBRACE, inner, beg, depth+1);
+                p = arithskip(x, p+2, AR_SKBRACE, inner, beg);
                 if (!arithat(x, p)) {
                     return eot;
                 }
@@ -367,7 +366,7 @@ static u8 *arithskip(ArithExpr *x, u8 *p, i32 mode, i32 state, u8 *start, i32 de
             }
 
         } else if (mode==AR_SKBRACE && (c=='<' || c=='>') && c1=='(') {
-            p = arithskip(x, p+2, AR_SKCMD, 0, 0, depth+1);
+            p = arithskip(x, p+2, AR_SKCMD, 0, 0);
             if (!arithat(x, p)) {
                 return eot;
             }
@@ -375,7 +374,7 @@ static u8 *arithskip(ArithExpr *x, u8 *p, i32 mode, i32 state, u8 *start, i32 de
             continue;
 
         } else if (mode==AR_SKCMD && c=='(') {
-            p = arithskip(x, p+1, AR_SKCMD, 0, 0, depth+1);
+            p = arithskip(x, p+1, AR_SKCMD, 0, 0);
             if (!arithat(x, p)) {
                 return eot;
             }
@@ -394,7 +393,7 @@ static u8 *arithskip(ArithExpr *x, u8 *p, i32 mode, i32 state, u8 *start, i32 de
             }
 
         } else if (mode==AR_SKBRACE && c=='[' && state==AR_DBPARAM) {
-            u8 *e = arithskip(x, p+1, AR_SKSUB, 0, 0, depth+1);
+            u8 *e = arithskip(x, p+1, AR_SKSUB, 0, 0);
             if (!arithat(x, e)) {
                 return eot;
             }
@@ -422,7 +421,7 @@ static u8 *arithskip(ArithExpr *x, u8 *p, i32 mode, i32 state, u8 *start, i32 de
 // Find the ']' closing the subscript opened at p, or the end of the text.
 static u8 *arithskipsub(ArithExpr *x, u8 *p)
 {
-    return arithskip(x, p+1, AR_SKSUB, 0, 0, 0);
+    return arithskip(x, p+1, AR_SKSUB, 0, 0);
 }
 
 // Scan an identifier, with its subscript, starting at p, into the

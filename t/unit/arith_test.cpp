@@ -8,6 +8,7 @@
 // frames at bash's limits under 1 MiB, which clang's -O0 frames with
 // UBSan exceed several times over (GCC's at -O0 do not).
 // This is free and unencumbered software released into the public domain.
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -415,6 +416,13 @@ static Str repeat(Arena *a, Str pre, Str mid, Str post, iz n)
     return finish(&b);
 }
 
+static jmp_buf overjmp;
+
+static void overflowed(void *)
+{
+    longjmp(overjmp, 1);
+}
+
 static void runextra(Arena scratch)
 {
     Store    s = {};
@@ -510,13 +518,25 @@ static void runextra(Arena scratch)
                 (long long)used);
     }
 
-    // Skipping deeply nested shell syntax in a subscript is bounded
+    // Skipping deeply nested shell syntax in a subscript is bounded by
+    // the stack limit, as bash's by its stack
+    env.stacklimit = &top - ((iz)1<<20);
+    env.overflow   = overflowed;
     Str quotes = repeat(&scratch, "$(", "", ")", 100000);
-    r = arith(&env, &scratch, concat(&scratch, concat(&scratch, "0 && a[", quotes), "]"));
-    check(!r.ok && find(r.err, ": bad array subscript")>=0, "deep subscript syntax");
-    quotes = repeat(&scratch, "$(", "", ")", AR_SKMAXDEPTH);
+    b32 over = 0;
+    if (setjmp(overjmp)) {
+        over = 1;
+    } else {
+        arith(&env, &scratch, concat(&scratch, concat(&scratch, "0 && a[", quotes), "]"));
+    }
+    check(over, "deep subscript syntax overflows");
+    env.depth = 0;
+    env.cur   = 0;
+    quotes = repeat(&scratch, "$(", "", ")", 1000);
     r = arith(&env, &scratch, concat(&scratch, concat(&scratch, "0 && a[", quotes), "]"));
     check(r.ok && !r.value, "nested subscript syntax");
+    env.stacklimit = 0;
+    env.overflow   = 0;
 
     // Nested calls share the recursion depth through the env
     env.depth = ARITH_MAXDEPTH - 1;
