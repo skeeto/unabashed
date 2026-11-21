@@ -1502,6 +1502,10 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         if (hassub && !(on & V_ASSOC) && !isassoc) aon |= V_ARRAY;
         i32 sflags = (append ? SV_APPEND : 0) | (global ? SV_GLOBAL : 0);
         if (onref || isref) sflags |= SV_NOREF;
+        // Through a nameref to a variable that exists, bash's declare
+        // runs the hook of the name it was given, not the target's
+        b32 ownhook = hookname!=vname && name!="export" && name!="readonly";
+        if (ownhook) sflags |= SV_NOHOOK;
         // export and readonly without -a or -A assign a quoted
         // 'name=(...)' as a string, to element 0 of an existing array
         b32 plain    = (name=="export" || name=="readonly") && !(on & (V_ARRAY|V_ASSOC));
@@ -1557,7 +1561,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             // only later assignments are evaluated
             setattrs(sh, vname, on | (aon & V_ARRAY), off);
         }
-        if (eq==a.len && name!="export" && name!="readonly") {
+        if ((eq==a.len && name!="export" && name!="readonly") || ownhook) {
             varchanged(sh, hookname);  // as bash's declare, even without a value
         }
     }

@@ -673,6 +673,7 @@ enum : i32 {  // setvar flags
     SV_RAWKEY = 1<<6,  // an associative subscript used as it is
     SV_NEWLOCAL = 1<<7,  // a local just made: lists expand without it
     SV_ATDEPTH  = 1<<8,  // the binding at function depth flags>>16
+    SV_NOHOOK   = 1<<9,  // no variable hook: the caller runs its own
 };
 
 static void varchanged(Shell *, Str name);
@@ -735,7 +736,7 @@ static Str assignedvalue(Shell *sh, Arena *scratch, u32 attrs, Str old, Str valu
     return convertcase(scratch, value, attrs, sh->utf8);
 }
 
-static void assigned(Shell *sh, Value *val, Str name)
+static void assigned(Shell *sh, Value *val, Str name, i32 flags = 0)
 {
     if (sh->opt[O_ALLEXPORT]) {
         val->attrs |= V_EXPORT;
@@ -743,7 +744,9 @@ static void assigned(Shell *sh, Value *val, Str name)
     if (val->attrs & V_EXPORT) {
         sh->exportgen++;
     }
-    varchanged(sh, name);
+    if (!(flags & SV_NOHOOK) || name=="_") {
+        varchanged(sh, name);  // $_ is no longer dynamic regardless
+    }
 }
 
 // Free positional parameters that set made (Shell.argsown). An
@@ -1255,7 +1258,7 @@ static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str val
         aput(st, arr, idx, sclone(st, value));
     }
     arr->isset = 1;
-    assigned(sh, val, name);
+    assigned(sh, val, name, flags);
     return 1;
 }
 
@@ -1367,7 +1370,7 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
     if ((byte *)old.data >= st->mark) {
         sfreestr(st, old);
     }
-    assigned(sh, val, name);
+    assigned(sh, val, name, flags);
     return 1;
 }
 

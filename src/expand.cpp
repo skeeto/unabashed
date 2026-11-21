@@ -3759,7 +3759,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
             setelem(sh, scratch, name, ind, {}, it.val, eflags|(it.append ? SV_APPEND : 0));
             ind = (i64)((u64)ind + 1);
         }
-        assigned(sh, assignslot(sh, scratch, name, flags|SV_FORCE), name);
+        assigned(sh, assignslot(sh, scratch, name, flags|SV_FORCE), name, flags);
         return 1;
     }
 
@@ -3857,7 +3857,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
         val->arr = dst;
     }
     dst->isset = 1;
-    assigned(sh, val, name);
+    assigned(sh, val, name, flags);
     if (failed) compoundfail(sh);
     return 1;
 }
