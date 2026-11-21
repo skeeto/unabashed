@@ -993,15 +993,13 @@ static void closegate(Shell *sh)
 // A here-document a child inherits becomes an OS object first, so that
 // both read one open file, as bash's forked child shares the temporary
 // file or pipe: { read x; } & reads only its own line
-static void materializefds(Shell *sh, b32 skip0)
+static void materializefds(Shell *sh, Arena scratch, b32 skip0)
 {
     Fdtab *t = sh->fds;
     for (i32 fd = skip0 ? 1 : 0; fd < t->top; fd++) {
         File *f = t->fd[fd];
         if (f && f->kind==F_MEM) {
-            byte  mem[256];
-            Arena a = {mem, mem+sizeof(mem)};
-            materialize(sh, a, f);
+            materialize(sh, scratch, f);
         }
     }
 }
@@ -1014,7 +1012,7 @@ static void materializefds(Shell *sh, b32 skip0)
 static Handle spawnstage(Shell *sh, Node *n, File *in, File *out, i64 grp,
                          i64 *pid, Arena scratch)
 {
-    materializefds(sh, in!=0);
+    materializefds(sh, scratch, in!=0);
     i64 save = sh->spawngrp;
     sh->spawngrp = grp ? grp : -1;
     i64 proc = spawnimage(sh, n, in, out, pid, scratch, 1);
@@ -1072,7 +1070,7 @@ static b32 runfgimage(Shell *sh, Node *n, Arena scratch)
 static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid,
                      Arena scratch)
 {
-    materializefds(sh, in!=0);
+    materializefds(sh, scratch, in!=0);
     i64   proc = spawnimage(sh, n, in, out, pid, scratch);
     if (proc >= 0) return spawnwaiter(sh->sched, (Handle)proc, sh->spawngrp!=0);
     Vproc *m = vprocwith(sh, in, out);
