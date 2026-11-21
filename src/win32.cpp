@@ -1622,14 +1622,17 @@ static void helperdone(Os *os, Helper *hp)
     w->helper = 0;
     w->active = 0;
     if (io) os->nwait--;
-    b32 reuse = 0;
+    // An interposition made while this operation was in flight waits
+    // for it (lend): what it read goes through the pipe first, then a
+    // pump takes over, or the children see the end of file
+    Interpose *ip    = w->ip;
+    b32        wait  = ip && !ip->started && ip->iw;
+    b32        reuse = 0;
     switch (hp->op) {
     case H_READ:
     case H_CONREAD:
-        if (hp->n && !io && w->ip && !w->ip->started && w->ip->iw) {
-            // An interposition waited for this read: its byte goes
-            // through the pipe, then the pump takes over
-            writeall(w->ip->iw, hp->buf, hp->n);
+        if (hp->n && !io && wait) {
+            writeall(ip->iw, hp->buf, hp->n);
             hp->n = 0;
         }
         appendahead(os, w, hp->buf, hp->n);
@@ -1651,20 +1654,6 @@ static void helperdone(Os *os, Helper *hp)
                 pushdone(os, io);
             }
         }
-        if (w->ip && !w->ip->started && w->ip->iw) {
-            Interpose *ip = w->ip;
-            ip->started = 1;
-            if constexpr (LIBMODE) lib_unhandle(os, ip->iw);  // the pump's
-            hp->op     = H_PUMP;
-            hp->iw     = ip->iw;
-            hp->stop   = 0;
-            hp->pstate = 0;
-            ip->iw     = 0;
-            w->helper  = hp;
-            __atomic_store_n(&hp->live, 1, __ATOMIC_SEQ_CST);
-            SetEvent(hp->go);
-            reuse = 1;
-        }
         break;
     case H_WRITE:
         io->n   = hp->n;
@@ -1673,7 +1662,15 @@ static void helperdone(Os *os, Helper *hp)
         pushdone(os, io);
         break;
     case H_PUMP:
-        appendahead(os, w, hp->buf, hp->n);  // read after the stop
+        // A stopped pump still blocked in a read when its children went
+        // (a console's, or a pipe's on XP): what it read after the stop,
+        // and an end of file, are the next reader's
+        if (hp->n && wait) {
+            writeall(ip->iw, hp->buf, hp->n);
+            hp->n = 0;
+        }
+        appendahead(os, w, hp->buf, hp->n);
+        w->eof |= hp->eof && hp->stop;
         break;
     case H_CONNECT:
         if (io) {
@@ -1682,6 +1679,24 @@ static void helperdone(Os *os, Helper *hp)
             pushdone(os, io);
         }
         break;
+    }
+    if (wait && w->eof) {
+        w->eof = 0;
+        closeh(os, ip->iw);
+        ip->iw = 0;
+        ip->started = 1;
+    } else if (wait) {
+        ip->started = 1;
+        if constexpr (LIBMODE) lib_unhandle(os, ip->iw);  // the pump's
+        hp->op     = H_PUMP;
+        hp->iw     = ip->iw;
+        hp->stop   = 0;
+        hp->pstate = 0;
+        ip->iw     = 0;
+        w->helper  = hp;
+        __atomic_store_n(&hp->live, 1, __ATOMIC_SEQ_CST);
+        SetEvent(hp->go);
+        reuse = 1;
     }
     if (!reuse) {
         hp->next = os->idle;
@@ -1904,8 +1919,10 @@ static void drainpipe(Os *os, Wobj *w, uz ir)
 // pump and drain what they left into the read-ahead.
 static void stopinterpose(Os *os, Wobj *w)
 {
+    // Its own pump only: one not started waits for the operation in
+    // flight, perhaps a pump stopped before (helperdone)
     Interpose *ip = w->ip;
-    Helper    *hp = w->helper && w->helper->op==H_PUMP ? w->helper : 0;
+    Helper    *hp = ip->started && w->helper && w->helper->op==H_PUMP ? w->helper : 0;
     if (hp) {
         __atomic_store_n(&hp->stop, 1, __ATOMIC_SEQ_CST);
         for (i32 i = 0;; i++) {
@@ -1987,7 +2004,7 @@ static uz lend(Os *os, uz h, Wobj **out, b32 *viaip)
             closeh(os, iw);
             ip->iw = 0;
             ip->started = 1;
-        } else if (!reading) {
+        } else if (!w->helper) {
             if (issue(os, w, h, H_PUMP, 0, iw)) {
                 ip->iw = 0;
                 ip->started = 1;
@@ -1995,7 +2012,8 @@ static uz lend(Os *os, uz h, Wobj **out, b32 *viaip)
                 listhungry(os, w);  // all helpers busy: helperdone starts it
             }
         }
-        // else the pump starts once the read in flight ends (helperdone)
+        // else the pump starts once the operation in flight ends
+        // (helperdone), never over it
     }
     w->ip->children++;
     *viaip = 1;
