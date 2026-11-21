@@ -68,6 +68,7 @@ static Os *ctrlos;  // the one Os, for the console handler and os_oom
 [[noreturn]] static void os_oom()
 {
     if (ctrlos) flushw(ctrlos);
+    if (ctrlos) ttyabandon(ctrlos);
     Str msg = "bash: out of memory\n";
     writeall(GetStdHandle(STD_ERROR_HANDLE), msg.data, msg.len);
     ExitProcess(2);

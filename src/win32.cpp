@@ -694,6 +694,9 @@ struct Os {
     i32        ttykeys;    // atomic: reads give keys (TK_*), not lines
     i32        ttyinmode;  // and its modes before
     i32        ttyoutmode;
+    uz         ttyin;      // and its handles, for ttyabandon
+    uz         ttyout;
+    b32        ttypaste;   // TTY_PASTE
     i32        conhi;      // conkeys: a high surrogate read, its low one not
     uz         jobkeys;    // completion keys handed out
     u32        jobflags;   // limits of each program's job (see newjob)
@@ -3562,10 +3565,23 @@ enum : i32 {  // console modes
     CM_NO_AUTO_RETURN = 0x0008,
 };
 
+// The console's modes as they were before os_tty changed them, and
+// bracketed paste off, for an end of the process that skips
+// TTY_RESTORE (os_oom), as posix.cpp's.
+static void ttyabandon(Os *os)
+{
+    if (!os->ttyraw) return;
+    os->ttyraw = 0;
+    if (os->ttypaste) writeall(os->ttyout, (u8 *)"\x1b[?2004l", 8);
+    SetConsoleMode(os->ttyin, os->ttyinmode);
+    SetConsoleMode(os->ttyout, os->ttyoutmode);
+}
+
 static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
 {
     flushw(os);
     Tty r = {};
+    b32 paste = !!(how & TTY_PASTE);
     how &= ~TTY_PASTE;
     i32 imode = 0;
     i32 omode = 0;
@@ -3581,7 +3597,10 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
             os->ttyraw     = 1;
             os->ttyinmode  = imode;
             os->ttyoutmode = omode;
+            os->ttyin      = in;
+            os->ttyout     = out;
         }
+        os->ttypaste = paste && how==TTY_RAW;
         i32 base = os->ttyinmode;
         switch (how) {
         case TTY_RAW: {
@@ -3611,7 +3630,8 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
             break;
         }
     } else if (how==TTY_RESTORE && os->ttyraw) {
-        os->ttyraw = 0;
+        os->ttyraw   = 0;
+        os->ttypaste = 0;
         __atomic_store_n(&os->ttykeys, TK_LINES, __ATOMIC_SEQ_CST);
         SetConsoleMode(in, os->ttyinmode);
         SetConsoleMode(out, os->ttyoutmode);
