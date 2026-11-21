@@ -1176,7 +1176,25 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
 
     i32 status = 0;
     u32 arrbits = on & (V_ARRAY|V_ASSOC);
-    for (; i < nargs; i++) {
+    u32 on0 = on, off0 = off;  // each name starts from the options
+    // bash assigns each literal name=(...) as the words expand: those go
+    // first, then the xtrace line (DeclTrace), then the rest in order
+    DeclTrace *dt = sh->decltrace;
+    sh->decltrace = 0;
+    iz   first = i, count = nargs - first;
+    Str *refarr = alloc<Str>(&scratch, count);  // -n on one: told in its place
+    for (iz step = 0; step < (print ? count : 2*count); step++) {
+        b32 later = !print && step>=count;
+        i = first + (later ? step-count : step);
+        if (dt && step==(print ? 0 : count)) tracedecl(sh, scratch, dt);
+        if (later && refarr[i-first].data) {
+            Str msg = concat(&scratch, refarr[i-first], ": reference variable cannot be an array");
+            builtinerror(sh, scratch, name, msg);
+            status = 1;
+        }
+        if (!print && (compflag(sh, args, i)==1) == later) continue;
+        on  = on0;
+        off = off0;
         Str a = args[i];
         if (local && a=="-") {
             // Save the set options for the function's return
@@ -1241,9 +1259,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         b32  forcelocal = local || (name!="export" && name!="readonly" && sh->funcdepth);
         b32  onref    = !!(on & V_NAMEREF);
         if (onref && wordcomp && val.len>1 && val[0]=='(' && val[val.len-1]==')') {
-            // declare -n r=(...): reported, then assigned as an array
-            Str msg = concat(&scratch, vname, ": reference variable cannot be an array");
-            builtinerror(sh, scratch, name, msg);
+            // declare -n r=(...): assigned as an array, then reported
+            // among the rest, as bash's declare -n r finds an array
+            refarr[i-first] = vname;
             on   &= ~V_NAMEREF;
             onref = 0;
             Value *old = rawlookup(sh, vname);
@@ -1548,7 +1566,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             // that a hook (LC_ALL, POSIXLY_CORRECT) reads through it
             u32 pre = aon | (on & V_NAMEREF);
             if (pre || off) setattrs(sh, vname, pre, off);
-            if (sh->opt[O_XTRACE] && (name=="export" || name=="readonly")) {
+            if (sh->opt[O_XTRACE] && (name=="export" || name=="readonly") && !wordcomp) {
                 traceassign(sh, scratch, vname, append, val);  // as bash does
             }
             b32 ok = 0;

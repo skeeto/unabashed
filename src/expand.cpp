@@ -3665,12 +3665,13 @@ static Slice<Str> compoundwords(Shell *sh, Arena *a, Str s)
     return r;
 }
 
-struct CItem {      // an element of an indexed compound assignment
+struct CItem {      // an element of a compound assignment
     Str word;       // as written, for messages
-    Str sub;
+    Str key;        // the subscript or key, expanded
     Str val;
-    b32 hassub;
-    b32 append;
+    u8  hassub;
+    u8  append;
+    u8  badsub;     // as written: 1 for @ or *, 2 for empty
 };
 
 // While the list for a new local expands, the binding it hides shows:
@@ -3715,6 +3716,27 @@ static Array *appendtarget(Shell *sh, Arena scratch, Str name, i32 flags, Hidden
     return *own;
 }
 
+// One word of an associative compound assignment, expanded: [key]=value,
+// or else (from declare, for xtrace and its message) a bare value.
+static CItem assocword(Shell *sh, Arena *a, Str w, b32 decl)
+{
+    CItem it = {};
+    it.word = w;
+    iz eq = assignment(w, 1);
+    if (!eq) {
+        if (decl) it.val = expandstring(sh, a, w, XC_ASSIGN);
+        return it;
+    }
+    Str lhs = takehead(w, eq);
+    it.hassub = 1;
+    it.append = lhs.len && lhs[lhs.len-1]=='+';
+    if (it.append) lhs = cuttail(lhs, 1);
+    X *x   = newx(sh, a);
+    it.key = subkey(x, span(lhs.data+1, lhs.data+lhs.len-1));
+    it.val = expandstring(sh, a, cuthead(w, eq+1), XC_ASSIGN);
+    return it;
+}
+
 // Discard the rest of the command after a failed compound assignment.
 [[noreturn]] static void compoundfail(Shell *sh)
 {
@@ -3722,12 +3744,42 @@ static Array *appendtarget(Shell *sh, Arena scratch, Str name, i32 flags, Hidden
     escape(sh, ESC_DISCARD);
 }
 
+static void traceline(Shell *, Arena, Str);  // exec.cpp
+
+// One word of a declaration's name=(...) as bash's xtrace shows it,
+// expanded and requoted: 'value', or ['sub']='value'.
+static Str traceitem(Arena *a, b32 hassub, Str sub, b32 append, Str value)
+{
+    if (!hassub) return singlequote(a, value);
+    Str head = concat3(a, "[", singlequote(a, sub), append ? Str("]+=") : Str("]="));
+    return concat(a, head, singlequote(a, value));
+}
+
+// The xtrace line bash prints as it assigns a declaration's name=(...)
+// (DeclTrace), before the command's own.
+static void tracecompound(Shell *sh, Arena *a, Str name, b32 append, Slice<Str> items)
+{
+    Buf b(a, name.len+64);
+    print(&b, name);
+    print(&b, append ? Str("+=(") : Str("=("));
+    for (iz i = 0; i < items.len; i++) {
+        if (i) putbyte(&b, ' ');
+        print(&b, items[i]);
+    }
+    putbyte(&b, ')');
+    Str line = finish(&b);
+    traceline(sh, *a, line);
+}
+
 // Assign name=(body). From declare, words in messages appear quoted, as
-// bash shows them after requoting.
+// bash shows them after requoting, and xtrace shows them so.
 static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flags, b32 decl = 0)
 {
     Arena *a  = &scratch;
     Store *st = sh->store;
+    Str    given = name;
+    b32    trace = decl && sh->opt[O_XTRACE];
+    Slice<Str> traced = {};
     Slice<Str> words = compoundwords(sh, a, body);
     if (!(flags & SV_NOREF)) {
         // A copy: the nameref's value it points into may change while
@@ -3763,9 +3815,26 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
                 it.append = lhs.len && lhs[lhs.len-1]=='+';
                 if (it.append) lhs = cuttail(lhs, 1);
                 it.word   = w;
-                it.sub    = span(lhs.data+1, lhs.data+lhs.len-1);
+                Str raw   = span(lhs.data+1, lhs.data+lhs.len-1);
                 it.hassub = 1;
-                it.val    = expandstring(sh, a, cuthead(w, eq+1), XC_ASSIGN);
+                it.badsub = allsub(raw) ? 1 : !raw.len ? 2 : 0;
+                // Unlike a[sub]=v, quotes in the subscript are removed.
+                // bash then removes them once more, which drops each
+                //  (its internal escape) before the next byte. As in
+                // bash, the subscript expands with the words, before any
+                // is evaluated: [n=1]=a [$n]=b uses the old n.
+                X  *x   = newx(sh, a);
+                Str sub = expandword(x, raw, 0);
+                if (find(sub, "") >= 0) {
+                    Buf b(a, sub.len);
+                    for (iz i = 0; i < sub.len; i++) {
+                        if (sub[i]==1 && i+1<sub.len) i++;
+                        putbyte(&b, sub[i]);
+                    }
+                    sub = finish(&b);
+                }
+                it.key = sub;
+                it.val = expandstring(sh, a, cuthead(w, eq+1), XC_ASSIGN);
                 items = push(a, items, it);
                 continue;
             }
@@ -3779,6 +3848,13 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
                 items = push(a, items, it);
             }
         }
+        if (trace) {
+            for (iz k = 0; k < items.len; k++) {
+                CItem it = items[k];
+                traced = push(a, traced, traceitem(a, it.hassub, it.key, it.append, it.val));
+            }
+            tracecompound(sh, a, given, append, traced);
+        }
         unhide(hid);
         Value *val = assignslot(sh, scratch, name, flags|SV_FORCE);
         toarray(sh, val);
@@ -3789,28 +3865,15 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
         for (iz k = 0; k < items.len; k++) {
             CItem it = items[k];
             if (it.hassub) {
-                if (allsub(it.sub)) {
+                if (it.badsub == 1) {
                     shellerror(sh, scratch, concat(a, it.word, ": cannot assign to non-numeric index"));
                     compoundfail(sh);
                 }
-                if (!it.sub.len) {
+                if (it.badsub == 2) {
                     badarraysub(sh, scratch, it.word);
                     compoundfail(sh);
                 }
-                // Unlike a[sub]=v, quotes in the subscript are removed.
-                // bash then removes them once more, which drops each
-                //  (its internal escape) before the next byte.
-                X  *x   = newx(sh, a);
-                Str sub = expandword(x, it.sub, 0);
-                if (find(sub, "") >= 0) {
-                    Buf b(a, sub.len);
-                    for (iz i = 0; i < sub.len; i++) {
-                        if (sub[i]==1 && i+1<sub.len) i++;
-                        putbyte(&b, sub[i]);
-                    }
-                    sub = finish(&b);
-                }
-                ind = evalarith(sh, a, sub).value;
+                ind = evalarith(sh, a, it.key).value;
                 if (ind < 0) {
                     Value *v = lookup(sh, name);
                     ind = (i64)((u64)ind + (u64)(v && v->arr ? amax(v->arr) : -1) + 1);
@@ -3833,31 +3896,35 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
 
     // Associative: build the new table while the old stays visible. An
     // append goes to the live table, its words expanded as they come, so
-    // later ones see earlier elements.
+    // later ones see earlier elements. From declare they all expand first,
+    // as bash's, and xtrace shows them before any message.
     Value *val = assignslot(sh, scratch, name, flags|SV_FORCE);
     Array *dst = append ? val->arr : newassoc(st, val->arr->nbuckets);
     Array *own = append ? 0 : dst;
     u32    at  = val->attrs;
     b32    failed = 0;
+    b32    early  = !append || decl;
     Hidden hid = hidelocal(sh, name, flags);
     if (words.len && !assignment(words[0], 1)) {
         // key value key value ..., each word expanded as an assignment
         // value is: no splitting, no globbing
         Slice<Str> f = {};
-        for (iz k = 0; !append && k < words.len; k++) {
+        for (iz k = 0; early && k < words.len; k++) {
             f = push(a, f, expandstring(sh, a, words[k], XC_ASSIGN));
+            if (trace) traced = push(a, traced, singlequote(a, f[k]));
         }
-        iz n = append ? words.len : f.len;
+        if (trace) tracecompound(sh, a, given, append, traced);
+        iz n = words.len;
         for (iz k = 0; k < n; k += 2) {
             Str key, v;
-            if (append) {
+            if (!early) {
                 key = expandstring(sh, a, words[k], XC_ASSIGN);
                 v   = k+1<n ? expandstring(sh, a, words[k+1], XC_ASSIGN) : Str("");
-                dst = appendtarget(sh, scratch, name, flags, hid, dst, &own);
             } else {
                 key = f[k];
                 v   = k+1<n ? f[k+1] : Str("");
             }
+            if (append) dst = appendtarget(sh, scratch, name, flags, hid, dst, &own);
             if (!key.len) {
                 // declare shows the word requoted, and goes on
                 badarraysub(sh, scratch, decl ? singlequote(a, key) : words[k]);
@@ -3873,26 +3940,28 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
             hput(st, dst, key, sclone(st, v));
         }
     } else {
+        Slice<CItem> items = {};
+        for (iz k = 0; decl && k < words.len; k++) {
+            items = push(a, items, assocword(sh, a, words[k], 1));
+            CItem it = items[k];
+            if (trace) traced = push(a, traced, traceitem(a, it.hassub, it.key, it.append, it.val));
+        }
+        if (trace) tracecompound(sh, a, given, append, traced);
         for (iz k = 0; k < words.len; k++) {
-            Str w  = words[k];
-            iz  eq = assignment(w, 1);
-            if (!eq) {
-                Str shown = decl ? singlequote(a, w) : w;
+            CItem it = decl ? items[k] : assocword(sh, a, words[k], 0);
+            if (!it.hassub) {
+                Str shown = decl ? singlequote(a, it.val) : it.word;
                 Str msg = concat(a, concat3(a, name, ": ", shown),
                                  ": must use subscript when assigning associative array");
                 shellerror(sh, scratch, msg);
                 failed = 1;
                 break;
             }
-            Str lhs = takehead(w, eq);
-            b32 app = lhs.len && lhs[lhs.len-1]=='+';
-            if (app) lhs = cuttail(lhs, 1);
-            X  *x   = newx(sh, a);
-            Str key = subkey(x, span(lhs.data+1, lhs.data+lhs.len-1));
-            Str v   = expandstring(sh, a, cuthead(w, eq+1), XC_ASSIGN);
+            Str key = it.key;
+            Str v   = it.val;
             if (append) dst = appendtarget(sh, scratch, name, flags, hid, dst, &own);
             if (!key.len) {
-                Str shown = w;
+                Str shown = it.word;
                 if (decl) {
                     shown = concat3(a, "[", singlequote(a, key), "]=");
                     shown = concat(a, shown, singlequote(a, v));
@@ -3902,7 +3971,7 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
                 break;
             }
             HItem *t = hfind(dst, key);
-            v = assignedvalue(sh, a, at, t ? t->val : Str{}, v, app ? SV_APPEND : 0);
+            v = assignedvalue(sh, a, at, t ? t->val : Str{}, v, it.append ? SV_APPEND : 0);
             if (append && (at & V_INTEGER)) {
                 dst = appendtarget(sh, scratch, name, flags, hid, dst, &own);
             }

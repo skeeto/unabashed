@@ -3272,6 +3272,25 @@ static void poptemps(Shell *sh, Temps *tb)
     while (tb && tb->n) poptemp(sh, tb->names[--tb->n]);
 }
 
+// The xtrace of a declaration builtin given a literal name=(...): bash
+// assigns and traces those while the words expand, then traces the
+// command with each as its name alone. The builtin prints this once it
+// has assigned them (declarelike), else runsimple1 does.
+struct DeclTrace {
+    Assign *as;  // the temporary bindings
+    iz      nassign;
+    Str    *argv;
+    iz      argc;
+};
+
+static void tracedecl(Shell *sh, Arena a, DeclTrace *t)
+{
+    for (iz i = 0; i < t->nassign; i++) {
+        traceassign(sh, a, t->as[i].name, 0, t->as[i].bound);  // as bound
+    }
+    tracewords(sh, a, t->argv, t->argc);
+}
+
 [[gnu::noinline]]
 static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb);
 
@@ -3659,11 +3678,30 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         if (f) fdset(sh, 0, f, 0, a);
     }
 
+    DeclTrace *dt = 0;
     if (sh->opt[O_XTRACE]) {
-        for (iz i = 0; i < nassign; i++) {
-            traceassign(sh, scratch, as[i].name, 0, as[i].bound);  // as bound
+        b32 comp = 0;
+        for (iz i = 0; i < compargs.len; i++) comp |= compargs[i] == 1;
+        dt = comp ? alloc<DeclTrace>(a) : 0;
+        if (dt) {
+            dt->as      = as;
+            dt->nassign = nassign;
+            dt->argv    = alloc<Str>(a, argv.len);
+            dt->argc    = argv.len;
+            for (iz i = 0; i < argv.len; i++) {
+                Str w = argv[i];
+                if (i<compargs.len && compargs[i]==1) {
+                    w = takehead(w, assignment(w, 0));
+                    if (w.len && w[w.len-1]=='+') w = cuttail(w, 1);
+                }
+                dt->argv[i] = w;
+            }
+        } else {
+            for (iz i = 0; i < nassign; i++) {
+                traceassign(sh, scratch, as[i].name, 0, as[i].bound);  // as bound
+            }
+            tracewords(sh, scratch, argv.data, argv.len);
         }
-        tracewords(sh, scratch, argv.data, argv.len);
     }
 
     // Job control shorthand: "%N" is "fg %N", and "%N &" is "bg %N",
@@ -3700,6 +3738,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     b32 redirected = jobspec || doredirs(sh, n->redirs, a, keep, child);
     sh->bltname = savedname;
     if (!redirected) {
+        if (dt) tracedecl(sh, scratch, dt);
         unwind(sh, mark);
         sh->status = sh->redirfail;
         Builtin *sb = findbuiltin(sh, name);
@@ -3727,6 +3766,10 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     if (!(special && sh->opt[O_POSIX]) && !jobspec) {
         // as bash, a name with a slash too, outside POSIX mode
         if (!sh->opt[O_POSIX] || !haspath(sh, name)) fn = findfunc(sh, name);
+    }
+    if (dt && (fn || !bi)) {
+        tracedecl(sh, scratch, dt);  // no declaration builtin to wait for
+        dt = 0;
     }
 
     if (posixfatal(sh) && rofail) {
@@ -3803,7 +3846,10 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             sh->nowriteerr = 0;
             sh->bifatal    = 0;
             sh->rawstatus  = 0;
+            sh->decltrace  = dt;
             sh->status = runbuiltin(sh, bi, argv.data, argv.len, scratch);
+            if (sh->decltrace) tracedecl(sh, scratch, sh->decltrace);
+            sh->decltrace = 0;
             // Only bash's forked child, which exits with the builtin's
             // own status, shows an internal one; the shell maps it to 1
             if (forked && sh->status && sh->rawstatus) {
