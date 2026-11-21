@@ -1236,6 +1236,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             on = (on & ~(V_ARRAY|V_ASSOC)) | (eq<a.len ? arrbits : 0);
         }
         b32  mklocal  = local || (name!="export" && name!="readonly" && sh->funcdepth && !global);
+        // bash's W_FORCELOCAL: an error declaring a literal name=(...)
+        // while it expands is not fatal (-g or not)
+        b32  forcelocal = local || (name!="export" && name!="readonly" && sh->funcdepth);
         b32  onref    = !!(on & V_NAMEREF);
         if (onref && wordcomp && val.len>1 && val[0]=='(' && val[val.len-1]==')') {
             // declare -n r=(...): reported, then assigned as an array
@@ -1363,8 +1366,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             // As bash, a literal name=(...) to a readonly variable is
             // first declared alone (with -aAiluc and the scope), while
             // the arguments expand. An error there is reported under the
-            // stale command name, and abandons the command unless it
-            // declares a local; otherwise the assignment itself fails.
+            // stale command name, and abandons the command unless
+            // forcelocal. Otherwise the shell assigns the array itself
+            // then, and its failure abandons the command.
             u32  bad    = V_ARRAY|V_ASSOC|V_INTEGER|V_LOWER|V_UPPER|V_CAPITAL;
             b32  shadow = mklocal && cur->depth!=sh->funcdepth && !cur->depth;
             Str  msg    = concat(&scratch, vname, ": readonly variable");
@@ -1375,13 +1379,14 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 } else {
                     shellerror(sh, scratch, msg);
                 }
-                if (!mklocal) {
+                if (!forcelocal) {
                     sh->status = 1;
                     escape(sh, ESC_DISCARD);
                 }
             } else {
                 shellerror(sh, scratch, msg);
-                status = 1;
+                sh->status = 1;
+                escape(sh, ESC_DISCARD);
             }
             a  = vname;  // then declared without its value
             eq = a.len;
@@ -1437,12 +1442,12 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                                                     : Str(": cannot convert associative to indexed array"));
             if (wordcomp && eq<a.len) {
                 // found while a literal name=(...) expands, as bash
-                // names the stale command, a function's or none; at
-                // top level that abandons the command, while in a
-                // function it is reported again and the command goes on
+                // names the stale command, a function's or none; unless
+                // forcelocal that abandons the command, else it is
+                // reported again and the command goes on
                 Str stale = {sh->cmdname, sh->cmdnamelen};
                 builtinerror(sh, scratch, stale, msg);
-                if (!sh->funcdepth) {
+                if (!forcelocal) {
                     sh->status = 1;
                     escape(sh, ESC_DISCARD);
                 }

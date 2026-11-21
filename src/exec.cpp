@@ -5233,6 +5233,7 @@ static void runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
     sh->status  = reader && sh->status ? sh->status : 1;
     sh->flow    = FLOW_NONE;
     sh->current = 0;
+    sh->cmdnamelen = 0;  // as bash's unwind of this_command_name
 }
 
 // A $"..." string the parser found under -D or --dump-po-strings,
