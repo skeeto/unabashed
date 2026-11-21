@@ -847,6 +847,8 @@ struct Shell {
     iz       lastargcap;   // read through the dynamic variable _ while
     b32      lastargdirty; // no one assigned, unset or declared _
     i32      cmdnamelen;   // from its call until a simple command ends
+    u8       lastwho[64];  // the last command whose $_ was assigned, not
+    i32      lastwholen;   // dynamic: an integer _'s error names it
     Str      bltname;      // the builtin running (or "((") for messages
     Str     *bltargs;      // and its arguments, which compargs describes
     iz       nbltargs;

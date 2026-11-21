@@ -3320,7 +3320,7 @@ static void tracedecl(Shell *sh, Arena a, DeclTrace *t)
 }
 
 [[gnu::noinline]]
-static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb);
+static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, Temps *tb);
 
 // Does bash fork before applying this command's redirections, as for a
 // program, found or not? Not for a function or a builtin; argv[ex] is
@@ -3339,8 +3339,9 @@ static b32 forksfirst(Shell *sh, Slice<Str> argv, iz ex)
 // alone), never exported. The dynamic variable _ reads it from a buffer,
 // so binding is a copy; only after a script assigned, unset or declared
 // _ is the variable itself made dynamic again (or assigned), as bash
-// rebinds it.
-static void bindlastarg(Shell *sh, Arena scratch, Str last)
+// rebinds it. Who ran it names an integer _'s error, or else the last
+// simple command that did (in a function), as bash's this_command_name.
+static void bindlastarg(Shell *sh, Arena scratch, Str last, Str who = {})
 {
     Store *st = sh->store;
     // Given attributes that change an assignment, _ is no longer the
@@ -3380,7 +3381,15 @@ static void bindlastarg(Shell *sh, Arena scratch, Str last)
         // is unexported. The word may view a variable that -i's
         // evaluation, running code, changes: a copy.
         Str word = clone(&scratch, last);
+        if (who.data) {
+            i32 len = (i32)(who.len<(iz)sizeof(sh->lastwho) ? who.len : 0);
+            copybytes(sh->lastwho, who.data, len);
+            sh->lastwholen = len;
+        }
+        Str saved  = sh->intwho;
+        sh->intwho = {sh->lastwho, sh->lastwholen};
         setvar(sh, scratch, "_", word);
+        sh->intwho = saved;
         Value *v = lookup(sh, "_");
         if (v && (v->attrs & V_EXPORT)) {
             Str name = "_";
@@ -3433,6 +3442,7 @@ static void startlastarg(Shell *sh, Arena scratch, Str value, b32 exported)
 static void runsimple(Shell *sh, Node *n, Arena scratch)
 {
     Str last = {};
+    Str who  = {};
     // Temporary bindings go however the command ends: an escape from an
     // expansion, the builtin, the function or the program's lookup
     // unbinds them too. The escape point is here, where it costs only
@@ -3449,10 +3459,10 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
             escape(sh, tb->e.why);
         }
     }
-    runsimple1(sh, n, scratch, &last, tb);
+    runsimple1(sh, n, scratch, &last, &who, tb);
     if (tb) escleave(sh, &tb->e);
     sh->cmdnamelen = 0;
-    if (last.data) bindlastarg(sh, scratch, last);
+    if (last.data) bindlastarg(sh, scratch, last, who);
     checksigs(sh, scratch);
 }
 
@@ -3468,6 +3478,26 @@ static b32 arrayvarbuiltin(Shell *sh, Str name)
         if (name == names[i]) return !!usablebuiltin(sh, tablebuiltin(name));
     }
     return 0;
+}
+
+// Does bash bind a builtin's $_ through its temporary bindings, as a
+// global nameref _ shows? Not for eval and source, whose commands end
+// them, nor for unset, mapfile and read, which bash runs in a scope of
+// their own (except through builtin), nor through a function's own _.
+static b32 bindintemps(Shell *sh, Slice<Str> argv)
+{
+    Value *u = rawlookup(sh, "_");
+    if (!u || !(u->attrs & V_NAMEREF) || u->depth) return 0;
+    b32 direct = 0;
+    iz  i      = 0;
+    for (; i<argv.len && (argv[i]=="command" || argv[i]=="builtin"); i++) {
+        direct |= argv[i] == "builtin";
+    }
+    if (i == argv.len) return 1;
+    Str name = argv[i];
+    if (name=="eval" || name=="source" || name==".") return 0;
+    return direct || !(name=="unset" || name=="mapfile" ||
+                       name=="readarray" || name=="read");
 }
 
 // As bash, a program finds its own path in $_, run directly or by
@@ -3488,7 +3518,7 @@ static Slice<Str> envlastarg(Shell *sh, Arena *a, Slice<Str> env, Str name)
     return env;
 }
 
-static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
+static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, Temps *tb)
 {
     // A direct pipeline stage's program starts without waiting, but not
     // the programs its words or a trap run first: they finish before it
@@ -3671,12 +3701,16 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         } else if (!ok) {
             escape(sh, ESC_DISCARD);  // as bash abandons the command
         }
+        bindlastarg(sh, scratch, *last);  // before ERR, as bash
+        *last = {};
         if (!forked) checkerrexit(sh);
         return;
     }
 
     Str name = argv[0];
     *last = argv[argv.len-1];
+    *who  = name;  // as bash's this_command_name, the command command runs
+    for (iz i = 1; i<argv.len && (*who=="command" || *who=="builtin"); i++) *who = argv[i];
     // bash's child for a stage or job runs a builtin or function no
     // longer interactive, though its words expanded while it still was
     sh->subchild |= forked;
@@ -3849,6 +3883,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         escape(sh, special&&!fn ? ESC_FATAL : ESC_DISCARD);
     }
 
+    b32 tempsbind = 0;
     if (fn || bi) {
         // bash's child for a stage counts as a subshell once its words
         // expand, so only for what a builtin or function runs; the
@@ -3904,6 +3939,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             i32 len = (i32)(name.len<(iz)sizeof(sh->cmdname) ? name.len : 0);
             copybytes(sh->cmdname, name.data, len);
             sh->cmdnamelen = len;
+            *who = {};  // its last simple command's, as bash's this_command_name
             callfunction(sh, fn, argv.data, argv.len, scratch);
             sh->line = fnline(sh, n->line);
         } else {
@@ -3971,12 +4007,17 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             }
         }
         sh->redirs = redirs;
-        // bash puts its line back to the enclosing command's before it
-        // drops the temporary environment: hooks (setlocale) cite that
-        i32 line = sh->line;
-        sh->line = sh->ctlline;
-        poptemps(sh, tb);
-        sh->line = line;
+        // bash binds $_ while a builtin's temporary bindings last
+        tempsbind = !fn && tb && tb->n && bindintemps(sh, argv);
+        if (!tempsbind) {
+            // bash puts its line back to the enclosing command's before
+            // it drops the temporary environment: hooks (setlocale) cite
+            // that
+            i32 line = sh->line;
+            sh->line = sh->ctlline;
+            poptemps(sh, tb);
+            sh->line = line;
+        }
     } else {
         // bash redirects a program in its forked child, so a procsub
         // there does not set $! here
@@ -4037,6 +4078,15 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
         reportchild(sh, scratch, n);
     }
     unwind(sh, mark);
+    // before ERR and set -e, as bash binds it
+    bindlastarg(sh, scratch, *last, *who);
+    *last = {};
+    if (tempsbind) {
+        i32 line = sh->line;  // the enclosing command's, as above
+        sh->line = sh->ctlline;
+        poptemps(sh, tb);
+        sh->line = line;
+    }
     if (sh->flow!=FLOW_RETURN && !forked) {
         checkerrexit(sh);
     }
