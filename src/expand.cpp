@@ -3739,6 +3739,10 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
                 break;
             }
             v = assignedvalue(sh, a, at, {}, v, 0);
+            if (append && (at & V_INTEGER)) {
+                // the evaluation may have run code too
+                dst = appendtarget(sh, scratch, name, flags, hid, dst, &own);
+            }
             hput(st, dst, key, sclone(st, v));
         }
     } else {
@@ -3772,6 +3776,9 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
             }
             HItem *t = hfind(dst, key);
             v = assignedvalue(sh, a, at, t ? t->val : Str{}, v, app ? SV_APPEND : 0);
+            if (append && (at & V_INTEGER)) {
+                dst = appendtarget(sh, scratch, name, flags, hid, dst, &own);
+            }
             hput(st, dst, key, sclone(st, v));
         }
     }

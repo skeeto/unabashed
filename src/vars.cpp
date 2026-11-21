@@ -714,17 +714,20 @@ static Value *assignslot(Shell *sh, Arena scratch, Str name, i32 flags)
 }
 
 // The string an assignment stores, given the binding's attributes and
-// the old value: integer evaluation, += and case conversion.
+// the old value: integer evaluation, += and case conversion. As bash,
+// the old value is evaluated first: the new one may assign the
+// variable, which frees the old.
 static Str assignedvalue(Shell *sh, Arena *scratch, u32 attrs, Str old, Str value, i32 flags)
 {
     if (attrs & V_INTEGER) {
         Arena a = *scratch;
-        Arith r = evalintvalue(sh, &a, value);
-        i64 n = r.value;
+        i64 o = 0;
         if (flags & SV_APPEND) {
-            Arith o = evalintvalue(sh, &a, old.data ? old : Str("0"));
-            n = (i64)((u64)n + (u64)(o.ok ? o.value : 0));
+            Arith r = evalintvalue(sh, &a, old.data ? old : Str("0"));
+            o = r.ok ? r.value : 0;
         }
+        Arith r = evalintvalue(sh, &a, value);
+        i64 n = (i64)((u64)r.value + (u64)o);
         value = fmti64(scratch, n);
     } else if (flags & SV_APPEND) {
         value = concat(scratch, old, value);
@@ -1208,7 +1211,9 @@ static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str val
     Store *st  = sh->store;
     if (!(flags & SV_NOREF)) name = arraytarget(sh, scratch, name, &flags);
     if (!name.data) return 0;
-    Value *val = assignslot(sh, scratch, name, flags);
+    Var *var = upsertvar(sh, name);
+    name = var->name;  // not a nameref's text, which evaluation may free
+    Value *val = assignvar(sh, scratch, var, flags);
     if (!val) return 0;
     if (val->attrs & V_NOASSIGN) return 1;
     switch (val->dyn) {
@@ -1235,7 +1240,18 @@ static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str val
         Str *e = aget(arr, idx);
         if (e) old = *e;
     }
-    value = assignedvalue(sh, &scratch, val->attrs, old, value, flags);
+    if (val->attrs & V_INTEGER) {
+        value = assignedvalue(sh, &scratch, val->attrs, old, value, flags);
+        // The evaluation may have run code that unset the array, made
+        // it readonly or assigned it anew: assign to it as it is now
+        val = assignvar(sh, scratch, var, flags);
+        if (!val) return 0;
+        if (val->attrs & V_NOASSIGN) return 1;
+        toarray(sh, val);
+        arr = val->arr;
+    } else {
+        value = assignedvalue(sh, &scratch, val->attrs, old, value, flags);
+    }
     if (arr->bucket) {
         hput(st, arr, key, sclone(st, value));
     } else {
@@ -1300,24 +1316,42 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
         flags |= SV_NOREF | (b.global ? SV_GLOBAL : 0);
         flags |= b.depth ? SV_ATDEPTH|b.depth<<16 : 0;
     }
-    Value *val = assignvar(sh, scratch, var ? var : upsertvar(sh, name), flags);
+    if (!var) var = upsertvar(sh, name);
+    name = var->name;  // not a nameref's text, which evaluation may free
+    Value *val = assignvar(sh, scratch, var, flags);
     if (!val) return 0;
     if (val->attrs & V_NOASSIGN) return 1;
     if (val->arr) {
         return setelem(sh, scratch, name, 0, "0", value, flags|SV_FORCE);
     }
     Str old = val->dyn && (flags & SV_APPEND) ? dynvalue(sh, &scratch, val) : val->str;
+    b32 ran = val->attrs & V_INTEGER;
     value = assignedvalue(sh, &scratch, val->attrs, old, value, flags);
-    if (val->dyn == DYN_RANDOM) {
+    i64 n = 0;
+    if (val->dyn==DYN_RANDOM || val->dyn==DYN_SECONDS) {
         Arena a = scratch;
         Arith r = evalarith(sh, &a, value);
+        n   = r.ok ? r.value : 0;
+        ran = 1;
+    }
+    if (ran) {
+        // The evaluation may have run code (a subscript's ${ ...; })
+        // that unset the variable, made it readonly or an array: assign
+        // the result to it as it is now
+        val = assignvar(sh, scratch, var, flags);
+        if (!val) return 0;
+        if (val->attrs & V_NOASSIGN) return 1;
+        if (val->arr) {
+            flags = (flags & ~SV_APPEND) | SV_FORCE;
+            return setelem(sh, scratch, name, 0, "0", value, flags);
+        }
+    }
+    if (val->dyn == DYN_RANDOM) {
         // The same seed gives the same sequence, in this BASHPID
-        sh->random    = pcgseed((u64)(r.ok ? r.value : 0), 0);
+        sh->random    = pcgseed((u64)n, 0);
         sh->randompid = sh->bashpid;
     } else if (val->dyn == DYN_SECONDS) {
-        Arena a = scratch;
-        Arith r = evalarith(sh, &a, value);
-        val->base = (r.ok ? r.value : 0) - (dynnow(sh) - sh->start)/1000000000;
+        val->base = n - (dynnow(sh) - sh->start)/1000000000;
     } else if (val->dyn == DYN_BASH_ARGV0) {
         // $0 follows, and keeps the value if BASH_ARGV0 is unset
         Str prev = sh->argv0;
