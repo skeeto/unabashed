@@ -2231,6 +2231,58 @@ static Str cdcanon(Shell *sh, Arena *a, Str path)
     return canonpath(a, path);
 }
 
+// bash's sh_physpath, for POSIX mode: absolute path with each symbolic
+// link in it followed as it comes, so that a later .. leaves where the
+// link led. Null data on failure, the reason in *err: a component that
+// is missing or under no directory, or more links than MAXSYMLINKS.
+static Str physpath(Shell *sh, Arena *a, Str path, i32 *err)
+{
+    i32 nlink = 0;
+    b32 dbl   = startswith(path, "//") && !startswith(path, "///");
+    Str root  = dbl ? Str("//") : Str("/");
+    Str out   = root;
+    Str rest  = path;
+    for (;;) {
+        iz i = 0;
+        for (; i<rest.len && rest[i]=='/'; i++) {}
+        rest = cuthead(rest, i);
+        if (!rest.len) return out;
+        iz e = 0;
+        for (; e<rest.len && rest[e]!='/'; e++) {}
+        Str comp = takehead(rest, e);
+        rest = cuthead(rest, e);
+        if (comp == ".") continue;
+        if (comp == "..") {
+            iz n = out.len;
+            for (; n>root.len && out[n-1]!='/'; n--) {}
+            out.len = n>root.len ? n-1 : n;
+            continue;
+        }
+        Str prev = out;
+        out = out.len==root.len ? concat(a, out, comp) : concat3(a, out, Str("/"), comp);
+        Str link = os_readlink(sh->os, a, out);
+        if (!link.data) {
+            Stat st = os_stat(sh->os, *a, out, 0);
+            if (st.err) {
+                *err = st.err;
+                return {};
+            }
+            continue;  // no link
+        }
+        if (++nlink > 32) {
+            *err = E_LOOP;
+            return {};
+        }
+        rest = concat3(a, link, Str("/"), rest);
+        out  = prev;
+        if (startswith(link, "/")) {
+            dbl  = startswith(link, "//") && !startswith(link, "///");
+            root = dbl ? Str("//") : Str("/");
+            out  = root;
+        }
+    }
+}
+
 // Make dir, canonical in the mode's form, the working directory: PWD
 // and OLDPWD, the native directory the platform sees (none for a
 // virtual msys directory such as /proc), and its drive's =X: entry.
@@ -2441,6 +2493,13 @@ static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
         return -1;
     }
     Str dest = physical ? cdcanon(sh, &scratch, target) : logical;
+    if (physical && sh->pathmode==PM_POSIX) {
+        // Through its links, as bash; where they cannot be followed it
+        // takes getcwd's name, the nearest here the textual one
+        i32 perr = 0;
+        Str phys = physpath(sh, &scratch, target, &perr);
+        if (phys.data) dest = phys;
+    }
     if (native) dest = diskcase(sh, &scratch, dest);
     if (msys && physical) dest = msysdir(sh, &scratch, dest);  // as getcwd's
     b32 ok = setcwd(sh, scratch, dest, old);
@@ -2767,12 +2826,15 @@ static i32 b_popd(Shell *sh, Str *args, iz nargs, Arena scratch)
 
 static i32 b_pwd(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
-    b32 win = 0;
+    b32 win   = 0;
+    b32 phys  = sh->opt[O_PHYSICAL];
+    b32 pflag = 0;
     for (iz i = 1; i<nargs && args[i].len>1 && args[i][0]=='-'; i++) {
         if (args[i] == "--") break;
         for (iz k = 1; k < args[i].len; k++) {
             switch (args[i][k]) {
-            case 'L': case 'P': break;  // the logical path holds no links
+            case 'L': phys = 0; break;
+            case 'P': phys = pflag = 1; break;
             case 'W':
                 if (sh->pathmode != PM_POSIX) {
                     win = 1;
@@ -2794,6 +2856,14 @@ static i32 b_pwd(Shell *sh, Str *args, iz nargs, Arena scratch)
         return 1;
     }
     Str wd = sh->wd;
+    if (phys && sh->pathmode==PM_POSIX) {
+        // Through its links, as bash (elsewhere the path holds none).
+        // Where they cannot be followed bash takes getcwd's name, the
+        // nearest here the one it has.
+        i32 err = 0;
+        Str p   = physpath(sh, &scratch, wd, &err);
+        if (p.data) wd = p;
+    }
     if (win && sh->pathmode==PM_MSYS) {
         // MSYS2's pwd -W: the Windows form with forward slashes
         PathCtx c = pathctx(sh, &scratch, {});
@@ -2802,7 +2872,8 @@ static i32 b_pwd(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     bprint(sh, wd);
     bprint(sh, "\n");
-    return 0;
+    // In POSIX mode -P sets PWD too, as bash does
+    return sh->opt[O_POSIX] && pflag && !setvar(sh, scratch, "PWD", wd);
 }
 
 // cygpath, msys mode only (also the shell started as cygpath): MSYS2's
