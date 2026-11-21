@@ -1,0 +1,21 @@
+== snap 1
+[oracle@oracle oracle bash] $ HOSTNAME=zz.yy USER=nobody
+[oracle@oracle oracle bash] $ unset HOSTNAME USER
+[oracle@oracle oracle bash] $
+@ 2,30
+== snap 2
+[oracle@oracle oracle bash] $ HOSTNAME=zz.yy USER=nobody
+[oracle@oracle oracle bash] $ unset HOSTNAME USER
+[oracle@oracle oracle bash] $ BASH_ARGV0=/q/r
+[oracle@oracle oracle r] $ bash -c 'x="\s \u \h"; echo "${x@P}"' /a/b/myname
+myname oracle oracle
+[oracle@oracle oracle r] $
+@ 5,27
+== snap 3
+[oracle@oracle oracle bash] $ HOSTNAME=zz.yy USER=nobody
+[oracle@oracle oracle bash] $ unset HOSTNAME USER
+[oracle@oracle oracle bash] $ BASH_ARGV0=/q/r
+[oracle@oracle oracle r] $ bash -c 'x="\s \u \h"; echo "${x@P}"' /a/b/myname
+myname oracle oracle
+[oracle@oracle oracle r] $
+@ 5,27

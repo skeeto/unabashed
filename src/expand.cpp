@@ -803,6 +803,8 @@ static Str promptexpand(X *x, Str r, i32 ctx)
     return r;
 }
 
+static Str ownuser(Shell *, Arena *);
+
 // Decode the backslash escapes of a prompt string. With expand, what
 // they give is quoted for the expansion that follows. With bb, as
 // busybox's line editor decodes a prompt after expanding it: \t, \T,
@@ -885,7 +887,7 @@ static Str promptescapes(X *x, Str s, b32 expand, b32 bb)
             print(&b, sh->cmdnumber - !(promptis(sh, *a, 1) || promptis(sh, *a, 2) ||
                                         promptis(sh, *a, 3)));
             break;
-        case 's':  promptput(&b, basename(sh->shellname), 1, expand); break;
+        case 's':  promptput(&b, basename(shellnameof(sh)), 1, expand); break;
         case 'j': {
             i64 n = 0;
             for (Job *j = sh->jobs; j; j = j->next) n++;
@@ -894,13 +896,10 @@ static Str promptescapes(X *x, Str s, b32 expand, b32 bb)
         case 'l':  print(&b, "tty"); break;
         case 'v':  print(&b, "5.3"); break;
         case 'V':  print(&b, "5.3.0"); break;
-        case 'H':
-            promptput(&b, getplain(sh, a, "HOSTNAME").value, 0, expand);
-            break;
-        case 'h':
-            promptput(&b, cut(getplain(sh, a, "HOSTNAME").value, '.').head, 0, expand);
-            break;
-        case 'u':  promptput(&b, getplain(sh, a, "USER").value, 0, expand); break;
+        // As bash, the names the shell found, not HOSTNAME's and USER's
+        case 'H':  promptput(&b, sh->host, 0, expand); break;
+        case 'h':  promptput(&b, cut(sh->host, '.').head, 0, expand); break;
+        case 'u':  promptput(&b, ownuser(sh, a), 0, expand); break;
         case 'w':
         case 'W': {
             Str pwd  = getplain(sh, a, "PWD").value;
@@ -2126,7 +2125,9 @@ static void expandbraced(X *x, Str whole, i32 ctx)
 static Str readwholefile(Shell *, Arena *, Str, i32 *);
 static b32 parsei64(Str, i64 *);
 
-static Str userhome(Shell *sh, Arena *a, Str user)
+// The password file's field (0 the name, 5 the home) of the entry for
+// user, or with a null name the shell's own user's: null if none.
+static Str pwfield(Shell *sh, Arena *a, Str user, i32 field)
 {
     if (sh->win32) return {};
     i32 err = 0;
@@ -2143,10 +2144,24 @@ static Str userhome(Shell *sh, Arena *a, Str user)
         if (n<6 || !d.ok) continue;  // name:pw:uid:gid:gecos:home:shell
         i64 uid;
         if (user.data ? f[0]==user : parsei64(f[2], &uid) && uid==sh->uid) {
-            return f[5];
+            return f[field];
         }
     }
     return {};
+}
+
+static Str userhome(Shell *sh, Arena *a, Str user)
+{
+    return pwfield(sh, a, user, 5);
+}
+
+// The shell's own user's name, as bash's \u takes it from getpwuid and
+// not from USER: from the password file, else (an account it lacks, as
+// on macOS, or Windows) the name the environment gave at startup.
+static Str ownuser(Shell *sh, Arena *a)
+{
+    Str name = pwfield(sh, a, {}, 0);
+    return name.data ? name : sh->user;
 }
 
 static Str tildeprefix(X *x, Str prefix, b32 *ok)

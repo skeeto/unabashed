@@ -1,0 +1,11 @@
+# A prompt's \h, \H and \u are the names the shell found for its host
+# and its user, as bash's, not HOSTNAME's and USER's values, which they
+# once were. \s is bash's shell_name: argv[0], else the $0 that -c
+# names, else what BASH_ARGV0 was last given (once argv[0] always).
+rc PS1='[\u@\h \H \s] $ '
+keys HOSTNAME=zz.yy USER=nobody\r
+keys unset HOSTNAME USER\r
+snap
+keys BASH_ARGV0=/q/r\r
+keys bash -c 'x="\\s \\u \\h"; echo "${x@P}"' /a/b/myname\r
+snap

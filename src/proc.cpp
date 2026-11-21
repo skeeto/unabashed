@@ -413,6 +413,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
         copybytes(c->pstatbig, sh->pstatbig, sh->npstat);
     }
     c->host       = sclone(st, sh->host);
+    c->user       = sclone(st, sh->user);
     c->hosts      = sclone(st, sh->hosts);
     c->badenv     = (Str *)salloc(st, (sh->nbadenv ? sh->nbadenv : 1)*(iz)sizeof(Str));
     for (iz i = 0; i < sh->nbadenv; i++) c->badenv[i] = sclone(st, sh->badenv[i]);
@@ -438,6 +439,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->srcframes  = copysrcframes(a, sh->srcframes, sh->frame, c->frame);
     c->argvbase   = copyargs(a, sh->argvbase);
     c->shellname  = sclone(st, sh->shellname);
+    c->cname      = sclone(st, sh->cname);
     c->hist       = copyhist(st, sh->hist);
     c->exe        = sclone(st, sh->exe);
     if (image) {

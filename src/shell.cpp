@@ -682,7 +682,8 @@ struct Shell {
                            // in (shift advances it), or none: freed
                            // when replaced
     Str      name;         // $0
-    Str      shellname;    // argv[0], for \s in prompts
+    Str      shellname;    // argv[0]
+    Str      cname;        // the $0 that -c named, if it did
     Str      iname;        // input name in syntax errors: -c or a file
     Str      srcname;      // BASH_SOURCE[0]: file of the running code
     Str      defsrc;       // a function's origin while importing one
@@ -811,7 +812,8 @@ struct Shell {
     Str      wd;           // logical working directory (bash's
                            // the_current_working_directory), as PWD shows
     i32      cwderr;       // why cwd has no name at all, for pwd
-    Str      host;
+    Str      host;         // the host's name, as the shell started
+    Str      user;         // USER (Windows: USERNAME) as the shell started
     Str      hosts;        // completion's host names, one per line,
     b32      hostsread;    // kept from HOSTFILE once there are any
     Str     *dirs;         // the directory stack under the working
@@ -1122,11 +1124,20 @@ static void flushbout(Shell *sh)
     }
 }
 
+// bash's shell_name, for \s in prompts and an interactive shell's
+// diagnostics: argv[0], replaced by the $0 that -c names, and that by
+// each assignment to BASH_ARGV0.
+static Str shellnameof(Shell *sh)
+{
+    if (sh->argv0.data) return sh->argv0;
+    return sh->cname.data ? sh->cname : sh->shellname;
+}
+
 // The name that starts a diagnostic: as bash, the file of the running
 // code if sourced, else the script, else $0 (which BASH_ARGV0 sets).
 static Str errname(Shell *sh)
 {
-    if (sh->interactive) return progbase(sh->shellname);  // as bash
+    if (sh->interactive) return progbase(shellnameof(sh));  // as bash
     if (sh->srcname.len) return sh->srcname;
     b32 script = !sh->cflag && !sh->interactive;
     return script || !sh->argv0.data ? sh->name : sh->argv0;

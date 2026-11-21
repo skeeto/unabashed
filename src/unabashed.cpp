@@ -891,7 +891,9 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     if (info->euid==0 || !getplain(sh, a, "PS4").set) {
         setvar(sh, scratch, "PS4", "+ ");
     }
-    setvar(sh, scratch, "HOSTNAME", info->host.len ? info->host : Str("oracle"));
+    sh->host = sclone(sh->store, info->host.len ? info->host : Str("oracle"));
+    setvar(sh, scratch, "HOSTNAME", sh->host);
+    sh->user = sclone(sh->store, getplain(sh, a, sh->win32 ? Str("USERNAME") : Str("USER")).value);
     setvar(sh, scratch, "PPID", fmti64(a, info->ppid));
     setattrs(sh, "PPID", V_INTEGER|V_READONLY, 0);
     setvar(sh, scratch, "UID", fmti64(a, info->uid));
@@ -2027,7 +2029,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             cmd = info->args[i++];
             havecmd = 1;
             setvar(sh, scratch, "BASH_EXECUTION_STRING", cmd);
-            if (i < info->nargs) sh->name = info->args[i++];
+            if (i < info->nargs) sh->name = sh->cname = info->args[i++];
             sh->args.v = info->args + i;
             sh->args.n = info->nargs - i;
             sh->iname  = "-c";
