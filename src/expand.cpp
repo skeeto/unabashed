@@ -1795,10 +1795,16 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         if (!exempt) unbound(x, uname);
     }
 
+    // As bash, the pattern operators read the positional parameters, or
+    // an array's elements, again once their words are expanded, though a
+    // scalar or one element keeps the value it had before them
+    b32 relist = p.list && (!p.array || (hassub && varray(sh, x->a, lookup(sh, name))));
+
     if (op=='#' || op=='%') {
         b32 longest = rest.len>1 && rest[1]==op;
         Str patword = cuthead(rest, longest ? 2 : 1);
         Str pat     = expandpat(x, patword, pctx);
+        if (relist) p = hassub ? getelems(x, name, sub) : getparam(x, name);
         i32 mode    = op=='#' ? (longest ? PF_LONGPREFIX : PF_SHORTPREFIX)
                               : (longest ? PF_LONGSUFFIX : PF_SHORTSUFFIX);
         i32 pf = patflags(sh);
@@ -1842,6 +1848,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         b32 amp = sh->shopt[S_PATSUB_REPLACEMENT];
         XField rf = expandfield(x, repword, pctx);
         Str rep = amp ? ampquote(x->a, rf) : rf.data;
+        if (relist) p = hassub ? getelems(x, name, sub) : getparam(x, name);
         i32 pf  = patflags(sh);
         if (sh->shopt[S_NOCASEMATCH]) pf |= PM_NOCASE;  // unlike # and %
         if (!pat.len && mode==PF_FIRST) {
@@ -1866,6 +1873,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         b32 all = rest.len>1 && rest[1]==op;
         Str opstr = takehead(rest, all ? 2 : 1);
         Str pat = expandpat(x, cuthead(rest, opstr.len), pctx);
+        if (relist) p = hassub ? getelems(x, name, sub) : getparam(x, name);
         b32 utf8 = sh->utf8;
         i32 pf = patflags(sh);
         if (p.list) {
@@ -1905,64 +1913,66 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         }
         if (p.list && p.array) {
             // ${a[@]:off:len} selects elements from index off on. As
-            // bash, a negative offset counts back from the end as it was,
-            // but the elements are the array's once the offset and length
-            // are known, which may assign it (a[1]=7, ${ a=(x y); })
+            // bash (verify_substring_values), a negative offset counts
+            // back from the end the offset's own expansion left (a[9]=7,
+            // ${ a=(x y); }), an offset past it selects nothing and leaves
+            // the length unexpanded, and the elements are the array's
+            // once the length is known. An associative array counts its
+            // elements from 1, though 0 is the first too.
             b32 assoc = arr && arr->bucket;
-            i64 top = assoc ? p.ln-1 : p.ln ? p.li[p.ln-1] : -1;
             Arith o = substrarith(x, uname, off);
-            Arith l = {};
-            if (c2 >= 0) {
-                l = substrarith(x, uname, len);
-                if (l.value < 0) {
-                    Arena a = *x->a;
-                    Str msg = concat(&a, len, ": substring expression < 0");
-                    expansionerror(sh, a, msg);
-                }
-            }
             p = hassub ? getelems(x, name, sub) : getparam(x, name);
-            // bash's count of indices wraps for the largest top index,
-            // and then a negative offset selects nothing
-            b32 wraps = top == 0x7fffffffffffffff;
-            i64 from  = o.value>=0 ? o.value : wraps ? -1 : top + 1 + o.value;
-            iz start = p.ln;
-            if (from >= 0) {
-                for (start = 0; start<p.ln && p.li[start]<from; start++) {}
+            i64 e1  = o.value;
+            i64 top = assoc ? p.ln : p.ln ? p.li[p.ln-1] : -1;
+            // the count wraps for the largest index, as bash's
+            i64 lim = (i64)((u64)top + (e1 < 0));
+            if (e1 < 0) e1 = (i64)((u64)e1 + (u64)lim);
+            if (e1<0 || e1>lim) {
+                putlist(x, 0, 0, p.star, ctx);
+                return;
             }
-            iz end = p.ln;
+            i64 count = p.ln;
             if (c2 >= 0) {
-                end = l.value < p.ln-start ? start+(iz)l.value : p.ln;
+                count = substrarith(x, uname, len).value;
+                if (count < 0) substrnegative(x, len);
+                p = hassub ? getelems(x, name, sub) : getparam(x, name);
             }
-            putlist(x, p.lv+start, end-start, p.star, ctx);
+            iz from = p.ln;
+            if (assoc) {
+                from = e1-1 < p.ln ? (iz)(e1>1 ? e1-1 : 0) : p.ln;
+            } else {
+                for (from = 0; from<p.ln && p.li[from]<e1; from++) {}
+            }
+            iz end = count < p.ln-from ? from+(iz)count : p.ln;
+            putlist(x, p.lv+from, end-from, p.star, ctx);
             return;
         }
         if (p.list) {
             // ${@:off:len} selects parameters; offset 0 is $0. As for an
-            // array, set -- in the offset or length changes the list,
-            // but not the end a negative offset counts from
-            iz n = sh->args.n + 1;
+            // array, the end a negative offset counts from, and the last
+            // a length reaches, are the parameters' after the offset's
+            // expansion; they are read once the length's is done
             Arith o = substrarith(x, name, off);
-            i64 start = o.value<0 ? n + o.value : o.value;
-            Arith l = {};
-            if (c2 >= 0) {
-                l = substrarith(x, name, len);
-                if (l.value < 0) {
-                    Arena a = *x->a;
-                    Str msg = concat(&a, len, ": substring expression < 0");
-                    expansionerror(sh, a, msg);
-                }
+            i64 e1  = o.value;
+            i64 lim = sh->args.n + 1 + (e1 == 0);
+            if (e1 < 0) e1 += lim;
+            if (e1<0 || e1>lim) {
+                putlist(x, 0, 0, p.star, ctx);
+                return;
             }
-            n = sh->args.n + 1;
+            i64 e2 = lim;
+            if (c2 >= 0) {
+                i64 l = substrarith(x, name, len).value;
+                if (l < 0) substrnegative(x, len);
+                e2 = l < lim-e1 ? e1+l : lim;
+            }
+            iz n = sh->args.n + 1;
             Str *all = alloc<Str>(x->a, n);
             all[0] = dollar0(sh);
             for (iz k = 0; k < sh->args.n; k++) all[k+1] = sh->args.v[k];
-            if (start < 0) start = n;  // out of range: nothing
-            if (start > n) start = n;
-            i64 end = n;
-            if (c2 >= 0) {
-                end = start+l.value<n ? start+l.value : n;
-            }
-            putlist(x, all+start, (iz)(end-start), p.star, ctx);
+            if (e1 > n) e1 = n;
+            if (e2 > n) e2 = n;
+            putlist(x, all+e1, (iz)(e2-e1), p.star, ctx);
             return;
         }
         putvalue(x, applysubstring(x, uname, p.value, off, len, c2>=0), ctx);
