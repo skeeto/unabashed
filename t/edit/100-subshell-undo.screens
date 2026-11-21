@@ -1,0 +1,46 @@
+== snap 1
+$ echo aaa bbb
+aaa bbb
+$ x=$(read -e v)
+echo aaaZZZQ bbb
+$ echo aaaZZZ bbb
+@ 4,17
+== snap 2
+$ echo aaa bbb
+aaa bbb
+$ x=$(read -e v)
+echo aaaZZZQ bbb
+$ echo aaa bbb
+@ 4,10
+== snap 3
+$ echo ccc bbb
+ccc bbb
+$ x=$(history -c; read -e v)
+yyy
+$ echo ccc bbbXX
+@ 4,16
+== snap 4
+$ echo ccc bbb
+ccc bbb
+$ x=$(history -c; read -e v)
+yyy
+$ echo ccc bbb
+@ 4,14
+== snap 5
+$ history
+    1  echo aaa bbb
+    2  x=$(read -e v)
+    3  echo ccc bbb
+    4  x=$(history -c; read -e v)
+    5  history
+$
+@ 6,2
+== snap 6
+$ history
+    1  echo aaa bbb
+    2  x=$(read -e v)
+    3  echo ccc bbb
+    4  x=$(history -c; read -e v)
+    5  history
+$
+@ 6,2

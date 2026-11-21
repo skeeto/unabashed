@@ -1,0 +1,24 @@
+# A history entry the shell edited keeps its undo list, which read -e
+# in a subshell may walk and add to without changing the shell's: after
+# x=$(history -c; read -e v), and after typing where an entry's last
+# insert ended, the shell's revert-line and undo work as before
+size 24 60
+rc PS1='$ '
+keys echo aaa bbb\r
+keys \e[A\C-a\ef\efZZZ\e[B
+keys x=$(read -e v)\r
+keys \e[A\e[A\C-a\ef\efQ\r
+keys \e[A\e[A
+snap
+keys \C-_
+snap
+keys \C-u\C-lecho ccc\r
+keys \e[AXX\e[B
+keys x=$(history -c; read -e v)\r
+keys yyy\r
+keys \e[A\e[A
+snap
+keys \er
+snap
+keys \C-u\C-lhistory\r
+snap

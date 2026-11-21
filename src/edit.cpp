@@ -1865,13 +1865,17 @@ static void edgroup(Editor *ed, i32 kind)  // U_BEGIN or U_END
 }
 
 // Insert at point, past it. As readline's, a single byte inserted where
-// the last insert ended joins its undo record, up to 20 bytes.
+// the last insert ended joins its undo record, up to 20 bytes, if the
+// record is this Editor's: a history entry's from the parent's, which a
+// subshell edits in turn, stays the parent's as it was.
 static void edinsert(Editor *ed, Str s)
 {
     if (!s.len) return;
     if (!ed->undoing) {
         EdUndo *u = ed->undo;
-        if (s.len==1 && u && u->kind==U_INSERT && u->end==ed->point &&
+        Mem   *m = ed->hmem.mem;
+        b32 own  = (byte *)u>(byte *)m && (byte *)u<m->limit;
+        if (s.len==1 && u && own && u->kind==U_INSERT && u->end==ed->point &&
             u->end-u->beg<20) {
             u->end++;
         } else {
