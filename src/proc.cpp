@@ -560,8 +560,8 @@ static void vprocmain(Task *t)
 {
     Vproc *m  = (Vproc *)t->arg;
     Shell *sh = m->sh;
-    Escape top = {};
-    sh->esc = &top;
+    Escape top;
+    escenter(sh, &top);  // the outermost: the copy has no escape point
     byte stackmark = 0;
     sh->stacktop = STACKAT(stackmark);
     iz room = t->stack - ((iz)1<<16);  // the parent's limit, if smaller
@@ -1005,22 +1005,18 @@ static void dropstages(Shell *sh, Stages *p)
 
 // rundebugtrap with stages started: an escape from the action drops
 // them (dropstages) on its way.
+[[gnu::noinline]]
 static b32 stagesdebugtrap(Shell *sh, Arena scratch, Stages *p)
 {
-    Escape e = {};
-    e.up        = sh->esc;
-    e.bout      = sh->bout;
-    e.undo      = sh->undo;
-    e.frame     = sh->frame;
-    e.loopdepth = sh->loopdepth;
-    sh->esc = &e;
+    Escape e;
+    escenter(sh, &e);
     if (jmpset(e.jmp)) {
-        sh->esc = e.up;
+        escleave(sh, &e);
         dropstages(sh, p);
         escape(sh, e.why);
     }
     b32 skip = rundebugtrap(sh, scratch);
-    sh->esc = e.up;
+    escleave(sh, &e);
     return skip;
 }
 
@@ -1045,6 +1041,23 @@ static b32 stagedebug(Shell *sh, Node *stage, i32 before, Arena scratch,
                        : rundebugtrap(sh, scratch);
     if (!sh->flow) sh->status = before;
     return skip;
+}
+
+// Run a pipeline's last stage in this shell (lastpipe). An escape from
+// it stops here, its reason returned (else 0), so that the caller joins
+// the other stages before passing it on.
+[[gnu::noinline]]
+static i32 laststage(Shell *sh, Node *stage, Arena scratch)
+{
+    Escape e;
+    escenter(sh, &e);
+    if (jmpset(e.jmp)) {
+        escleave(sh, &e);
+        return e.why;
+    }
+    execute(sh, stage, scratch);
+    escleave(sh, &e);
+    return 0;
 }
 
 // A grouped pipeline's last program stopped: the pipeline becomes a
@@ -1240,21 +1253,9 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     } else if (inhere) {
         // In this shell: stages still running must be joined even if
         // it exits
-        Escape e = {};
-        e.up        = sh->esc;
-        e.bout      = sh->bout;
-        e.undo      = sh->undo;
-        e.frame     = sh->frame;
-        e.loopdepth = sh->loopdepth;
-        sh->esc = &e;
-        if (!jmpset(e.jmp)) {
-            execute(sh, stage, child);
-        } else {
-            escaped = 1;
-            why     = e.why;
-        }
-        sh->esc = e.up;
-        status = sh->status;
+        why     = laststage(sh, stage, child);
+        escaped = why != 0;
+        status  = sh->status;
     } else {
         SubJob j = {};
         j.kind = SUB_NODE;

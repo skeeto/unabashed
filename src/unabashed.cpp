@@ -1645,8 +1645,8 @@ static i32 imagemain(Os *os, OsInfo *info)
     if (sh->win32) sh->sniffs = newsniffcache(&perm);
     if (sh->paths) sh->paths->pid = info->pid;
 
-    Escape top = {};
-    sh->esc = &top;
+    Escape top;
+    escenter(sh, &top);  // the outermost: the image has no escape point
     Sigproc *sig = alloc<Sigproc>(&perm);
     sigenter(sh, sig, sh->bashpid, sh->sched->cur);
     sh->sched->top = sig;
@@ -1743,8 +1743,8 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     sh->umask   = 022;
     sh->start   = os_now(os);
 
-    Escape top = {};
-    sh->esc = &top;
+    Escape top;
+    escenter(sh, &top);
     Sigproc *sig = alloc<Sigproc>(&perm);
     sigenter(sh, sig, sh->pid, sh->sched->cur);
     sh->sched->top = sig;

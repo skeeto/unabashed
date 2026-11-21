@@ -2307,15 +2307,11 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     }
     // Killed while the program runs (or any other escape): it runs on,
     // so its output pumps do too, orphaned for the Sched to join
-    Escape e = {};
+    Escape e;
     if (npumps || br.n) {
-        e.up    = sh->esc;
-        e.undo  = sh->undo;
-        e.frame = sh->frame;
-        e.bout  = sh->bout;
-        sh->esc = &e;
+        escenter(sh, &e);
         if (jmpset(e.jmp)) {
-            sh->esc = e.up;
+            escleave(sh, &e);
             for (i32 i = 0; i < npumps; i++) {
                 pumps[i]->sib = s->orphans;
                 s->orphans    = pumps[i];
@@ -2432,7 +2428,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     }
     // What the program wrote is passed on before anything the shell
     // writes next
-    if (npumps || br.n) sh->esc = e.up;
+    if (npumps || br.n) escleave(sh, &e);
     for (i32 i = 0; i < br.n; i++) {
         if (br.t[i]) {
             endbridge(s, br.t[i]);
