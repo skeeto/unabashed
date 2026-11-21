@@ -837,6 +837,8 @@ struct Shell {
                            // compound command, which is not interactive
     b32      forked;       // the next simple command is a stage or job
                            // bash forks first: %N is no command there
+    b32      asyncnull;    // and a job whose input becomes /dev/null once
+                           // its words expand, as in bash's child
     b32      asyncpct;     // the next simple command is "%N &", so bg
     i64      shellpgid;    // the shell's process group under job control
                            // (once set -m turned it on), else 0: no groups

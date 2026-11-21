@@ -45,6 +45,7 @@ static void     closeall(Shell *);
 
 // Jobs (jobs.cpp)
 static b32      fgjobctl(Shell *);
+static File    *devnull(Shell *, Arena);
 static i32      fgstopped(Shell *, Arena, Handle proc, i64 pid, i32 sig);
 static Handle   spawnstage(Shell *, Node *, File *in, File *out, i64 grp,
                            i64 *pid, Arena);
@@ -3266,6 +3267,8 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     b32 async  = sh->asyncpct;
     sh->forked   = 0;
     sh->asyncpct = 0;
+    b32 asyncnull = sh->asyncnull;  // see runasync1
+    sh->asyncnull = 0;
     safepoint(sh->sched);
     sh->line    = fnline(sh, n->line);
     sh->current = n;
@@ -3472,6 +3475,13 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             }
         }
         nassign = kept;
+    }
+
+    if (asyncnull) {
+        // A job's words have expanded with the shell's input: now the
+        // command reads /dev/null
+        File *f = devnull(sh, scratch);
+        if (f) fdset(sh, 0, f, 0, a);
     }
 
     if (sh->opt[O_XTRACE]) {

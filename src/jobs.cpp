@@ -1182,10 +1182,14 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     if (retry) {
         sh->debugdone = debugged;
         sh->forked    = n->kind == N_SIMPLE;
+        // A simple command's words expand first, a procsub reading this
+        // input, and then it reads /dev/null, as bash's child redirects
+        sh->asyncnull = nullin && n->kind==N_SIMPLE;
         b32 redir = forkedstdin(sh, n, 0);
-        t = spawnbg(sh, n, in, 0, &pid, scratch);
+        t = spawnbg(sh, n, sh->asyncnull ? 0 : in, 0, &pid, scratch);
         sh->debugdone  = 0;
         sh->forked     = 0;
+        sh->asyncnull  = 0;
         sh->stdinredir = redir;
         sh->forkstdin  = 0;
     }
