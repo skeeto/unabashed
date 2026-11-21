@@ -3736,6 +3736,13 @@ static Stat plt_fstat(Os *os, Handle h)
 // A program starts at its directory's name: there is nothing to hold.
 static void plt_cwd(Os *, Arena, Str) {}
 
+// Directories are held by name only (plt_cwd)
+static Str plt_getcwd(Os *, Arena *, Str dir, i32 *err)
+{
+    *err = 0;
+    return dir;
+}
+
 // A working directory for CreateProcess: never extended-length, which
 // counts against the limit below and which cmd refuses ("UNC paths are
 // not supported", then starting in the Windows directory).
@@ -5089,6 +5096,7 @@ static constexpr OsVtable pltvtable = {
     .con        = plt_con,
     .list       = plt_list,
     .cwd        = plt_cwd,
+    .getcwd     = plt_getcwd,
     .spawn      = plt_spawn,
     .imagenew   = plt_imagenew,
     .imagefree  = plt_imagefree,

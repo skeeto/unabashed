@@ -136,6 +136,11 @@ static void os_cwd(Os *os, Arena scratch, Str dir)
     osvtable(os)->cwd(os, scratch, dir);
 }
 
+static Str os_getcwd(Os *os, Arena *a, Str dir, i32 *err)
+{
+    return osvtable(os)->getcwd(os, a, dir, err);
+}
+
 static Spawned os_spawn(Os *os, Arena scratch, Spawn *s)
 {
     return osvtable(os)->spawn(os, scratch, s);

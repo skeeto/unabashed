@@ -451,6 +451,53 @@ static i32 enterdir(i32 fd, char *path)
     return (fd>=0 ? fchdir(fd) : chdir(path)) ? errno : 0;
 }
 
+// getcwd's name for the process's directory, however long, or null
+// with errno set.
+static char *getcwdgrow(Arena *a)
+{
+    for (iz cap = PATH_MAX; cap <= (iz)1<<20; cap *= 2) {
+        Arena save = *a;
+        char *buf = (char *)allocbytes(a, cap);
+        if (getcwd(buf, (uz)cap)) return buf;
+        *a = save;
+        if (errno != ERANGE) break;
+    }
+    return 0;
+}
+
+// A pinned directory's name, from getcwd once in it, so ENOENT once it
+// is removed; the process returns to its own at once. Without
+// a pin (always in the library, which so never moves the host's), the
+// name's own resolution.
+static Str plt_getcwd(Os *os, Arena *a, Str dir, i32 *err)
+{
+    flushw(os);
+    *err = 0;
+    Pin *p = findpin(os, dir);
+    if (!p) {
+        char *buf = (char *)allocbytes(a, PATH_MAX);
+        if (dir.len < PATH_MAX && realpath(cpath(a, dir), buf)) return fromcstr(buf);
+        *err = dir.len<PATH_MAX ? coreerr(errno) : E_NAMETOOLONG;
+        return {};
+    }
+    i32 dot = open(".", O_PIN);
+    if (dot < 0) {
+        *err = coreerr(errno);
+        return {};
+    }
+    Str name = {};
+    if (fchdir(p->fd)) {
+        *err = coreerr(errno);
+    } else {
+        char *buf = getcwdgrow(a);
+        *err = buf ? 0 : coreerr(errno);
+        name = buf ? fromcstr(buf) : Str{};
+        if (fchdir(dot)) {}
+    }
+    close(dot);
+    return name;
+}
+
 // The working directory's name for OsInfo.cwd: getcwd's, however long,
 // if it leads back, else an inherited absolute $PWD that names it. Empty,
 // the reason in *err, when it has no name (removed, or a parent cannot
@@ -459,17 +506,10 @@ static Str cwdname(Arena *a, Str *env, iz nenv, i32 *err)
 {
     *err = 0;
     Str name = {};
-    for (iz cap = PATH_MAX; cap <= (iz)1<<20; cap *= 2) {
-        Arena save = *a;
-        char *buf = (char *)allocbytes(a, cap);
-        if (getcwd(buf, (uz)cap)) {
-            struct stat st;
-            name = fromcstr(buf);
-            if (!stat(buf, &st)) return name;
-            break;
-        }
-        *a = save;
-        if (errno != ERANGE) break;
+    if (char *buf = getcwdgrow(a)) {
+        struct stat st;
+        name = fromcstr(buf);
+        if (!stat(buf, &st)) return name;
     }
     i32 e = errno;
     struct stat dot, st;
@@ -2066,6 +2106,7 @@ static constexpr OsVtable pltvtable = {
     .con        = plt_con,
     .list       = plt_list,
     .cwd        = plt_cwd,
+    .getcwd     = plt_getcwd,
     .spawn      = plt_spawn,
     .imagenew   = plt_imagenew,
     .imagefree  = plt_imagefree,

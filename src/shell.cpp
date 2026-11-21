@@ -830,6 +830,9 @@ struct Shell {
     Str      wd;           // logical working directory (bash's
                            // the_current_working_directory), as PWD shows
     i32      cwderr;       // why cwd has no name at all, for pwd
+    b32      wdlost;       // getcwd failed for pwd: bash has no name for
+                           // its directory until it finds one (realwd)
+    b32      wddot;        // bash then names it "." once cd'd to (cdlost)
     Str      host;         // the host's name, as the shell started
     Str      user;         // USER (Windows: USERNAME) as the shell started
     Str      hosts;        // completion's host names, one per line,

@@ -2321,11 +2321,52 @@ static Str physpath(Shell *sh, Arena *a, Str path, i32 *err)
     }
 }
 
+// bash's message, by who asked, when getcwd fails
+static void getcwderror(Shell *sh, Arena scratch, Str who, i32 err)
+{
+    Str msg = concat3(&scratch, who, ": error retrieving current directory: getcwd: "
+                      "cannot access parent directories: ", errtext(err));
+    flushbout(sh);
+    fdwrite(sh, 2, concat(&scratch, msg, "\n"));
+}
+
+// Does the shell's name for its directory still lead there (POSIX)?
+static b32 wdleads(Shell *sh, Arena scratch)
+{
+    if (sh->wddot) return 1;
+    i32  err = 0;
+    Str  now = os_getcwd(sh->os, &scratch, sh->cwd, &err);
+    if (!now.data) return 0;
+    Stat a   = os_stat(sh->os, scratch, sh->wd, 1);
+    Stat b   = os_stat(sh->os, scratch, now, 1);
+    return !a.err && !b.err && a.dev==b.dev && a.ino==b.ino;
+}
+
+// The directory's name now, from getcwd, which bash then keeps as its
+// own (resetpwd), PWD unchanged; or bash's message, by who asked, and
+// null, bash then having no name for its directory (Shell.wdlost). The
+// directory stays held by its old name.
+static Str realwd(Shell *sh, Arena scratch, Str who)
+{
+    i32 err = 0;
+    Str now = os_getcwd(sh->os, &scratch, sh->cwd, &err);
+    if (!now.data) {
+        getcwderror(sh, scratch, who, err);
+        sh->wdlost = 1;
+        return {};
+    }
+    sh->wd = sh->cwd = sclone(sh->store, now);
+    os_cwd(sh->os, scratch, sh->cwd);
+    sh->wdlost = sh->wddot = 0;
+    return sh->wd;
+}
+
 // Make dir, canonical in the mode's form, the working directory: PWD
 // and OLDPWD, the native directory the platform sees (none for a
 // virtual msys directory such as /proc), and its drive's =X: entry.
 static b32 setcwd(Shell *sh, Arena scratch, Str dir, Str old)
 {
+    sh->wdlost = sh->wddot = 0;
     Str ncwd = dir;
     if (sh->pathmode == PM_MSYS) {
         PathRes r = resolve(sh, &scratch, dir);
@@ -2408,10 +2449,9 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
     // print what they took
     if (sh->pathmode==PM_POSIX && !sh->cwd.len && sh->cwderr) {
         // bash first looks for the directory it has no name for
-        flushbout(sh);
-        fdwrite(sh, 2, concat3(&scratch,
-            "chdir: error retrieving current directory: getcwd: "
-            "cannot access parent directories: ", errtext(sh->cwderr), "\n"));
+        getcwderror(sh, scratch, "chdir", sh->cwderr);
+    } else if (sh->pathmode==PM_POSIX && sh->wdlost) {
+        realwd(sh, scratch, "chdir");
     }
     i32 err = 0;
     i32 r   = cdtry(sh, scratch, dir, physical, 1, printdir, &err);
@@ -2481,6 +2521,115 @@ static Str diskcase(Shell *sh, Arena *a, Str path)
     return out;
 }
 
+// bash's second try once the name failed (POSIX): dir as given, from
+// the directory it is in rather than from its name for it, which may no
+// longer lead there (moved or removed under it); the new name is then
+// getcwd's. In a removed directory only dots lead anywhere: .. to the
+// parent it was named under, taking getcwd's name there; else it stays,
+// with bash's message, named as the first try made it (target), still
+// held by its old name. -1 as cdtry, leaving *err to the first try.
+static i32 cdhere(Shell *sh, Arena scratch, Str dir, Str target, Str old,
+                  b32 printdir)
+{
+    i32 gerr = 0;
+    Str here = os_getcwd(sh->os, &scratch, sh->cwd, &gerr);
+    Str t    = here.data ? joinpath(&scratch, here, dir) : Str{};
+    for (Str rest = dir; !here.data && rest.len;) {
+        Cut c = cut(rest, '/');
+        if (c.head == "..") {
+            t = canonpath(&scratch, target);
+        } else if (c.head.len && c.head!=".") {
+            return -1;
+        }
+        rest = c.tail;
+    }
+    b32 ok = 1;
+    if (t.data) {
+        Stat st = pathstat(sh, scratch, t, 1);
+        if (st.err || st.type!=FT_DIR) return -1;
+        i32 perr = 0;
+        Str dest = physpath(sh, &scratch, t, &perr);
+        ok = setcwd(sh, scratch, dest.data ? dest : canonpath(&scratch, t), old);
+    } else {
+        if (!sh->wdlost) getcwderror(sh, scratch, "cd", gerr);
+        ok  = setvar(sh, scratch, "OLDPWD", old);
+        ok &= setvar(sh, scratch, "PWD", target);
+        sh->wd     = sclone(sh->store, target);
+        sh->wdlost = sh->wddot = 0;
+    }
+    if (printdir) {
+        bprint(sh, sh->wd);
+        bprint(sh, "\n");
+    }
+    return !ok;
+}
+
+// cd to a relative dir where bash has no name for its directory, or has
+// "." (Shell.wdlost, wddot: removed under it), so takes dir as named
+// from nothing: only dots lead anywhere, the directory staying and
+// bash naming it ".", or .. to the parent it was named under, taking
+// getcwd's name there (bash: "..", relative). -1 as cdtry.
+static i32 cdlost(Shell *sh, Arena scratch, Str dir, Str old, b32 printdir,
+                  i32 *err)
+{
+    b32 up = 0;
+    for (Str rest = dir; rest.len;) {
+        Cut c = cut(rest, '/');
+        if (c.head == "..") {
+            up = 1;
+        } else if (c.head.len && c.head!=".") {
+            *err = E_NOENT;
+            return -1;
+        }
+        rest = c.tail;
+    }
+    b32 ok = 1;
+    if (up) {
+        Str  t  = canonpath(&scratch, joinpath(&scratch, sh->cwd, dir));
+        Stat st = pathstat(sh, scratch, t, 1);
+        if (st.err || st.type!=FT_DIR) {
+            *err = st.err ? st.err : E_NOTDIR;
+            return -1;
+        }
+        i32 perr = 0;
+        Str dest = physpath(sh, &scratch, t, &perr);
+        ok = setcwd(sh, scratch, dest.data ? dest : t, old);
+    } else {
+        ok  = setvar(sh, scratch, "OLDPWD", old);
+        ok &= setvar(sh, scratch, "PWD", ".");
+        sh->wdlost = 0;
+        sh->wddot  = 1;
+    }
+    if (printdir) {
+        bprint(sh, sh->wddot ? Str(".") : sh->wd);
+        bprint(sh, "\n");
+    }
+    return !ok;
+}
+
+// bash's PATH_CHECKDOTDOT: each .. in path must follow a directory, as
+// named so far, or the logical name fails (*err) and cd with it.
+static b32 dotdotok(Shell *sh, Arena scratch, Str path, i32 *err)
+{
+    for (iz i = 0; i < path.len;) {
+        for (; i<path.len && path[i]=='/'; i++) {}
+        iz e = i;
+        for (; e<path.len && path[e]!='/'; e++) {}
+        if (span(path.data+i, path.data+e) == "..") {
+            Str head = canonpath(&scratch, takehead(path, i));
+            if (head!="/" && head!="//") {
+                Stat st = pathstat(sh, scratch, head, 1);
+                if (st.err || st.type!=FT_DIR) {
+                    *err = st.err ? st.err : E_NOTDIR;
+                    return 0;
+                }
+            }
+        }
+        i = e;
+    }
+    return 1;
+}
+
 static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
                  b32 usecdpath, b32 printdir, i32 *err)
 {
@@ -2497,9 +2646,16 @@ static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
     Str base   = sh->wd;
     b32 native = sh->pathmode == PM_NATIVE;
     Str target = isabsolute(sh, dir) || native ? dir : joinpath(&scratch, base, dir);
+    b32 posix  = sh->pathmode == PM_POSIX;
+    if (posix && (sh->wdlost || sh->wddot) && !isabsolute(sh, dir)) {
+        return cdlost(sh, scratch, dir, old, printdir, err);
+    }
+    // bash's second try, from the directory itself (cdhere)
+    b32 again = posix && (physical || !sh->opt[O_POSIX]);
 
     // CDPATH for relative names not starting with . or ..
     Got cdpath = usecdpath ? getplain(sh, &scratch, "CDPATH") : Got{};
+    b32 viacdpath = 0;
     if (cdpath.set && !isabsolute(sh, dir) && dir[0]!='.') {
         for (Str rest = cdpath.value;;) {
             Cut c = cut(rest, listsep(sh));
@@ -2511,8 +2667,13 @@ static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
                 Stat st = pathstat(sh, scratch, full, 1);
                 if (!st.err && st.type==FT_DIR) {
                     target = abs;
-                    printdir = 1;
+                    printdir = viacdpath = 1;
                     break;
+                }
+                i32 r = -1;
+                if (again && !isabsolute(sh, cand) &&
+                        (r = cdhere(sh, scratch, cand, abs, old, 1))>=0) {
+                    return r;
                 }
             }
             if (!c.ok) break;
@@ -2520,23 +2681,32 @@ static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
         }
     }
 
-    if (sh->pathmode==PM_POSIX && !isabsolute(sh, target)) {
+    if (posix && !isabsolute(sh, target)) {
         *err = E_NOENT;  // no directory name to start from
         return -1;
     }
-    Str logical = cdcanon(sh, &scratch, target);
-    Stat st = pathstat(sh, scratch, physical ? target : logical, 1);
+    Str  logical = cdcanon(sh, &scratch, target);
+    Stat st      = pathstat(sh, scratch, physical ? target : logical, 1);
+    i32  dderr   = 0;
+    if (!st.err && posix && !physical && !dotdotok(sh, scratch, target, &dderr)) {
+        st.err = dderr;
+    }
     if (st.err || st.type!=FT_DIR) {
         *err = st.err ? st.err : E_NOTDIR;
-        return -1;
+        again &= !isabsolute(sh, dir) && !viacdpath;
+        return again ? cdhere(sh, scratch, dir, target, old, printdir) : -1;
     }
     Str dest = physical ? cdcanon(sh, &scratch, target) : logical;
     if (physical && sh->pathmode==PM_POSIX) {
         // Through its links, as bash; where they cannot be followed it
-        // takes getcwd's name, the nearest here the textual one
+        // takes getcwd's name once there
         i32 perr = 0;
         Str phys = physpath(sh, &scratch, target, &perr);
-        if (phys.data) dest = phys;
+        if (!phys.data) {
+            phys = os_getcwd(sh->os, &scratch, target, &perr);
+            if (!phys.data) getcwderror(sh, scratch, "cd", perr);
+        }
+        dest = phys.data ? phys : target;
     }
     if (native) dest = diskcase(sh, &scratch, dest);
     if (msys && physical) dest = msysdir(sh, &scratch, dest);  // as getcwd's
@@ -2887,20 +3057,32 @@ static i32 b_pwd(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     if (sh->pathmode==PM_POSIX && !sh->cwd.len && sh->cwderr) {
         // Started in a directory with no name, and not left since
-        flushbout(sh);
-        fdwrite(sh, 2, concat3(&scratch,
-            "pwd: error retrieving current directory: getcwd: "
-            "cannot access parent directories: ", errtext(sh->cwderr), "\n"));
+        getcwderror(sh, scratch, "pwd", sh->cwderr);
         return 1;
     }
     Str wd = sh->wd;
-    if (phys && sh->pathmode==PM_POSIX) {
+    if (sh->pathmode == PM_POSIX) {
         // Through its links, as bash (elsewhere the path holds none).
-        // Where they cannot be followed bash takes getcwd's name, the
-        // nearest here the one it has.
-        i32 err = 0;
-        Str p   = physpath(sh, &scratch, wd, &err);
-        if (p.data) wd = p;
+        // bash takes getcwd's name where they cannot be followed, where
+        // it has no name (getcwd failed before), and in POSIX mode where
+        // the name no longer leads to the directory; its POSIX mode asks
+        // twice in the second case
+        b32 lost  = sh->wdlost;
+        b32 again = lost;
+        if (sh->wddot) {
+            wd = ".";  // as bash names it (cdlost), -P too
+        } else if (!again && phys) {
+            i32 err = 0;
+            Str p   = physpath(sh, &scratch, wd, &err);
+            wd    = p.data ? p : wd;
+            again = !p.data;
+        }
+        if (!again && sh->opt[O_POSIX]) again = !wdleads(sh, scratch);
+        if (again) {
+            wd = realwd(sh, scratch, "pwd");
+            if (!wd.data && lost && sh->opt[O_POSIX]) realwd(sh, scratch, "pwd");
+            if (!wd.data) return 1;
+        }
     }
     if (win && sh->pathmode==PM_MSYS) {
         // MSYS2's pwd -W: the Windows form with forward slashes

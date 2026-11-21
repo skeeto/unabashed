@@ -407,6 +407,13 @@ static Dirent *os_list(Os *, Arena *, Str dir, i32 *err);
 // dir runs in this directory, as bash's would, even once it is renamed
 // or removed. A no-op elsewhere.
 static void    os_cwd(Os *, Arena scratch, Str dir);
+// The name the directory the shell entered as dir (os_cwd) has now, as
+// getcwd gives it, though dir may no longer lead there (moved, or a
+// link in it changed): null, the reason in *err, when it has none
+// (removed, or a parent cannot be read). A directory the platform does
+// not hold is known by its name: what dir leads to, or simply dir
+// (Windows, the vos).
+static Str     os_getcwd(Os *, Arena *, Str dir, i32 *err);
 // Start a program. The child's descriptors are exactly those listed. A
 // working directory it cannot start in is an error (E_NOENT where it
 // is gone, E_NAMETOOLONG where Windows cannot take it): it never runs
@@ -569,7 +576,8 @@ static Str     lib_root(Os *);
 // 3: os_cputime
 // 4: os_writeerr
 // 5: os_close returns a gathered write's failure
-enum : i32 { OSVTABLE_VERSION = 5 };
+// 6: os_getcwd
+enum : i32 { OSVTABLE_VERSION = 6 };
 
 struct OsVtable {
     i32 version;  // the OSVTABLE_VERSION it implements
@@ -598,6 +606,7 @@ struct OsVtable {
     decltype(os_con)        *con;
     decltype(os_list)       *list;
     decltype(os_cwd)        *cwd;
+    decltype(os_getcwd)     *getcwd;
     decltype(os_spawn)      *spawn;
     decltype(os_imagenew)   *imagenew;
     decltype(os_imagefree)  *imagefree;

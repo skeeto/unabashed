@@ -1984,6 +1984,13 @@ static b32 vntfsless(Dirent **a, Dirent **b)
 // hold either: a removed directory is entered by name as if there).
 static void vos_cwd(Os *, Arena, Str) {}
 
+// Directories are held by name only (vos_cwd)
+static Str vos_getcwd(Os *, Arena *, Str dir, i32 *err)
+{
+    *err = 0;
+    return dir;
+}
+
 // The longest working directory Windows starts a program in, without
 // a trailing slash: MAX_PATH, less the NUL and the slash it appends.
 enum : i32 { VCWDMAX = 258 };
@@ -4432,6 +4439,7 @@ static OsVtable const vosvtable = {
     .con        = vos_con,
     .list       = vos_list,
     .cwd        = vos_cwd,
+    .getcwd     = vos_getcwd,
     .spawn      = vos_spawn,
     .imagenew   = vos_imagenew,
     .imagefree  = vos_imagefree,
