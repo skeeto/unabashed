@@ -5406,6 +5406,10 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
                 histnative(sh);
                 showps0(sh);
             }
+            // As bash's reader loop, a script file's, standard input's
+            // or the prompt's (not -c's), each command starts with no
+            // redirected input for & to keep (see executeone)
+            if (reader) sh->stdinredir = 0;
             if (reader) sh->cmdnumber++;
             // Traps for signals that came while the line was read, as
             // before every command in bash
