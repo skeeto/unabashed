@@ -1,0 +1,33 @@
+== snap 1
+$ #ls ~/a,bc
+$ #ls ~/a]x
+$ #ls ~/a\#x
+$ #ls ~/a}x
+$ #ls ~/a^x
+$ #ls \~/$y1
+$ #ls $HOME/a,bc
+$ #ls ${HOME}/a}x
+$ #ls "$PWD/e/b~x"
+$ #ls "$PWD/e/b{x"
+$ #~/a,
+$ #~/fx
+$
+@ 12,2 bell 1
+== snap 2
+$ HOME=$PWD/d/\$NOPE
+$ #\~/fx
+$ #ls \~/a,bc
+$ #ls \~/a]x
+$ #ls \~/a\#x
+$ #ls \~/$NOPE/a,bc
+$
+@ 6,2 bell 1
+== snap 3
+$ HOME=$PWD/d/\$NOPE
+$ #\~/fx
+$ #ls \~/a,bc
+$ #ls \~/a]x
+$ #ls \~/a\#x
+$ #ls \~/$NOPE/a,bc
+$
+@ 6,2 bell 1

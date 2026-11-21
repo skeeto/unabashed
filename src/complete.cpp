@@ -44,6 +44,7 @@ struct Comp {
     u8         append;    // ' ', '/' or 0
     i32        ignore;    // IG_*
     b32        dirhook;   // expand $ and ` in a directory to open it
+    Str        qkeep;     // what the hook took out of the quoting table
     Str        udir;      // the directory as the user wrote it
     Str        odir;      // and as opened
     Slice<Str> m;         // the matches, sorted and distinct
@@ -252,6 +253,26 @@ static b32 compexists(Shell *sh, Arena a, Str path)
     return !pathstat(sh, a, path, 0).err;
 }
 
+// bash_check_expchar: the character that subjects s to expansion ($
+// anywhere, a leading ~, or `), with the ( or { after a $ and its
+// closer, which bash takes out of its quoting table so that the
+// expansion survives. closed: an unclosed $( ${ or ` does not count.
+static Str compexpchars(Str s, b32 closed)
+{
+    for (iz i = 0; i < s.len; i++) {
+        if (s[i] != '$') continue;
+        u8 n = i+1<s.len ? s[i+1] : 0;
+        if (n!='(' && n!='{') return "$";
+        Str rest = cuthead(s, i+2);
+        if (closed && !compin(rest, n=='(' ? ')' : '}')) return {};
+        return n=='(' ? Str("$()") : Str("${}");
+    }
+    if (s.len && s[0]=='~') return "~";
+    iz ticks = 0;
+    for (iz i = 0; i < s.len; i++) ticks += s[i]=='`';
+    return ticks && (!closed || !(ticks&1)) ? Str("`") : Str{};
+}
+
 // Expand a directory as bash's directory hook does: $ and ` words that
 // do not exist literally, as a prompt string would be (no command
 // substitution); null if expansion fails.
@@ -342,6 +363,10 @@ static Slice<Str> compfiles(Editor *ed, Shell *sh, Comp *c, Str w, i32 keep)
         }
     }
     if (c->dirhook) {
+        // A directory the hook expands sets bash's quoting table for the
+        // rest of the attempt (set_filename_quote_chars)
+        Str keep = compexpchars(odir, 1);
+        if (keep.len && !compexists(sh, *a, odir)) c->qkeep = keep;
         odir = compexpdir(sh, a, odir);
         if (sh->shopt[S_DIREXPAND] && udir.len) udir = odir;
     }
@@ -864,6 +889,22 @@ static Str compbackslash(Arena *a, Str s, Str breaks, Str noesc, b32 tilde)
     return finish(&b);
 }
 
+// bash's partial quoting of a name subject to expansion: the characters
+// of table anywhere, a leading #, and the word breaks but noesc
+static Str comptable(Arena *a, Str s, Str table, Str breaks, Str noesc)
+{
+    Buf b(a, s.len*2);
+    for (iz i = 0; i < s.len; i++) {
+        u8 ch = s[i];
+        if (compin(table, ch) || (i==0 && ch=='#')
+            || (compin(breaks, ch) && !compin(noesc, ch))) {
+            putbyte(&b, '\\');
+        }
+        putbyte(&b, ch);
+    }
+    return finish(&b);
+}
+
 // Quote a match for insertion; *style gets the style used. mult cuts the
 // closing quote.
 static Str compquote(Editor *, Shell *sh, Comp *c, Str s, b32 mult, i32 *style)
@@ -872,17 +913,34 @@ static Str compquote(Editor *, Shell *sh, Comp *c, Str s, b32 mult, i32 *style)
     Str  breaks = c->breaks;
     i32  qs     = c->quote=='\'' ? QS_SINGLE : c->quote=='"' ? QS_DOUBLE : QS_BACKSLASH;
     Str  noesc  = {};
-    b32  plain  = 0;  // double quotes leaving $ and ` alone
-    if (qs==QS_BACKSLASH && !sh->shopt[S_DIREXPAND]
-        && (compin(s, '$') || compin(s, '`')) && !compexists(sh, *a, s)) {
-        noesc = "${}()~`";
-        b32 any = 0;
-        for (iz i = 0; i < s.len; i++) {
-            any |= !compin(noesc, s[i]) && compin(" \t\n\\\"'@<>=;|&#?*[!:", s[i])
-                   && (s[i]!=':' || sh->pathmode!=PM_NATIVE);
+    Str  table  = {};  // bash's partial quoting with these characters
+    b32  plain  = 0;   // double quotes leaving $ and ` alone
+    Str  keep   = compexpchars(s, 0);
+    if (qs==QS_BACKSLASH && !sh->shopt[S_DIREXPAND] && keep.len
+        && !compexists(sh, *a, s)) {
+        // As bash_quote_filename: its filename quote characters less
+        // those that expand, unless the directory hook already set them
+        // this attempt; in double quotes if the expansion holds one
+        Str  all  = " \t\n\\\"'@<>=;|&()#$`?*[!:{~";
+        Str  less = c->qkeep.len ? c->qkeep : Str{};
+        if (keep[0]=='$' || keep[0]=='`') {
+            Str x = compexpdir(sh, a, s);
+            for (iz i = 0; i < x.len; i++) {
+                if (compin(all, x[i]) && !compin(less, x[i])
+                    && (x[i]!=':' || sh->pathmode!=PM_NATIVE)) {
+                    qs = QS_DOUBLE;
+                }
+            }
+            plain = 1;
         }
-        if (any) qs = QS_DOUBLE;
-        plain = 1;
+        less = c->qkeep.len ? c->qkeep : keep;
+        Buf t(a, all.len);
+        for (iz i = 0; i < all.len; i++) {
+            u8 ch = all[i];
+            if (compin(less, ch) || (ch==':' && sh->pathmode==PM_NATIVE)) continue;
+            putbyte(&t, ch);
+        }
+        table = finish(&t);
     } else if (qs==QS_BACKSLASH && compin(s, '\n')) {
         qs = QS_SINGLE;
     } else if (qs==QS_DOUBLE) {
@@ -894,12 +952,13 @@ static Str compquote(Editor *, Shell *sh, Comp *c, Str s, b32 mult, i32 *style)
     Buf b(a, s.len*2+2);
     switch (qs) {
     case QS_BACKSLASH: {
-        b32 tilde = s.len && s[0]=='~' && compexists(sh, *a, s);
         // Without bash's full quoting (the specific commands), = and :
         // are escaped only as word breaks. In native mode : means
         // nothing to the shell, only a drive (d:/), and is never escaped.
         if (c->partial) noesc = concat(a, noesc, "=:");
         if (sh->pathmode == PM_NATIVE) noesc = concat(a, noesc, ":");
+        if (table.data) return comptable(a, s, table, breaks, noesc);
+        b32 tilde = s.len && s[0]=='~' && compexists(sh, *a, s);
         return compbackslash(a, s, breaks, noesc, tilde);
     }
     case QS_SINGLE:

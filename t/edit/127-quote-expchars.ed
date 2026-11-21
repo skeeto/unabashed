@@ -1,0 +1,32 @@
+# A match subject to expansion ($ anywhere, a leading ~, or `) that does
+# not exist as written is quoted as bash_quote_filename does: from its
+# filename quote characters, less the expansion's own ($ and the ( or {
+# after it with the closer, ~, or `), and in double quotes if what it
+# expands to holds one of them. A directory the hook expanded earlier
+# in the attempt has already set the table, so under a home whose name
+# has a $ the leading ~ is quoted: \~/fx.
+size 24 70
+rc PS1='$ '
+rc mkdir -p d e; : >'d/a,bc'; : >'d/a]x'; : >'d/a#x'; : >'d/a}x'; : >'d/a^x'; : >d/fx; chmod +x d/fx; : >'e/b~x'; : >'e/b{x'; : >'d/$y1'
+rc HOME=$PWD/d
+keys ls ~/a,\t\C-a#\r
+keys ls ~/a]\t\C-a#\r
+keys ls ~/a#\t\C-a#\r
+keys ls ~/a}\t\C-a#\r
+keys ls ~/a^\t\C-a#\r
+keys ls ~/\\$\t\C-a#\r
+keys ls \$HOME/a,\t\C-a#\r
+keys ls \${HOME}/a}\t\C-a#\r
+keys ls \$PWD/e/b~\t\C-a#\r
+keys ls \$PWD/e/b{\t\C-a#\r
+keys ~/a,\t\C-a#\r
+keys ~/f\t\C-a#\r
+snap
+keys \C-l
+keys HOME=$PWD/d/\\$NOPE\r
+keys ~/f\t\C-a#\r
+keys ls ~/a,\t\C-a#\r
+keys ls ~/a]\t\C-a#\r
+keys ls ~/a#\t\C-a#\r
+keys ls ~/\$NOPE/a,\t\C-a#\r
+snap
