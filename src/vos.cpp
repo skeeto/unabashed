@@ -1636,11 +1636,12 @@ static Opened vos_tempfile(Os *os, Arena)
 
 static void vdetach(VNode *);
 
-static void vos_close(Os *os, Handle h)
+// Nothing is gathered here, so nothing fails late
+static i32 vos_close(Os *os, Handle h)
 {
     Vos   *v = osvos(os);
     VFile *f = vfile(v, h);
-    if (!f || --f->refs) return;
+    if (!f || --f->refs) return 0;
     if (f->delclose && f->node->parent) vdetach(f->node);
     if (f->kind == VK_PIPEREAD)  f->pipe->readers--;
     if (f->kind == VK_PIPEWRITE) f->pipe->writers--;
@@ -1651,6 +1652,7 @@ static void vos_close(Os *os, Handle h)
         p->buf = 0;
     }
     f->kind = VK_FREE;
+    return 0;
 }
 
 static Handle vos_dup(Os *os, Handle h)

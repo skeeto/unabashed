@@ -357,6 +357,9 @@ struct File {
     iz     pos;
     b32    ownmem;   // mem is store memory to free with the file
     b32    full;     // F_OS: /dev/full, whose writes fail with ENOSPC
+    i32    writer;   // F_OS: the builtin that wrote to it last (bltid),
+    i32    wline;    // its line, and Shell.cmdseq then, for a write error
+    i64    wseq;     // the platform finds only as it closes (fileunref)
 };
 
 // A command substitution's output: what its File (F_CAPTURE) points at.
@@ -454,6 +457,7 @@ enum : i32 {  // reasons to unwind to an escape point
 struct BOut {         // output of the running builtin
     Buf b;        // never grows: it shares an arena with the builtin
     b32 failed;   // an early write failed
+    b32 wrote;    // an early write was made
 };
 
 // An escape point, and the Shell's state when it was set up (escenter):
@@ -746,6 +750,10 @@ struct Shell {
     Redirs   redirs;       // the innermost such call
     i32      funcline;     // the running function's body starts here
     b32      nowriteerr;   // the builtin ignores a failed write (help)
+    i32      bltlast;      // the innermost builtin run last (runbuiltin),
+                           // a bltid: its write errors name it, not
+                           // `command`
+    i64      cmdseq;       // commands begun (runsimple, executeone)
     b32      viacommand;   // a builtin started by `command`, until it
                            // reads this (POSIX mode's fatal errors)
     b32      restricted;   // set -r, rbash: the restrictions apply now
@@ -1059,6 +1067,7 @@ static void runsigs(Shell *, Arena);
 static void runexittrap(Shell *, Arena);
 [[noreturn]] static void sigdie(Shell *, i32, Arena);
 static Arena *scratchat(Shell *, i32);
+static Str    bltidname(i32);  // builtins.cpp
 
 // A write to a pipe without readers: as a process killed by SIGPIPE,
 // the vproc ends silently with status 141, after its EXIT trap, if
@@ -1138,8 +1147,9 @@ static b32 fdwrite(Shell *sh, i32 fd, Str s)
 // buffered so that the builtin's final write reports the error.
 static void flushbout(Shell *sh)
 {
-    if (sh->bout && sh->bout->b.len && fdwrite(sh, 1, finish(&sh->bout->b))) {
-        sh->bout->b.len = 0;
+    if (sh->bout && sh->bout->b.len) {
+        sh->bout->wrote = 1;
+        if (fdwrite(sh, 1, finish(&sh->bout->b))) sh->bout->b.len = 0;
     }
 }
 
@@ -1309,6 +1319,16 @@ static Str errtext(i32 err)
     return "Unknown error";
 }
 
+// A builtin's failed write to its output, as bash's sh_wrerror reports
+// it: other reasons than these show as EBADF there.
+static void writeerror(Shell *sh, Arena scratch, Str name, i32 e)
+{
+    b32 keep = e==E_PIPE || e==E_NOSPC || e==E_ACCES || e==E_NOMEM ||
+               e==E_FBIG || e==E_DQUOT;
+    Str msg  = concat(&scratch, "write error: ", errtext(keep ? e : E_BADF));
+    builtinerror(sh, scratch, name, msg);
+}
+
 
 // Files
 
@@ -1343,11 +1363,23 @@ static b32 fileseekable(Shell *sh, File *f)
     return f->seek == 2;
 }
 
+// A builtin's output the platform gathered may fail only as the file
+// closes, so later than bash's builtin, which flushes its own: that
+// builtin reports it, at its line, and if no command began since, so
+// that bash's status would be its, the status is 1. The store's free
+// end serves for the message, as for refwarning.
 static void fileunref(Shell *sh, File *f)
 {
     if (!f || --f->refs) return;
     if (f->kind == F_OS) {
-        os_close(sh->os, f->h);
+        i32 err = os_close(sh->os, f->h);
+        if (err && f->writer) {
+            i32 line = sh->line;
+            sh->line = f->wline;
+            writeerror(sh, sh->store->a, bltidname(f->writer), err);
+            sh->line = line;
+            if (f->wseq == sh->cmdseq) sh->status = 1;
+        }
     } else if (f->kind == F_PIPE) {
         pipeclose(sh->sched, f->pipe, !(f->flags & OF_READ));
     } else if (f->kind == F_CLIP) {

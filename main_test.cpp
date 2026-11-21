@@ -849,6 +849,69 @@ static Opened refuseopen(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
     return vosvtable.open(os, scratch, path, flags, mode);
 }
 
+// The vos's open and close, the close of a file named "late" failing
+// as a platform's does when output it gathered fails as it goes out
+static Handle lateh = BADHANDLE;
+
+static Opened lateopen(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
+{
+    Opened r = vosvtable.open(os, scratch, path, flags, mode);
+    if (path == "/home/oracle/late") lateh = r.h;
+    return r;
+}
+
+static i32 lateclose(Os *os, Handle h)
+{
+    vosvtable.close(os, h);
+    if (h!=BADHANDLE && h==lateh) {
+        lateh = BADHANDLE;
+        return E_NOSPC;
+    }
+    return 0;
+}
+
+// A write failure found only as the file closes is reported by the
+// builtin that wrote last, at its line, with status 1 if no command
+// began since, as bash's builtin reports its own failed flush.
+static void test_latewrite(Test *t)
+{
+    Os *os = t->os;
+    static OsVtable filter;
+    filter       = vosvtable;
+    filter.open  = lateopen;
+    filter.close = lateclose;
+    os->vt = &filter;
+    Result r = runc(t, "{ echo a; echo b; } >late; echo \"group $?\"\n"
+                       "{ echo a; true; } >late; echo \"true $?\"\n"
+                       "for i in 1 2; do echo $i; done >late; echo \"for $?\"\n"
+                       "f() { printf x; }; f >late; echo \"function $?\"\n"
+                       "exec 3>late; echo a >&3\n"
+                       "exec 3>&-; echo \"exec $?\"\n"
+                       "builtin echo x >late; command printf y >late\n"
+                       ": >late; echo \"no writer $?\"");
+    expect(t, "late write", r.out,
+        "group 1\ntrue 0\nfor 1\nfunction 1\nexec 0\nno writer 0\n");
+    expect(t, "late write err", r.err,
+        "bash: line 1: echo: write error: No space left on device\n"
+        "bash: line 2: echo: write error: No space left on device\n"
+        "bash: line 3: echo: write error: No space left on device\n"
+        "bash: line 4: printf: write error: No space left on device\n"
+        "bash: line 5: echo: write error: No space left on device\n"
+        "bash: line 7: echo: write error: No space left on device\n"
+        "bash: line 7: printf: write error: No space left on device\n");
+
+    // As the shell ends: its status is the builtin's, or exit's
+    r = runc(t, "exec >late; echo a");
+    expect(t, "late write at exit", r.err,
+        "bash: line 1: echo: write error: No space left on device\n");
+    expectint(t, "late write at exit status", r.status, 1);
+    r = runc(t, "exec >late; echo a; exit 0");
+    expectint(t, "late write after exit 0", r.status, 0);
+    r = runc(t, "(echo a >late); echo \"subshell $?\"");
+    os->vt = 0;
+    expect(t, "late write subshell", r.out, "subshell 1\n");
+}
+
 // A copy of a platform table with an entry wrapped: the shell and the
 // programs it runs see the filter, and then the table comes back. A
 // table of another version is refused.
@@ -2329,6 +2392,7 @@ int main(int argc, char **argv)
     test_plainbrace(&t);
     test_treestack(&t);
     test_vtable(&t);
+    test_latewrite(&t);
 
     if (argc>3 && (!strcmp(argv[1], "--oracle") || !strcmp(argv[1], "--oracle-v"))) {
         // --oracle SUITEDIR NAME...: bash test suite runs on the vos

@@ -353,13 +353,15 @@ static b32 owned(Lib *l, uz h)
     return i>=0 && l->hcount[i];
 }
 
-static void libclose(Os *os, Handle h)
+static i32 libclose(Os *os, Handle h)
 {
     if (!owned((Lib *)os, (uz)h)) {
         flushw(os);
-        return;  // never the host's
+        if (h==BADHANDLE || h!=os->werrh) return 0;  // never the host's
+        os->werrh = 0;
+        return E_IO;
     }
-    plt_close(os, h);
+    return plt_close(os, h);
 }
 
 static Handle libdup(Os *os, Handle h)

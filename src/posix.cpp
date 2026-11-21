@@ -572,14 +572,17 @@ static Opened plt_tempfile(Os *os, Arena scratch)
     return r;
 }
 
-static void plt_close(Os *os, Handle h)
+// Not close's own error: bash ignores it too, its output already
+// written by then.
+static i32 plt_close(Os *os, Handle h)
 {
     flushw(os);
-    if (h == BADHANDLE) return;
+    if (h == BADHANDLE) return 0;
     i32 fd = (i32)h;
     if (fd>=0 && fd<countof(os->wkind)) os->wkind[fd] = 0;  // the number may come back
-    if (os->werrfd == (i32)h) os->werrfd = -1;
+    i32 err = wfailed(os, fd);
     close((i32)h);
+    return err;
 }
 
 static Handle plt_dup(Os *os, Handle h)

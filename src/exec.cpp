@@ -46,6 +46,7 @@ static i32      b_command(Shell *, Str *, iz, Arena);
 static void     edrelease(Shell *, Editor *up);  // edit.cpp
 static void     joinpsubs(Shell *);
 static void     closeall(Shell *);
+static void     exitflush(Shell *);
 
 // Jobs (jobs.cpp)
 static b32      fgjobctl(Shell *);
@@ -183,6 +184,7 @@ static void bprint(Shell *sh, Str s)
 {
     BOut *o = sh->bout;
     if (o->b.cap-o->b.len < s.len) {
+        o->wrote = 1;
         if (o->b.len) {
             o->failed |= !fdwrite(sh, 1, finish(&o->b));
             o->b.len = 0;
@@ -3447,6 +3449,7 @@ static void startlastarg(Shell *sh, Arena scratch, Str value, b32 exported)
 
 static void runsimple(Shell *sh, Node *n, Arena scratch)
 {
+    sh->cmdseq++;
     Str last = {};
     Str who  = {};
     // Temporary bindings go however the command ends: an escape from an
@@ -3583,14 +3586,15 @@ static void callbuiltin(Shell *sh, Builtin *bi, Str name, Slice<Str> argv,
     sh->nbltargs = savednargs;
     sh->compargs = savedcomp;
     sh->bout = saved;
+    File *out = sh->fds->fd[1];
+    if ((b.b.len || b.wrote) && !sh->nowriteerr && out && out->kind==F_OS) {
+        out->writer = sh->bltlast;  // should its close find a failure
+        out->wline  = sh->line;
+        out->wseq   = sh->cmdseq;
+    }
     b32 failed = (b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed;
     if (failed && !sh->nowriteerr) {
-        i32 e   = sh->writeerr;
-        b32 keep = e==E_PIPE || e==E_NOSPC || e==E_ACCES || e==E_NOMEM ||
-                   e==E_FBIG || e==E_DQUOT;
-        Str why  = errtext(keep ? e : E_BADF);
-        Str msg = concat(&scratch, "write error: ", why);
-        builtinerror(sh, scratch, name, msg);
+        writeerror(sh, scratch, bltidname(sh->bltlast), sh->writeerr);
         sh->status = 1;
     }
 }
@@ -5089,6 +5093,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     }
     checkstack(sh);
     sh->intwho = {};
+    sh->cmdseq++;
     Undo *mark = sh->undo;
     b32   invert = n->flags & CMD_INVERT;
     if (invert) sh->noerrexit++;

@@ -606,6 +606,7 @@ static void vprocmain(Task *t)
             runexittrap(sh, *scratchat(sh, 0));
         }
     }
+    exitflush(sh);
     // its last program's death, if that is still its status
     b32 tail = sh->childsig && sh->taillevel==sh->subshell+1 &&
                (sh->status & 255)==128+sh->childsig;
@@ -785,6 +786,22 @@ static void closeall(Shell *sh)
         fds->fd[fd] = 0;
     }
     fds->top = 0;
+}
+
+// As a (sub)shell ends, close the files a builtin wrote to, so that
+// output the platform gathered for them goes out while a failure can
+// still be reported and change the status (fileunref), as bash's
+// builtin reports its own as it flushes.
+static void exitflush(Shell *sh)
+{
+    Fdtab *fds = sh->fds;
+    for (i32 fd = 0; fd < fds->top; fd++) {
+        File *f = fds->fd[fd];
+        if (f && f->kind==F_OS && f->writer) {
+            fileunref(sh, f);
+            fds->fd[fd] = 0;
+        }
+    }
 }
 
 static Str procsubst(Shell *sh, Arena *a, Str body, b32 output)

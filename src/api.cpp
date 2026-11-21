@@ -358,7 +358,10 @@ static Opened  os_tempfile(Os *, Arena scratch);
 // held; it is deleted once the handle closes (with os_dup's copies).
 // E_NOSYS elsewhere.
 static NamedTemp os_namedtemp(Os *, Arena *, Str dir);
-static void    os_close(Os *, Handle);
+// Close a handle. Output the platform gathered for it goes out first:
+// the error (E_*) of such a write that failed as it went out, not yet
+// returned by a later os_write to the handle, else 0.
+static i32     os_close(Os *, Handle);
 // Remove a file (not a directory) by absolute path: an error, or 0.
 static i32     os_unlink(Os *, Arena scratch, Str path);
 // Rename a file by absolute paths, replacing any file at to: an error,
@@ -565,7 +568,8 @@ static Str     lib_root(Os *);
 // 2: os_cwd, and os_spawn's working directory is never skipped
 // 3: os_cputime
 // 4: os_writeerr
-enum : i32 { OSVTABLE_VERSION = 4 };
+// 5: os_close returns a gathered write's failure
+enum : i32 { OSVTABLE_VERSION = 5 };
 
 struct OsVtable {
     i32 version;  // the OSVTABLE_VERSION it implements

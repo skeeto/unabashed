@@ -3259,17 +3259,20 @@ static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 // Never the last handle of an object in an operation: helpers use a
 // private duplicate (Wobj.own), released once the object is unused.
 // An operation that ended meanwhile may release it in drainwake already.
-static void plt_close(Os *os, Handle h)
+// A failed flush of its gathered output is E_IO, as taskwrite guesses.
+static i32 plt_close(Os *os, Handle h)
 {
     flushw(os);
-    if (h == BADHANDLE) return;
-    if (h == os->werrh) os->werrh = 0;  // the handle value may come back
+    if (h == BADHANDLE) return 0;
+    i32 err = h==os->werrh ? E_IO : 0;
+    if (err) os->werrh = 0;  // the handle value may come back
     Wobj *w = unreg(os, h);
     if (w) {
         drainwake(os);
         maybefree(os, w);
     }
     closeh(os, h);
+    return err;
 }
 
 static Handle plt_dup(Os *os, Handle h)

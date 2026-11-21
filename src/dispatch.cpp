@@ -51,9 +51,9 @@ static NamedTemp os_namedtemp(Os *os, Arena *a, Str dir)
     return osvtable(os)->namedtemp(os, a, dir);
 }
 
-static void os_close(Os *os, Handle h)
+static i32 os_close(Os *os, Handle h)
 {
-    osvtable(os)->close(os, h);
+    return osvtable(os)->close(os, h);
 }
 
 static i32 os_unlink(Os *os, Arena scratch, Str path)

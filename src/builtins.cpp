@@ -5115,9 +5115,17 @@ static void compbuiltins(Shell *sh, Arena *a, Slice<Str> *out)
     }
 }
 
+// A builtin's name by its bltid, its place in builtins plus 1, kept
+// where a state image may hold it: no pointer out of the image
+static Str bltidname(i32 id)
+{
+    return id>0 && id<=countof(builtins) ? builtins[id-1].name : Str{};
+}
+
 // Run a builtin: NAME --help describes it instead, as bash's do
 static i32 runbuiltin(Shell *sh, Builtin *b, Str *args, iz nargs, Arena scratch)
 {
+    sh->bltlast = (i32)(b - builtins) + 1;
     if (nargs>1 && args[1]=="--help" && !(b->flags & B_NOHELP)) {
         return builtinhelp(sh, args[0], scratch);
     }

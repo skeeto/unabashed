@@ -1690,6 +1690,7 @@ static i32 imagemain(Os *os, OsInfo *info)
             runexittrap(sh, scratch);
         }
     }
+    exitflush(sh);
     // its last program's death, if that is still its status
     b32 tail = sh->childsig && sh->taillevel==sh->subshell+1 &&
                (sh->status & 255)==128+sh->childsig;
@@ -2186,6 +2187,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         histexit(sh);
     }
     jobctloff(sh);
+    exitflush(sh);
     if constexpr (LIBMODE) {
         // A library's run: the non-standard descriptors close, so that
         // the procsubs reading them finish, and get a second to do so.

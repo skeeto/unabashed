@@ -293,15 +293,15 @@ static Opened libtempfile(Os *os, Arena scratch)
     return r;
 }
 
-static void libclose(Os *os, Handle h)
+static i32 libclose(Os *os, Handle h)
 {
     Lib *l = (Lib *)os;
     if (!fdowned(l, (i64)h)) {
         flushw(os);
-        return;  // never the host's
+        return h==BADHANDLE ? 0 : wfailed(os, (i32)h);  // never the host's
     }
     fdgive(l, (i32)h);
-    plt_close(os, h);
+    return plt_close(os, h);
 }
 
 static Handle libdup(Os *os, Handle h)
