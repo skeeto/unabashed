@@ -873,7 +873,7 @@ static Str16 widepath(Arena *a, Str path)
     }
 }
 
-static b32 hassuffix(Str s, Str suffix)  // ASCII case-insensitive
+static b32 hassuffix(Str s, Str suffix)  // ASCII case-insensitive, suffix lower
 {
     if (s.len < suffix.len) return 0;
     Str tail = taketail(s, suffix.len);
@@ -3766,7 +3766,7 @@ static Str envget(Str *env, iz nenv, Str name)
 {
     for (iz i = 0; i < nenv; i++) {
         Str n = envname(env[i]);
-        if (n.len==name.len && hassuffix(n, name) && n.len<env[i].len) {
+        if (equalfold(n, name) && n.len<env[i].len) {
             return cuthead(env[i], n.len+1);
         }
     }
