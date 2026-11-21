@@ -1484,7 +1484,7 @@ static Str tracequote(Shell *sh, Arena *a, Str s)
 static Str traceprefix(Shell *sh, Arena *a)
 {
     // Unset, there is no prefix at all
-    Got g = getvar(sh, a, "PS4");
+    Got g = getplain(sh, a, "PS4");
     if (!g.set) return {};
 
     // PS4 is a prompt string: decoded, then expanded as if in double
@@ -2551,7 +2551,7 @@ static Str envvalue(Shell *sh, Arena *a, Str name)
 {
     Value *v = lookup(sh, name);
     if (!v || !(v->attrs & V_EXPORT)) return {};
-    Got g = getvar(sh, a, name);
+    Got g = getplain(sh, a, name);
     return !g.set ? Str{} : g.value.data ? g.value : Str("");
 }
 
@@ -2634,7 +2634,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
             chldreaped(sh, 1);
             return status;
         }
-        if (!path.data && !getvar(sh, &a, "PATH").set) {
+        if (!path.data && !getplain(sh, &a, "PATH").set) {
             // bash tries the bare name, in the working directory
             undotemps(sh, argv);
             Str msg = concat(&a, name, ": No such file or directory");
@@ -2846,7 +2846,7 @@ static void leaveframe(Shell *sh, Frame *f)
 [[gnu::noinline]]
 static void checkfuncnest(Shell *sh, Str name, Arena scratch)
 {
-    Got nest = getvar(sh, &scratch, "FUNCNEST");
+    Got nest = getplain(sh, &scratch, "FUNCNEST");
     i64 limit = 0;
     if (nest.set && parsei64(nest.value, &limit) && limit>0 && sh->funcdepth>=limit) {
         Str msg = concat3(&scratch, name,
@@ -2991,7 +2991,7 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
     if (!escaped) {
         if (valsub) makelocal(sh, &scratch, "REPLY");
         runsource(sh, src, sh->iname, scratch, 0, comsubline(sh, 1), 0, 0, 1);
-        if (valsub) val = clone(a, getvar(sh, &scratch, "REPLY").value);
+        if (valsub) val = clone(a, getplain(sh, &scratch, "REPLY").value);
     }
     escleave(sh, &e);
     sh->tracedepth = tracedepth;
@@ -4055,7 +4055,7 @@ static void timereport(Shell *sh, Arena scratch, Usage u, b32 posix, b32 since)
     if (posix) {
         fmt = "real %2R\nuser %2U\nsys %2S";
     } else {
-        Got g = getvar(sh, &scratch, "TIMEFORMAT");
+        Got g = getplain(sh, &scratch, "TIMEFORMAT");
         if (g.set) {
             fmt = g.value;
         } else if (since) {
@@ -4684,7 +4684,7 @@ static void selectmenu(Shell *sh, Arena scratch, Slice<Str> list)
     iz colwidth = maxlen + width + 4;  // ") " and two spaces
 
     i64 columns = 80;
-    Got g = getvar(sh, &scratch, "COLUMNS");
+    Got g = getplain(sh, &scratch, "COLUMNS");
     if (!g.set || !parsei64(g.value, &columns) || columns<=0) columns = 80;
     iz cols = (iz)(columns / colwidth);
     cols = cols ? cols : 1;
@@ -4770,7 +4770,7 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
         Arena it = scratch;
         if (loopsafepoint(sh, it)) break;
         if (menu) selectmenu(sh, it, list);
-        Got ps3 = getvar(sh, &it, "PS3");
+        Got ps3 = getplain(sh, &it, "PS3");
         fdwrite(sh, 2, ps3.set ? ps3.value : Str("#? "));
         // As bash, the read builtin with no options or names: REPLY,
         // backslashes processed, TMOUT the default timeout. Its failure
@@ -4782,7 +4782,7 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
             sh->status = 1;
             break;
         }
-        Str reply = getvar(sh, &it, "REPLY").value;
+        Str reply = getplain(sh, &it, "REPLY").value;
         menu = !trim(reply).len;
         if (menu) continue;
         i64 choice = 0;

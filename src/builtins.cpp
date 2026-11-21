@@ -633,7 +633,7 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
     for (iz k = 0; k < file.len; k++) slash |= file[k]=='/';
     slash |= sh->pathmode!=PM_POSIX && haspath(sh, file);
     if (!slash && (only || sh->shopt[S_SOURCEPATH])) {
-        if (!only) g = getvar(sh, &scratch, "PATH");
+        if (!only) g = getplain(sh, &scratch, "PATH");
         b32 found = 0;
         for (Str rest = g.value; g.set;) {
             Cut c = cut(rest, listsep(sh));
@@ -1982,7 +1982,7 @@ static void setpathmode(Shell *sh, Arena scratch, PathMode mode)
 {
     if (!sh->win32 || mode==sh->pathmode) return;
     PathCtx c    = pathctx(sh, &scratch, {});
-    Got     path = getvar(sh, &scratch, "PATH");
+    Got     path = getplain(sh, &scratch, "PATH");
     Str     ncwd = spawncwd(sh, &scratch);
     // The new mode first: native PATH assignment rewrites colons
     sh->pathmode = mode;
@@ -2251,7 +2251,7 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
     Str dir;
     b32 printdir = 0;
     if (i == nargs) {
-        Got g = getvar(sh, &scratch, "HOME");
+        Got g = getplain(sh, &scratch, "HOME");
         if (!g.set) {
             builtinerror(sh, scratch, name, "HOME not set");
             return 1;
@@ -2261,7 +2261,7 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
         builtinerror(sh, scratch, name, "too many arguments");
         return 2;
     } else if (args[i] == "-") {
-        Got g = getvar(sh, &scratch, "OLDPWD");
+        Got g = getplain(sh, &scratch, "OLDPWD");
         if (!g.set) {
             builtinerror(sh, scratch, name, "OLDPWD not set");
             return 1;
@@ -2291,7 +2291,7 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
     i32 err = 0;
     i32 r   = cdtry(sh, scratch, dir, physical, 1, printdir, &err);
     if (r<0 && sh->shopt[S_CDABLE_VARS] && validvarname(dir)) {
-        Got v = getvar(sh, &scratch, dir);
+        Got v = getplain(sh, &scratch, dir);
         if (v.set && (r = cdtry(sh, scratch, v.value, physical, 0, 0, &err))>=0) {
             bprint(sh, v.value);
             bprint(sh, "\n");
@@ -2366,14 +2366,14 @@ static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
     // msys mode a Windows-form directory, as imported from a native
     // parent's PWD, stays in that form, as Git Bash keeps it: made
     // POSIX first, a one-letter directory under / would be a drive.
-    Got pwd    = getvar(sh, &scratch, "PWD");
+    Got pwd    = getplain(sh, &scratch, "PWD");
     Str old    = pwd.set ? pwd.value : sh->wd;
     Str base   = sh->wd;
     b32 native = sh->pathmode == PM_NATIVE;
     Str target = isabsolute(sh, dir) || native ? dir : joinpath(&scratch, base, dir);
 
     // CDPATH for relative names not starting with . or ..
-    Got cdpath = usecdpath ? getvar(sh, &scratch, "CDPATH") : Got{};
+    Got cdpath = usecdpath ? getplain(sh, &scratch, "CDPATH") : Got{};
     if (cdpath.set && !isabsolute(sh, dir) && dir[0]!='.') {
         for (Str rest = cdpath.value;;) {
             Cut c = cut(rest, listsep(sh));
@@ -2485,7 +2485,7 @@ static Str spellpath(Shell *sh, Arena *a, Str path)
 // A directory as dirs shows it: under $HOME as ~
 static Str politedir(Shell *sh, Arena *a, Str dir)
 {
-    Got home = getvar(sh, a, "HOME");
+    Got home = getplain(sh, a, "HOME");
     if (!home.set || home.value.len<2) return dir;
     iz n = homeprefix(sh, dir, home.value);
     return n<0 ? dir : concat(a, "~", cuthead(dir, n));
@@ -2807,8 +2807,8 @@ static i32 b_cygpath(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
     }
     PathCtx c      = pathctx(sh, &scratch, {});
-    Str     windir = getvar(sh, &scratch, "SYSTEMROOT").value;
-    windir = windir.len ? windir : getvar(sh, &scratch, "WINDIR").value;
+    Str     windir = getplain(sh, &scratch, "SYSTEMROOT").value;
+    windir = windir.len ? windir : getplain(sh, &scratch, "WINDIR").value;
     CygRun  r      = cygpathrun(&c, &scratch, &o, args, nargs, in, windir);
     // cygpath buffers its output until it exits, except with -f, where
     // it flushes each line: the error comes first or last
@@ -2999,7 +2999,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
         return !inputready(sh, in);  // -t 0: is there input?
     }
     if (!timed) {
-        Got tm = getvar(sh, &scratch, "TMOUT");  // the default timeout
+        Got tm = getplain(sh, &scratch, "TMOUT");  // the default timeout
         if (tm.set && !parsetimeout(tm.value, &timeout)) timeout = 0;
     }
     timeout = timeout<0 ? 0 : timeout;
@@ -3260,7 +3260,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (d == '\n') {
                 // a line continuation, prompted for as bash does
                 if (sh->interactive && tty && !edit) {
-                    fdwrite(sh, 2, getvar(sh, &scratch, "PS2").value);
+                    fdwrite(sh, 2, getplain(sh, &scratch, "PS2").value);
                 }
                 continue;
             }
@@ -4164,7 +4164,7 @@ static i32 getopts(Shell *sh, Str *args, iz nargs, Arena scratch)
     b32 quiet = silent;
     {
         // OPTERR=0 also quiets the messages: bash reads it as atoi
-        Got e = getvar(sh, &scratch, "OPTERR");
+        Got e = getplain(sh, &scratch, "OPTERR");
         if (e.set) {
             Str s = trim(e.value);
             iz  i = s.len && (s[0]=='-' || s[0]=='+');
@@ -4174,7 +4174,7 @@ static i32 getopts(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
     }
 
-    Got g = getvar(sh, &scratch, "OPTIND");
+    Got g = getplain(sh, &scratch, "OPTIND");
     i64 optind = 1;
     // bash keeps OPTIND in an int: larger values are truncated
     if (!parsei64(g.value, &optind)) optind = 1;

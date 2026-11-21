@@ -808,7 +808,7 @@ struct PcCtx {
 
 static Str pcwordbreaks(Shell *sh, Arena *a)
 {
-    Got g = getvar(sh, a, "COMP_WORDBREAKS");
+    Got g = getplain(sh, a, "COMP_WORDBREAKS");
     if (g.set) return g.value;
     return wordbreaks(sh, sh->shopt[S_HOSTCOMPLETE]);
 }
@@ -1003,7 +1003,7 @@ static PcRes pcgenerate(Shell *sh, Arena *a, CompSpec *cs, PcCtx *x)
         r.m = pcappend(a, r.m, g);
     }
     if (cs->has & (1u<<PS_WORDS)) {
-        Got ifs = getvar(sh, a, "IFS");
+        Got ifs = getplain(sh, a, "IFS");
         Slice<Str> raw = pcifssplit(a, cs->str[PS_WORDS], ifs.set ? ifs.value : Str(" \t\n"));
         Word  *head = 0;
         Word **tail = &head;

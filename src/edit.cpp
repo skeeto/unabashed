@@ -3394,12 +3394,12 @@ static void edshellcmd(Editor *ed, Shell *sh, Str cmd)
     sh->lexeof = lexeof;
     edraw(ed, sh);
 
-    Got g = getvar(sh, &a, names[0]);
+    Got g = getplain(sh, &a, names[0]);
     if (g.set) edreplace(ed, g.value);
     i64 n = 0;
-    g = getvar(sh, &a, names[1]);
+    g = getplain(sh, &a, names[1]);
     if (g.set && parsei64(g.value, &n)) ed->point = edbyteoff(ed, sh, n);
-    g = getvar(sh, &a, names[2]);
+    g = getplain(sh, &a, names[2]);
     if (g.set && parsei64(g.value, &n)) ed->mark = edbyteoff(ed, sh, n);
     for (i32 i = 0; i < 4; i++) unsetvar(sh, names[i], 1);
     sh->capdepth = depth - 1;
@@ -5664,7 +5664,7 @@ static i64 edchars(Editor *ed)
 // no TERM.
 static b32 eddumb(Shell *sh, Arena a)
 {
-    Got term = getvar(sh, &a, "TERM");
+    Got term = getplain(sh, &a, "TERM");
     Str name = term.value;
     if (name == "dumb") return 1;
     if (sh->pathmode != PM_POSIX) return 0;
@@ -5677,12 +5677,12 @@ static b32 eddumb(Shell *sh, Arena a)
     // element and an unset variable meaning the system's), the system's
     Str dirs[16];
     i32 ndirs = 0;
-    Got ti = getvar(sh, &a, "TERMINFO");
+    Got ti = getplain(sh, &a, "TERMINFO");
     if (ti.value.len) dirs[ndirs++] = ti.value;
-    Got home = getvar(sh, &a, "HOME");
+    Got home = getplain(sh, &a, "HOME");
     if (home.value.len) dirs[ndirs++] = concat(&a, home.value, "/.terminfo");
     Str sys[] = {"/etc/terminfo", "/lib/terminfo", "/usr/share/terminfo"};
-    Got td = getvar(sh, &a, "TERMINFO_DIRS");
+    Got td = getplain(sh, &a, "TERMINFO_DIRS");
     b32 addsys = !td.set;
     for (Str rest = td.value; td.set;) {
         Cut c = cut(rest, ':');
@@ -5740,7 +5740,7 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
         Tty t = {};
         t.cols = 80;
         Arena a = *scratchat(sh, sh->capdepth+1);
-        Str cols = getvar(sh, &a, "COLUMNS").value;
+        Str cols = getplain(sh, &a, "COLUMNS").value;
         i64 v = 0;
         for (iz i = 0; i<cols.len && v<100000; i++) {
             if (cols[i]<'0' || cols[i]>'9') { v = 0; break; }

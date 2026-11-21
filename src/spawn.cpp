@@ -321,7 +321,7 @@ static Str pathsearch(Shell *sh, Arena *a, Str path, Str name, iz nth = 0)
 // Search PATH for the nth match of an executable name.
 static Str pathlookup(Shell *sh, Arena *a, Str name, iz nth = 0)
 {
-    Got g = getvar(sh, a, "PATH");
+    Got g = getplain(sh, a, "PATH");
     if (!g.set) {
         // As bash: only the working directory, giving the bare name
         Stat st = pathstat(sh, *a, name, 1);
@@ -832,7 +832,7 @@ static Str findinterp(Shell *sh, Arena *a, Str interp)
             if (!st.err && st.type==FT_FILE) return cand;
         }
     }
-    Got g = getvar(sh, a, "PATH");
+    Got g = getplain(sh, a, "PATH");
     return last.len && g.set ? pathsearch(sh, a, g.value, last) : Str{};
 }
 

@@ -335,7 +335,7 @@ static Str histdelim(Shell *sh, Lexer *L, Str line)
 // previous entry, quoted to match itself.
 static b32 histignored(Shell *sh, Str line, Arena scratch)
 {
-    Str ign = getvar(sh, &scratch, "HISTIGNORE").value;
+    Str ign = getplain(sh, &scratch, "HISTIGNORE").value;
     if (!ign.len) return 0;
     Hist *h    = &sh->hist;
     Str   prev = h->len ? h->ents[h->len-1]->line : Str{};
@@ -536,7 +536,7 @@ static void histload(Shell *sh)
         setvar(sh, a, "HISTFILESIZE", n);
     }
     histfilesize(sh);
-    Str file = getvar(sh, &a, "HISTFILE").value;
+    Str file = getplain(sh, &a, "HISTFILE").value;
     if (file.len && !pathstat(sh, a, file, 1).err) {
         if (!histread(sh, file, 0, a)) sh->hist.infile = sh->hist.readlines;
     }
@@ -550,7 +550,7 @@ static Str histtime(Shell *, Arena *, Str stamp, Str fmt);
 static void histlist(Shell *sh, iz from, Arena scratch)
 {
     Hist *h = &sh->hist;
-    Str fmt = getvar(sh, &scratch, "HISTTIMEFORMAT").value;
+    Str fmt = getplain(sh, &scratch, "HISTTIMEFORMAT").value;
     for (iz i = from; i < h->len; i++) {
         Arena    a = scratch;
         HistEnt *e = h->ents[i];
@@ -1571,9 +1571,9 @@ static Str histexpandarg(Shell *sh, Arena *a, Str s, i32 *result)
 // HISTFILE, or readline's default when it is unset.
 static Str histfile(Shell *sh, Arena *a)
 {
-    Got g = getvar(sh, a, "HISTFILE");
+    Got g = getplain(sh, a, "HISTFILE");
     if (g.set) return g.value;
-    return concat(a, getvar(sh, a, "HOME").value, "/.history");
+    return concat(a, getplain(sh, a, "HOME").value, "/.history");
 }
 
 // A time stamp line: the comment character and a digit.
@@ -1758,7 +1758,7 @@ static void histfilesize(Shell *sh)
 {
     Hist *h = &sh->hist;
     Arena a = *scratchat(sh, sh->capdepth+1);
-    Got   g = getvar(sh, &a, "HISTFILESIZE");
+    Got   g = getplain(sh, &a, "HISTFILESIZE");
     i64   n = 0;
     if (!g.value.len || !histnum(g.value, &n) || n<0) return;
     Str file = histfile(sh, &a);
@@ -1785,7 +1785,7 @@ static void histexit(Shell *sh)
     Hist *h = &sh->hist;
     if (!sh->opt[O_HISTORY] || h->session<=0) return;
     Arena a    = *scratchat(sh, sh->capdepth+1);
-    Str   file = getvar(sh, &a, "HISTFILE").value;
+    Str   file = getplain(sh, &a, "HISTFILE").value;
     if (!file.len) return;
     histcreate(sh, file, a);
     if (h->session<=h->len || sh->shopt[S_HISTAPPEND]) {
@@ -1809,13 +1809,13 @@ static void histnative(Shell *sh)
     Hist *h = &sh->hist;
     if (sh->pathmode!=PM_NATIVE || !sh->opt[O_HISTORY] || h->session<=0) return;
     Arena a    = *scratchat(sh, sh->capdepth+1);
-    Str   file = getvar(sh, &a, "HISTFILE").value;
+    Str   file = getplain(sh, &a, "HISTFILE").value;
     if (!file.len || histcreate(sh, file, a)) return;
     if (h->session > h->len) h->session = h->len;
     histwrite(sh, file, h->len-(iz)h->session, 1, a);
     h->infile += h->session;
     h->session = 0;
-    Got g = getvar(sh, &a, "HISTFILESIZE");
+    Got g = getplain(sh, &a, "HISTFILESIZE");
     i64 n = 0;
     if (g.value.len && histnum(g.value, &n) && n>=0 && h->infile>4*n) {
         histfilesize(sh);
@@ -1826,7 +1826,7 @@ static void histnative(Shell *sh)
 static i32 histfileop(Shell *sh, i32 op, Str *args, iz nargs, iz i, Arena scratch)
 {
     Hist *h    = &sh->hist;
-    Str   file = i<nargs ? args[i] : getvar(sh, &scratch, "HISTFILE").value;
+    Str   file = i<nargs ? args[i] : getplain(sh, &scratch, "HISTFILE").value;
     if (!file.len) {
         Str msg = i<nargs ? Str("empty filename") : "HISTFILE: parameter null or not set";
         builtinerror(sh, scratch, "history", msg);
@@ -1965,7 +1965,7 @@ static i32 fcrun(Shell *sh, Str src, Arena scratch)
 // mkstemp makes it (bash-fc.XXXXXX): its name, or an error.
 static Opened fctemp(Shell *sh, Arena *a, Str *name)
 {
-    Str dir = getvar(sh, a, "TMPDIR").value;
+    Str dir = getplain(sh, a, "TMPDIR").value;
     if (!dir.len || pathstat(sh, *a, dir, 1).type!=FT_DIR) dir = "/tmp";
     Opened o = {};
     for (i32 try_ = 0; try_ < 100; try_++) {

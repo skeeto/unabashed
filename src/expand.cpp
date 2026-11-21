@@ -857,16 +857,16 @@ static Str promptescapes(X *x, Str s, b32 expand, b32 bb)
         case 'v':  print(&b, "5.3"); break;
         case 'V':  print(&b, "5.3.0"); break;
         case 'H':
-            promptput(&b, getvar(sh, a, "HOSTNAME").value, 0, expand);
+            promptput(&b, getplain(sh, a, "HOSTNAME").value, 0, expand);
             break;
         case 'h':
-            promptput(&b, cut(getvar(sh, a, "HOSTNAME").value, '.').head, 0, expand);
+            promptput(&b, cut(getplain(sh, a, "HOSTNAME").value, '.').head, 0, expand);
             break;
-        case 'u':  promptput(&b, getvar(sh, a, "USER").value, 0, expand); break;
+        case 'u':  promptput(&b, getplain(sh, a, "USER").value, 0, expand); break;
         case 'w':
         case 'W': {
-            Str pwd  = getvar(sh, a, "PWD").value;
-            Got home = getvar(sh, a, "HOME");
+            Str pwd  = getplain(sh, a, "PWD").value;
+            Got home = getplain(sh, a, "HOME");
             iz  n    = home.set ? homeprefix(sh, pwd, home.value) : -1;
             b32 athome = home.set && n==pwd.len;
             if (c=='W' && !athome) {
@@ -2055,7 +2055,7 @@ static Str tildeprefix(X *x, Str prefix, b32 *ok)
     Shell *sh = x->sh;
     *ok = 1;
     if (!prefix.len) {
-        Got g = getvar(sh, x->a, "HOME");
+        Got g = getplain(sh, x->a, "HOME");
         if (g.set) return g.value;
         Str h = userhome(sh, x->a, {});
         if (h.data) return h;
@@ -2063,10 +2063,10 @@ static Str tildeprefix(X *x, Str prefix, b32 *ok)
         return {};
     }
     if (prefix == "+") {
-        Got g = getvar(sh, x->a, "PWD");
+        Got g = getplain(sh, x->a, "PWD");
         if (g.set) return g.value;
     } else if (prefix == "-") {
-        Got g = getvar(sh, x->a, "OLDPWD");
+        Got g = getplain(sh, x->a, "OLDPWD");
         if (g.set) return g.value;
     } else {
         // ~N, ~+N, ~-N: the directory stack, else a user's home

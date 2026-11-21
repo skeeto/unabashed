@@ -491,7 +491,7 @@ static b32 startupfile(Shell *sh, Arena scratch, Str name, Startup *s)
 // value (bash then expands a leading ~, busybox does not).
 static void envfile(Shell *sh, Arena scratch, Str var, Startup *s)
 {
-    Got g = getvar(sh, &scratch, var);
+    Got g = getplain(sh, &scratch, var);
     if (!g.value.len) return;
     Str name = expandfilename(sh, &scratch, g.value);
     if (name.len) startupfile(sh, scratch, name, s);
@@ -543,7 +543,7 @@ static void startup(Shell *sh, Arena scratch, Str argv0, Startup *s)
                 Str path2 = concat(&scratch, dir, "../etc/profile");
                 startupfile(sh, scratch, path2, s);
             }
-            Got home = getvar(sh, &scratch, "HOME");
+            Got home = getplain(sh, &scratch, "HOME");
             if (home.set) {
                 Str path = concat(&scratch, home.value, "/.profile");
                 startupfile(sh, scratch, path, s);
@@ -610,7 +610,7 @@ static void logoutfiles(Shell *sh, Arena scratch)
 static void importopts(Shell *sh, Arena scratch, b32 shopt)
 {
     if (sh->rshell) return;  // as bash, a restricted shell ignores them
-    Str list = getvar(sh, &scratch, shopt ? Str("BASHOPTS") : Str("SHELLOPTS")).value;
+    Str list = getplain(sh, &scratch, shopt ? Str("BASHOPTS") : Str("SHELLOPTS")).value;
     while (list.len) {
         Cut c = cut(list, ':');
         list = c.tail;
@@ -782,8 +782,8 @@ static void initwinvars(Shell *sh, Arena scratch)
 {
     Arena *a    = &scratch;
     b32    msys = sh->pathmode == PM_MSYS;
-    Got    home = getvar(sh, a, "HOME");
-    Got    prof = getvar(sh, a, "USERPROFILE");
+    Got    home = getplain(sh, a, "HOME");
+    Got    prof = getplain(sh, a, "USERPROFILE");
     if (!home.set && prof.value.len) {
         PathCtx c = pathctx(sh, a, {});
         Str     h = msys ? envtoposix(&c, a, "HOME", prof.value)
@@ -792,31 +792,31 @@ static void initwinvars(Shell *sh, Arena scratch)
         if (msys) setattrs(sh, "HOME", V_EXPORT, 0);
     }
     if (msys) {
-        if (!getvar(sh, a, "TERM").set) {
+        if (!getplain(sh, a, "TERM").set) {
             setvar(sh, scratch, "TERM", "xterm-256color");
             setattrs(sh, "TERM", V_EXPORT, 0);
         }
-        if (!getvar(sh, a, "PATH").set) {
+        if (!getplain(sh, a, "PATH").set) {
             setvar(sh, scratch, "PATH", "/usr/bin");
             setattrs(sh, "PATH", V_EXPORT, 0);
         }
         return;
     }
-    Got user = getvar(sh, a, "USERNAME");
-    if (user.value.len && !getvar(sh, a, "USER").set) {
+    Got user = getplain(sh, a, "USERNAME");
+    if (user.value.len && !getplain(sh, a, "USER").set) {
         setvar(sh, scratch, "USER", user.value);
     }
-    if (user.value.len && !getvar(sh, a, "LOGNAME").set) {
+    if (user.value.len && !getplain(sh, a, "LOGNAME").set) {
         setvar(sh, scratch, "LOGNAME", user.value);
     }
     // busybox-w32's startup (win32/mingw.c's _setargv): BB_GLOBBING=0,
     // exported unless inherited, tells its programs that a shell already
     // expanded their arguments, and that they are in its environment
-    if (!getvar(sh, a, "BB_GLOBBING").set) {
+    if (!getplain(sh, a, "BB_GLOBBING").set) {
         setvar(sh, scratch, "BB_GLOBBING", "0");
         setattrs(sh, "BB_GLOBBING", V_EXPORT, 0);
     }
-    if (!getvar(sh, a, "PATH").set) {
+    if (!getplain(sh, a, "PATH").set) {
         Str dir = takehead(sh->exe, sh->exe.len-lastpart(sh->exe).len);
         if constexpr (LIBMODE) dir = selfdir(sh);
         if (!LIBMODE || dir.len) {  // the library with no root: none
@@ -883,7 +883,7 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     setattrs(sh, "OPTIND", V_INTEGER, 0);
     setvar(sh, scratch, "IFS", " \t\n");
     // PS4 comes from the environment, except for root
-    if (info->euid==0 || !getvar(sh, a, "PS4").set) {
+    if (info->euid==0 || !getplain(sh, a, "PS4").set) {
         setvar(sh, scratch, "PS4", "+ ");
     }
     setvar(sh, scratch, "HOSTNAME", info->host.len ? info->host : Str("oracle"));
@@ -896,19 +896,19 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     if (sh->pathmode != PM_POSIX) {
         initwinvars(sh, scratch);
     }
-    g = getvar(sh, a, "TERM");
+    g = getplain(sh, a, "TERM");
     // busybox-w32 leaves TERM unset, which a console needs no more of
     if (!g.set && sh->pathmode!=PM_NATIVE) setvar(sh, scratch, "TERM", "dumb");
-    g = getvar(sh, a, "SHELL");
+    g = getplain(sh, a, "SHELL");
     if (!g.set) setvar(sh, scratch, "SHELL", shell);
-    g = getvar(sh, a, "PATH");
+    g = getplain(sh, a, "PATH");
     if (!g.set) {
         setvar(sh, scratch, "PATH",
                "/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:.");
     }
 
     // PWD: inherited if it names the working directory
-    g = getvar(sh, a, "PWD");
+    g = getplain(sh, a, "PWD");
     if (sh->pathmode==PM_POSIX && info->cwderr) {
         // No usable name: the process's own directory is the shell's
         // (an empty cwd). With no name at all bash reports it, keeps
@@ -952,11 +952,11 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
         sh->wd  = pwd==cwd ? sh->cwd : sclone(sh->store, pwd);
         if (sh->cwd.len) os_cwd(sh->os, scratch, sh->cwd);
     }
-    g = getvar(sh, a, "OLDPWD");
+    g = getplain(sh, a, "OLDPWD");
     if (!g.set) setattrs(sh, "OLDPWD", V_EXPORT, 0);
 
     // SHLVL counts nested shells
-    g = getvar(sh, a, "SHLVL");
+    g = getplain(sh, a, "SHLVL");
     i64 lvl = 0;
     if (g.set && !parsei64(g.value, &lvl)) lvl = 0;
     lvl = lvl<0 ? 0 : lvl+1;
@@ -1070,7 +1070,7 @@ static Str psname(b32 first)
 // is none, even under set -u, as in bash.
 static Str promptstr(Shell *sh, Arena *a, Str name)
 {
-    Got v = getvar(sh, a, name);
+    Got v = getplain(sh, a, name);
     if (!v.set) return {};
     // Native mode shows PS1 and PS2 as busybox-w32's shell does
     b32 native = sh->pathmode==PM_NATIVE && (name=="PS1" || name=="PS2");
@@ -1187,7 +1187,7 @@ static void promptcommand(Shell *sh)
     if (!v || (v->attrs&V_ASSOC)) return;
     i32   depth  = ++sh->capdepth;
     Arena a      = *scratchat(sh, depth);
-    Str   last   = clone(&a, getvar(sh, &a, "_").value);
+    Str   last   = clone(&a, getplain(sh, &a, "_").value);
     i32   status = sh->status;  // $? too, unlike eval
     i32   line   = sh->line;
     b32   lexeof = sh->lexeof;
@@ -1367,7 +1367,7 @@ static b32 fillstdin(void *ctx, Lexer *L)
 static Slice<Str> cygexpand(Shell *sh, Arena *a, Slice<Str> out, Str pat)
 {
     Slice<Str> alts = cygbraces(a, {}, pat, (iz)1<<12);
-    Str home = getvar(sh, a, "HOME").value;
+    Str home = getplain(sh, a, "HOME").value;
     Stat st  = home.len ? pathstat(sh, *a, home, 1) : Stat{};
     b32 dir  = home.len && !st.err && st.type==FT_DIR;
     for (iz k = 0; k < alts.len; k++) {
@@ -1961,8 +1961,8 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             // startup files)
             sh->opt[O_HISTORY] = sh->opt[O_HISTEXPAND] = 1;
             sh->hist.comchar = '#';
-            if (!getvar(sh, &scratch, "HISTFILE").set) {
-                Str home = getvar(sh, &scratch, "HOME").value;
+            if (!getplain(sh, &scratch, "HISTFILE").set) {
+                Str home = getplain(sh, &scratch, "HOME").value;
                 Str name = st.busybox        ? Str("/.ash_history")
                          : sh->opt[O_POSIX] ? Str("/.sh_history")
                          :                    Str("/.bash_history");
@@ -1988,8 +1988,8 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             if (!st.noediting && !sh->opt[O_VI]) sh->opt[O_EMACS] = 1;
             // Native mode takes busybox-w32 ash's prompt, as "~ $ "
             Str ps1 = st.busybox ? Str("\\w \\$ ") : Str("\\s-\\v\\$ ");
-            if (!getvar(sh, &scratch, "PS1").set) setvar(sh, scratch, "PS1", ps1);
-            if (!getvar(sh, &scratch, "PS2").set) setvar(sh, scratch, "PS2", "> ");
+            if (!getplain(sh, &scratch, "PS1").set) setvar(sh, scratch, "PS1", ps1);
+            if (!getplain(sh, &scratch, "PS2").set) setvar(sh, scratch, "PS2", "> ");
             b32 tty = os_isatty(os, info->std[0]) || os_isatty(os, info->std[2]);
             if (!st.busybox && !tty) {
                 // As bash finding no terminal for job control (a
@@ -2093,7 +2093,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
                 Stat d = pathstat(sh, scratch, file, 1);
                 err = !d.err && d.type==FT_DIR ? 0 : err;
             }
-            Got  path = getvar(sh, &scratch, "PATH");
+            Got  path = getplain(sh, &scratch, "PATH");
             if (err==E_NOENT && path.set && !haspath(sh, file)) {
                 // As bash: a script found along PATH, whose found name
                 // the messages then use, though $0 keeps the given one

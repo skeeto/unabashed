@@ -681,7 +681,7 @@ static Slice<Str> glob(Shell *sh, Arena *a, Str pat)
 
     Slice<Str> out = {};
     if (r.err) return out;
-    Str ign = getvar(sh, a, "GLOBIGNORE").value;
+    Str ign = getplain(sh, a, "GLOBIGNORE").value;
     for (iz i = 0; i < r.v.len; i++) {
         if (!ign.len || !globignored(sh, r.v[i].name, ign, *a)) {
             out = push(a, out, r.v[i].name);

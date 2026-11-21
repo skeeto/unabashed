@@ -340,7 +340,7 @@ static b32 rliftest(Editor *ed, Shell *sh, RlRead *r, Str args, Arena a)
 {
     Str w = rlword(args);
     if (w.len>=5 && rlequal(takehead(w, 5), "term=")) {
-        Got t = getvar(sh, &a, "TERM");
+        Got t = getplain(sh, &a, "TERM");
         if (!t.set) return 0;
         Str name = cuthead(w, 5);
         Str full = t.value;
@@ -720,7 +720,7 @@ static void rlinit(Editor *ed, Shell *sh)
     if (ed->rllast.len) {
         rlreadfile(ed, sh, ed->rllast, 0, a);
     } else {
-        Str rc = getvar(sh, &a, "INPUTRC").value;
+        Str rc = getplain(sh, &a, "INPUTRC").value;
         if (rc.len) {
             if (rlreadfile(ed, sh, rc, 0, a)) ed->rllast = clone(&ed->perm, rc);
         } else if (rlreadfile(ed, sh, "~/.inputrc", 0, a)) {

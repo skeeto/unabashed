@@ -530,7 +530,7 @@ static Str jobline(Shell *sh, Arena *perm, Job *j, i32 form)
     if (!(j->wd == sh->wd)) {
         // As bash's polite form: HOME as ~
         Str wd   = j->wd;
-        Got home = getvar(sh, perm, "HOME");
+        Got home = getplain(sh, perm, "HOME");
         print(&b, "  (wd: ");
         iz  n    = homeprefix(sh, wd, home.value);
         if (n >= 0) {
@@ -1886,7 +1886,7 @@ static Str jobtext(Shell *sh, Arena *a, Job *j, Str sep)
 {
     if (j->wd == sh->wd) return j->text;
     Str wd   = j->wd;
-    Got home = getvar(sh, a, "HOME");
+    Got home = getplain(sh, a, "HOME");
     iz  n    = homeprefix(sh, wd, home.value);
     if (n >= 0) wd = concat(a, "~", cuthead(wd, n));
     return concat3(a, j->text, sep, concat3(a, "(wd: ", wd, ")"));

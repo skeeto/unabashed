@@ -1141,7 +1141,7 @@ static void helplist(Shell *sh, Arena a)
         "\n"
         "A star (*) marks a builtin that enable has turned off.\n"
         "\n");
-    Got cols  = getvar(sh, &a, "COLUMNS");
+    Got cols  = getplain(sh, &a, "COLUMNS");
     i64 ncols = 0;
     if (!cols.set || !parsei64(cols.value, &ncols) || ncols<=0) ncols = 80;
     iz width = (iz)(ncols/2 < 128 ? ncols/2 : 128);
