@@ -7644,7 +7644,7 @@ static FkMatch fkrxexec(FkRx *rx, Str s, iz start, Arena scratch, b32 longest,
     // Memo of visited branch states, when it is sound and affordable
     u8 *memo = 0;
     iz  slots = (iz)rx->len * (s.len+1);
-    if (!rx->backrefs && slots < ((iz)1<<26)) {
+    if (!rx->backrefs && slots < ((iz)1<<26) && (slots>>3) < (scratch.end-scratch.beg)/2) {
         memo = alloc<u8>(&scratch, (slots>>3) + 1);
     }
 

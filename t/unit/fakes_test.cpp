@@ -1,7 +1,10 @@
 // Unit tests for fakes.cpp on the virtual OS
-// $ g++ -std=c++20 -g3 -Wall -Wextra -Wconversion -Wno-sign-conversion
-//       -fsanitize=undefined -fsanitize-trap -o fakes_test t/unit/fakes_test.cpp
+// $ g++ -std=c++20 -g3 -Og -Wall -Wextra -Wconversion -Wno-sign-conversion
+//       -Wno-unused-parameter -Wno-unused-function -fsanitize=undefined
+//       -fsanitize-trap -o fakes_test t/unit/fakes_test.cpp
 // $ ./fakes_test [t/unit]
+// -Og, as for main_test.cpp: a fake runs on a 1 MiB vos fiber, which
+// the regex parser's 1000 levels overflow in -O0 frames with UBSan.
 //
 // Runs each case of fakes.golden (recorded from fakes.cases by
 // fakes_record.sh in the oracle image) on a fresh vos holding the files
@@ -15,18 +18,39 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../../src/base.cpp"
-#include "../../src/api.cpp"
+#define EDIT_CHECK 1
+#include "../../src/unabashed.cpp"
+#include "../../src/fibers.cpp"
 #include "../../src/fakes.cpp"
 #include "../../src/vos.cpp"
 
+// The vos's layer, as main_test.cpp's but without shells: the fakes run
+// on fibers, with memory from the vos's arena, and nothing reserves
+// more (no shell, no images).
 struct Os {
-    Vos vos;
+    Fibers fibers;
+    Vos    vos;
 };
+
+static Fibers *osfibers(Os *os)
+{
+    return &os->fibers;
+}
 
 static Vos *osvos(Os *os)
 {
     return &os->vos;
+}
+
+static byte *osheap(Os *, iz *len)
+{
+    *len = 0;
+    return 0;
+}
+
+static OsVtable const *osvtable(Os *)
+{
+    return &vosvtable;
 }
 
 [[noreturn]] static void os_oom()
@@ -36,9 +60,28 @@ static Vos *osvos(Os *os)
     __builtin_trap();
 }
 
-static b32 os_commit(Os *, byte *, iz)
+static byte *plt_reserve(Os *, iz)
+{
+    return 0;
+}
+
+static b32 plt_commit(Os *, byte *, iz)
 {
     return 1;
+}
+
+static void plt_decommit(Os *, byte *, iz) {}
+
+static byte *fiberstack(Os *, iz size)
+{
+    byte *p = (byte *)malloc((uz)size);
+    if (!p) os_oom();
+    return p;
+}
+
+static void fiberunstack(Os *, byte *p, iz)
+{
+    free(p);
 }
 
 // A fixed heap block as an arena that never commits.
@@ -184,7 +227,7 @@ static void populate(Os *os, Arena a, Str fixture)
 
 enum : u8 { RD_IN, RD_OUT, RD_APPEND, RD_DUP, RD_HERE };
 
-struct Redir {
+struct LineRedir {
     i32 fd;
     u8  op;
     Str word;
@@ -192,9 +235,9 @@ struct Redir {
 };
 
 struct Cmd {
-    Slice<Str>   assigns;
-    Slice<Str>   argv;
-    Slice<Redir> redirs;
+    Slice<Str>       assigns;
+    Slice<Str>       argv;
+    Slice<LineRedir> redirs;
 };
 
 struct Pipeline {
@@ -202,7 +245,7 @@ struct Pipeline {
     u8         conn;   // connector before it: ';', '&' (&&), '|' (||)
 };
 
-struct Parser {
+struct LineParser {
     Arena *a;
     Str    s;
     iz     i;
@@ -214,13 +257,13 @@ static b32 opchar(u8 c)
     return c=='|' || c=='&' || c==';' || c=='<' || c=='>';
 }
 
-static void skipblanks(Parser *p)
+static void skipblanks(LineParser *p)
 {
     for (; p->i<p->s.len && (p->s[p->i]==' ' || p->s[p->i]=='\t'); p->i++) {}
 }
 
 // Read one word, or null data at an operator or the end.
-static Str parseword(Parser *p)
+static Str parseword(LineParser *p)
 {
     Str s = p->s;
     skipblanks(p);
@@ -327,7 +370,7 @@ static b32 isname(Str s)
     return 1;
 }
 
-static Slice<Pipeline> parseline(Parser *p)
+static Slice<Pipeline> parseline(LineParser *p)
 {
     Slice<Pipeline> r = {};
     Pipeline pl = {};
@@ -349,7 +392,7 @@ static Slice<Pipeline> parseline(Parser *p)
             }
         }
         if (p->i<s.len && (s[p->i]=='<' || s[p->i]=='>')) {
-            Redir rd = {};
+            LineRedir rd = {};
             if (startswith(cuthead(s, p->i), "<<<")) {
                 rd.op = RD_HERE;
                 rd.fd = 0;
@@ -439,7 +482,7 @@ struct Run {
     Str  err;      // harness failure
 };
 
-static Str builtins[] = {
+static Str bashbuiltins[] = {
     "echo", "printf", "true", "false", "pwd", "test", "[", "cd", "kill",
     "read", "type", "command", "exit", "set", "export", "unset", "eval",
     "exec", "source", ".", ":", "umask", "wait", "alias", "times", "let",
@@ -458,13 +501,16 @@ static void bashdiag(Os *os, Str a, Str b)
     os_write(os, 2, m.data, m.len);
 }
 
-// Run one pipeline, returning its status.
+// Run one pipeline, returning its status. Its stages run concurrently,
+// as the vos's pipes hold only 64 KiB.
 static i32 runpipeline(Run *run, Pipeline *pl, b32 lastsimple, Arena scratch)
 {
     Os *os = run->os;
     Str cwd = "/home/oracle";
     Handle in = 0;  // the outermost standard input, empty
     i32 status = 0;
+    Slice<Handle> procs    = {};  // BADHANDLE for a stage that never ran
+    Slice<i32>    statuses = {};  // of those
     for (iz c = 0; c < pl->cmds.len; c++) {
         Cmd   *cmd = pl->cmds.data + c;
         b32    last = c == pl->cmds.len-1;
@@ -482,7 +528,7 @@ static i32 runpipeline(Run *run, Pipeline *pl, b32 lastsimple, Arena scratch)
 
         b32 failed = 0;
         for (iz r = 0; r < cmd->redirs.len && !failed; r++) {
-            Redir *rd = cmd->redirs.data + r;
+            LineRedir *rd = cmd->redirs.data + r;
             if (rd->fd > 9) {
                 run->err = "descriptor out of range";
                 return 2;
@@ -521,13 +567,15 @@ static i32 runpipeline(Run *run, Pipeline *pl, b32 lastsimple, Arena scratch)
         }
 
         Str name = cmd->argv[0];
-        for (iz i = 0; i < countof(builtins); i++) {
-            if (name == builtins[i]) {
+        for (iz i = 0; i < countof(bashbuiltins); i++) {
+            if (name == bashbuiltins[i]) {
                 run->err = "bash builtin used as a command";
                 return 2;
             }
         }
-        Str path = {};
+        status = 0;
+        Handle proc = BADHANDLE;
+        Str    path = {};
         if (!failed && cut(name, '/').ok) {
             path = name[0]=='/' ? name : fkjoin(&scratch, cwd, name);
         } else if (!failed) {
@@ -583,11 +631,13 @@ static i32 runpipeline(Run *run, Pipeline *pl, b32 lastsimple, Arena scratch)
                 bashdiag(os, name, fkerrtext(sp.err));
                 status = sp.err==E_NOENT ? 127 : 126;
             } else {
-                status = os_waitproc(os, sp.proc);
+                proc = sp.proc;
             }
         } else if (!status) {
             status = 1;
         }
+        procs    = push(&scratch, procs, proc);
+        statuses = push(&scratch, statuses, status);
 
         for (iz i = 0; i < opened.len; i++) os_close(os, opened[i]);
         if (in != 0) os_close(os, in);
@@ -596,12 +646,15 @@ static i32 runpipeline(Run *run, Pipeline *pl, b32 lastsimple, Arena scratch)
             in = pipe.r;
         }
     }
+    for (iz c = 0; c < procs.len; c++) {
+        status = procs[c]!=BADHANDLE ? os_waitproc(os, procs[c]) : statuses[c];
+    }
     return status;
 }
 
 static i32 runline(Run *run, Str line, Arena scratch)
 {
-    Parser p = {};
+    LineParser p = {};
     p.a = &scratch;
     p.s = line;
     Slice<Pipeline> pls = parseline(&p);
@@ -625,7 +678,7 @@ static i32 runline(Run *run, Str line, Arena scratch)
 
 // Golden file
 
-struct Case {
+struct GoldenCase {
     Str line;
     Str out;
     Str err;
@@ -794,8 +847,10 @@ static Slice<Stress> stresses(Arena *a)
     r = push(a, r, stress(a, "sed too deep", "a\n", "", 1,
                           "sed", concat(a, concat(a, Str("s/"), nest(a, "\\(", "a", "\\)", deep)),
                                         Str("/x/"))));
+    // Blocks nest without recursion, but a vos program's 4 MiB arena
+    // holds only about 8000 commands
     r = push(a, r, stress(a, "sed nested blocks", "a\n", "a\n", 0,
-                          "sed", "-n", nest(a, "{", "p", "}", deep)));
+                          "sed", "-n", nest(a, "{", "p", "}", 2*ok)));
     r = push(a, r, stress(a, "sed many commands", "a\n", repeat(a, "a\n", deep), 0,
                           "sed", "-n", repeat(a, "p;", deep)));
     r = push(a, r, stress(a, "expr nested match groups", "", "a\n", 0,
@@ -865,6 +920,7 @@ int main(int argc, char **argv)
     }
 
     static Os os;
+    (void)vwinfakes;  // the Windows personality's, not tested here
     Vos *v = &os.vos;
     v->outcap     = (iz)1 << 20;
     v->out.data   = (u8 *)malloc((uz)v->outcap);
@@ -876,7 +932,7 @@ int main(int argc, char **argv)
     while (s.len && s[0]=='#') s = cut(s, '\n').tail;
     while (s.len) {
         b32 ok = 1;
-        Case c = {};
+        GoldenCase c = {};
         c.line = block(&s, "case", &ok);
         c.out  = block(&s, "stdout", &ok);
         c.err  = block(&s, "stderr", &ok);
