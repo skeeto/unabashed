@@ -1537,7 +1537,9 @@ static Str traceprefix(Shell *sh, Arena *a)
     // PS4 is a prompt string: decoded, then expanded as if in double
     // quotes, so <(...) and >(...) are plain text. xtrace is off while
     // it expands, so commands in it are not traced. An expansion error,
-    // even a fatal one, is reported and the raw text used instead.
+    // even a fatal one, is reported and the raw text used instead. An
+    // exit in it (the builtin in ${ cmd; }, or set -e after an error)
+    // ends the shell, with xtrace still off, as in bash.
     Str ps4 = g.value;
     b32 xtrace = sh->opt[O_XTRACE];
     i32 status = sh->status;
@@ -1547,6 +1549,9 @@ static Str traceprefix(Shell *sh, Arena *a)
     sh->promptkind = 4;  // a prompt for \! and \#
     if (!jmpset(e.jmp)) {
         ps4 = expandstring(sh, a, "${PS4@P}");
+    } else if (e.why!=ESC_DISCARD && e.why!=ESC_FATAL && e.why!=ESC_ABORT) {
+        escleave(sh, &e);
+        escape(sh, e.why);
     }
     escresume(sh, &e);  // promptkind too
     sh->opt[O_XTRACE] = xtrace;
