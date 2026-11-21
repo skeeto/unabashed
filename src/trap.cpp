@@ -609,6 +609,17 @@ static void sigfatal(Shell *sh)
     }
 }
 
+// A wait builtin a signal interrupted: one that kills this level does
+// so at once, as bash's handler acts inside the wait, before $? is set;
+// else its status is 128 plus the (trapped) signal's number.
+static i32 waitintr(Shell *sh)
+{
+    sh->sched->cur->intr = 0;
+    sigfatal(sh);
+    u64 pend = sh->sig->pending;
+    return pend ? 128 + __builtin_ctzll(pend) + 1 : 128;
+}
+
 // After a wait that failed, perhaps because a signal interrupted it:
 // a signal that kills this level does so now. True if a signal was
 // the cause.

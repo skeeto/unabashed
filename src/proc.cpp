@@ -762,9 +762,7 @@ static i32 waitpsub(Shell *sh, i64 pid, b32 *found)
         if (t->pid == pid) {
             i32 st;
             if (!taskjoinintr(sh->sched, t, &st)) {
-                sh->sched->cur->intr = 0;
-                u64 pend = sh->sig->pending;
-                return pend ? 128 + __builtin_ctzll(pend) + 1 : 128;
+                return waitintr(sh);
             }
             *p = t->sib;
             sh->psubpid    = pid;

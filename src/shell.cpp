@@ -1053,6 +1053,7 @@ static b32  sigtaken(Shell *);
 static void waitdone(Shell *, u64 died, b32 failed);
 static void takeossigs(Shell *);
 static void sigfatal(Shell *);
+static i32  waitintr(Shell *);
 static u64  sigbit(i32);
 static void runsigs(Shell *, Arena);
 static void runexittrap(Shell *, Arena);

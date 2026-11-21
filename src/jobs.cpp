@@ -755,9 +755,7 @@ static b32 waitjob(Shell *sh, Job *j, i32 *status, b32 force = 0)
     if (j->task && iswaiter(j->task)) {
         // It may stop meanwhile, under job control
         if (!joinorstop(sh, j, 1, force)) {
-            sh->sched->cur->intr = 0;
-            u64 pend = sh->sig->pending;
-            *status = pend ? 128 + __builtin_ctzll(pend) + 1 : 128;
+            *status = waitintr(sh);
             return 0;
         }
         if (j->stopped && j->task->state!=TS_DONE) {
@@ -768,9 +766,7 @@ static b32 waitjob(Shell *sh, Job *j, i32 *status, b32 force = 0)
     } else if (j->task) {
         i32 st;
         if (!taskjoinintr(sh->sched, j->task, &st)) {
-            sh->sched->cur->intr = 0;
-            u64 pend = sh->sig->pending;
-            *status = pend ? 128 + __builtin_ctzll(pend) + 1 : 128;
+            *status = waitintr(sh);
             return 0;
         }
         sh->sched->nbg--;
@@ -1660,9 +1656,7 @@ static i32 waitany(Shell *sh, Arena scratch, Str *ids, iz nids, Str var)
         }
         if (!live) return 127;
         if (!taskwaitany(sh->sched)) {
-            sh->sched->cur->intr = 0;
-            u64 pend = sh->sig->pending;
-            return pend ? 128 + __builtin_ctzll(pend) + 1 : 128;
+            return waitintr(sh);
         }
     }
 }

@@ -1014,6 +1014,12 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
         sh->opt[O_VERBOSE] = verbose;
         sh->errexitoff = errexitoff;
         endcapture(sh, capture, child);
+        // A signal that kills this level, sent meanwhile (kill $$ in
+        // it), does so now, as bash's handler acts in the wait: the
+        // rest of the command neither expands nor runs. A trapped one
+        // waits for a safe point.
+        takeossigs(sh);
+        sigfatal(sh);
     }
     sh->capdepth = depth - 1;
     sh->current = 0;
