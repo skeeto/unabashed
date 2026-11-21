@@ -595,6 +595,7 @@ static void vprocmain(Task *t)
     if (!sh->execed && !sh->killsig) {
         // Its own EXIT trap, set in the vproc
         sh->esc = &top;
+        if (top.why == ESC_FATAL) fatalunwind(sh, 0);
         errexitundo(sh, 0);
         if (!jmpset(top.jmp)) {
             runexittrap(sh, *scratchat(sh, 0));

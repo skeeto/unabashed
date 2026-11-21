@@ -510,6 +510,8 @@ struct Escape {
     b32       ingetopts;
     b32       listing;
     b32       viacommand;
+    b32       fatalnest;  // a site that carries on is ending nothing
+    Undo     *fatalundo;
 };
 
 // The scratch arenas for nesting depths (scratchat): a table of the
@@ -916,6 +918,8 @@ struct Shell {
     b32      execing;      // exec's program may replace the process
     i32      errexited;    // set -e is ending this level: ERREXIT_*
     Undo    *errundo;      // the redirections that stay for the EXIT trap
+    b32      fatalnest;    // a fatal error left eval, source, a trap action
+    Undo    *fatalundo;    // or ${ cmd; } begun with these (fatalunwind)
     i32      writeerr;     // why the last fdwrite failed
 };
 
@@ -1516,6 +1520,8 @@ static void escenter(Shell *sh, Escape *e)
     e->ingetopts  = sh->ingetopts;
     e->listing    = sh->listing;
     e->viacommand = sh->viacommand;
+    e->fatalnest  = sh->fatalnest;
+    e->fatalundo  = sh->fatalundo;
     sh->esc = e;
 }
 
@@ -1562,6 +1568,8 @@ static void escrestore(Shell *sh, Escape *e)
     sh->ingetopts  = e->ingetopts;
     sh->listing    = e->listing;
     sh->viacommand = e->viacommand;
+    sh->fatalnest  = e->fatalnest;
+    sh->fatalundo  = e->fatalundo;
 }
 
 // After the jump back to e, at a site that carries on in this shell:

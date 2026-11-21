@@ -1672,6 +1672,7 @@ static i32 imagemain(Os *os, OsInfo *info)
     if (!sh->execed && !sh->killsig) {
         // Its own EXIT trap, set in the background job
         sh->esc = &top;
+        if (top.why == ESC_FATAL) fatalunwind(sh, 0);
         errexitundo(sh, 0);
         if (!jmpset(top.jmp)) {
             sh->exiting = 1;
@@ -2167,6 +2168,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             sh->exiting = 0;
             checksigs(sh, scratch);
             sh->exiting = 1;
+            if (top.why == ESC_FATAL) fatalunwind(sh, 0);
             errexitundo(sh, 0);
             runexittrap(sh, scratch);
         }

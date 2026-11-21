@@ -70,6 +70,7 @@ static void     errexittrap(Shell *);
 static b32      errexitdue(Shell *, b32 fn);
 static void     errexitcall(Shell *);
 static void     errexitundo(Shell *, Undo *);
+static b32      undoheld(Shell *, Undo *);
 static b32      rundebugtrap(Shell *, Arena);
 static b32      trapset(Shell *, i32 idx);
 static void     runreturntrap(Shell *, Arena);
@@ -687,6 +688,25 @@ static void runjob(Shell *sh, SubJob *j, Arena scratch)
     }
 }
 
+// A fatal error (${x?}, set -u) is ending the level: undo the
+// redirections bash's jump to its top level undoes before the EXIT
+// trap. Raised outside eval, source, a trap action or ${ cmd; }, all of
+// them (top_level_cleanup), but none in a subshell of -c, whose jump
+// lands in the frame of the -c text, which unwinds nothing there.
+// Raised inside, those the outermost of these made (its frame), except
+// in the shell running -c, whose text's frame then undoes all. The
+// others stay for the action, the fd 1 of a ${ cmd; } among them.
+static void fatalunwind(Shell *sh, Undo *base)
+{
+    if (sh->cflag && !sh->subshell) {
+        unwind(sh, base);
+    } else if (sh->fatalnest) {
+        if (undoheld(sh, sh->fatalundo)) unwind(sh, sh->fatalundo);
+    } else if (!sh->cflag) {
+        unwind(sh, base);
+    }
+}
+
 // Run a job in a synchronous subshell and return its exit status.
 // Everything it changes is rolled back. With cap, its standard output
 // is collected there.
@@ -748,6 +768,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     }
     storerehold(sh->store, e.hold);  // the level's own: its EXIT trap frees
     if (!sh->execed && !sh->killsig && sh->traps) {
+        if (e.why == ESC_FATAL) fatalunwind(sh, body);
         errexitundo(sh, body);
         runexittrap(sh, scratch);
     }
@@ -3133,10 +3154,11 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
         // As bash, the exit builtin, and anything that ends a subshell,
         // runs the EXIT trap with the redirections still in place, fd 1
         // included, so the trap writes nowhere. Their records stay for
-        // the handler, in this depth's scratch, which stays reserved.
+        // the handler, in this depth's scratch, which stays reserved. A
+        // fatal error leaves them to its catch to undo (fatalunwind).
         b32 ends = e.why==ESC_EXIT || e.why==ESC_FATAL || e.why==ESC_DISCARD;
         b32 keep = escaped && ((e.why==ESC_EXIT && sh->exitcalled) ||
-                               (ends && sh->subshell));
+                               (ends && sh->subshell) || e.why==ESC_FATAL);
         if (!keep) unwind(sh, mark);
         endcapture(sh, cap, scratch);
     }
@@ -5362,6 +5384,12 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             // command has redirections: as callfunction's
             escrestore(sh, e);
             errexitcall(sh);
+        }
+        if (e->why == ESC_FATAL) {
+            // the outermost such parse, the last to pass it on, decides
+            // what stays for the EXIT trap (fatalunwind)
+            sh->fatalnest = 1;
+            sh->fatalundo = e->undo;
         }
         escape(sh, e->why);
     }
