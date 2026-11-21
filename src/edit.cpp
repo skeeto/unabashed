@@ -6056,43 +6056,20 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     Editor *ed   = editor(sh);
     EdNest  nest = ednest(ed, sh);
 
-    Escape e = {};
-    e.up        = sh->esc;
-    e.bout      = sh->bout;
-    e.undo      = sh->undo;
-    e.frame     = sh->frame;
-    e.loopdepth = sh->loopdepth;
-    Lexer *lexer     = sh->lexer;
-    Str    iname     = sh->iname;
-    Str    srcname   = sh->srcname;
-    Node  *current   = sh->current;
-    i32    noerrexit = sh->noerrexit;
-    i32    evaldepth = sh->evaldepth;
-    i32    srcdepth  = sh->sourcedepth;
-    i32    capdepth  = sh->capdepth;
-    i32    line      = sh->line;
-    b32    lexeof    = sh->lexeof;
-    sh->esc = &e;
+    Escape e;
+    escenter(sh, &e);
+    i32 line   = sh->line;
+    b32 lexeof = sh->lexeof;
     if (!jmpset(e.jmp)) {
         i32 r = edline(sh, ed, prompt, out, opts, isread, fin, ferr);
-        sh->esc = e.up;
+        escleave(sh, &e);
         edunnest(ed, sh, nest);
         return r;
     }
-    sh->esc = e.up;
-    unwind(sh, e.undo);
-    sh->flow        = FLOW_NONE;
-    sh->loopdepth   = e.loopdepth;
-    sh->lexer       = lexer;
-    sh->iname       = iname;
-    sh->srcname     = srcname;
-    sh->current     = current;
-    sh->noerrexit   = noerrexit;
-    sh->evaldepth   = evaldepth;
-    sh->sourcedepth = srcdepth;
-    sh->capdepth    = capdepth;
-    sh->line        = line;
-    sh->lexeof      = lexeof;
+    escresume(sh, &e);  // also before passing it on, below
+    sh->flow   = FLOW_NONE;
+    sh->line   = line;
+    sh->lexeof = lexeof;
     if (ed->shellcmd) {
         // As bash's unwinding: bind -x's variables go
         ed->shellcmd = 0;

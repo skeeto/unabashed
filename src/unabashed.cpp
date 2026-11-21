@@ -1140,41 +1140,21 @@ static void showps0(Shell *sh)
 // the reason (ESC_INTR, ESC_DISCARD, ESC_ABORT), or 0.
 static i32 promptrun(Shell *sh, Str *cmds, iz n, Arena a)
 {
-    Escape e = {};
-    e.up        = sh->esc;
-    e.bout      = sh->bout;
-    e.undo      = sh->undo;
-    e.frame     = sh->frame;
-    e.loopdepth = sh->loopdepth;
-    Lexer *lexer     = sh->lexer;
-    Str    iname     = sh->iname;
-    Str    srcname   = sh->srcname;
-    Node  *current   = sh->current;
-    i32    noerrexit = sh->noerrexit;
-    i32    evaldepth = sh->evaldepth;
-    i32    srcdepth  = sh->sourcedepth;
-    i32    capdepth  = sh->capdepth;
-    sh->esc = &e;
+    Escape e;
+    escenter(sh, &e);
     if (jmpset(e.jmp)) {
-        sh->esc = e.up;
-        if (e.why==ESC_EXIT || e.why==ESC_FATAL) escape(sh, e.why);
-        unwind(sh, e.undo);
-        sh->flow        = FLOW_NONE;
-        sh->loopdepth   = e.loopdepth;
-        sh->lexer       = lexer;
-        sh->iname       = iname;
-        sh->srcname     = srcname;
-        sh->current     = current;
-        sh->noerrexit   = noerrexit;
-        sh->evaldepth   = evaldepth;
-        sh->sourcedepth = srcdepth;
-        sh->capdepth    = capdepth;
+        if (e.why==ESC_EXIT || e.why==ESC_FATAL) {
+            escleave(sh, &e);
+            escape(sh, e.why);
+        }
+        escresume(sh, &e);
+        sh->flow = FLOW_NONE;
         return e.why;
     }
     for (iz i = 0; i<n && !sh->exiting; i++) {
         if (cmds[i].len) runsource(sh, cmds[i], "PROMPT_COMMAND", a, 0, 1);
     }
-    sh->esc = e.up;
+    escleave(sh, &e);
     return 0;
 }
 
@@ -1677,6 +1657,7 @@ static i32 imagemain(Os *os, OsInfo *info)
         checksigs(sh, scratch);
         execute(sh, h->node, scratch);
     }
+    storerehold(sh->store, top.hold);  // after an escape, from any holder
     if (!sh->execed && !sh->killsig) {
         // Its own EXIT trap, set in the background job
         sh->esc = &top;
@@ -2156,12 +2137,16 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     } else if (top.why==ESC_ABORT && sh->cflag) {
         sh->status = 1;  // as bash's -c, its text abandoned
     }
+    // An escape may leave holders' counts behind: nothing holds the
+    // store here, so the EXIT trap's frees take effect as it goes
+    storerehold(sh->store, top.hold);
     if (!sh->execed && !sh->killsig) {
         // A login shell's logout files, signals still pending, then the
         // EXIT trap
         if (sh->interactive && !jmpset(top.jmp)) {
             logoutfiles(sh, scratch);
         }
+        storerehold(sh->store, top.hold);  // as above, after the files
         if (!jmpset(top.jmp)) {
             sh->exiting = 0;
             checksigs(sh, scratch);

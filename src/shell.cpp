@@ -222,8 +222,10 @@ static void sflush(Store *st)
 // Hold the store around a reader that keeps views of store memory while
 // it runs code that may free them. Every storehold has its storeunhold,
 // unless an escape unwinds past both: then escrestore sets the count
-// back to what escenter recorded (Escape.hold). Until then the count is
-// too high, which only defers frees; it is never too low.
+// back to what escenter recorded (Escape.hold), and the outermost catch
+// sites, which never resume, set it back to their own (zero) before an
+// EXIT trap runs. Until then the count is too high, which only defers
+// frees; it is never too low.
 static void storehold(Store *st)
 {
     st->hold++;

@@ -686,6 +686,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
         // 1, while a script's reader keeps the command's
         sh->status = 1;
     }
+    storerehold(sh->store, e.hold);  // the level's own: its EXIT trap frees
     if (!sh->execed && !sh->killsig && sh->traps) {
         if (sh->errexited) unwind(sh, saved->undo);
         runexittrap(sh, scratch);
@@ -2742,6 +2743,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         if (!jmpset(e.jmp)) {
             runsource(sh, src, name, *scratchat(sh, sh->capdepth), 1);
         }
+        storerehold(sh->store, e.hold);  // as subshell's, for its EXIT trap
         if (!sh->execed && !sh->killsig && sh->traps) {
             if (sh->errexited) unwind(sh, saved->undo);
             runexittrap(sh, *scratchat(sh, sh->capdepth));

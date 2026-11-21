@@ -568,7 +568,8 @@ static void vprocmain(Task *t)
     sh->stackmax = sh->stackmax<room ? sh->stackmax : room;
     m->sig.task = t;
     if (jmpset(top.jmp)) {
-        // escaped
+        // escaped, from holders now gone: frees take effect again
+        storerehold(sh->store, top.hold);
     } else if (m->sig.pending && (checksigs(sh, *scratchat(sh, 0)), sh->exiting)) {
         // killed before it ran
     } else if (m->node) {
