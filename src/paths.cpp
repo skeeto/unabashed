@@ -1129,9 +1129,12 @@ struct ArgType {
 
 // Classify s[beg, end) as msys2's find_path_start_and_type does. Peeks
 // past end read the underlying string, as the original reads past a
-// list element's end.
+// list element's end. Where the original recurses on the rest (after
+// each '=', for one), this starts over in a loop, as an argument may
+// hold any number of them.
 static ArgType argtype(Str s, iz beg, iz end)
 {
+    again:
     ArgType r = {AT_NONE, end};
     iz      i = beg;
     if (i >= end) {
@@ -1251,7 +1254,8 @@ static ArgType argtype(Str s, iz beg, iz end)
                 return r;
             }
             if (c=='/' && !hasbyte(s, j, end, ',')) {
-                return argtype(s, j, end);
+                beg = j;
+                goto again;
             }
             minusalpha = 0;
         }
@@ -1259,7 +1263,8 @@ static ArgType argtype(Str s, iz beg, iz end)
             minus = 0;
         }
         if (c=='=' || (c==':' && minus) || c=='\'' || c=='"' || (c==',' && minus)) {
-            return argtype(s, j+1, end);
+            beg = j + 1;
+            goto again;
         }
         if (c==':' && j+1!=end) {
             c = s[++j];

@@ -3103,6 +3103,7 @@ static b32 nullterminator(i32 t)  // nullcmd_terminator
 
 static Node *parsepipecommand(Parser *p)  // pipeline_command
 {
+    checkstack(p->L);  // it recurses for each ! and time
     Lexer *L = p->L;
     i32    t = peek(p);
     if (t == T_BANG) {

@@ -521,6 +521,13 @@ static void testmsys(Arena scratch)
     check(b.mounts.len == 2, 0, "fstab serverless UNC");
     want(&b, a, "/unc/",  PK_FILE, "C:/r/unc/");
     want(&b, a, "/unc2/", PK_FILE, "C:/r/unc2/");
+
+    // Each '=' starts the classification over: no stack for each
+    Buf eq(&a, 1<<16);
+    for (i32 i = 0; i < 30000; i++) print(&eq, "x=");
+    Str head = finish(&eq);
+    Str arg  = concat(&a, head, "/x");
+    check(msysarg(&b, &a, arg, {}) == concat(&a, head, "C:/r/x"), 0, "msysarg many =");
 }
 
 static void testposix(Arena scratch)
