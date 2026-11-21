@@ -3351,7 +3351,6 @@ static void dropkept(Shell *sh)
     while (n) poptemp(sh, names[--n]);
 }
 
-[[gnu::noinline]]
 static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, Temps *tb);
 
 // Does bash fork before applying this command's redirections, as for a
@@ -3479,7 +3478,8 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
     // Temporary bindings go however the command ends: an escape from an
     // expansion, the builtin, the function or the program's lookup
     // unbinds them too. The escape point is here, where it costs only
-    // commands with assignments, and keeps runsimple1's frame small.
+    // commands with assignments, and keeps the frame small (runsimple1's,
+    // inlined here, is on every level of shell function recursion).
     Temps *tb = 0;
     if (n->words && (isassignword(n->words) || sh->opt[O_KEYWORD])) {
         tb = alloc<Temps>(&scratch);
@@ -3554,12 +3554,35 @@ static Slice<Str> envlastarg(Shell *sh, Arena *a, Slice<Str> env, Str name)
     return env;
 }
 
-// Run builtin bi as a simple command does, its output buffered. Out of
-// line, as runsimple1's frame is one per function call level.
+// A simple command that simpleprep made ready to run (runsimple1).
+struct Simple {
+    Slice<Str> argv;
+    Slice<u8>  compargs;
+    Assign    *as;       // its temporary bindings
+    iz         nassign;
+    Undo      *mark;     // its redirections, and procsubs in its words
+    Func      *fn;
+    Builtin   *bi;
+    Spawnto   *direct;   // see simpleprep
+    i64        lastbg;
+    Redirs     redirs;   // put back after a builtin or function
+    b32        forked;
+    b32        stage;
+    b32        special;
+    b32        execonly;
+};
+
+// Run c's builtin as a simple command does, its output buffered. Out
+// of line, as runsimple1's frame is one per function call level.
 [[gnu::noinline]]
-static void callbuiltin(Shell *sh, Builtin *bi, Str name, Slice<Str> argv,
-                        Slice<u8> compargs, b32 forked, b32 special, Arena scratch)
+static void callbuiltin(Shell *sh, Simple *c, Arena scratch)
 {
+    Builtin   *bi       = c->bi;
+    Slice<Str> argv     = c->argv;
+    Str        name     = argv[0];
+    Slice<u8>  compargs = c->compargs;
+    b32        forked   = c->forked;
+    b32        special  = c->special;
     BOut  b     = {};
     BOut *saved = sh->bout;
     b.b  = Buf(&scratch, (iz)1<<12);
@@ -3712,7 +3735,12 @@ static i32 keeptemp(Builtin *bi, Func *fn)
     return 2;
 }
 
-static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, Temps *tb)
+// All that runsimple1 does before it runs a command, apart from its
+// frame: every level of shell function recursion passes through that.
+// It allocates in runsimple1's arena. False when nothing is left to run
+// (a skipped command, assignments alone, redirections that failed).
+[[gnu::noinline]]
+static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *tb, Simple *c)
 {
     // A direct pipeline stage's program starts without waiting, but not
     // the programs its words or a trap run first: they finish before it
@@ -3736,12 +3764,11 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
     sh->current = n;
     if (!sh->intrap) sh->cmdnode = n;  // in trap actions, what ran them
     if (sh->traps && !debugdone) {
-        b32 skip = rundebugtrap(sh, scratch);
+        b32 skip = rundebugtrap(sh, *a);
         sh->line    = fnline(sh, n->line);
         sh->current = n;
-        if (skip) return;
+        if (skip) return 0;
     }
-    Arena *a = &scratch;
 
     // Leading assignments, then the rest
     Word *assigns = n->words;
@@ -3859,7 +3886,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
             unwind(sh, mark);
             sh->status = sh->redirfail;
             if (!forked) checkerrexit(sh);
-            return;
+            return 0;
         }
         if (child) laststatus = 0;
         unwind(sh, mark);
@@ -3869,10 +3896,10 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
         } else if (!ok) {
             escape(sh, ESC_DISCARD);  // as bash abandons the command
         }
-        bindlastarg(sh, scratch, *last);  // before ERR, as bash
+        bindlastarg(sh, *a, *last);  // before ERR, as bash
         *last = {};
         if (!forked) checkerrexit(sh);
-        return;
+        return 0;
     }
 
     Str name = argv[0];
@@ -3905,13 +3932,13 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
     if (tb && forked) tb->keep = keeptemp(bi, fn);
 
     if (sh->opt[O_XTRACE]) {
-        tracewords(sh, scratch, argv.data, argv.len);
+        tracewords(sh, *a, argv.data, argv.len);
     }
 
     if (asyncnull) {
         // A job's words have expanded with the shell's input: now the
         // command reads /dev/null
-        File *f = devnull(sh, scratch);
+        File *f = devnull(sh, *a);
         if (f) fdset(sh, 0, f, 0, a);
     }
 
@@ -3963,7 +3990,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
             escape(sh, ESC_EXIT);
         }
         if (!forked) checkerrexit(sh);
-        return;
+        return 0;
     }
     if (execonly) {
         closepsubs(sh, mark);  // exec 3< <(f) keeps 3, not 63
@@ -3975,36 +4002,119 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
         mark = sh->undo;
     }
 
-    if (fn || bi) {
+    c->argv     = argv;
+    c->compargs = compargs;
+    c->as       = as;
+    c->nassign  = nassign;
+    c->mark     = mark;
+    c->fn       = fn;
+    c->bi       = bi;
+    c->direct   = direct;
+    c->lastbg   = lastbg;
+    c->forked   = forked;
+    c->stage    = stage;
+    c->special  = special;
+    c->execonly = execonly;
+    return 1;
+}
+
+// A program, with its temporary bindings in its environment, as
+// runsimple1 runs it.
+[[gnu::noinline]]
+static void runprogram1(Shell *sh, Node *n, Simple *c, Temps *tb, Arena scratch)
+{
+    Arena     *a       = &scratch;
+    Slice<Str> argv    = c->argv;
+    Str        name    = argv[0];
+    Assign    *as      = c->as;
+    iz         nassign = c->nassign;
+    Spawnto   *direct  = c->direct;
+    Slice<Str> env = makeenv(sh, a);
+    for (iz i = 0; i < nassign; i++) {
+        Str tname = tempname(sh, as[i].name);  // what a nameref names
+        Value *cur = rawlookup(sh, tname);
+        if (cur && (cur->attrs & V_READONLY)) continue;  // its binding fails below
+        Str entry = concat3(a, tname, "=", as[i].bound);
+        b32 replaced = 0;
+        for (iz k = 0; k < env.len; k++) {
+            Cut kv = cut(env[k], '=');
+            if (kv.head == tname) {
+                env[k]   = entry;
+                replaced = 1;
+            }
+        }
+        if (!replaced) env = push(a, env, entry);
+    }
+    // Also bound in the shell while the program is looked up, as
+    // bash's temporary environment: a PATH there is searched, and
+    // command_not_found_handle sees them all
+    Str *names   = tb ? tb->names : 0;
+    iz   npushed = tb ? tb->n : 0;
+    env = envlastarg(sh, a, env, name);
+    sh->childsig = 0;
+    sh->spawnto = direct;
+    sh->attail  = n==sh->tailnode && sh->taillevel==sh->subshell+1;
+    sh->undonames = names;
+    sh->nundo     = npushed;
+    sh->undoargv  = argv.data;
+    if (tb) {
+        tb->n    = 0;  // runprogram's to undo now (undotemps)
+        tb->argv = argv.data;
+    }
+    sh->status = runexternal(sh, scratch, argv.data, argv.len, env);
+    sh->attail  = 0;
+    if (!direct) chldreaped(sh, 1);
+    if (sh->nundo) {
+        // Not spawned here: a stage that ends in the program, as
+        // bash's child that execs, never restores (and so is quiet)
+        sh->nolocwarn = !!direct;
+        for (iz i = npushed-1; i >= 0; i--) poptemp(sh, names[i]);
+        sh->nolocwarn = 0;
+        sh->nundo     = 0;
+    }
+    reportchild(sh, scratch, n);
+}
+
+// Run a simple command (runsimple). Only a function call is made in
+// this frame, which is part of every level of shell function recursion:
+// the rest is done by simpleprep and the helpers above.
+static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, Temps *tb)
+{
+    Simple *c = allocraw<Simple>(&scratch);  // simpleprep fills it in
+    if (!simpleprep(sh, n, &scratch, last, who, tb, c)) {
+        return;
+    }
+    if (c->fn || c->bi) {
         // bash's child for a stage counts as a subshell once its words
         // expand, so only for what a builtin or function runs; the
         // stage's subshell level puts it back
-        sh->simplestages -= stage;
+        sh->simplestages -= c->stage;
         // As bash's frame for a builtin's or function's redirections:
         // set -e in what it runs unwinds the call first (errexittrap)
-        Redirs redirs = sh->redirs;
-        if (n->redirs && !execonly) {
-            sh->redirs.call  = fn ? sh->funcdepth+1 : -1-sh->funcdepth;
-            sh->redirs.mark  = mark;
+        c->redirs = sh->redirs;
+        if (n->redirs && !c->execonly) {
+            sh->redirs.call  = c->fn ? sh->funcdepth+1 : -1-sh->funcdepth;
+            sh->redirs.mark  = c->mark;
             sh->redirs.lexer = sh->lexer;
             sh->redirs.src   = sh->srcframes;
         }
-        if (fn) {
+        if (c->fn) {
             // Until its first simple command ends, a function's name
             // prefixes errors from declaration arguments name=(...)
-            i32 len = (i32)(name.len<(iz)sizeof(sh->cmdname) ? name.len : 0);
+            Str name = c->argv[0];
+            i32 len  = (i32)(name.len<(iz)sizeof(sh->cmdname) ? name.len : 0);
             copybytes(sh->cmdname, name.data, len);
             sh->cmdnamelen = len;
             *who = {};  // its last simple command's, as bash's this_command_name
-            callfunction(sh, fn, argv.data, argv.len, scratch);
+            callfunction(sh, c->fn, c->argv.data, c->argv.len, scratch);
             sh->line = fnline(sh, n->line);
         } else {
-            callbuiltin(sh, bi, name, argv, compargs, forked, special, scratch);
+            callbuiltin(sh, c, scratch);
         }
-        sh->redirs = redirs;
+        sh->redirs = c->redirs;
         // bash binds $_ while a builtin's temporary bindings last (they
         // stay in tb until then)
-        if (fn || !tb || !tb->n || !bindintemps(sh, argv)) {
+        if (c->fn || !tb || !tb->n || !bindintemps(sh, c->argv)) {
             // bash puts its line back to the enclosing command's before
             // it drops the temporary environment: hooks (setlocale) cite
             // that
@@ -4016,53 +4126,10 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
     } else {
         // bash redirects a program in its forked child, so a procsub
         // there does not set $! here
-        sh->lastbg = lastbg;
-        Slice<Str> env = makeenv(sh, a);
-        for (iz i = 0; i < nassign; i++) {
-            Str tname = tempname(sh, as[i].name);  // what a nameref names
-            Value *cur = rawlookup(sh, tname);
-            if (cur && (cur->attrs & V_READONLY)) continue;  // its binding fails below
-            Str entry = concat3(a, tname, "=", as[i].bound);
-            b32 replaced = 0;
-            for (iz k = 0; k < env.len; k++) {
-                Cut c = cut(env[k], '=');
-                if (c.head == tname) {
-                    env[k]   = entry;
-                    replaced = 1;
-                }
-            }
-            if (!replaced) env = push(a, env, entry);
-        }
-        // Also bound in the shell while the program is looked up, as
-        // bash's temporary environment: a PATH there is searched, and
-        // command_not_found_handle sees them all
-        Str *names   = tb ? tb->names : 0;
-        iz   npushed = tb ? tb->n : 0;
-        env = envlastarg(sh, a, env, name);
-        sh->childsig = 0;
-        sh->spawnto = direct;
-        sh->attail  = n==sh->tailnode && sh->taillevel==sh->subshell+1;
-        sh->undonames = names;
-        sh->nundo     = npushed;
-        sh->undoargv  = argv.data;
-        if (tb) {
-            tb->n    = 0;  // runprogram's to undo now (undotemps)
-            tb->argv = argv.data;
-        }
-        sh->status = runexternal(sh, scratch, argv.data, argv.len, env);
-        sh->attail  = 0;
-        if (!direct) chldreaped(sh, 1);
-        if (sh->nundo) {
-            // Not spawned here: a stage that ends in the program, as
-            // bash's child that execs, never restores (and so is quiet)
-            sh->nolocwarn = !!direct;
-            for (iz i = npushed-1; i >= 0; i--) poptemp(sh, names[i]);
-            sh->nolocwarn = 0;
-            sh->nundo     = 0;
-        }
-        reportchild(sh, scratch, n);
+        sh->lastbg = c->lastbg;
+        runprogram1(sh, n, c, tb, scratch);
     }
-    unwind(sh, mark);
+    unwind(sh, c->mark);
     // before ERR and set -e, as bash binds it
     bindlastarg(sh, scratch, *last, *who);
     *last = {};
@@ -4072,7 +4139,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
         poptemps(sh, tb);
         sh->line = line;
     }
-    if (sh->flow!=FLOW_RETURN && !forked) {
+    if (sh->flow!=FLOW_RETURN && !c->forked) {
         checkerrexit(sh);
     }
 }
