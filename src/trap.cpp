@@ -275,26 +275,25 @@ static i32 runtrap(Shell *sh, i32 idx)
         sh->exiting = 1;
         escape(sh, ESC_EXIT);
     }
+    // Its bookkeeping (the depth, intrap, trapbusy, trapstatus and the
+    // rest) goes back however the action ends, an escape included
+    Escape e;
+    escenter(sh, &e);
     i32   depth = ++sh->capdepth;
     Arena a     = *scratchat(sh, depth);
     Str   cmd   = clone(&a, sh->traps[idx]);  // it may change itself
     i32   status   = sh->status;
-    i32   saved    = sh->trapstatus;
     i32   line     = sh->line;
     b32   lexeof   = sh->lexeof;  // bash saves its parser state
-    Node *current  = sh->current;
-    Node *cmdnode  = sh->cmdnode;
     // BASH_COMMAND once its node was freed: the store copy may be
     // replaced while the action runs (keepcmdtext)
-    Str   cmdtext_ = cmdnode ? Str{} : clone(&a, sh->cmdtext);
-    i32   funcs    = sh->trapfuncs;
+    CmdSave cmdsave = savecmd(sh, &a);
     i32   npstat   = sh->npstat;  // PIPESTATUS survives it, as $? does
     u8   *pstat    = alloc<u8>(&a, npstat);
     copybytes(pstat, pstatv(sh), npstat);
     sh->trapstatus = status;
     sh->trapfuncs  = sh->funcdepth;
     sh->intrap++;
-    i32   busy  = sh->trapbusy;
     if (idx >= TRAP_DEBUG) sh->trapbusy |= 1 << (idx-TRAP_DEBUG);
     // BASH_TRAPSIG: the trap's number, while it runs
     Str num = fmti64(&a, idx);
@@ -302,25 +301,23 @@ static i32 runtrap(Shell *sh, i32 idx)
     Value *v = lookup(sh, "BASH_TRAPSIG");
     if (v) v->attrs &= ~V_EXPORT;
     sh->evaldepth++;
-    // As bash, a signal's action is numbered from line 1, but DEBUG,
-    // ERR and RETURN go on from the current line
-    runsource(sh, cmd, sh->iname, a, 0, idx>=TRAP_DEBUG ? sh->line : 1);
+    b32 escaped = jmpset(e.jmp);
+    if (!escaped) {
+        // As bash, a signal's action is numbered from line 1, but DEBUG,
+        // ERR and RETURN go on from the current line
+        runsource(sh, cmd, sh->iname, a, 0, idx>=TRAP_DEBUG ? sh->line : 1);
+    }
     i32 own = sh->status;
-    sh->evaldepth--;
-    poptemp(sh, "BASH_TRAPSIG");
-    sh->capdepth = depth - 1;
-    sh->trapbusy = busy;
-    sh->intrap--;
-    sh->trapstatus = saved;
-    sh->trapfuncs  = funcs;
+    escleave(sh, &e);
+    escrestore(sh, &e);
+    if (!escaped) {
+        poptemp(sh, "BASH_TRAPSIG");  // an abandoned action's stays, as in bash
+    }
     sh->line    = line;
     sh->lexeof  = lexeof;
-    sh->current = current;
-    sh->cmdnode = cmdnode;
-    if (!cmdnode && cmdtext_.data) {
-        Store *st = sh->store;
-        if ((byte *)sh->cmdtext.data >= st->mark) sfreestr(st, sh->cmdtext);
-        sh->cmdtext = sclone(st, cmdtext_);
+    restorecmd(sh, cmdsave);
+    if (escaped) {
+        escape(sh, e.why);
     }
     if (sh->flow != FLOW_RETURN) {
         sh->status = status;
