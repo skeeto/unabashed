@@ -527,8 +527,9 @@ struct Shell {
     i32      ctlline;      // bash's line as only some commands set it
                            // (top level, calls, for, case, select)
     i32      status;       // $?
-    i32      npstat;       // PIPESTATUS: the last pipeline's statuses
-    u8       pstat[256];
+    i32      npstat;       // PIPESTATUS: the last pipeline's statuses,
+    u8       pstat[32];    // here, or past this many in a store buffer
+    u8      *pstatbig;     // of npstat bytes (see pstatv)
     b32      pstatdirty;   // PIPESTATUS assigned or unset meanwhile
     i32      flow;
     i32      flowcount;

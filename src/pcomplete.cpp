@@ -1526,8 +1526,8 @@ static PcLive pclivesafe(Editor *ed, Shell *sh, Comp *c, b32 *cmdpos)
     i32 depth  = sh->capdepth;
     i32 status = sh->status;  // $? and PIPESTATUS kept, as bash's
     i32 npstat = sh->npstat;
-    u8  pstat[countof(sh->pstat)];
-    copybytes(pstat, sh->pstat, countof(pstat));
+    u8 *pstat  = alloc<u8>(c->a, npstat);
+    copybytes(pstat, pstatv(sh), npstat);
     PcLive r = {};
     if (!jmpset(e.jmp)) {
         r = pclive(ed, sh, c, cmdpos);
@@ -1542,8 +1542,7 @@ static PcLive pclivesafe(Editor *ed, Shell *sh, Comp *c, b32 *cmdpos)
     sh->esc    = e.up;
     sh->status = status;
     if (!sh->pstatdirty) {
-        sh->npstat = npstat;
-        copybytes(sh->pstat, pstat, countof(pstat));
+        copybytes(newpstat(sh, npstat), pstat, npstat);
     }
     return r;
 }

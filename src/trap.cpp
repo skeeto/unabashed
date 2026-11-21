@@ -289,8 +289,8 @@ static i32 runtrap(Shell *sh, i32 idx)
     Str   cmdtext_ = cmdnode ? Str{} : clone(&a, sh->cmdtext);
     i32   funcs    = sh->trapfuncs;
     i32   npstat   = sh->npstat;  // PIPESTATUS survives it, as $? does
-    u8   *pstat    = alloc<u8>(&a, countof(sh->pstat));
-    copybytes(pstat, sh->pstat, countof(sh->pstat));
+    u8   *pstat    = alloc<u8>(&a, npstat);
+    copybytes(pstat, pstatv(sh), npstat);
     sh->trapstatus = status;
     sh->trapfuncs  = sh->funcdepth;
     sh->intrap++;
@@ -326,8 +326,7 @@ static i32 runtrap(Shell *sh, i32 idx)
         sh->status = status;
     }
     if (!sh->pstatdirty) {
-        sh->npstat = npstat;
-        copybytes(sh->pstat, pstat, countof(sh->pstat));
+        copybytes(newpstat(sh, npstat), pstat, npstat);
     }
     return own;
 }

@@ -403,6 +403,10 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     c->lastargcap = sh->lastarg.len>32 ? sh->lastarg.len : 32;
     c->lastarg    = {(u8 *)salloc(st, c->lastargcap), sh->lastarg.len};
     copybytes(c->lastarg.data, sh->lastarg.data, sh->lastarg.len);
+    if (sh->pstatbig) {
+        c->pstatbig = (u8 *)salloc(st, sh->npstat);
+        copybytes(c->pstatbig, sh->pstatbig, sh->npstat);
+    }
     c->host       = sclone(st, sh->host);
     c->hosts      = sclone(st, sh->hosts);
     c->badenv     = (Str *)salloc(st, (sh->nbadenv ? sh->nbadenv : 1)*(iz)sizeof(Str));

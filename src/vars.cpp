@@ -469,6 +469,12 @@ static Str dollar0(Shell *sh)
 
 static Array *dynarray(Shell *, Arena *, Value *);
 
+// The last pipeline's npstat statuses.
+static u8 *pstatv(Shell *sh)
+{
+    return sh->pstatbig ? sh->pstatbig : sh->pstat;
+}
+
 // COMP_WORDBREAKS's default, with '@' unless hostname completion is off.
 // Native mode leaves out ':', which there follows a drive letter, so
 // d:/ completes on D: and not at the root of the current drive (/).
@@ -526,7 +532,7 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
         return fmti64(a, histnumber(sh) - !prompt);
     }
     case DYN_BASH_ARGV0:    return dollar0(sh);
-    case DYN_PIPESTATUS:    return fmti64(a, sh->npstat ? sh->pstat[0] : 0);
+    case DYN_PIPESTATUS:    return fmti64(a, sh->npstat ? pstatv(sh)[0] : 0);
     case DYN_UNDERSCORE:    return sh->lastarg.data ? sh->lastarg : Str("");
     case DYN_COMP_WORDBREAKS: return wordbreaks(sh, 1);
     case DYN_GROUPS: {
@@ -979,7 +985,7 @@ static Array *dynarray(Shell *sh, Arena *a, Value *v)
         r->e     = alloc<Elem>(a, r->cap);
         for (; r->len < sh->npstat; r->len++) {
             r->e[r->len].idx = r->len;
-            r->e[r->len].val = fmti64(a, sh->pstat[r->len]);
+            r->e[r->len].val = fmti64(a, pstatv(sh)[r->len]);
         }
         r->isset = 1;
         return r;
@@ -1070,18 +1076,32 @@ static void restorepstat(Shell *sh)
     jset(st, &v->top, n);
 }
 
-static void setpstat1(Shell *sh)
+// Room for n new statuses, as bash has no limit on stages. Past the
+// Shell's own array they get a fresh store buffer, never one rewritten
+// in place: the level around a synchronous subshell gets its buffer
+// back as it was, and sfree leaves that one alone.
+static u8 *newpstat(Shell *sh, i32 n)
 {
     if (sh->pstatdirty) restorepstat(sh);
-    sh->npstat   = 1;
-    sh->pstat[0] = (u8)sh->status;
+    if (sh->pstatbig) {
+        sfree(sh->store, sh->pstatbig, sh->npstat);
+        sh->pstatbig = 0;
+    }
+    sh->npstat = n;
+    if (n <= countof(sh->pstat)) return sh->pstat;
+    sh->pstatbig = (u8 *)salloc(sh->store, n);
+    return sh->pstatbig;
+}
+
+static void setpstat1(Shell *sh)
+{
+    newpstat(sh, 1)[0] = (u8)sh->status;
 }
 
 static void setpstat(Shell *sh, i32 *statuses, i32 n)
 {
-    if (sh->pstatdirty) restorepstat(sh);
-    sh->npstat = n;
-    for (i32 i = 0; i < n; i++) sh->pstat[i] = (u8)statuses[i];
+    u8 *p = newpstat(sh, n);
+    for (i32 i = 0; i < n; i++) p[i] = (u8)statuses[i];
 }
 
 static b32 assignelem(Shell *, Arena, Str name, Str sub, Str lhs, Str value, i32 flags);
