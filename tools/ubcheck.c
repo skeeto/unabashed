@@ -549,6 +549,7 @@ static int check(char *argv0, int quick)
         {"trapped TSTP to $$", "trap 'echo t' TSTP; kill -TSTP $$", 0, "t"},
         {"kill 0", "kill 0; echo no", UB_SIGNALED|(128+SIGTERM)},
         {"kill -0 group and host", "kill -0 0 && kill -0 $PPID && echo ok", 0, "ok"},
+        {"kill -64 0", "trap 'echo t' 64; kill -64 0; echo after", 0, "t\nafter"},
         {"kill -1, host refused",
          "kill -TERM -1 2>/dev/null; echo a=$?; kill $PPID 2>/dev/null; echo b=$?", 0,
          "a=1\nb=1"},

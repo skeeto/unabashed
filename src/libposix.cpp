@@ -648,9 +648,8 @@ static u64 libsiggroup(Os *os)
 {
     Lib *l = (Lib *)os;
     u64 bits = plt_siggroup(os);
-    for (i32 sig = 1; bits>>(sig-1); sig++) {
-        if (!(bits>>(sig-1) & 1)) continue;
-        i32 hsig = hostsig(sig);
+    for (u64 b = bits; b; b &= b-1) {
+        i32 hsig = hostsig(__builtin_ctzll(b) + 1);
         if (!hsig) continue;
         for (i32 i = 0; i < l->nkids; i++) {
             kill(-(pid_t)l->kids[i].pid, hsig);
@@ -1121,7 +1120,7 @@ static void libfree(Lib *l)
 static i32 libsignal(Lib *l, i32 sig)
 {
     i32 c = coresig(sig & 0xff);
-    if (!c || (sig & ~(0xff|UB_GROUP))) return -E_INVAL;
+    if (c<1 || c>64 || (sig & ~(0xff|UB_GROUP))) return -E_INVAL;
     u64 volatile *bits = sig&UB_GROUP ? &l->os.grpbits : &l->os.sigbits;
     bitsor(bits, (u64)1<<(c-1));
     wakeup(l);
