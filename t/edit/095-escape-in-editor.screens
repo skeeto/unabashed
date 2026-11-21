@@ -1,0 +1,45 @@
+== snap 1
+bash: 1/0: division by 0 (error token is "0")
+$
+@ 1,2
+== snap 2
+bash: 1/0: division by 0 (error token is "0")
+$ echo $? ${READLINE_LINE-unset}
+1 unset
+
+$
+@ 4,2
+== snap 3
+bash: 1/0: division by 0 (error token is "0")
+$ echo $? ${READLINE_LINE-unset}
+1 unset
+
+$ echo $?
+1
+$ foo
+$
+@ 7,2
+== snap 4
+bash: 1/0: division by 0 (error token is "0")
+$ echo $? ${READLINE_LINE-unset}
+1 unset
+
+$ echo $?
+1
+$ foo
+$ echo $?
+1
+$
+@ 9,2
+== snap 5
+bash: 1/0: division by 0 (error token is "0")
+$ echo $? ${READLINE_LINE-unset}
+1 unset
+
+$ echo $?
+1
+$ foo
+$ echo $?
+1
+$
+@ 9,2

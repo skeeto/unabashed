@@ -1,0 +1,27 @@
+== snap 1
+pc1
+$ true
+^C
+pc3
+$
+@ 4,2
+== snap 2
+pc1
+$ true
+^C
+pc3
+$ echo $? $n
+130 3
+pc4
+$
+@ 7,2
+== snap 3
+pc1
+$ true
+^C
+pc3
+$ echo $? $n
+130 3
+pc4
+$
+@ 7,2

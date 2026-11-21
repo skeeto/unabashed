@@ -1295,6 +1295,7 @@ static Tty vos_tty(Os *os, Handle in, Handle out, i32 how)
     Vos *v = osvos(os);
     Tty  r = {};
     VTty *y = &v->tty;
+    how &= ~TTY_PASTE;
     if (!y->term || !vistty(v, in) || !vistty(v, out)) {
         r.err = E_NOTTY;
         return r;

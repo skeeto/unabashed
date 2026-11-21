@@ -1133,8 +1133,53 @@ static void showps0(Shell *sh)
     showprompt(sh, "PS0");
 }
 
+// PROMPT_COMMAND's commands. Nothing outside catches what escapes them,
+// so what bash's jump to the top level would abandon, they are, here:
+// the reason (ESC_INTR, ESC_DISCARD, ESC_ABORT), or 0.
+static i32 promptrun(Shell *sh, Str *cmds, iz n, Arena a)
+{
+    Escape e = {};
+    e.up        = sh->esc;
+    e.bout      = sh->bout;
+    e.undo      = sh->undo;
+    e.frame     = sh->frame;
+    e.loopdepth = sh->loopdepth;
+    Lexer *lexer     = sh->lexer;
+    Str    iname     = sh->iname;
+    Str    srcname   = sh->srcname;
+    Node  *current   = sh->current;
+    i32    noerrexit = sh->noerrexit;
+    i32    evaldepth = sh->evaldepth;
+    i32    srcdepth  = sh->sourcedepth;
+    i32    capdepth  = sh->capdepth;
+    sh->esc = &e;
+    if (jmpset(e.jmp)) {
+        sh->esc = e.up;
+        if (e.why==ESC_EXIT || e.why==ESC_FATAL) escape(sh, e.why);
+        unwind(sh, e.undo);
+        sh->flow        = FLOW_NONE;
+        sh->loopdepth   = e.loopdepth;
+        sh->lexer       = lexer;
+        sh->iname       = iname;
+        sh->srcname     = srcname;
+        sh->current     = current;
+        sh->noerrexit   = noerrexit;
+        sh->evaldepth   = evaldepth;
+        sh->sourcedepth = srcdepth;
+        sh->capdepth    = capdepth;
+        return e.why;
+    }
+    for (iz i = 0; i<n && !sh->exiting; i++) {
+        if (cmds[i].len) runsource(sh, cmds[i], "PROMPT_COMMAND", a, 0, 1);
+    }
+    sh->esc = e.up;
+    return 0;
+}
+
 // PROMPT_COMMAND, run before each primary prompt: the string, or each
 // element of an indexed array, as eval would run it. $_ survives it.
+// An interrupt runs it again from the start, as bash's new prompt
+// after its jump to the top level does; an error gives it up, status 1.
 static void promptcommand(Shell *sh)
 {
     Value *v = lookup(sh, "PROMPT_COMMAND");
@@ -1155,9 +1200,11 @@ static void promptcommand(Shell *sh)
     Str *copies = alloc<Str>(&a, cmds.n);  // the commands may change it
     for (iz i = 0; i < cmds.n; i++) copies[i] = clone(&a, cmds.vals[i]);
     sh->evaldepth++;
-    for (iz i = 0; i<cmds.n && !sh->exiting; i++) {
-        if (copies[i].len) runsource(sh, copies[i], "PROMPT_COMMAND", a, 0, 1);
+    i32 why;
+    while ((why = promptrun(sh, copies, cmds.n, a)) == ESC_INTR) {
+        status = sh->status = 128 + 2;
     }
+    if (why) status = 1;
     sh->evaldepth--;
     sh->capdepth = depth - 1;
     sh->status   = status;

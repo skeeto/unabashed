@@ -639,6 +639,8 @@ struct Editor {
     i32      ccol;
     b32      pending;   // the terminal has a wrap pending (crow, ccol at
                         // the last column)
+    b32      paste;     // bracketed paste is on
+    b32      shellcmd;  // a bind -x command is running
     Buf      out_;      // output for one redisplay
     b32      done;
     i32      result;    // ED_*
@@ -1521,6 +1523,13 @@ static void edrefresh(Editor *ed, Shell *sh)
 }
 
 static void edsize(Editor *, Shell *, Tty);
+
+// The terminal in raw mode, the platform told whether bracketed paste
+// is on, to turn it off should the process die meanwhile
+static Tty edraw(Editor *ed, Shell *sh)
+{
+    return os_tty(sh->os, ed->in, ed->out, TTY_RAW | (ed->paste ? TTY_PASTE : 0));
+}
 
 // The terminal may have a new size (SIGWINCH): as readline does, clear
 // the rows of the line from its last up to its first, then draw it all
@@ -3033,8 +3042,9 @@ static void ededitexec(Editor *ed, Shell *sh, b32 vi = 0, u8 key = 0)
         edmove(ed, l->nrows-1, l->rows[l->nrows-1].width);
         edput(ed, "\r\n");
     }
-    b32 bracket = !ed->hscroll && !ed->tty.legacy && ed->vars.bracketpaste;
+    b32 bracket = ed->paste;
     if (bracket) edput(ed, "\x1b[?2004l\r");
+    ed->paste = 0;
     edflush(ed, sh);
     if (!argset) {
         reallyadd(sh, clone(&ed->linemem, edtext(ed)));
@@ -3065,7 +3075,8 @@ static void ededitexec(Editor *ed, Shell *sh, b32 vi = 0, u8 key = 0)
     sh->lexeof   = lexeof;
 
     // The program may have resized the terminal
-    Tty t = os_tty(sh->os, ed->in, ed->out, TTY_RAW);
+    ed->paste = bracket;
+    Tty t = edraw(ed, sh);
     if (!t.err && t.cols>=2) {
         ed->tty.rows = t.rows;
         ed->tty.cols = t.cols;
@@ -3142,11 +3153,13 @@ static void edshellcmd(Editor *ed, Shell *sh, Str cmd)
     i32 line   = sh->line;
     b32 lexeof = sh->lexeof;
     sh->evaldepth++;
+    ed->shellcmd = 1;  // an escape still unsets the variables (editline)
     runsource(sh, cmd, "bash_execute_unix_command", a);
+    ed->shellcmd = 0;
     sh->evaldepth--;
     sh->line   = line;
     sh->lexeof = lexeof;
-    os_tty(sh->os, ed->in, ed->out, TTY_RAW);
+    edraw(ed, sh);
 
     Got g = getvar(sh, &a, names[0]);
     if (g.set) edreplace(ed, g.value);
@@ -5404,9 +5417,6 @@ static i64 edchars(Editor *ed)
     return n;
 }
 
-// Read a line on the terminal with the editor, the prompt shown first.
-// ED_NOTTY if the input (descriptor 0, or opts->fd) and descriptor 2
-// are not one terminal. With opts, for read -e.
 // Whether to draw as on a dumb terminal: TERM=dumb and, as readline
 // does when the terminal database knows no such terminal, on POSIX an
 // unset TERM or one without a terminfo entry. A Windows console needs
@@ -5467,24 +5477,19 @@ static b32 eddumb(Shell *sh, Arena a)
     return 1;
 }
 
-static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
+static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
+                  b32 isread, File *fin, File *ferr)
 {
-    EdRead none = {};
-    none.delim = -1;
-    opts = opts ? opts : &none;
-    b32 isread = opts!=&none && !opts->shell;
-    File *fin  = sh->fds->fd[opts->fd];
-    File *ferr = sh->fds->fd[2];
-    if (!fin || !ferr || fin->kind!=F_OS || ferr->kind!=F_OS) return ED_NOTTY;
-    Editor *ed = editor(sh);
     // The prompt and initial text live in the callers' scratch, which
     // the size checks below reuse: copy them first
     ed->linemem = {(byte *)(ed->linemem.mem+1), ed->linemem.end, ed->linemem.mem};
     prompt      = clone(&ed->linemem, prompt);
     Str init    = clone(&ed->linemem, opts->init);
+    ed->out_  = Buf(&ed->linemem, 256);
+    ed->paste = ed->shellcmd = 0;
     ed->in  = fin->h;
     ed->out = ferr->h;
-    ed->tty   = os_tty(sh->os, ed->in, ed->out, TTY_RAW);
+    ed->tty   = edraw(ed, sh);
     ed->notty = 0;
     if (ed->tty.err) {
         // The shell's input that is no terminal is still read with the
@@ -5511,7 +5516,6 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     ed->width = ed->tty.xenl ? ed->tty.cols : ed->tty.cols-1;
 
     ed->line    = Buf(&ed->linemem, 256);
-    ed->out_    = Buf(&ed->linemem, 256);
     ed->done    = 0;
     ed->fin     = fin;
     ed->delim   = opts->delim;
@@ -5577,8 +5581,11 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     }
     // Bracketed paste, as readline's enable-bracketed-paste, except where
     // there are no escape sequences
-    b32 bracket = !ed->hscroll && !ed->tty.legacy && ed->vars.bracketpaste;
-    if (bracket) edput(ed, "\x1b[?2004h");
+    ed->paste = !ed->hscroll && !ed->tty.legacy && ed->vars.bracketpaste;
+    if (ed->paste) {
+        edput(ed, "\x1b[?2004h");
+        edraw(ed, sh);
+    }
 
     // As readline, the first draw starts wherever the cursor is, taken
     // as column 0, so a prompt follows output with no final newline.
@@ -5673,9 +5680,85 @@ static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
     if (crlf && !(ed->result==ED_INTR && isread)) {
         edput(ed, ed->notty ? Str("\n") : "\r\n");  // readline's crlf
     }
-    if (bracket) edput(ed, "\x1b[?2004l\r");
+    if (ed->paste) edput(ed, "\x1b[?2004l\r");
+    ed->paste = 0;
     edflush(ed, sh);
     if (!ed->notty) edsize(ed, sh, os_tty(sh->os, ed->in, ed->out, TTY_RESTORE));
     print(out, {ed->line.data, ed->line.len});
     return ed->result;
+}
+
+// Read a line on the terminal with the editor, the prompt shown first.
+// ED_NOTTY if the input (descriptor 0, or opts->fd) and descriptor 2
+// are not one terminal. With opts, for read -e.
+//
+// Shell code the editor runs (bind -x, completion functions, the WINCH
+// trap, fc) may escape. Before the escape goes on, the line is left as
+// on an interrupt and the terminal as the editor found it. At the
+// shell's own prompt nothing outside catches it, so what bash's jump
+// to the top level would abandon, the line, is given up here instead
+// (ED_ABORT), as bash then starts a new prompt.
+static i32 editline(Shell *sh, Str prompt, Buf *out, EdRead *opts)
+{
+    EdRead none = {};
+    none.delim = -1;
+    opts = opts ? opts : &none;
+    b32 isread = opts!=&none && !opts->shell;
+    File *fin  = sh->fds->fd[opts->fd];
+    File *ferr = sh->fds->fd[2];
+    if (!fin || !ferr || fin->kind!=F_OS || ferr->kind!=F_OS) return ED_NOTTY;
+    Editor *ed = editor(sh);
+
+    Escape e = {};
+    e.up        = sh->esc;
+    e.bout      = sh->bout;
+    e.undo      = sh->undo;
+    e.frame     = sh->frame;
+    e.loopdepth = sh->loopdepth;
+    Lexer *lexer     = sh->lexer;
+    Str    iname     = sh->iname;
+    Str    srcname   = sh->srcname;
+    Node  *current   = sh->current;
+    i32    noerrexit = sh->noerrexit;
+    i32    evaldepth = sh->evaldepth;
+    i32    srcdepth  = sh->sourcedepth;
+    i32    capdepth  = sh->capdepth;
+    i32    line      = sh->line;
+    b32    lexeof    = sh->lexeof;
+    sh->esc = &e;
+    if (!jmpset(e.jmp)) {
+        i32 r = edline(sh, ed, prompt, out, opts, isread, fin, ferr);
+        sh->esc = e.up;
+        return r;
+    }
+    sh->esc = e.up;
+    unwind(sh, e.undo);
+    sh->flow        = FLOW_NONE;
+    sh->loopdepth   = e.loopdepth;
+    sh->lexer       = lexer;
+    sh->iname       = iname;
+    sh->srcname     = srcname;
+    sh->current     = current;
+    sh->noerrexit   = noerrexit;
+    sh->evaldepth   = evaldepth;
+    sh->sourcedepth = srcdepth;
+    sh->capdepth    = capdepth;
+    sh->line        = line;
+    sh->lexeof      = lexeof;
+    if (ed->shellcmd) {
+        // As bash's unwinding: bind -x's variables go
+        ed->shellcmd = 0;
+        Str names[] = {"READLINE_LINE", "READLINE_POINT", "READLINE_MARK",
+                       "READLINE_ARGUMENT"};
+        for (i32 i = 0; i < countof(names); i++) unsetvar(sh, names[i], 1);
+    }
+
+    edleave(ed, sh, 1);
+    if (ed->paste) edput(ed, "\x1b[?2004l\r");
+    ed->paste = 0;
+    edflush(ed, sh);
+    if (!ed->notty) edsize(ed, sh, os_tty(sh->os, ed->in, ed->out, TTY_RESTORE));
+    b32 resume = e.why==ESC_DISCARD || e.why==ESC_ABORT || e.why==ESC_INTR;
+    if (!resume || !opts->shell) escape(sh, e.why);
+    return ED_ABORT;
 }

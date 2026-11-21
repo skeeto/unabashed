@@ -1,0 +1,11 @@
+# An interrupt while PROMPT_COMMAND runs abandons it, and it runs again
+# from the start, as after bash's jump to the top level; $? is then 130
+size 24 60
+rc PS1='$ '
+rc n=0; PROMPT_COMMAND='((n++ == 1)) && sleep 3; echo pc$n'
+keys true\r
+pause 500
+keys \C-c
+snap
+keys echo $? $n\r
+snap

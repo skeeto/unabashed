@@ -29,6 +29,9 @@ struct Os {
     iz     stack;       // OsInfo.stack, likewise
     i32    ttyraw;      // os_tty: the mode set (TTY_*), 0 if never changed
     termios ttysave;    // and its mode before
+    i32    ttyin;       // the terminal, while its mode is changed
+    i32    ttyout;
+    b32    ttypaste;    // TTY_PASTE
     // Output to a regular file is coalesced (see os_write)
     i32    wpend;       // the file's descriptor, while wlen > 0
     i32    wlen;
@@ -648,20 +651,80 @@ static b32 plt_con(Os *os, Handle, ConOp *)
     return 0;  // no legacy consoles here
 }
 
+// The terminal as it was before os_tty changed it, and bracketed paste
+// off, for an end of the process that skips TTY_RESTORE. Called from
+// a signal handler too.
+static void ttyabandon(Os *os)
+{
+    if (!os->ttyraw) return;
+    os->ttyraw = 0;
+    if (os->ttypaste && write(os->ttyout, "\x1b[?2004l", 8)) {}
+    tcsetattr(os->ttyin, TCSANOW, &os->ttysave);
+}
+
+// While the terminal's mode is changed, the signals whose default action
+// would end the process are caught instead, to restore it first, then
+// die of them as readline does.
+static int const ttydeadly[] = {
+    SIGHUP, SIGINT, SIGQUIT, SIGALRM, SIGTERM, SIGUSR1, SIGUSR2, SIGXCPU,
+    SIGXFSZ, SIGVTALRM,
+};
+
+static void ondeadly(int sig)
+{
+    ttyabandon(sigos);
+    struct sigaction sa = {};
+    sa.sa_handler = SIG_DFL;
+    sigaction(sig, &sa, 0);
+    raise(sig);  // delivered on return
+}
+
+static b32 ttyisdeadly(int sig)
+{
+    for (iz i = 0; i < countof(ttydeadly); i++) {
+        if (ttydeadly[i] == sig) return 1;
+    }
+    return 0;
+}
+
+// Catch the deadly signals left at their default action, or put back
+// those caught so.
+static void ttycatch(b32 on)
+{
+    for (iz i = 0; i < countof(ttydeadly); i++) {
+        struct sigaction sa = {};
+        if (sigaction(ttydeadly[i], 0, &sa)) continue;
+        if (sa.sa_handler != (on ? SIG_DFL : ondeadly)) continue;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags   = 0;
+        sa.sa_handler = on ? ondeadly : SIG_DFL;
+        sigaction(ttydeadly[i], &sa, 0);
+    }
+}
+
 static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
 {
     flushw(os);
     Tty     r = {};
     termios t;
+    b32 paste = !!(how & TTY_PASTE);
+    how &= ~TTY_PASTE;
     if (!isatty((i32)in) || !isatty((i32)out) || tcgetattr((i32)in, &t)) {
         r.err = E_NOTTY;
         return r;
     }
+    if (how!=TTY_QUERY && how!=TTY_RESTORE) {
+        os->ttypaste = paste && how==TTY_RAW;
+    }
     if (how==TTY_RAW && os->ttyraw==TTY_RAW) {
         t = os->ttysave;  // already
     } else if (how!=TTY_QUERY && how!=TTY_RESTORE) {
-        if (!os->ttyraw) os->ttysave = t;
+        b32 first = !os->ttyraw;
+        if (first) os->ttysave = t;
+        os->ttyin  = (i32)in;
+        os->ttyout = (i32)out;
         os->ttyraw = how;
+        if (first) ttycatch(1);
         termios m = os->ttysave;
         switch (how) {
         case TTY_RAW:
@@ -692,8 +755,10 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
             sigaction(SIGWINCH, &sa, 0);
         }
     } else if (how==TTY_RESTORE && os->ttyraw) {
-        os->ttyraw = 0;
+        os->ttyraw   = 0;
+        os->ttypaste = 0;
         tcsetattr((i32)in, TCSADRAIN, &os->ttysave);
+        ttycatch(0);
         t = os->ttysave;
     } else if (os->ttyraw) {
         t = os->ttysave;
@@ -1128,6 +1193,10 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
                 signal(sig, SIG_DFL);
             }
         }
+        if (os->ttyraw) {
+            ttycatch(0);  // the parent's terminal, not this process's
+            os->ttyraw = 0;
+        }
         os->changed = s->sigign & ~os->entryign;
         os->pending = 0;
         os->peekfd[0] = os->peekfd[1] = 0;
@@ -1528,7 +1597,7 @@ static void plt_sigmode(Os *os, i32 sig, i32 mode)
     sa.sa_flags = SA_RESTART;
     switch (mode) {
     case SIGM_DEFAULT:
-        sa.sa_handler = SIG_DFL;
+        sa.sa_handler = os->ttyraw && ttyisdeadly(hsig) ? ondeadly : SIG_DFL;
         break;
     case SIGM_IGNORE:
         sa.sa_handler = SIG_IGN;
@@ -1999,6 +2068,7 @@ static Slice<InheritFd> inherited(Arena *a)
 static void exitwith(i32 status)
 {
     if (sigos) flushw(sigos);
+    if (sigos) ttyabandon(sigos);
     #if PROFILE
     exit(status & 255);  // -DPROFILE -pg: exit writes gprof's gmon.out
     #endif

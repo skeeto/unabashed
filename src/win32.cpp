@@ -3558,6 +3558,7 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
 {
     flushw(os);
     Tty r = {};
+    how &= ~TTY_PASTE;
     i32 imode = 0;
     i32 omode = 0;
     ConsoleInfo ci = {};

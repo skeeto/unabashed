@@ -1,0 +1,20 @@
+# Shell code the editor runs that escapes gives up the line, as bash's
+# jump to the top level does, and the shell goes on at a new prompt
+# with status 1: an integer assignment error or an interrupt in bind
+# -x (its variables gone), an interrupt in a completion function
+size 24 60
+rc PS1='$ '
+rc declare -i n
+rc bind -x '"\C-xa": n=1/0'
+rc bind -x '"\C-xi": kill -INT $$; echo after'
+rc f() { kill -INT $$; echo after; }; complete -F f foo
+keys echo abc\C-xa
+snap
+keys echo $? ${READLINE_LINE-unset}\r
+keys echo def\C-xi
+snap
+keys echo $?\r
+keys foo \t
+snap
+keys echo $?\r
+snap

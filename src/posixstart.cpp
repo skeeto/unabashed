@@ -5,6 +5,7 @@
 [[noreturn]] static void os_oom()
 {
     if (sigos) flushw(sigos);
+    if (sigos) ttyabandon(sigos);
     Str msg = "bash: out of memory\n";
     writeall(2, msg.data, msg.len);
     _exit(2);

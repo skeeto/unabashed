@@ -283,6 +283,11 @@ enum : i32 {  // os_tty
     TTY_CHARS,    // each byte as typed, echoed (read -n, -d)
     TTY_CHARSNOECHO,  // each byte as typed, not echoed (read -sn)
 };
+// Should the process die of a signal's default action or run out of
+// memory while the mode is changed, the platform restores it first, as
+// readline's handlers do. TTY_PASTE, or'd with TTY_RAW, says the caller
+// turned on bracketed paste: it is turned off then too.
+enum : i32 { TTY_PASTE = 1<<8 };
 
 struct Tty {
     i32 err;    // E_NOTTY if in and out are not one terminal
