@@ -2293,6 +2293,7 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
     i32 r   = cdtry(sh, scratch, dir, physical, 1, printdir, &err);
     if (r<0 && sh->shopt[S_CDABLE_VARS] && validvarname(dir)) {
         Got v = getplain(sh, &scratch, dir);
+        v.value = clone(&scratch, v.value);  // OLDPWD or PWD: cd sets them
         if (v.set && (r = cdtry(sh, scratch, v.value, physical, 0, 0, &err))>=0) {
             bprint(sh, v.value);
             bprint(sh, "\n");
