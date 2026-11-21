@@ -78,6 +78,13 @@ static i32 coresig(i32 sig) { return sig; }
 static u64 corebit(i32 sig) { return (u64)1 << (sig-1); }
 static b32 hostin(u64 set, i32 sig) { return sigin(set, sig); }
 
+// The core numbers errors as Linux does (api.cpp): the identity, as
+// for signals (darwin.cpp's coreerr).
+static_assert(EAGAIN==E_AGAIN && EDEADLK==E_DEADLK && ENAMETOOLONG==E_NAMETOOLONG &&
+              ENOSYS==E_NOSYS && ENOTEMPTY==E_NOTEMPTY && ELOOP==E_LOOP,
+              "the generic Linux numbering");
+static i32 coreerr(i32 err) { return err; }
+
 // posix_spawn beyond POSIX, by glibc version: chdir actions (2.29),
 // closefrom (2.34), and the terminal for a new group (2.35)
 #if defined(__GLIBC_PREREQ)
@@ -237,7 +244,7 @@ static i32 plt_siglevel(Os *os, i64 pid, i64 level, i32 sig)
     if (!ourprocess(pid)) return E_SRCH;
     union sigval v = {};
     v.sival_int = (i32)(serial<<8 | sig);
-    return sigqueue((pid_t)pid, siglevelnum(), v) ? errno : 0;
+    return sigqueue((pid_t)pid, siglevelnum(), v) ? coreerr(errno) : 0;
 }
 
 static void initlevel()

@@ -148,6 +148,7 @@ static void  stattimes(Stat *, struct stat *);
 static b32   closerange(i32 lo, i32 hi);
 static i32   hostsig(i32 sig);
 static i32   coresig(i32 sig);
+static i32   coreerr(i32 err);
 static u64   corebit(i32 sig);
 static b32   hostin(u64 set, i32 sig);
 static b32   spawnable(SpawnPlan *);
@@ -391,7 +392,7 @@ static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
     } while (fd<0 && errno==EINTR);
     if (fd < 0) {
         r.h   = BADHANDLE;
-        r.err = errno;
+        r.err = coreerr(errno);
         return r;
     }
     r.h = (Handle)highfd(fd);
@@ -401,7 +402,7 @@ static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 static i32 plt_unlink(Os *os, Arena scratch, Str path)
 {
     flushw(os);
-    return unlink(cpath(&scratch, path)) ? errno : 0;
+    return unlink(cpath(&scratch, path)) ? coreerr(errno) : 0;
 }
 
 static i32 plt_rename(Os *os, Arena scratch, Str from, Str to)
@@ -409,7 +410,7 @@ static i32 plt_rename(Os *os, Arena scratch, Str from, Str to)
     flushw(os);
     char *f = cpath(&scratch, from);
     char *t = cpath(&scratch, to);
-    return rename(f, t) ? errno : 0;
+    return rename(f, t) ? coreerr(errno) : 0;
 }
 
 static Opened plt_tempfile(Os *os, Arena scratch)
@@ -443,7 +444,7 @@ static Opened plt_tempfile(Os *os, Arena scratch)
         if (fd < 0 && errno==EEXIST) continue;
         if (fd < 0) {
             r.h   = BADHANDLE;
-            r.err = errno;
+            r.err = coreerr(errno);
             return r;
         }
         unlink(path);
@@ -452,7 +453,7 @@ static Opened plt_tempfile(Os *os, Arena scratch)
         return r;
     }
     r.h   = BADHANDLE;
-    r.err = EEXIST;
+    r.err = E_EXIST;
     return r;
 }
 
@@ -495,7 +496,7 @@ static OsPipe plt_pipe(Os *os)
     OsPipe r = {};
     i32 fds[2];
     if (cloexecpipe(fds)) {
-        r.err = errno;
+        r.err = coreerr(errno);
         r.r = r.w = BADHANDLE;
         return r;
     }
@@ -554,7 +555,7 @@ static Stat plt_stat(Os *os, Arena scratch, Str path, b32 follow)
     char *p = cpath(&scratch, path);
     if (follow ? stat(p, &s) : lstat(p, &s)) {
         Stat r = {};
-        r.err = errno;
+        r.err = coreerr(errno);
         return r;
     }
     return tostat(&s);
@@ -566,7 +567,7 @@ static Stat plt_fstat(Os *os, Handle h)
     struct stat s;
     if (fstat((i32)h, &s)) {
         Stat r = {};
-        r.err = errno;
+        r.err = coreerr(errno);
         return r;
     }
     return tostat(&s);
@@ -658,7 +659,7 @@ static Dirent *plt_list(Os *os, Arena *a, Str dir, i32 *err)
     flushw(os);
     Arena tmp = *a;
     DIR *d = opendir(cpath(&tmp, dir));
-    *err = d ? 0 : errno;
+    *err = d ? 0 : coreerr(errno);
     if (!d) return 0;
     if constexpr (LIBMODE) lib_dir(os, d);  // closed if the run ends here
     Dirent  *head = 0;
@@ -751,7 +752,7 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
     if (sync[0]<0 || sync[1]<0) {
         if (sync[0] >= 0) close(sync[0]);
         if (sync[1] >= 0) close(sync[1]);
-        return E_MFILE;
+        return EMFILE;
     }
     pid_t pid = fork();
     if (!pid) {
@@ -806,7 +807,7 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
         }
         sigprocmask(SIG_SETMASK, mask, 0);
         execve(p->path, p->argv, p->envp);
-        err = errno ? errno : E_NOEXEC;
+        err = errno ? errno : ENOEXEC;
         if (w>=0 && write(w, &err, sizeof(err))) {}
         _exit(127);
     }
@@ -965,7 +966,7 @@ static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
     if (!e) joingroup(pid, p.pgid, p.fg, p.tty);
     threadmask(SIG_SETMASK, &p.mask, 0);
     if (e) {
-        r.err = e;
+        r.err = coreerr(e);
         return r;
     }
     r.proc = (Handle)pid;
@@ -1096,7 +1097,7 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         os_switch(os, f);
         _exit(127);  // never reached
     }
-    i32 e = pid<0 ? errno : 0;
+    i32 e = pid<0 ? coreerr(errno) : 0;
     if (pid > 0) joingroup(pid, s->pgid, s->fg, (i32)s->tty);
     sigprocmask(SIG_SETMASK, &old, 0);
     if (e) {
@@ -1116,7 +1117,7 @@ static i32 plt_forkexec(Os *os, Arena scratch, Spawn *s)
 {
     flushw(os);
     i32 sync[2];
-    if (pipe(sync)) return errno;
+    if (pipe(sync)) return coreerr(errno);
     for (i32 i = 0; i < 2; i++) sync[i] = highfd(sync[i]);
     if (sync[0]<0 || sync[1]<0) {
         if (sync[0] >= 0) close(sync[0]);
@@ -1143,7 +1144,7 @@ static i32 plt_forkexec(Os *os, Arena scratch, Spawn *s)
         sigprocmask(SIG_SETMASK, &old, 0);
         return 0;
     }
-    i32 err = pid<0 ? errno : 0;
+    i32 err = pid<0 ? coreerr(errno) : 0;
     sigprocmask(SIG_SETMASK, &old, 0);
     close(sync[0]);
     if (!err) {
@@ -1200,7 +1201,7 @@ static i32 plt_exec(Os *os, Arena scratch, Spawn *s)
             if (save[i] >= 0) close(save[i]);
         }
         if (dot >= 0) close(dot);
-        return err;
+        return coreerr(err);
     }
 
     for (i32 fd = 0; fd < 1024; fd++) {
@@ -1243,7 +1244,7 @@ static i32 plt_exec(Os *os, Arena scratch, Spawn *s)
         }
         close(src[i]);
     }
-    return err;
+    return coreerr(err);
 }
 
 static i32 waitstatus(i32 status)
@@ -1364,7 +1365,7 @@ static i32 plt_setrlimit(Os *os, i32 res, Rlimit r)
     i32 n = rlres(res);
     if (n < 0) return E_NOSYS;
     rlimit l = {torlim(r.soft), torlim(r.hard)};
-    return setrlimit(n, &l) ? errno : 0;
+    return setrlimit(n, &l) ? coreerr(errno) : 0;
 }
 
 static i32 plt_kill(Os *os, i64 pid, i32 sig)
@@ -1373,13 +1374,13 @@ static i32 plt_kill(Os *os, i64 pid, i32 sig)
     if (pid<-(i64)0x7fffffff || pid>(i64)0x7fffffff) return E_SRCH;
     i32 hsig = hostsig(sig);
     if (sig && !hsig) return E_INVAL;  // one of Linux's this host lacks
-    return kill((pid_t)pid, hsig) ? errno : 0;
+    return kill((pid_t)pid, hsig) ? coreerr(errno) : 0;
 }
 
 static i32 plt_setpgid(Os *os, i64 pid, i64 pgid)
 {
     flushw(os);
-    return setpgid((pid_t)pid, (pid_t)pgid) ? errno : 0;
+    return setpgid((pid_t)pid, (pid_t)pgid) ? coreerr(errno) : 0;
 }
 
 static i64 plt_tcpgrp(Os *os, Handle tty, i64 pgid)
@@ -1387,14 +1388,14 @@ static i64 plt_tcpgrp(Os *os, Handle tty, i64 pgid)
     flushw(os);
     if (!pgid) {
         pid_t r = tcgetpgrp((i32)tty);
-        return r<0 ? -errno : r;
+        return r<0 ? -coreerr(errno) : r;
     }
     sigset_t ttou, old;
     sigemptyset(&ttou);
     sigaddset(&ttou, SIGTTOU);
     sigprocmask(SIG_BLOCK, &ttou, &old);
     i32 r = tcsetpgrp((i32)tty, (pid_t)pgid);
-    i32 e = errno;
+    i32 e = coreerr(errno);
     sigprocmask(SIG_SETMASK, &old, 0);
     return r ? -e : pgid;
 }
@@ -1525,7 +1526,7 @@ static b32 tryio(Io *io, i32 revents)
             n = read((i32)io->h, io->buf, (uz)len);
         } while (n<0 && errno==EINTR);
         io->n   = n<0 ? 0 : n;
-        io->err = n<0 ? errno : 0;
+        io->err = n<0 ? coreerr(errno) : 0;
     } return 1;
     case IO_WRITE: {
         if (!revents) return 0;
@@ -1535,7 +1536,7 @@ static b32 tryio(Io *io, i32 revents)
             n = write((i32)io->h, io->buf, (uz)len);
         } while (n<0 && errno==EINTR);
         io->n   = n<0 ? 0 : n;
-        io->err = n<0 ? errno : 0;
+        io->err = n<0 ? coreerr(errno) : 0;
     } return 1;
     case IO_PROC:
     case IO_PROCSTOP: {

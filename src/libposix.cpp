@@ -537,7 +537,7 @@ static void libsubmit(Os *os, Io *io)
                 io->done = 1;
                 io->next = 0;
                 io->n    = n<0 ? 0 : n;
-                io->err  = n<0 ? errno : 0;
+                io->err  = n<0 ? coreerr(errno) : 0;
                 return;
             }
         }

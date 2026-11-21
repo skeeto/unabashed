@@ -81,6 +81,40 @@ static b32 hostin(u64 set, i32 sig)
     return (set & corebit(sig)) != 0;
 }
 
+// The core numbers errors as Linux does (api.cpp), and macOS numbers
+// them alike up to 34, but for EAGAIN and EDEADLK. Every error that
+// goes to the core is translated: those the core names to its numbers,
+// and those whose host number it would take for another (35 to 40) to
+// Linux's. Any other passes as it is: the core has no text for it.
+static_assert(EPERM==E_PERM && ENOENT==E_NOENT && ESRCH==E_SRCH &&
+              EINTR==E_INTR && EIO==E_IO && ENXIO==E_NXIO && E2BIG==E_2BIG &&
+              ENOEXEC==E_NOEXEC && EBADF==E_BADF && ECHILD==E_CHILD &&
+              ENOMEM==E_NOMEM && EACCES==E_ACCES && EFAULT==E_FAULT &&
+              EBUSY==E_BUSY && EEXIST==E_EXIST && EXDEV==E_XDEV &&
+              ENODEV==E_NODEV && ENOTDIR==E_NOTDIR && EISDIR==E_ISDIR &&
+              EINVAL==E_INVAL && ENFILE==E_NFILE && EMFILE==E_MFILE &&
+              ENOTTY==E_NOTTY && ETXTBSY==E_TXTBSY && EFBIG==E_FBIG &&
+              ENOSPC==E_NOSPC && ESPIPE==E_SPIPE && EROFS==E_ROFS &&
+              EMLINK==E_MLINK && EPIPE==E_PIPE && EDOM==E_DOM &&
+              ERANGE==E_RANGE, "macOS numbers these as Linux does");
+static i32 coreerr(i32 err)
+{
+    switch (err) {
+    case EAGAIN:       return E_AGAIN;
+    case EDEADLK:      return E_DEADLK;
+    case ENAMETOOLONG: return E_NAMETOOLONG;
+    case ENOSYS:       return E_NOSYS;
+    case ENOTEMPTY:    return E_NOTEMPTY;
+    case ELOOP:        return E_LOOP;
+    case EINPROGRESS:  return 115;
+    case EALREADY:     return 114;
+    case ENOTSOCK:     return 88;
+    case EDESTADDRREQ: return 89;
+    case EMSGSIZE:     return 90;
+    }
+    return err;
+}
+
 // posix_spawn beyond POSIX: chdir actions (10.15, named without _np
 // from 26), and close-on-exec for all but the map
 #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 260000
