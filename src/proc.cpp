@@ -23,7 +23,7 @@ struct Vproc {
     byte  *permbase;
     Store  store;         // the vproc's store
     byte  *storebase;
-    Arena *pool[NPOOL];   // scratch arenas by depth, kept across uses
+    Pooled *pool[NPOOL];  // scratch arenas by depth, kept across uses
     Shell *sh;
     Node  *node;          // what it runs, or else
     Str    src;           // source text to parse and run (procsubs)

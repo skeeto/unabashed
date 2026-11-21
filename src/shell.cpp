@@ -496,7 +496,14 @@ struct Escape {
     b32       viacommand;
 };
 
+// The scratch arenas for nesting depths (scratchat): a table of the
+// first NPOOL, and each deeper one hanging from the one above it.
 enum { NPOOL = 64 };
+
+struct Pooled {
+    Arena   a;       // starts past this header, at its own base
+    Pooled *deeper;  // the next depth's, past the table
+};
 
 // The table of remembered command paths, as hash shows it: bash's
 // bucket count and string hash, so that listings come out in its order.
@@ -640,7 +647,7 @@ struct Shell {
     Lexer   *lexfloor;     // the parser around a command substitution
     BOut    *bout;
     Spawnto *spawnto;      // start the next program without waiting
-    Arena   *pool[NPOOL];  // scratch arenas for nested captures, by depth
+    Pooled  *pool[NPOOL];  // scratch arenas for nested captures, by depth
     iz       reserve;      // address space for each pool arena
     i32      capdepth;     // nesting of captures and pipeline stages
     i32      tracedepth;   // nesting of command substitutions, for PS4

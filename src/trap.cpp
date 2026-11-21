@@ -268,9 +268,9 @@ static void copytraps(Shell *c, Shell *sh)
 // Returns the action's own status.
 static i32 runtrap(Shell *sh, i32 idx)
 {
-    if (sh->intrap>=10 || sh->capdepth+2>=NPOOL) {
+    if (sh->intrap >= 10) {
         // Actions nested this deep (a trap sending its own signal):
-        // bash recurses until it crashes. Each level holds an arena.
+        // bash recurses until it crashes
         sh->status  = 139;
         sh->exiting = 1;
         escape(sh, ESC_EXIT);

@@ -22,11 +22,15 @@
 
 // Memory
 
-// A new arena on its own reservation, committed as it grows.
-static Arena newarena(Os *os, iz reserve)
+// A new arena on its own reservation, committed as it grows. With
+// maybe, a null arena where the address space has no room for it.
+static Arena newarena(Os *os, iz reserve, b32 maybe = 0)
 {
     byte *base = os_reserve(os, reserve);
     iz    head = (iz)1<<16;
+    if (!base && maybe) {
+        return {};
+    }
     if (!base || !os_commit(os, base, head)) {
         os_oom();
     }

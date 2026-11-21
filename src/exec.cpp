@@ -194,24 +194,37 @@ static void bprinti(Shell *sh, i64 v)
     bprint(sh, finish(&b));
 }
 
+// A scratch arena for nesting depth, newly reserved.
+static Pooled *newpooled(Shell *sh, i32 depth)
+{
+    // 32-bit address space holds only a few full-size reservations:
+    // the first level (most comsubs) gets half, deeper ones what a
+    // vproc gets. Past the table (deep recursion through $( ), as far
+    // as the stack allows) each gets less, and where even that does
+    // not fit, as much as does
+    iz cap = sizeof(void *)==4 && depth<=1 ? sh->reserve/2
+           : sizeof(void *)==4             ? sh->sched->reserve
+           : depth<NPOOL                   ? sh->reserve
+           :                                 sh->reserve/16;
+    Arena a = {};
+    for (iz floor = (iz)1<<18; !a.beg; cap /= 2) {
+        a = newarena(sh->os, cap, cap>floor);
+    }
+    Pooled *p = alloc<Pooled>(&a);
+    p->a = a;
+    return p;
+}
+
 // The scratch arena for a nesting depth, reserved on first use.
 static Arena *scratchat(Shell *sh, i32 depth)
 {
-    if (depth >= NPOOL) {
-        os_oom();
+    i32      d    = depth<NPOOL ? depth : NPOOL-1;
+    Pooled **slot = &sh->pool[d];
+    for (;; d++) {
+        if (!*slot) *slot = newpooled(sh, d);
+        if (d == depth) return &(*slot)->a;
+        slot = &(*slot)->deeper;
     }
-    if (!sh->pool[depth]) {
-        // 32-bit address space holds only a few full-size reservations:
-        // the first level (most comsubs) gets half, deeper ones what a
-        // vproc gets
-        iz    cap = sizeof(void *)==8 ? sh->reserve
-                  : depth<=1          ? sh->reserve/2
-                  :                     sh->sched->reserve;
-        Arena a = newarena(sh->os, cap);
-        sh->pool[depth] = alloc<Arena>(&a);
-        *sh->pool[depth] = a;
-    }
-    return sh->pool[depth];
 }
 
 // checkwinsize: after a foreground program, LINES and COLUMNS take the
@@ -241,13 +254,10 @@ static void keepcmdtext(Shell *sh, byte *beg, byte *end)
 {
     byte *p = (byte *)sh->cmdnode;
     if (!p || p<beg || p>=end) return;
-    Str s = {};
-    if (sh->capdepth+1 < NPOOL) {
-        Arena scratch = *scratchat(sh, sh->capdepth+1);
-        s = cmdtext(sh, &scratch);
-    }
-    Store *st  = sh->store;
-    Str    old = sh->cmdtext;
+    Arena  scratch = *scratchat(sh, sh->capdepth+1);
+    Str    s       = cmdtext(sh, &scratch);
+    Store *st      = sh->store;
+    Str    old     = sh->cmdtext;
     sh->cmdtext = sclone(st, s);
     sh->cmdnode = 0;
     if ((byte *)old.data >= st->mark) {
