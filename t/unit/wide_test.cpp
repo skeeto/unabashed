@@ -8,8 +8,9 @@
 // The default mode replays wide.golden, recorded by wide_record.sh from
 // CommandLineToArgvW, msvcrt.dll, ucrtbase.dll and Git's msys printf,
 // through splitcmdline and splitcygwin (with a simulated glob and
-// response files for the latter), then checks quote/split round trips
-// on random byte strings, the lpReserved2 codec, and pesniff on
+// response files for the latter), then checks cygbraces against that
+// glob's recursive braces and at command line sizes, quote/split round
+// trips on random byte strings, the lpReserved2 codec, and pesniff on
 // synthetic images, intact, truncated and mutated.
 //
 // --real sniffs real binaries, read-only, on Windows: cmd.exe, Git's
@@ -552,6 +553,78 @@ static void splits(Arena scratch)
 }
 
 
+// cygbraces against the recursive model, and at sizes the model cannot
+// take: as many groups as a command line holds, and more results than
+// the limit or copies than the arena can spare
+
+static Str joinargs(Arena *a, Slice<Str> s)
+{
+    return showargs(a, s.data, s.len);
+}
+
+static Str repeat(Arena *a, Str s, iz n)
+{
+    Buf b(a, s.len*n);
+    for (iz i = 0; i < n; i++) print(&b, s);
+    return finish(&b);
+}
+
+static void bracetests(Arena scratch)
+{
+    u64 seed = 7;
+    i32 bad  = 0;
+    for (i32 n = 0; n < 20000; n++) {
+        Arena t = scratch;
+        Str   p = randarg(&t, &seed, "ab{{}},,\\", 16, 1);
+        Str got  = joinargs(&t, cygbraces(&t, {}, p, (iz)1<<12));
+        Str want = joinargs(&t, braces(&t, {}, p));
+        if (!(got == want) && !bad++) {
+            expect(concat(&t, "cygbraces ", p), got, want);
+        }
+    }
+    expectint("cygbraces random mismatches", bad, 0);
+
+    Arena t = scratch;
+    Str   p = repeat(&t, "{a,b}", 13);
+    Slice<Str> got  = cygbraces(&t, {}, p, (iz)1<<12);
+    Slice<Str> want = braces(&t, {}, p);
+    expectint("cygbraces limit", got.len, (iz)1<<12);
+    want.len = got.len<want.len ? got.len : want.len;
+    expect("cygbraces limit prefix", joinargs(&t, got), joinargs(&t, want));
+
+    t = scratch;
+    p = concat(&t, concat(&t, "x", repeat(&t, "{a}", 10900)), "*");
+    got = cygbraces(&t, {}, p, (iz)1<<12);
+    expect("cygbraces 10900 groups", joinargs(&t, got), "<x^l10900;*>");
+
+    t = scratch;
+    p = concat(&t, concat(&t, repeat(&t, "{", 4000), "a,b"), repeat(&t, "}", 4000));
+    got = cygbraces(&t, {}, p, (iz)1<<12);
+    expect("cygbraces 4000 nested", joinargs(&t, got), "<a> <b>");
+
+    t = scratch;
+    p = repeat(&t, "{a,b}", 2000);
+    got = cygbraces(&t, {}, p, (iz)1<<12);
+    expectint("cygbraces 2000 pairs", got.len, (iz)1<<12);
+    if (got.len) {
+        expect("cygbraces 2000 pairs last", got[got.len-1],
+               concat(&t, repeat(&t, "a", 2000-12), repeat(&t, "b", 12)));
+    }
+
+    // Only a quarter of a small arena's room: the braces stay
+    t = scratch;
+    p = repeat(&t, "{a,b}", 6000);
+    Arena small = {};
+    small.beg = (byte *)alloc<u8>(&t, (iz)1<<22);
+    small.end = small.beg + ((iz)1<<22);
+    got = cygbraces(&small, {}, p, (iz)1<<12);
+    expectint("cygbraces over budget", got.len, 1);
+    if (got.len) {
+        expect("cygbraces over budget pattern", got[0], p);
+    }
+}
+
+
 // Inherited CRT descriptors
 
 static Str hexstr(Arena *a, Str s)
@@ -937,6 +1010,7 @@ int main(int argc, char **argv)
         char *path = argc>1 ? argv[1] : (char *)"t/unit/wide.golden";
         golden(a, {(u8 *)path, (iz)strlen(path)});
         splits(a);
+        bracetests(a);
         roundtrips(a);
         crtfds(a);
         pes(a);

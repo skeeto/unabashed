@@ -466,40 +466,82 @@ static Slice<CygArg> splitcygwin(Arena *a, Str cmd, b32 program)
 }
 
 // GLOB_BRACE on a CYG_GLOB pattern: every alternative of the first
-// brace group, recursively ("{}" stays). At most limit results, since
-// a command line can ask for 2^5000 of them.
+// brace group, then of the first group of each result ("{}" stays),
+// depth first. A loop, not recursion, since a command line holds 10000
+// groups, and the first alternative takes its pattern's place in its
+// buffer, so that "{a}{a}..." copies nothing. At most limit results,
+// since it can ask for 2^5000 of them, and copies up to a quarter of
+// the arena's room (at most 64 MiB), past which the braces stay.
 static Slice<Str> cygbraces(Arena *a, Slice<Str> out, Str p, iz limit)
 {
-    if (out.len >= limit) return out;
-    iz open = -1, close = -1, depth = 0;
-    for (iz i = 0; i < p.len; i++) {
-        if (p[i] == '\\') {
-            i++;
-        } else if (p[i]=='{' && !(i+1<p.len && p[i+1]=='}')) {
-            if (!depth++ && open<0) open = i;
-        } else if (p[i]=='}' && depth && !--depth && close<0) {
-            close = i;
+    struct Pending { Str s; iz from; b32 own; };  // no group before from
+    byte *mark   = a->beg;
+    iz    room   = ((a->mem ? a->mem->limit : a->end) - mark) / 4;
+    iz    budget = room<((iz)1<<26) ? room : (iz)1<<26;
+    Slice<Str>     start = out;
+    Slice<Pending> todo  = {};
+    todo = push(a, todo, Pending{p, 0, 0});
+    while (todo.len && out.len<limit) {
+        Pending e = todo[todo.len-1];
+        todo.len--;
+        Str s = e.s;
+        iz open = -1, close = -1, depth = 0;
+        for (iz i = e.from; close<0 && i<s.len; i++) {
+            if (s[i] == '\\') {
+                i++;
+            } else if (s[i]=='{' && !(i+1<s.len && s[i+1]=='}')) {
+                if (!depth++ && open<0) open = i;
+            } else if (s[i]=='}' && depth && !--depth) {
+                close = i;
+            }
         }
-    }
-    if (open<0 || close<0) {
-        return push(a, out, p);
-    }
-    Str head = takehead(p, open);
-    Str tail = cuthead(p, close+1);
-    iz  beg  = open + 1;
-    depth = 0;
-    for (iz i = beg; i <= close; i++) {
-        if (p[i] == '\\') {
-            i++;
-        } else if (p[i] == '{') {
-            depth++;
-        } else if (i==close || (p[i]==',' && !depth)) {
-            Str alt = span(p.data+beg, p.data+i);
-            out = cygbraces(a, out, concat(a, concat(a, head, alt), tail), limit);
-            beg = i + 1;
-        } else if (p[i] == '}') {
-            depth--;
+        if (open<0 || close<0) {
+            out = push(a, out, s);
+            continue;
         }
+
+        // The second alternative on are copies, pushed in reverse, up
+        // to the last that can be among the results
+        iz first = -1, firstend = -1, nalts = 0, base = todo.len;
+        iz beg   = open + 1;
+        depth = 0;
+        for (iz i = beg; i<=close && nalts<limit-out.len; i++) {
+            if (s[i] == '\\') {
+                i++;
+            } else if (s[i] == '{') {
+                depth++;
+            } else if (i==close || (s[i]==',' && !depth)) {
+                if (!nalts++) {
+                    first    = beg;
+                    firstend = i;
+                } else {
+                    Str alt = span(s.data+beg, s.data+i);
+                    Str c   = concat(a, concat(a, takehead(s, open), alt), cuthead(s, close+1));
+                    todo = push(a, todo, Pending{c, open, 1});
+                }
+                if (a->beg-mark > budget) {
+                    return push(a, start, p);
+                }
+                beg = i + 1;
+            } else if (s[i] == '}') {
+                depth--;
+            }
+        }
+        for (iz i = base, j = todo.len-1; i < j; i++, j--) {
+            Pending t = todo[i];
+            todo[i] = todo[j];
+            todo[j] = t;
+        }
+
+        if (!e.own) {
+            s = clone(a, s);
+        }
+        iz len  = firstend - first;
+        iz tail = s.len - (close+1);
+        __builtin_memmove(s.data+open, s.data+first, (uz)len);
+        __builtin_memmove(s.data+open+len, s.data+close+1, (uz)tail);
+        s.len = open + len + tail;
+        todo = push(a, todo, Pending{s, open, 1});
     }
     return out;
 }
