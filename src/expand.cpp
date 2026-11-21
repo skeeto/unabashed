@@ -3509,6 +3509,7 @@ struct Sub {
 
 static void badarraysub(Shell *sh, Arena a, Str word)
 {
+    skipmsg(&a, word);  // callers build it as they call
     Str msg = concat(&a, word, ": bad array subscript");
     shellerror(sh, a, msg);
 }

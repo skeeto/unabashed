@@ -75,6 +75,8 @@ static void usageerror(Shell *sh, Arena a, Str name)
 
 static void invalidoption(Shell *sh, Arena a, Str name, Str opt)
 {
+    skipmsg(&a, name);  // callers build them as they call
+    skipmsg(&a, opt);
     Str msg = concat(&a, opt, ": invalid option");
     builtinerror(sh, a, name, msg);
     usageerror(sh, a, name);

@@ -1839,6 +1839,7 @@ static Stat dirstat(Shell *sh)
 // stat, "foo" finds "foo.exe".
 static Stat pathstat(Shell *sh, Arena a, Str path, b32 follow)
 {
+    skipmsg(&a, path);  // compstat builds it as it calls
     if (sh->pathmode == PM_POSIX) {
         Str full = absolute(sh, &a, path);
         return os_stat(sh->os, a, full, follow);

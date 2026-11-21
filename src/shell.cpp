@@ -1157,12 +1157,13 @@ static void msgprefix(Shell *sh, Buf *b)
 }
 
 // Report an error on the shell's standard error.
-// A message built with the caller's copy of scratch, as in
-// f(sh, scratch, concat(&scratch, ...)), may sit where this copy starts
-// (the order of evaluation is unspecified): allocate past it. It may
-// also start below the copy, when concat extended a string that ended
-// at the tip. The copy's end is stale if building the message committed
-// more, so the message is placed by the reservation's limit.
+// A message (or another string argument) built with the caller's copy
+// of scratch, as in f(sh, scratch, concat(&scratch, ...)), may sit where
+// this copy starts (the order of evaluation is unspecified): allocate
+// past it. It may also start below the copy, when concat extended a
+// string that ended at the tip. The copy's end is stale if building the
+// message committed more, so the message is placed by the reservation's
+// limit.
 static void skipmsg(Arena *scratch, Str msg)
 {
     byte *end   = (byte *)(msg.data + msg.len);

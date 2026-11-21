@@ -894,11 +894,16 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     sh->host = sclone(sh->store, info->host.len ? info->host : Str("oracle"));
     setvar(sh, scratch, "HOSTNAME", sh->host);
     sh->user = sclone(sh->store, getplain(sh, a, sh->win32 ? Str("USERNAME") : Str("USER")).value);
-    setvar(sh, scratch, "PPID", fmti64(a, info->ppid));
+    // Each number first: built in the call, setvar's copy of scratch
+    // (taken first under clang) would allocate over it
+    Str num = fmti64(a, info->ppid);
+    setvar(sh, scratch, "PPID", num);
     setattrs(sh, "PPID", V_INTEGER|V_READONLY, 0);
-    setvar(sh, scratch, "UID", fmti64(a, info->uid));
+    num = fmti64(a, info->uid);
+    setvar(sh, scratch, "UID", num);
     setattrs(sh, "UID", V_INTEGER|V_READONLY, 0);
-    setvar(sh, scratch, "EUID", fmti64(a, info->euid));
+    num = fmti64(a, info->euid);
+    setvar(sh, scratch, "EUID", num);
     setattrs(sh, "EUID", V_INTEGER|V_READONLY, 0);
     if (sh->pathmode != PM_POSIX) {
         initwinvars(sh, scratch);
@@ -947,7 +952,8 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
             }
         }
         if (g.set && isabsolute(sh, g.value) && sh->pathmode!=PM_NATIVE) {
-            Stat x = os_stat(sh->os, scratch, absolute(sh, a, g.value), 1);
+            Str  abs = absolute(sh, a, g.value);  // as for the numbers
+            Stat x   = os_stat(sh->os, scratch, abs, 1);
             Stat y = os_stat(sh->os, scratch, cwd, 1);
             if (!x.err && !y.err && x.ino==y.ino && x.dev==y.dev) {
                 pwd = clone(a, g.value);  // setvar frees PWD's old buffer
@@ -967,7 +973,8 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     i64 lvl = 0;
     if (g.set && !parsei64(g.value, &lvl)) lvl = 0;
     lvl = lvl<0 ? 0 : lvl+1;
-    setvar(sh, scratch, "SHLVL", fmti64(a, lvl));
+    num = fmti64(a, lvl);
+    setvar(sh, scratch, "SHLVL", num);
     setattrs(sh, "SHLVL", V_EXPORT, 0);
 
     dynamic(sh, "LINENO", DYN_LINENO);
