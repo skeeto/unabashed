@@ -1701,7 +1701,9 @@ static void hredisplay(Editor *ed, Layout *nl, Arena *a)
     } else if (cpos < w-2) {
         lm = 0;
     } else if (phys < 1) {
-        lm = (cpos - 1) / t * t;
+        // Three columns or fewer leave t 0: readline divides by it, which
+        // on its arm64 builds (as the oracle's) gives 0
+        lm = t ? (cpos - 1) / t * t : 0;
     }
     ed->lmargin = lm;
 
