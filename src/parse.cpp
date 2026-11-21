@@ -403,23 +403,6 @@ struct Lexer {
     b32      overflow;   // the limit was hit
 };
 
-// The stack a walk of a tree may use. The parse bounds a tree's depth,
-// but its copies and printed forms may be made far deeper in the stack
-// (a function body copied for a pipeline stage deep in a recursion):
-// past floor, overflow is called, which does not return. A null floor
-// is no limit.
-struct Stackguard {
-    byte  *floor;
-    void (*overflow)(void *ctx);
-    void  *ctx;
-};
-
-static void guardstack(Stackguard *g)
-{
-    byte here = 0;
-    if (STACKAT(here) < g->floor) g->overflow(g->ctx);
-}
-
 static void   synerror(Lexer *);
 static Lexer *newlexer(Arena *, Str);
 static Node  *parsecomlist(Lexer *);
@@ -3928,7 +3911,10 @@ static iz condbytes(Cond *c, Stackguard *g)
 // operands, a ; b ; c as ((a ; b) ; c), pipelines down their right, a |
 // (b | c), and elif arms down the else parts. nodebytes and copynode
 // follow it in a loop rather than by recursion, so that a chain of any
-// length costs no stack; what truly nests recurses, within g.
+// length costs no stack; what truly nests recurses, within g: the parse
+// bounds a tree's depth, but its copies may be made far deeper in the
+// stack (a function body copied for a pipeline stage deep in a
+// recursion).
 static b32 chainsright(Node *n)
 {
     return n->kind==N_CONNECT && n->connector=='|';

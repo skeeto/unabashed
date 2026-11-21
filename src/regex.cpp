@@ -83,7 +83,9 @@ static Str rxerrors[] = {
 enum : i32 {
     RX_DUPMAX  = 0x7fff,  // RE_DUP_MAX
     RX_MAXTREE = 1<<20,   // parse tree nodes before "Memory exhausted"
-    RX_MAXNEST = 500,     // group nesting, for the stack
+    RX_MAXNEST = 500,     // group nesting, for the stack: 150 KiB at
+                          // -O2, 1.5 MiB at -O0, so callers deep in the
+                          // stack also pass a Stackguard
 };
 
 // Anchors are glibc's constraints on the characters either side of a
@@ -252,6 +254,7 @@ struct RxParse {
                    // syntax error comes later
     b32    wide;   // a word anchor, or a bracket glibc makes a
                    // COMPLEX_BRACKET in UTF-8 (see Regex.midchar)
+    Stackguard *guard;  // for group nesting, if given
 };
 
 static u8 rxupper(u8 c)
@@ -797,6 +800,7 @@ static Rt *rxgroup(RxParse *p, i32 nest)
             p->err = RXE_ESPACE;
             return 0;
         }
+        if (p->guard) guardstack(p->guard);
         body = rxregexp(p, nest+1);
         if (p->err) return 0;
         if (p->tok.type != TK_CLOSE) {
@@ -1180,7 +1184,8 @@ static void rxstatic(Regex *re, i32 x, u32 *set, i32 *stack)
 
 // Compile pat. The result lives in a. stop is polled as in rxexec.
 static RxComp rxcompile(Str pat, i32 flags, Arena *a,
-                        b32 (*stop)(void *) = 0, void *stopctx = 0)
+                        b32 (*stop)(void *) = 0, void *stopctx = 0,
+                        Stackguard *guard = 0)
 {
     RxComp  r = {};
     RxStop  halt = {stop, stopctx, 0, 0};
@@ -1189,6 +1194,7 @@ static RxComp rxcompile(Str pat, i32 flags, Arena *a,
     p.pat   = pat;
     p.a     = a;
     p.flags = flags;
+    p.guard = guard;
     if (flags & REX_ICASE) {
         p.pat = {allocbytes(a, pat.len), pat.len};
         for (iz i = 0; i < pat.len; i++) p.pat.data[i] = rxupper(pat[i]);

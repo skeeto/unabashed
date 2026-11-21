@@ -4116,7 +4116,8 @@ static i32 condregex(Shell *sh, Arena a, Str s, Str re)
     i32 flags = 0;
     if (sh->shopt[S_NOCASEMATCH]) flags |= REX_ICASE;
     if (sh->utf8) flags |= REX_UTF8;
-    RxComp rc = rxcompile(re, flags, &a, rxsigstop, sh);
+    Stackguard g = shellguard(sh);
+    RxComp rc = rxcompile(re, flags, &a, rxsigstop, sh, &g);
     if (!rc.re && rc.err<0) {
         sigfatal(sh);  // stopped by a signal that ends this level
         return 2;

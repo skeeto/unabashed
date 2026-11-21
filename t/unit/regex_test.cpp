@@ -11,7 +11,8 @@
 // patterns (deep nesting, intervals of intervals, long alternations,
 // nested stars before a back-reference) finish or fail cleanly within
 // the limits, and the error messages. Build with -Wl,--stack,1048576 to
-// check that the limits fit a 1 MiB stack, as on a shell fiber.
+// check that the limits fit a 1 MiB stack when optimized (-O0 frames
+// need 1.5 MiB; the shell passes a Stackguard for its own limit).
 //
 // This is free and unencumbered software released into the public domain.
 #include <stdio.h>
@@ -168,6 +169,9 @@ static double seconds()
     return (double)clock() / CLOCKS_PER_SEC;
 }
 
+static JmpBuf guardjmp;
+static void guardjump(void *) { jmpback(guardjmp); }
+
 static void hostile(Arena perm)
 {
     {
@@ -193,6 +197,20 @@ static void hostile(Arena perm)
         p = cat(&a, repeat(&a, "(", 600), repeat(&a, ")", 600));
         r = run(&a, p, "a", 0);
         expect(r=="err 12", "600 nested groups", r);
+    }
+    {
+        // Nesting within the limit but past the caller's stack guard
+        Arena a = perm;
+        Str   p = cat(&a, repeat(&a, "(", 400), "a");
+        p = cat(&a, p, repeat(&a, ")", 400));
+        byte       here = 0;
+        Stackguard g    = {STACKAT(here) - ((iz)1<<14), guardjump, 0};
+        if (!jmpset(guardjmp)) {
+            rxcompile(p, 0, &a, 0, 0, &g);
+            expect(0, "400 nested groups past a stack guard", {});
+        } else {
+            expect(1, "400 nested groups past a stack guard", {});
+        }
     }
     {
         // Intervals of intervals: too big rather than slow

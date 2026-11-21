@@ -55,6 +55,22 @@ enum : iz { STACKSCALE = 1 };
 enum : iz { STACKSCALE = sizeof(void *)==8 ? 8 : 1 };
 #endif
 
+// The stack a recursion over its input may use (a parse tree's walk, a
+// regular expression's parse), for code that knows nothing of its
+// caller's limits: past floor, overflow is called, which does not
+// return. A null floor is no limit.
+struct Stackguard {
+    byte  *floor;
+    void (*overflow)(void *ctx);
+    void  *ctx;
+};
+
+static void guardstack(Stackguard *g)
+{
+    byte here = 0;
+    if (STACKAT(here) < g->floor) g->overflow(g->ctx);
+}
+
 // Non-local exits: jmpset(b) returns 0, then 1 again when jmpback(b)
 // unwinds to it. Callers keep to __builtin_setjmp's rules: jmpback only
 // from a deeper frame, never from the function that called jmpset.
