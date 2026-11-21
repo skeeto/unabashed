@@ -639,9 +639,11 @@ struct Editor {
     i32      unread;    // how many
     Str      macro;     // a macro's keys, read before the terminal's
     iz       macropos;
+    Buf      macrobuf;  // perm: where macro is copied, used again
     b32      kbddef;    // defining a keyboard macro
     Buf      kbdrec;    // its keys so far
     Str      kbdmacro;  // the last one defined
+    Buf      kbdbuf;    // perm: where kbdmacro is copied, used again
     iz       seqstart;  // kbdrec's length where this command's keys began
     // The init file
     b32      inited;
@@ -655,7 +657,9 @@ struct Editor {
     // The line being edited
     Buf      line;
     iz       point;
-    Arena    linemem;
+    Arena    linemem;   // what lasts the line, in buffers used again
+    Arena    cmdmem;    // what lasts one command: a claimed shell scratch
+    i32      cmddepth;  // the capture depth claimed for it
     // The terminal
     Tty      tty;
     VtCon    vtcon;     // tty.legacy: the console's interpreter
@@ -716,19 +720,24 @@ struct Editor {
     b32      hmarked;   // shell code is running: hmark is set
     b32      hsaved;    // the new line, kept while on an entry
     Str      hsavedline;
+    Buf      hsavedbuf;
     EdUndo    *hsavedundo;
     i64      getnext;   // operate-and-get-next: the entry to start on, or -1
     b32      active;    // the region from mark to point is highlighted
     b32      keepactive;  // and stays so past this command
     Str      lastisearch; // the last incremental search's string
     Str      noninc;    // the last non-incremental search's string
+    Buf      lastisbuf; // perm: where they are copied, used again
+    Buf      nonincbuf;
     iz       nonincpos; // and the entry it found
     iz       hspos;     // history-search: the entry last found
     iz       hpoint;    // history-preserve-point: where point goes, or -1
     b32      starred;   // mark-modified-lines: the star is shown
     Str      hsprefix;  // ^ and the line up to point (or without ^)
+    Buf      hsprefixbuf;
     iz       hsplen;    // the length of the line up to point
     Str      hsprev;    // the last line found
+    Buf      hsprevbuf;
     i64      ylskip;    // yank-last-arg's walk back
     i32      yldir;
     i32      ylcount;
@@ -1889,6 +1898,39 @@ static Str edtext(Editor *ed)
     return {ed->line.data, ed->line.len};
 }
 
+// A copy of s kept in b, a buffer of a's used again for each copy, so
+// that copying over and over costs no more than the longest. A buffer
+// of linemem's starts again with each line (edline), when a nested call
+// may have swapped linemem under it.
+static Str edkeepstr(Arena *a, Buf *b, Str s, Str head = {})
+{
+    if (b->a != a) *b = Buf(a, 0);
+    if (!head.len && b->cap && s.data==b->data) {  // already there
+        b->len = s.len;
+        return s;
+    }
+    b->len = 0;
+    print(b, head);
+    print(b, s);
+    return finish(b);
+}
+
+// The longest line, past which an insert fails with the bell: the line
+// and the copies of it kept in buffers used again (edkeepstr) fit in
+// linemem whatever their growth leaves behind.
+static iz edlinemax(Editor *ed)
+{
+    Mem *m = ed->linemem.mem;
+    return (m->limit - (byte *)(m+1)) / 20;
+}
+
+static b32 edfits(Editor *ed, iz len)
+{
+    if (len <= edlinemax(ed)) return 1;
+    edbell(ed);
+    return 0;
+}
+
 // Motion by characters, as readline's: a zero-width character (a
 // combining mark) goes with the one before it.
 static iz edprev(Editor *ed, iz i)  // start of the character before i
@@ -1988,10 +2030,12 @@ static void edgroup(Editor *ed, i32 kind)  // U_BEGIN or U_END
 // Insert at point, past it. As readline's, a single byte inserted where
 // the last insert ended joins its undo record, up to 20 bytes, if the
 // record is this Editor's: a history entry's from the parent's, which a
-// subshell edits in turn, stays the parent's as it was.
-static void edinsert(Editor *ed, Str s)
+// subshell edits in turn, stays the parent's as it was. Nothing past
+// the longest line: false, and the bell.
+static b32 edinsert(Editor *ed, Str s)
 {
-    if (!s.len) return;
+    if (!s.len) return 1;
+    if (!ed->undoing && !edfits(ed, ed->line.len+s.len)) return 0;
     if (!ed->undoing) {
         EdUndo *u = ed->undo;
         Mem   *m = ed->hmem.mem;
@@ -2009,6 +2053,7 @@ static void edinsert(Editor *ed, Str s)
     copybytes(d+ed->point, s.data, s.len);
     ed->line.len += s.len;
     ed->point    += s.len;
+    return 1;
 }
 
 // Delete [beg, end), either way round; point stays on the same text.
@@ -2071,7 +2116,7 @@ static b32 edundo1(Editor *ed)
 // The line replaced whole, undone as one, as bash's expansions do.
 static void edreplace(Editor *ed, Str s)
 {
-    if (s == edtext(ed)) return;
+    if (s==edtext(ed) || !edfits(ed, s.len)) return;
     edrecord(ed, U_BEGIN, 0, 0);
     eddelete(ed, 0, ed->line.len);
     ed->point = 0;
@@ -2196,7 +2241,7 @@ static void edsaveline(Editor *ed)
 {
     if (ed->hsaved) return;
     ed->hsaved     = 1;
-    ed->hsavedline = clone(&ed->linemem, edtext(ed));
+    ed->hsavedline = edkeepstr(&ed->linemem, &ed->hsavedbuf, edtext(ed));
     ed->hsavedundo = ed->undo;
 }
 
@@ -2241,7 +2286,7 @@ static void edprevhist(Editor *ed, Shell *sh, i64 count)
     edsaveline(ed);
     edkeepline(ed, sh);
     iz to = count>ed->hpos ? 0 : ed->hpos-(iz)count;
-    if (to == ed->hpos) {
+    if (to==ed->hpos || h->ents[to]->line.len>edlinemax(ed)) {
         ed->hsaved = had;
         edbell(ed);
         return;
@@ -2261,6 +2306,8 @@ static void ednexthist(Editor *ed, Shell *sh, i64 count)
     if (count >= h->len-ed->hpos) {
         ed->hpos = h->len;
         edunsaveline(ed);
+    } else if (h->ents[ed->hpos+(iz)count]->line.len > edlinemax(ed)) {
+        edbell(ed);  // too long to edit
     } else {
         edload(ed, sh, ed->hpos+(iz)count);
         edhistset(ed);
@@ -2299,8 +2346,7 @@ static b32 edyankarg(Editor *ed, Shell *sh, i64 n, i64 skip, u8 key)
         edbell(ed);
         return 0;
     }
-    Arena  a = ed->linemem;
-    HWords w = histwords(&a, h->ents[at]->line, h->comchar, -1);
+    HWords w = histwords(&ed->cmdmem, h->ents[at]->line, h->comchar, -1);
     if (n == '$') {
         n = w.len - 1;
     } else if (n < 0) {
@@ -2310,7 +2356,7 @@ static b32 edyankarg(Editor *ed, Shell *sh, i64 n, i64 skip, u8 key)
         edbell(ed);
         return 0;
     }
-    Str arg = clone(&ed->hmem, w.word[n]);
+    Str arg = w.word[n];
     edgroup(ed, U_BEGIN);
     ed->mark = ed->point;
     if (ed->vars.vimode && ed->vicmd && !ed->vireplmode) {
@@ -2445,8 +2491,8 @@ static void edtransposewords(Editor *ed, i32 count, b32 shell)
         edbell(ed);
         return;
     }
-    Str w1 = clone(&ed->hmem, {ed->line.data+w1b, w1e-w1b});
-    Str w2 = clone(&ed->hmem, {ed->line.data+w2b, w2e-w2b});
+    Str w1 = clone(&ed->cmdmem, {ed->line.data+w1b, w1e-w1b});
+    Str w2 = clone(&ed->cmdmem, {ed->line.data+w2b, w2e-w2b});
     edgroup(ed, U_BEGIN);
     ed->point = w2b;
     eddelete(ed, w2b, w2e);
@@ -2590,16 +2636,33 @@ static b32 edsame(Str a, Str b, b32 fold)
     return 1;
 }
 
+// The lines searched: every entry, then the line typed, the saved one
+// or this one. The line searched from is the one shown, which its entry
+// may not hold yet: inserts that extend the last undo record leave it
+// alone. The history stays as it is while the search reads keys.
+struct EdISLines {
+    Str  shown;
+    Str  typed;
+    iz   from;
+};
+
+static Str edisline(Shell *sh, EdISLines *ls, iz i)
+{
+    if (i == ls->from) return ls->shown;
+    return i<sh->hist.len ? sh->hist.ents[i]->line : ls->typed;
+}
+
 static void edisearch(Editor *ed, Shell *sh, i64 count)
 {
     Hist *h = &sh->hist;
     if (edkeepline(ed, sh)) ed->undo = 0;
 
-    // Every entry, and the line typed: the saved one or this one
     iz   hlen  = h->len + 1;
-    Str *lines = alloc<Str>(&ed->linemem, hlen);
-    for (iz i = 0; i < h->len; i++) lines[i] = h->ents[i]->line;
-    lines[h->len] = ed->hsaved ? ed->hsavedline : clone(&ed->linemem, edtext(ed));
+    EdISLines ls = {};
+    ls.shown = clone(&ed->cmdmem, edtext(ed));
+    ls.typed = ed->hsaved ? ed->hsavedline : ls.shown;
+    ls.from  = ed->hpos;
+    iz   max   = edlinemax(ed);  // longer entries are passed over
 
     iz   saveline  = ed->hpos;
     iz   savepoint = ed->point;
@@ -2607,20 +2670,17 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
     Str  prompt    = ed->prompt;
     iz   pos       = saveline;
     iz   lastfound = saveline;
-    Str  sline     = clone(&ed->linemem, edtext(ed));
+    Str  sline     = ls.shown;
     iz   idx       = ed->point;
-    // The line searched from is the one shown, which its entry may not
-    // hold yet: inserts that extend the last undo record leave it alone
-    lines[saveline] = sline;
     Str  prevfound = {};
     i32  dir       = count>=0 ? 1 : -1;  // C-r passes -count
     b32  failed    = 0;
-    Buf  str(&ed->linemem, 64);
+    Buf  str(&ed->cmdmem, 64);
     b32  fold      = ed->vars.searchcase;
 
     for (;;) {
         // The message in place of the prompt
-        Arena a = ed->linemem;
+        Arena a = ed->cmdmem;
         Buf   m(&a, str.len+40);
         print(&m, "(");
         if (failed) print(&m, "failed ");
@@ -2703,10 +2763,10 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
             // Back to the line searched from, then by history motion to
             // the one found
             ed->line.len = 0;
-            print(&ed->line, lines[saveline]);
+            print(&ed->line, ls.shown);
             ed->point = ed->line.len;
             Str last = {str.data, str.len};
-            ed->lastisearch = clone(&ed->perm, last);
+            ed->lastisearch = edkeepstr(&ed->perm, &ed->lastisbuf, last);
             if (lastfound < saveline) {
                 edprevhist(ed, sh, saveline-lastfound);
             } else {
@@ -2752,7 +2812,7 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
             break;
         case OP_ABORT:
             ed->line.len = 0;
-            print(&ed->line, lines[saveline]);
+            print(&ed->line, ls.shown);
             ed->point  = savepoint<ed->line.len ? savepoint : ed->line.len;
             ed->mark   = savemark;
             ed->active = 0;
@@ -2776,7 +2836,7 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
             print(&str, {ed->line.data+w, ed->line.len-w});
         } break;
         case OP_PASTE:
-            print(&str, edpaste(ed, sh, &ed->linemem));
+            print(&str, edpaste(ed, sh, &ed->cmdmem));
             break;
         case OP_QUOTE: {
             i32 k = edkey(ed, sh, -1);
@@ -2825,8 +2885,9 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
                     failed = 1;
                     break;
                 }
-                sline = lines[pos];
-            } while ((prevfound.data && prevfound==sline) || s.len>sline.len);
+                sline = edisline(sh, &ls, pos);
+            } while ((prevfound.data && prevfound==sline) || s.len>sline.len ||
+                     sline.len>max);
             if (failed) {
                 if (idx<0 || idx>sline.len) idx = 0;
                 break;
@@ -2838,9 +2899,9 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
             pos = lastfound;
             ed->active = 0;
         } else {
-            prevfound    = lines[pos];
+            prevfound    = edisline(sh, &ls, pos);
             ed->line.len = 0;
-            print(&ed->line, lines[pos]);
+            print(&ed->line, prevfound);
             ed->point = idx;
             ed->mark  = idx + s.len;
             edactivate(ed);
@@ -2851,9 +2912,10 @@ static void edisearch(Editor *ed, Shell *sh, i64 count)
 
 // Search the history from entry pos in direction dir for one holding s
 // (at its start if s starts with ^): its index, -1 if none, and where in
-// it the match is (backward: the last in the line).
+// it the match is (backward: the last in the line). Entries longer
+// than max, too long to edit, are passed over.
 static iz edfindhist(Shell *sh, Str s, iz pos, i32 dir, iz *at, b32 fold,
-                     b32 pat = 0)
+                     iz max, b32 pat = 0)
 {
     Hist *h  = &sh->hist;
     b32   anchor = s.len && s[0]=='^';
@@ -2870,7 +2932,8 @@ static iz edfindhist(Shell *sh, Str s, iz pos, i32 dir, iz *at, b32 fold,
         if (p[p.len-1] != '*') p = concat(&a, p, "*");
         i32 flags = sh->utf8 ? PM_UTF8 : 0;
         for (; pos>=0 && pos<h->len; pos += dir) {
-            if (patmatch(p, h->ents[pos]->line, flags, a)) {
+            Str line = h->ents[pos]->line;
+            if (line.len<=max && patmatch(p, line, flags, a)) {
                 *at = 0;
                 return pos;
             }
@@ -2879,6 +2942,7 @@ static iz edfindhist(Shell *sh, Str s, iz pos, i32 dir, iz *at, b32 fold,
     }
     for (; pos>=0 && pos<h->len; pos += dir) {
         Str line = h->ents[pos]->line;
+        if (line.len > max) continue;
         if (anchor) {
             if (line.len>=s.len && edsame(Str{line.data, s.len}, s, fold)) {
                 *at = 0;
@@ -2941,12 +3005,12 @@ static b32 edreadstr(Editor *ed, Shell *sh, Str pchar, Str *out, b32 names = 0)
 {
     iz     savepoint = ed->point;
     iz     savemark  = ed->mark;
-    Str    saved     = clone(&ed->linemem, edtext(ed));
+    Str    saved     = clone(&ed->cmdmem, edtext(ed));
     EdUndo *saveundo = ed->undo;
     Str    prompt    = ed->prompt;
     ed->line.len = ed->point = 0;
     ed->undo     = 0;
-    ed->prompt   = concat(&ed->linemem, prompt, pchar);
+    ed->prompt   = concat(&ed->cmdmem, prompt, pchar);
 
     b32 ok = 0;
     for (;;) {
@@ -2985,7 +3049,7 @@ static b32 edreadstr(Editor *ed, Shell *sh, Str pchar, Str *out, b32 names = 0)
             edinsert(ed, {&b, 1});
         }
     }
-    *out = clone(&ed->linemem, edtext(ed));
+    *out = clone(&ed->cmdmem, edtext(ed));
     ed->prompt   = prompt;
     ed->line.len = 0;
     print(&ed->line, saved);
@@ -3012,10 +3076,11 @@ static void ednoninc(Editor *ed, Shell *sh, i32 dir, b32 again = 0,
         }
         from = ed->nonincpos;
     } else {
-        ed->noninc = clone(&ed->perm, typed);
+        ed->noninc = edkeepstr(&ed->perm, &ed->nonincbuf, typed);
     }
     iz at  = 0;
-    iz got = edfindhist(sh, ed->noninc, from+dir, dir, &at, ed->vars.searchcase, pat);
+    iz got = edfindhist(sh, ed->noninc, from+dir, dir, &at, ed->vars.searchcase,
+                       edlinemax(ed), pat);
     if (got < 0) {
         edbell(ed);
         if (again) ed->point = 0;  // as readline's, left for its caller
@@ -3048,8 +3113,8 @@ static void edhistsearch(Editor *ed, Shell *sh, i32 fn, i32 count)
     if (ed->lastfn!=f0 && ed->lastfn!=f1) {
         Str typed    = {ed->line.data, ed->point};
         ed->hspos    = ed->hpos;
-        ed->hsprefix = sub ? clone(&ed->linemem, typed)
-                           : concat(&ed->linemem, "^", typed);
+        ed->hsprefix = edkeepstr(&ed->linemem, &ed->hsprefixbuf, typed,
+                                 sub ? Str{} : Str("^"));
         ed->hsplen   = typed.len;
         ed->hsprev   = {};
     }
@@ -3067,14 +3132,15 @@ static void edhistsearch(Editor *ed, Shell *sh, i32 fn, i32 count)
     iz  col = -1;
     while (n) {
         iz at  = 0;
-        iz got = edfindhist(sh, ed->hsprefix, ed->hspos+dir, dir, &at, ed->vars.searchcase);
+        iz got = edfindhist(sh, ed->hsprefix, ed->hspos+dir, dir, &at,
+                            ed->vars.searchcase, edlinemax(ed));
         if (got < 0) break;
         ed->hspos = got;
         col = at;
         any = 1;
         Str line = sh->hist.ents[got]->line;
         if (ed->hsprev.data && ed->hsprev==line) continue;
-        ed->hsprev = clone(&ed->linemem, line);
+        ed->hsprev = edkeepstr(&ed->linemem, &ed->hsprevbuf, line);
         n--;
     }
     iz plen = ed->hsplen;
@@ -3394,7 +3460,7 @@ static void ededitexec(Editor *ed, Shell *sh, b32 vi = 0, u8 key = 0)
     ed->paste = 0;
     edflush(ed, sh);
     if (!argset) {
-        reallyadd(sh, clone(&ed->linemem, edtext(ed)));
+        reallyadd(sh, clone(&ed->cmdmem, edtext(ed)));
         reallyadd(sh, "");
     }
     edcooked(ed, sh);
@@ -3542,21 +3608,14 @@ static void edshowtext(Editor *ed, Shell *sh, Str text)
     Layout *l = &ed->shown;
     if (!ed->hscroll) edmove(ed, l->nrows-1, l->lastwidth);
     edput(ed, "\r\n");
-    Buf b(&ed->linemem, text.len+16);
+    Arena a = ed->cmdmem;
+    Buf   b(&a, text.len+16);
     for (iz i = 0; i < text.len; i++) {
         if (text[i] == '\n') putbyte(&b, '\r');
         putbyte(&b, text[i]);
     }
     edput(ed, finish(&b));
     edredraw(ed, sh);
-}
-
-// Keys to read next, ahead of the rest of any running macro
-static void edplay(Editor *ed, Str keys)
-{
-    Str rest = cuthead(ed->macro, ed->macropos);
-    ed->macro    = rest.len ? concat(&ed->perm, keys, rest) : clone(&ed->perm, keys);
-    ed->macropos = 0;
 }
 
 // As readline's abort: the bell, and any keyboard macro, running or
@@ -3569,6 +3628,27 @@ static void edabort(Editor *ed)
     ed->kbdmacro = {};
     ed->active   = 0;
     edresetarg(ed);
+}
+
+// Keys to read next, count times, ahead of the rest of any running
+// macro: copied into a buffer used again. More than a sixteenth of the
+// Editor's memory is given up, with any running macro (edabort).
+static void edplay(Editor *ed, Str keys, i32 count = 1)
+{
+    if (count < 1) return;
+    Str rest = cuthead(ed->macro, ed->macropos);
+    Mem *m   = ed->perm.mem;
+    iz   max = (m->limit - (byte *)(m+1)) / 16;
+    if (rest.len>max || (keys.len && count>(max-rest.len)/keys.len)) {
+        edabort(ed);
+        return;
+    }
+    Arena a = ed->cmdmem;
+    Buf   b(&a, keys.len*count+rest.len);
+    for (i32 i = 0; i < count; i++) print(&b, keys);
+    print(&b, rest);
+    ed->macro    = edkeepstr(&ed->perm, &ed->macrobuf, finish(&b));
+    ed->macropos = 0;
 }
 
 // Readline's _rl_overwrite_char: ch in place of the character at
@@ -3606,8 +3686,8 @@ static void edselfinsert(Editor *ed, Shell *sh, u8 key, i32 count)
         edoverchar(ed, ch, count);
     } else if (count == 1) {
         edinsert(ed, ch);
-    } else {
-        Buf b(&ed->hmem, len*count);
+    } else if (edfits(ed, ed->line.len + len*count)) {
+        Buf b(&ed->cmdmem, len*count);
         for (i32 i = 0; i < count; i++) print(&b, ch);
         edinsert(ed, finish(&b));
     }
@@ -4280,7 +4360,7 @@ static i32 viread(Editor *ed, Shell *sh, ViMove *m)
             ed->argset = 0;
             save = sign = 1;
         }
-        Arena a = ed->linemem;
+        Arena a = ed->cmdmem;
         Buf   b(&a, 32);
         print(&b, "(arg: ");
         print(&b, n*sign);
@@ -4764,7 +4844,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
                 EdUndo *u = ed->undo;
                 b32   o = ed->undoing;
                 ed->undoing = 1;
-                Str t = clone(&ed->hmem, {ed->line.data+(p<m?p:m), p<m?m-p:p-m});
+                Str t = clone(&ed->cmdmem, {ed->line.data+(p<m?p:m), p<m?m-p:p-m});
                 edkill(ed, p, m);
                 ed->point = p<m ? p : m;
                 edinsert(ed, t);
@@ -4782,7 +4862,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         EdUndo *u = ed->undo;
         b32   o = ed->undoing;
         ed->undoing = 1;
-        Str t = clone(&ed->hmem, {ed->line.data+(p<q?p:q), p<q?q-p:p-q});
+        Str t = clone(&ed->cmdmem, {ed->line.data+(p<q?p:q), p<q?q-p:p-q});
         edkill(ed, p, q);
         ed->point = p<q ? p : q;
         edinsert(ed, t);
@@ -4929,7 +5009,8 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
             break;
         }
         ed->kbddef = 1;
-        ed->kbdrec = Buf(&ed->perm, 64);
+        if (ed->kbdrec.a != &ed->perm) ed->kbdrec = Buf(&ed->perm, 64);
+        ed->kbdrec.len = 0;  // used again
         if (ed->argset && ed->kbdmacro.len) {
             // Run again, and so kept, then added to
             print(&ed->kbdrec, ed->kbdmacro);
@@ -4942,8 +5023,8 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
             break;
         }
         ed->kbddef   = 0;
-        ed->kbdmacro = clone(&ed->perm, Str{ed->kbdrec.data, ed->seqstart});
-        for (i32 i = 1; i < count; i++) edplay(ed, ed->kbdmacro);
+        ed->kbdmacro = edkeepstr(&ed->perm, &ed->kbdbuf, Str{ed->kbdrec.data, ed->seqstart});
+        edplay(ed, ed->kbdmacro, count-1);
         break;
     case EF_CALL_LAST_KBD_MACRO:
         if (ed->kbddef) {
@@ -4952,7 +5033,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         } else if (!ed->kbdmacro.data) {
             edabort(ed);
         } else {
-            for (i32 i = 0; i < count; i++) edplay(ed, ed->kbdmacro);
+            edplay(ed, ed->kbdmacro, count);
         }
         break;
     case EF_PRINT_LAST_KBD_MACRO: {
@@ -4960,7 +5041,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
             edbell(ed);
             break;
         }
-        Buf b(&ed->linemem, 64);
+        Buf b(&ed->cmdmem, 64);
         rlputkeys(&b, ed->kbdmacro);
         putbyte(&b, '\n');
         edshowtext(ed, sh, finish(&b));
@@ -5182,7 +5263,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         ed->vireplcount += (i32)(ed->line.len - len);
         break;
     case EF_VI_OVERSTRIKE_PASTE: {
-        Str t = edpaste(ed, sh, &ed->hmem);
+        Str t = edpaste(ed, sh, &ed->cmdmem);
         for (iz i = 0; i < t.len;) {
             iz j = i;
             for (j++; j<t.len && (t[j]&0xc0)==0x80; j++) {}
@@ -5356,7 +5437,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         }
         iz at = ed->point;
         iz a  = edprev(ed, at);
-        Str c = clone(&ed->hmem, {ed->line.data+a, at-a});
+        Str c = clone(&ed->cmdmem, {ed->line.data+a, at-a});
         eddelete(ed, a, at);
         ed->point = a;
         if (count > 0) {
@@ -5448,7 +5529,7 @@ static void edrun(Editor *ed, Shell *sh, i32 fn, u8 key)
         ededitexec(ed, sh);
         return;
     case EF_BRACKETED_PASTE_BEGIN: {
-        Str t = edpaste(ed, sh, &ed->hmem);
+        Str t = edpaste(ed, sh, &ed->cmdmem);
         ed->mark = ed->point;
         edinsert(ed, t);
         if (!ed->hscroll) edactivate(ed);
@@ -5610,6 +5691,7 @@ static void edresetarg(Editor *ed)
 // one. False at the end of input.
 static b32 eddispatch(Editor *ed, Shell *sh)
 {
+    if (!ed->incmd) ed->cmdmem = *scratchat(sh, ed->cmddepth);
     ed->seqstart = ed->kbdrec.len;
     EdSeq s = edreadseq(ed, sh);
     if (s.status == ED_INTR) {
@@ -5644,9 +5726,12 @@ static b32 eddispatch(Editor *ed, Shell *sh)
         break;
     case EF_MACRO: {
         // Its keys come next, before the rest of any running macro
-        Str rest = cuthead(ed->macro, ed->macropos);
-        ed->macro    = rest.len ? concat(&ed->perm, s.macro, rest) : s.macro;
-        ed->macropos = 0;
+        if (ed->macropos < ed->macro.len) {
+            edplay(ed, s.macro);
+        } else {
+            ed->macro    = s.macro;
+            ed->macropos = 0;
+        }
     } break;
     case EF_SHELLCMD:
         edshellcmd(ed, sh, s.macro);
@@ -5683,7 +5768,7 @@ static void edarg(Editor *ed, Shell *sh, i32 key)
     b32 sawminus  = 0;
     Str prompt    = ed->prompt;
     for (;;) {
-        Arena a = ed->linemem;
+        Arena a = ed->cmdmem;
         Buf   b(&a, 32);
         print(&b, "(arg: ");
         print(&b, (i64)ed->count*(ed->argneg ? -1 : 1));
@@ -5843,11 +5928,20 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
                   b32 isread, File *fin, File *ferr)
 {
     // The prompt and initial text live in the callers' scratch, which
-    // the size checks below reuse: copy them first
+    // the size checks below reuse: copy them first. Neither may be
+    // longer than a line can be: a longer prompt is cut short, and
+    // longer text is not put on the line, with the bell.
     ed->linemem = {(byte *)(ed->linemem.mem+1), ed->linemem.end, ed->linemem.mem};
-    prompt      = clone(&ed->linemem, prompt);
-    Str init    = clone(&ed->linemem, opts->init);
+    iz  max     = edlinemax(ed);
+    b32 toolong = opts->init.len > max;
+    prompt      = clone(&ed->linemem, takehead(prompt, prompt.len<max ? prompt.len : max));
+    Str init    = toolong ? Str{} : clone(&ed->linemem, opts->init);
     ed->out_  = Buf(&ed->linemem, 256);
+    ed->hsavedbuf = ed->hsprefixbuf = ed->hsprevbuf = Buf(&ed->linemem, 0);
+    // What one command allocates and drops: the next scratch, claimed
+    // for the line, as the shell code commands run claims its own above
+    i32 depth   = ed->cmddepth = ++sh->capdepth;
+    ed->cmdmem  = *scratchat(sh, depth);
     ed->paste = ed->shellcmd = ed->incmd = ed->hmarked = ed->unnested = 0;
     ed->in  = fin->h;
     ed->out = ferr->h;
@@ -5857,7 +5951,10 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
         // The shell's input that is no terminal is still read with the
         // editor, as bash's readline does, drawing as on a dumb
         // terminal COLUMNS wide
-        if (!opts->shell || os_isatty(sh->os, ed->in)) return ED_NOTTY;
+        if (!opts->shell || os_isatty(sh->os, ed->in)) {
+            sh->capdepth = depth - 1;
+            return ED_NOTTY;
+        }
         Tty t = {};
         t.cols = 80;
         Arena a = *scratchat(sh, sh->capdepth+1);
@@ -5901,6 +5998,7 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     }
     rlttychars(ed);
     print(&ed->line, init);
+    if (toolong) edbell(ed);
     ed->point   = ed->line.len;
     ed->eof     = ed->tty.eof ? ed->tty.eof : 0x04;
     ed->lastc   = 0;
@@ -6052,6 +6150,7 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     edflush(ed, sh);
     if (!ed->notty) edsize(ed, sh, edcooked(ed, sh));
     print(out, {ed->line.data, ed->line.len});
+    sh->capdepth = depth - 1;
     return ed->result;
 }
 
@@ -6086,6 +6185,10 @@ static void edkeep(Editor *to, Editor *from)
     to->killidx    = from->killidx;
     to->lastisearch = from->lastisearch;
     to->noninc      = from->noninc;
+    to->lastisbuf   = from->lastisbuf;
+    to->nonincbuf   = from->nonincbuf;
+    to->kbdbuf      = from->kbdbuf;
+    to->macrobuf    = from->macrobuf;
     to->nonincpos   = from->nonincpos;
     to->vars        = from->vars;
     to->vilastcmd    = from->vilastcmd;

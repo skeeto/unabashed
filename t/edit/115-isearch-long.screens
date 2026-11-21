@@ -1,0 +1,17 @@
+== snap 1
+$
+@ 0,2
+== snap 2
+(reverse-i-search)`one': echo one
+~                              rrr
+@ 0,30
+== snap 3
+$ echo one
+one
+$
+@ 2,2
+== snap 4
+$ echo one
+one
+$
+@ 2,2

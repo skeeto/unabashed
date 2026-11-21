@@ -1,0 +1,16 @@
+# Incremental search started over and over on a long line: each search
+# once copied the line, and the list of every entry, into memory kept
+# for the whole line, which on the vos ran out within a few searches.
+rc PS1='$ '
+keys echo one\r
+keys \e100000x
+keys \C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g
+keys \C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g
+keys \C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g
+keys \C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g\C-r\C-g
+keys \C-u\C-l
+snap
+keys \C-rone
+snap
+keys \r
+snap

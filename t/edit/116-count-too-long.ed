@@ -1,0 +1,12 @@
+# A numeric argument making the line longer than a line may be (a
+# twentieth of the line's memory: on the vos 209 KB, natively 838 KB):
+# the bell, and nothing inserted, where the copy it was built in once
+# took memory for good, and on the vos ran out. bash inserts them all,
+# so these screens come from our own POSIX build (EDRECORD_SHELL).
+rc PS1='$ '
+keys ab\e1000000x
+snap
+keys \e999999y
+snap
+keys c\r
+snap
