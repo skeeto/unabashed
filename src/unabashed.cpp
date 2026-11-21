@@ -1453,10 +1453,13 @@ static b32 msysargv(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
 }
 
 // The descriptors the process started with, each usable as it is open,
-// as bash's are: a terminal on fd 0 takes writes, as on 2 reads.
+// as bash's are: a terminal on fd 0 takes writes, as on 2 reads. One
+// the process lacks (BADHANDLE) is closed, as a POSIX parent's `<&-`
+// leaves it, not an open File that fails each use.
 static void startfds(Shell *sh, OsInfo *info)
 {
     for (i32 i = 0; i < 3; i++) {
+        if (info->std[i] == BADHANDLE) continue;
         i32 flags = info->stdflags[i];
         flags = flags ? flags : i ? OF_WRITE : OF_READ;
         File *f = stdfile(sh, info->std[i], flags);
@@ -2129,6 +2132,11 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             } else {
                 runsource(sh, src, file, scratch, 1);
             }
+        } else if (!sh->interactive && !sh->fds->fd[0]) {
+            // As bash, which finds no input to buffer on a closed fd 0
+            Str msg = "error creating buffered stream: ";
+            shellerror(sh, scratch, concat(&scratch, msg, errtext(E_BADF)));
+            sh->status = 126;
         } else {
             readstdin(sh, scratch);
         }

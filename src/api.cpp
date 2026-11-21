@@ -49,7 +49,7 @@ struct OsInfo {
     Str    machtype; // POSIX: cpu-vendor-os, as bash's configure triple,
                      // for MACHTYPE, HOSTTYPE, OSTYPE; empty for the
                      // test oracle's x86_64-pc-linux-gnu
-    Handle std[3];
+    Handle std[3];       // BADHANDLE for one the process lacks (closed)
     i32    stdflags[3];  // OF_READ, OF_WRITE as each is open; 0 if unknown:
                          // read for 0, write for 1 and 2
     InheritFd *inherit;  // descriptors above 2 from the parent: those open

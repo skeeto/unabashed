@@ -3,6 +3,8 @@ pipeline 1 0
 subshell 1
 read 1
 null 0
+sh: line 7: 0: Bad file descriptor
+sh: line 7: 3: Bad file descriptor
 dup 1
 closed 1
 status 0

@@ -1,7 +1,8 @@
 # A shell started with no standard input and no console (tools/stdrun
 # -d): reads fail at once, in the shell and in its programs, which get
-# no handle for it rather than their own hidden console's, and copies
-# of it are as absent. Likewise a shell with no standard output. The
+# no handle for it rather than their own hidden console's, and it is a
+# closed descriptor, which cannot be copied (as in Git Bash). Likewise
+# a shell with no standard output. The
 # programs' messages are dropped (busybox's or not).
 S=$BIN/stdrun.exe
 "$S" -d -t 20 - 1 1 -- "$U" -c '

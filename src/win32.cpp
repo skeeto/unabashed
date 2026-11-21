@@ -2892,7 +2892,7 @@ static void plt_decommit(Os *, byte *p, iz len)
 
 static b32 plt_write(Os *os, Handle h, u8 *buf, iz len)
 {
-    if (h == BADHANDLE) return 0;  // absent (see plt_dup)
+    if (h == BADHANDLE) return 0;  // no handle (see plt_dup)
     Wobj *w    = lookup(os, h);
     i32   mode = 0;
 
@@ -2988,7 +2988,7 @@ static iz rawread(uz h, u8 *buf, iz len)
 static iz plt_read(Os *os, Handle h, u8 *buf, iz len)
 {
     flushw(os);
-    if (h == BADHANDLE) return -1;  // absent (see plt_dup)
+    if (h == BADHANDLE) return -1;  // no handle (see plt_dup)
     Wobj *w = lookup(os, h);
     i32   mode = 0;
     if (!w && GetConsoleMode(h, &mode)) w = track(os, h);
@@ -3265,8 +3265,9 @@ static void plt_close(Os *os, Handle h)
 static Handle plt_dup(Os *os, Handle h)
 {
     flushw(os);
-    // An absent descriptor's BADHANDLE is also the pseudo-handle for
-    // this process, which DuplicateHandle would gladly duplicate
+    // BADHANDLE, which a File gets when the shell could not open one
+    // for it, is also the pseudo-handle for this process, which
+    // DuplicateHandle would gladly duplicate
     if (h == BADHANDLE) return BADHANDLE;
     uz self = GetCurrentProcess();
     uz r    = 0;

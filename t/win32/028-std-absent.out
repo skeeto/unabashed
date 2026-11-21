@@ -1,0 +1,24 @@
+sh: line 2: 0: Bad file descriptor
+dup 1
+tty 1
+sh: line 4: read: 0: read error: Bad file descriptor
+read 1
+reopened 1
+sh: line 6: 0: Bad file descriptor
+closed again 1
+status 0
+sh: error creating buffered stream: Bad file descriptor
+stdin 126
+missing 127
+dup 1
+echo 1
+loop 127
+program 1
+sh: line 8: nosuch: command not found
+status 0
+sh: line 1: 1: Bad file descriptor
+dup 1
+tty 1
+reopened 0
+status 0
+status 0
