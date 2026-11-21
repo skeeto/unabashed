@@ -848,7 +848,8 @@ static Node *bgnode(Shell *c, Arena *a, Node *n, b32 keepjobs)
     if (r->kind == N_SUBSHELL) {
         r->kind = N_GROUP;
         c->tailnode = tailcommand(r->a);
-        c->ctlline  = n->endline;  // see execsubshell
+        // see execsubshell; but a coprocess's keeps the shell's line
+        if (n->endline) c->ctlline = n->endline;
     }
     c->taillevel  = c->subshell + 1;
     c->keepredirs = r;
@@ -1463,7 +1464,10 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
         b32 redir = sh->stdinredir;
         sh->stdinredir = body->kind==N_SUBSHELL ? stdinredirects(body->redirs) : 1;
         sh->forkstdin  = body->redirs && body->kind!=N_SIMPLE && body->kind!=N_CONNECT;
-        task = spawnbg(sh, body, r2, w1, &pid, scratch);
+        // and bash's child for it leaves its line alone (bgnode)
+        Node sub = *body;
+        sub.endline = 0;
+        task = spawnbg(sh, &sub, r2, w1, &pid, scratch);
         sh->stdinredir = redir;
         sh->forkstdin  = 0;
         sh->coprocs = mine.next;
