@@ -1,0 +1,37 @@
+# Under job control the terminal's ^C reaches only a pipeline's group,
+# not the shell: when a stage dies of it the shell starts a new line,
+# and a loop running the pipeline is abandoned, even with INT trapped
+# (the trap does not run). A read in a stage ends like a program.
+size 24 60
+rc PS1='$ '
+keys read y | cat\r
+pause 300
+keys zz
+pause 100
+keys \C-c
+pause 200
+keys echo "a $?"\r
+keys sleep 3 | cat\r
+pause 300
+keys \C-c
+pause 200
+keys echo "b $?"\r
+keys for i in 1 2; do sleep 3 | cat; echo "i$i"; done\r
+pause 300
+keys \C-c
+pause 200
+keys echo "c $?"\r
+keys trap 'echo T' INT\r
+keys for i in 1 2; do read y | cat; echo "j$i"; done\r
+pause 300
+keys zz
+pause 100
+keys \C-c
+pause 200
+keys echo "d $?"\r
+keys sleep 3 | cat; echo "e $?"\r
+pause 300
+keys \C-c
+pause 200
+keys echo "f $?"\r
+snap

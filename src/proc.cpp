@@ -1433,6 +1433,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     statuses[last] = status | (lastsig ? WSIGNALED : 0);
     sh->sig->fgwait = 1;
     u64 died   = lastsig ? sigbit(lastsig) : 0;
+    b32 intr   = lastsig == 2;
     b32 extbad = ext[last] && stage->kind==N_SIMPLE && status;  // a program failed
     for (i32 k = last-1; k >= 0; k--) {
         i32 st = statuses[k];
@@ -1447,8 +1448,14 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         statuses[k] = st;
         i32 sig = (st & 255) - 128;
         if ((st & WSIGNALED) && sig>0 && sig<NSIGNAL) died |= sigbit(sig);
+        intr |= (st & WSIGNALED) && sig==2;
         if (!failed) failed = st & 255;
     }
+    // Under job control the terminal's INT reached only the job's group:
+    // as bash, the shell acts on it if any stage died of it, unless a
+    // last program that led the group did so already (runprogram)
+    b32 fgtail = ext[last] && stage->kind==N_SIMPLE && !grp;
+    if (grouped && intr && !(fgtail && lastsig==2)) intrjob(sh);
     waitdone(sh, died, extbad);
     i32 forked = 0;
     for (i32 k = 0; k < nstages; k++) forked += ran[k] && (k<last || !inhere);

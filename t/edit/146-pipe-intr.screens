@@ -1,0 +1,50 @@
+== snap 1
+$ read y | cat
+zz^C
+$ echo "a $?"
+a 130
+$ sleep 3 | cat
+^C
+$ echo "b $?"
+b 130
+$ for i in 1 2; do sleep 3 | cat; echo "i$i"; done
+^C
+$ echo "c $?"
+c 130
+$ trap 'echo T' INT
+$ for i in 1 2; do read y | cat; echo "j$i"; done
+zz^C
+$ echo "d $?"
+d 130
+$ sleep 3 | cat; echo "e $?"
+^C
+e 130
+$ echo "f $?"
+f 0
+$
+@ 22,2
+== snap 2
+$ read y | cat
+zz^C
+$ echo "a $?"
+a 130
+$ sleep 3 | cat
+^C
+$ echo "b $?"
+b 130
+$ for i in 1 2; do sleep 3 | cat; echo "i$i"; done
+^C
+$ echo "c $?"
+c 130
+$ trap 'echo T' INT
+$ for i in 1 2; do read y | cat; echo "j$i"; done
+zz^C
+$ echo "d $?"
+d 130
+$ sleep 3 | cat; echo "e $?"
+^C
+e 130
+$ echo "f $?"
+f 0
+$
+@ 22,2
