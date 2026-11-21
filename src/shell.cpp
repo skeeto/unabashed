@@ -410,6 +410,7 @@ struct Frame {       // a function call
     Str    src;      // the same for BASH_SOURCE (Code.src)
     Args   args;     // its arguments, for BASH_ARGV and BASH_ARGC
     b32    argpushed;  // there (extdebug was on at the call)
+    b32    funsub;   // a ${ cmd; } body, absent from FUNCNAME and the rest
     Var  **locals;   // variables localized at this level
     iz     nlocals;
     iz     caplocals;

@@ -3014,12 +3014,15 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
 // and positional parameters, and its standard output collected in cap.
 // Without cap, ${| cmd; }, REPLY is local and its final value, copied
 // to a, is the result. The capture ends here even when the body
-// escapes, since its memory goes with the caller's frame.
+// escapes, since its memory goes with the caller's frame. As bash, the
+// current line is put back afterwards, so the rest of the command (its
+// later words, LINENO, ERR, its messages) keeps its own.
 static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
 {
     checkstack(sh);
     b32   valsub = !cap;
     Undo *mark   = sh->undo;
+    i32   line   = sh->line;
     if (cap) {
         File *out = newfile(sh, F_CAPTURE, OF_WRITE);
         out->cap = &cap->b;
@@ -3033,7 +3036,8 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
         f.file = sh->frame->file;
         f.src  = sh->frame->src;
     }
-    f.up = sh->frame;
+    f.up     = sh->frame;
+    f.funsub = 1;
     sh->frame = &f;
     sh->funcdepth++;
     i32 loopdepth = sh->loopdepth;
@@ -3056,6 +3060,7 @@ static Str runfunsub(Shell *sh, Arena *a, Str src, Capture *cap, Arena scratch)
         if (valsub) val = clone(a, getplain(sh, &scratch, "REPLY").value);
     }
     escleave(sh, &e);
+    sh->line       = line;
     sh->tracedepth = tracedepth;
     sh->opt[O_ERREXIT] = errexit;
     sh->opt[O_VERBOSE] = verbose;

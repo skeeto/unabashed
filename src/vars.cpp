@@ -1034,8 +1034,9 @@ static Array *dynarray(Shell *sh, Arena *a, Value *v)
         return r;
     }
     if (d!=DYN_FUNCNAME && d!=DYN_BASH_LINENO && d!=DYN_BASH_SOURCE) return 0;
+    // A ${ cmd; } body's frame is not a call here, as in bash
     iz n = 0, nsrc = 0;
-    for (Frame *f = sh->frame; f; f = f->up) n++;
+    for (Frame *f = sh->frame; f; f = f->up) n += !f->funsub;
     for (Srcframe *s = sh->srcframes; s; s = s->up) nsrc++;
     // FUNCNAME exists only inside functions, then with the sourced
     // files among them ("source")
@@ -1048,6 +1049,10 @@ static Array *dynarray(Shell *sh, Arena *a, Value *v)
     Frame    *f = sh->frame;
     Srcframe *s = nsrc ? sh->srcframes : 0;
     while (f || s) {
+        if (f && f->funsub && !(s && s->frame==f)) {
+            f = f->up;
+            continue;
+        }
         r->e[r->len].idx = r->len;
         if (s && (s->frame==f || !f)) {
             // started in this call (or outside any): the newer
