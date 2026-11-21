@@ -807,6 +807,34 @@ static void test_arena(Test *t)
     expectint(t, "arena oom", hit, 1);
 }
 
+// f80digits has room for every integer digit it stores, 9 a division,
+// at the exponents where the most spill over: its allocation's size is
+// the distance to the next (allocbytes does not align).
+static void test_f80ints(Test *t)
+{
+    Os *os = t->os;
+    heapreset(os);
+    Arena a = newarena(os, (iz)1<<22);
+    i32 es[] = {0x7fc2, 0x7fe0, 0x7ffe};
+    for (i32 e : es) {
+        Arena s = a;
+        i64 x  = e - F80_BIAS - 63;
+        Big ip = bignew(&s, (iz)(x/32) + 4, ~0ull);
+        bigshl(&ip, &s, x);
+        byte *ints   = s.beg;
+        iz    stored = 0;
+        for (; ip.len; stored += 9) {
+            bigdivsmall(&ip, 1000000000);
+        }
+        s = a;
+        F80 v = {};
+        v.m = ~0ull;
+        v.e = e;
+        F80Dec d = f80digits(v, 0, 1, &s);
+        expectint(t, "f80digits room", (byte *)d.d-ints >= stored, 1);
+    }
+}
+
 // RANDOM's PCG64: pcg-c's published outputs for pcg64_srandom_r(42, 54),
 // and the 64-bit halves against 128-bit integers for other seeds.
 static void test_pcg(Test *t)
@@ -2090,6 +2118,7 @@ int main(int argc, char **argv)
     test_vterm(&t);
     test_conkey(&t);
     test_arena(&t);
+    test_f80ints(&t);
     test_pcg(&t);
     test_chacha(&t);
     test_sched(&t);

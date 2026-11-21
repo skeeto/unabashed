@@ -597,7 +597,9 @@ static F80Dec f80digits(F80 v, b32 fix, i64 n, Arena *a)
     } else if (x > -64) {
         ip = bignew(a, 4, v.m >> -x);
     }
-    g.ints = allocbytes(a, (iz)(bigbits(ip)*3/10) + 20);
+    // At most bits*log10(2) + 1 digits, stored 9 per division, so up
+    // to 8 more: 31/100 rounds log10(2) up.
+    g.ints = allocbytes(a, (iz)(bigbits(ip)*31/100) + 9);
     while (ip.len) {
         u32 c = bigdivsmall(&ip, 1000000000);
         for (i32 k = 0; k < 9; k++) {
