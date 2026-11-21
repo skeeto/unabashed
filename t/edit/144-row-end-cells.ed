@@ -1,0 +1,19 @@
+# At a row's end, as readline: a control character's ^ and letter may
+# go on different rows, and the cursor on a wide character that did not
+# fit the row's end is at its start on the next row, not after the gap
+size 8 10
+rc PS1='$ '
+keys #abcdef\C-v\C-ah
+snap
+keys \C-b\C-b
+snap
+keys \C-b
+snap
+keys \r#abcdef字h
+snap
+keys \C-b\C-b
+snap
+keys \C-b
+snap
+keys \C-f
+snap

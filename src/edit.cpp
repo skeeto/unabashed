@@ -1446,8 +1446,15 @@ static void laywalk(Layouter *y, Str prompt, Str line, iz point, iz rbeg, iz ren
         // the cursor goes after it
         if (y->l.prow<0 && i>=point) {
             // The cursor goes where the next cell would: past a full
-            // row, at the start of the next
-            if (y->col >= y->width) {
+            // row, or before a wide character that does not fit what
+            // is left of it, at the start of the next
+            i32 w = 1;
+            if (i < line.len) {
+                iz  j  = i;
+                i32 cp = utf8strict(line, &j);
+                w = cp>=0x80 ? cpwidth(cp) : 1;
+            }
+            if (y->col>=y->width || (y->col && y->col+w>y->width)) {
                 layfinish(y);
                 laynewrow(y);
             }
@@ -1473,9 +1480,12 @@ static void laywalk(Layouter *y, Str prompt, Str line, iz point, iz rbeg, iz ren
         } else if (cp < 0) {
             laycell(y, hi ? layregion(hbuf, badbyte) : badbyte, 1);
         } else if (c<0x20 || c==0x7f) {
-            u8  buf[2] = {'^', (u8)(c==0x7f ? '?' : c|0x40)};
-            Str t      = {buf, 2};
-            laycell(y, hi ? layregion(hbuf, t) : t, 2);
+            // Two cells, as readline writes them: a row may end between
+            u8 buf[2] = {'^', (u8)(c==0x7f ? '?' : c|0x40)};
+            for (i32 k = 0; k < 2; k++) {
+                Str t = {buf+k, 1};
+                laycell(y, hi ? layregion(hbuf, t) : t, 1);
+            }
         } else {
             i32 w = cpwidth(cp);
             Str t = {line.data+beg, i-beg};

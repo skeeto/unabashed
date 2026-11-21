@@ -1,0 +1,42 @@
+== snap 1
+$ #abcdef^
+Ah
+@ 1,2
+== snap 2
+$ #abcdef^
+Ah
+@ 0,9
+== snap 3
+$ #abcdef^
+Ah
+@ 0,8
+== snap 4
+$ #abcdef^
+Ah
+$ #abcdef
+字h
+@ 3,3
+== snap 5
+$ #abcdef^
+Ah
+$ #abcdef
+字h
+@ 3,0
+== snap 6
+$ #abcdef^
+Ah
+$ #abcdef
+字h
+@ 2,8
+== snap 7
+$ #abcdef^
+Ah
+$ #abcdef
+字h
+@ 3,0
+== snap 8
+$ #abcdef^
+Ah
+$ #abcdef
+字h
+@ 3,0

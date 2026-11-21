@@ -1,0 +1,22 @@
+# Three columns or fewer, as readline draws them where the cursor can
+# move up: a prompt wider than the screen, wide characters that do not
+# fit a row's end, editing and C-l. (Sideways scrolling, TERM=dumb, is
+# not matched there: readline writes past its own width.)
+size 10 3
+rc PS1='hello$ '
+keys echo 漢x
+snap
+keys \C-a
+snap
+keys X\C-e\b\b
+snap
+keys \C-l
+snap
+keys \C-u
+resize 10 2
+keys 字ab
+snap
+keys \C-b\C-b\C-b
+snap
+keys \C-l
+snap
