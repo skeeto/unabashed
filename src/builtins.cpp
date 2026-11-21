@@ -1281,6 +1281,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             }
         }
         Str    refname = {};  // the nameref followed to vname, if any
+        Str    hookname = vname;  // as bash's declare names it to the hooks
         Value *raw = global ? globalvalue(sh, vname) : rawlookup(sh, vname);
         if (raw && (raw->attrs & V_NAMEREF) && hassub && eq<a.len) {
             // declare -n r; declare r[1]=x: r stops being a nameref
@@ -1317,6 +1318,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             if (follow) {
                 refname = vname;
                 vname   = r.name;
+                // bash's hook names the target only if it makes it anew
+                Value *t = global ? globalvalue(sh, vname) : rawlookup(sh, vname);
+                if (!mklocal && (r.hassub || !t)) hookname = vname;
                 if (r.hassub && !hassub) {
                     sub    = r.sub;
                     hassub = 1;
@@ -1508,8 +1512,10 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             if (compound) hassub = 0;
         }
         if (eq < a.len) {
-            // set the attributes first so that -i and -l apply
-            if (aon || off) setattrs(sh, vname, aon, off);
+            // set the attributes first so that -i and -l apply, and -n so
+            // that a hook (LC_ALL, POSIXLY_CORRECT) reads through it
+            u32 pre = aon | (on & V_NAMEREF);
+            if (pre || off) setattrs(sh, vname, pre, off);
             if (sh->opt[O_XTRACE] && (name=="export" || name=="readonly")) {
                 traceassign(sh, scratch, vname, append, val);  // as bash does
             }
@@ -1541,6 +1547,9 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             // Like bash, a new -i leaves the current value as it is:
             // only later assignments are evaluated
             setattrs(sh, vname, on | (aon & V_ARRAY), off);
+        }
+        if (eq==a.len && name!="export" && name!="readonly") {
+            varchanged(sh, hookname);  // as bash's declare, even without a value
         }
     }
     return status;

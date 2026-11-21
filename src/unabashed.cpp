@@ -358,7 +358,8 @@ static void varchanged(Shell *sh, Str name)
             shellerror(sh, a, msg);
         }
     } else if (name == "IGNOREEOF") {
-        sh->opt[O_IGNOREEOF] = !!lookup(sh, name);  // set or not
+        Value *v = lookup(sh, name);  // set or not, as bash's var_isset
+        sh->opt[O_IGNOREEOF] = v && (v->str.data || v->arr);
     } else if (name == "PIPESTATUS") {
         sh->pstatdirty = 1;
     } else if (name == "HOSTFILE") {
@@ -378,7 +379,7 @@ static void varchanged(Shell *sh, Str name)
         if (!sh->ingetopts) sh->optchar = 1;
     } else if (name == "POSIXLY_CORRECT") {
         Value *v = lookup(sh, name);
-        b32 on = !!v;
+        b32 on = v && (v->str.data || v->arr);  // as bash's var_isset
         if (on && (v->attrs&V_TEMP) && !sh->posixsaved) {
             // as bash, one level of saving for POSIXLY_CORRECT=y cmd
             for (i32 i = 0; i < countof(posixshopts); i++) {
