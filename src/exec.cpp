@@ -3313,17 +3313,65 @@ static b32 doassignments(Shell *sh, Arena *a, Word *w, iz n)
 // A simple command's temporary bindings (NAME=value cmd), in its arena
 // with the escape point that unbinds them if the command escapes.
 struct Temps {
-    Escape e;
-    Str   *names;  // bound now, the innermost last
-    iz     n;
-    Str   *argv;   // once runprogram undoes them, its argv (undotemps)
-    i32    keep;   // a stage or job's command: never unbound (1), or
-                   // until the next simple command ends (2, keeptemps)
+    Escape  e;
+    Str    *names;   // bound now, the innermost last
+    iz      n;
+    Str    *argv;    // once runprogram undoes them, its argv (undotemps)
+    i32     keep;    // a stage or job's command: never unbound (1), or
+                     // until the next simple command ends (2, keeptemps)
+    Hidden *hidden;  // out of sight while the redirections expand
+    iz      nhidden;
 };
 
 static void poptemps(Shell *sh, Temps *tb)
 {
     while (tb && !tb->keep && tb->n) poptemp(sh, tb->names[--tb->n]);
+}
+
+// The command's own temporary bindings are out of sight while its
+// redirections expand, as bash's expanding_redir has variable lookup
+// skip its temporary environment: a word there sees, and assigns, the
+// variable beneath (a=42; a=2 cmd >&$a is 42), and so does a command
+// or process substitution there, as bash flushes the temporary
+// environment in its child. Each binding is unlinked from its chain,
+// innermost first, and linked back on top once they are done, over
+// whatever is visible then (as unhide, for code a ${ cmd; } ran). No hook
+// runs, as in bash (the locale stays the binding's), except PATH's,
+// which drops paths remembered under the other value. Lookups pay
+// nothing: only a command with both bindings and redirections does.
+[[gnu::noinline]]
+static void hidetemps(Shell *sh, Arena *a, Temps *tb)
+{
+    if (!tb || !tb->n) return;
+    Store *st = sh->store;
+    tb->hidden  = alloc<Hidden>(a, tb->n);
+    tb->nhidden = 0;
+    for (iz i = tb->n-1; i >= 0; i--) {
+        Str     name = tempname(sh, tb->names[i]);
+        Var    *v    = findvar(sh, name);
+        Value **slot = v ? &v->top : 0;
+        while (slot && *slot && !((*slot)->attrs & V_TEMP)) slot = &(*slot)->below;
+        if (!slot || !*slot) continue;
+        Value *t = *slot;
+        jset(st, slot, t->below);
+        tb->hidden[tb->nhidden++] = {v, t};
+        if (name == "PATH") varchanged(sh, name);
+    }
+    sh->exportgen++;
+}
+
+[[gnu::noinline]]
+static void unhidetemps(Shell *sh, Temps *tb)
+{
+    if (!tb || !tb->nhidden) return;
+    Store *st = sh->store;
+    while (tb->nhidden) {
+        Hidden h = tb->hidden[--tb->nhidden];
+        jset(st, &h.top->below, h.var->top);
+        jset(st, &h.var->top, h.top);
+        if (h.var->name == "PATH") varchanged(sh, h.var->name);
+    }
+    sh->exportgen++;
 }
 
 // A forked builtin's bindings stay (Temps.keep), as bash's temporary
@@ -3486,6 +3534,7 @@ static void runsimple(Shell *sh, Node *n, Arena scratch)
         escenter(sh, &tb->e);
         if (jmpset(tb->e.jmp)) {
             escleave(sh, &tb->e);
+            unhidetemps(sh, tb);  // first: poptemp finds them in place
             poptemps(sh, tb);
             keeptemps(sh, tb);
             undotemps(sh, tb->argv);
@@ -3683,39 +3732,52 @@ static iz bindtemps(Shell *sh, Arena *a, Word *assigns, iz nassign, Assign *as, 
         }
         t = splitassign(sh, a, w->text);
         t.bound = tempvalue(sh, a, t);
-        as[nas++] = t;
-        if (persist) {
-            // the binding's value, as bash merges it into the shell
-            setvar(sh, scratch, t.name, t.bound, 0);
-            Value *v = lookup(sh, t.name);
-            if (v && (v->attrs & V_TEMP)) {
-                // as bash, also past a function call's temporary
-                // binding, so the value outlives the call
-                setvar(sh, scratch, t.name, t.bound, SV_UNDERTEMP);
-            }
-            // and exported, as the temporary binding bash makes and
-            // then keeps is
-            for (i32 k = 0; k < 2; k++) {
-                i32    f = SV_QUIET|SV_FORCE|(k ? SV_UNDERTEMP : 0);
-                Value *e = assignslot(sh, scratch, t.name, f);
-                if (e && !(e->attrs & V_EXPORT)) {
-                    e->attrs |= V_EXPORT;
-                    sh->exportgen++;
-                }
-            }
-        } else {
-            // One that fails (a readonly nameref target) is not bound,
-            // nor unbound after: that would unbind an outer binding
-            sh->nolocwarn = !hooks;
-            b32 bound = pushtemp(sh, scratch, t.name, t.bound);
-            sh->nolocwarn = 0;
-            if (bound) tb->names[tb->n++] = t.name;
-        }
+        // One that fails (a readonly nameref target) is not bound, nor
+        // unbound after: that would unbind an outer binding. Under
+        // persist, the bound ones are kept once the redirections are
+        // done (mergetemps), and so only they are listed.
+        sh->nolocwarn = !hooks;
+        b32 bound = pushtemp(sh, scratch, t.name, t.bound);
+        sh->nolocwarn = 0;
+        if (bound) tb->names[tb->n++] = t.name;
+        if (bound || !persist) as[nas++] = t;
         if (sh->opt[O_XTRACE]) {
             traceassign(sh, scratch, t.name, 0, t.bound);  // as bound
         }
     }
     return nas;
+}
+
+// A POSIX special builtin's bindings, bound as any until its
+// redirections are done, then kept in the shell, as bash merges its
+// temporary environment: their hooks run again (a second setlocale
+// warning, as in bash).
+[[gnu::noinline]]
+static void mergetemps(Shell *sh, Arena scratch, Assign *as, iz nas, Temps *tb)
+{
+    sh->nolocwarn = 1;
+    while (tb->n) poptemp(sh, tb->names[--tb->n]);
+    sh->nolocwarn = 0;
+    for (iz i = 0; i < nas; i++) {
+        Assign t = as[i];
+        setvar(sh, scratch, t.name, t.bound, 0);
+        Value *v = lookup(sh, t.name);
+        if (v && (v->attrs & V_TEMP)) {
+            // as bash, also past a function call's temporary binding,
+            // so the value outlives the call
+            setvar(sh, scratch, t.name, t.bound, SV_UNDERTEMP);
+        }
+        // and exported, as the temporary binding bash makes and then
+        // keeps is
+        for (i32 k = 0; k < 2; k++) {
+            i32    f = SV_QUIET|SV_FORCE|(k ? SV_UNDERTEMP : 0);
+            Value *e = assignslot(sh, scratch, t.name, f);
+            if (e && !(e->attrs & V_EXPORT)) {
+                e->attrs |= V_EXPORT;
+                sh->exportgen++;
+            }
+        }
+    }
 }
 
 // Temps.keep for a command in bash's child forked for a stage or job,
@@ -3975,7 +4037,10 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
     if (n->redirs && findbuiltin(sh, name)) sh->bltname = name;  // for messages
     b32 keep       = (execonly && !commit) || n==sh->keepredirs;
     b32 child      = n->redirs && !jobspec && forksfirst(sh, argv, ex);
+    b32 hide = tb && tb->n && n->redirs && !jobspec;
+    if (hide) hidetemps(sh, a, tb);
     b32 redirected = jobspec || doredirs(sh, n->redirs, a, keep, child);
+    if (hide) unhidetemps(sh, tb);
     sh->bltname = savedname;
     if (!redirected) {
         unwind(sh, mark);
@@ -3992,6 +4057,7 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
         if (!forked) checkerrexit(sh);
         return 0;
     }
+    if (persist && tb) mergetemps(sh, *a, as, nassign, tb);
     if (execonly) {
         closepsubs(sh, mark);  // exec 3< <(f) keeps 3, not 63
     }
