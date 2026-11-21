@@ -200,6 +200,13 @@ static b32 fromterminal(siginfo_t *info)
     return info && info->si_code==SI_KERNEL;
 }
 
+// Whether a fault (faulted) surely is the process's own: on Linux kill's
+// si_code is never a fault's
+static b32 faultsure(int, siginfo_t *)
+{
+    return 1;
+}
+
 // RL_* as the system numbers them, -1 where it has no such limit
 static i32 rlres(i32 res)
 {

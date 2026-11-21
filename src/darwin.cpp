@@ -170,6 +170,14 @@ static b32 fromterminal(siginfo_t *)
     return 0;
 }
 
+// Whether a fault (faulted) surely is the process's own: macOS gives an
+// ILL, BUS or SEGV sent by kill(2) a fault's si_code and no si_pid, as
+// arm64 macOS 27 was seen to, so those cannot be told apart.
+static b32 faultsure(int sig, siginfo_t *info)
+{
+    return info->si_pid || (sig!=SIGILL && sig!=SIGBUS && sig!=SIGSEGV);
+}
+
 // RL_* as the system numbers them, -1 where it has no such limit
 static i32 rlres(i32 res)
 {

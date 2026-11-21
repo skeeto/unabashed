@@ -42,6 +42,7 @@ struct Os {
     i32    werrfd;      // a flush to this descriptor failed, else -1
     i32    werr;        // why the last write failed (os_writeerr)
     b32    wcatch;      // the deadly signals are caught (wcatchsigs)
+    u64    refault;     // host signals onsignal left at default (faultsure)
     u8     wkind[256];  // per descriptor: FK_* (fdkind)
     u8     wbuf[1<<14];
     u64    entropyn;    // os_entropy's fallback counter
@@ -182,6 +183,7 @@ static short spawnpre(posix_spawnattr_t *, posix_spawn_file_actions_t *,
                       SpawnPlan *, i32 *src, i32 base);
 static void  spawnpost(posix_spawn_file_actions_t *, SpawnPlan *, i32 base);
 static b32   fromterminal(siginfo_t *);
+static b32   faultsure(int sig, siginfo_t *);
 static i32   rlres(i32 res);
 static i32   plt_siglevel(Os *, i64 pid, i64 level, i32 sig);
 static void  initlevel();
@@ -1560,7 +1562,10 @@ static b32 faulted(int sig, siginfo_t *info)
 // and TSTP, which the kernel sends to its whole foreground group, are
 // told apart from those sent to this process (kill): every level of
 // the shell gets them, as every process of bash's foreground job would.
-// A fault kills the shell as if it were never caught.
+// A fault kills the shell as if it were never caught. One that may have
+// been sent (faultsure) is noted as sent, the default action left for
+// a fault of its own to meet when the instruction runs again, and the
+// handler back once the shell takes the signal (plt_sigpending).
 // A SIGPIPE of the shell's own making (a write to a broken pipe: the
 // kernel's, naming no sender or the shell itself) is only EPIPE, as if
 // ignored; the level that wrote acts on it (sigpipe), so that a broken
@@ -1571,8 +1576,11 @@ static void onsignal(int sig, siginfo_t *info, void *)
         struct sigaction sa = {};
         sa.sa_handler = SIG_DFL;
         sigaction(sig, &sa, 0);
-        raise(sig);  // delivered on return, if returning does not fault again
-        return;
+        if (faultsure(sig, info)) {
+            raise(sig);  // delivered on return, if returning does not fault again
+            return;
+        }
+        bitsor(&sigos->refault, (u64)1<<(sig-1));
     }
     if (sig==SIGPIPE && (!info || !info->si_pid || info->si_pid==getpid())) {
         return;
@@ -1672,6 +1680,13 @@ static LevelSig plt_levelsig(Os *)
 static u64 plt_sigpending(Os *os)
 {
     if (os->wlen && monons()-os->wtime>=WDELAY) flushw(os);
+    for (u64 b = bitstake(&os->refault); b; b &= b-1) {
+        struct sigaction sa = {};  // as plt_sigmode caught it
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags     = SA_RESTART | SA_SIGINFO;
+        sa.sa_sigaction = onsignal;
+        sigaction(__builtin_ctzll(b) + 1, &sa, 0);
+    }
     return bitstake(&os->sigbits);
 }
 
@@ -1711,6 +1726,8 @@ static void plt_sigmode(Os *os, i32 sig, i32 mode)
         return;  // still as on entry, which may be a profiler's SIGPROF
     }
     os->changed |= bit;
+    u64 refault = bitstake(&os->refault);  // not to be put back over this
+    bitsor(&os->refault, refault & ~((u64)1<<(hsig-1)));
     if (mode==SIGM_DEFAULT && hsig==SIGPIPE) {
         quietpipe(os);  // its in-process subshells' broken pipes
         return;
