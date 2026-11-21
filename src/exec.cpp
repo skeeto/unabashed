@@ -5214,16 +5214,19 @@ static void checkcomplist(Shell *sh, Arena scratch, Str body)
 // command substitution), BASH_COMMAND goes back to the command that ran
 // it, as bash's parse_and_execute does, and the parser and its name go
 // back too, however it ends: the escape point for that is here, with
-// the parse in runsource1, whose frame it would otherwise grow.
+// the parse in runsource1, whose frame it would otherwise grow. The
+// control line its commands set goes back on return, as bash protects
+// line_number there (an escape's catcher puts it back otherwise).
 static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i32 line,
                      b32 (*fill)(void *, Lexer *), void *fillctx, b32 comsub, b32 hist)
 {
     if (reader || !sh->lexer) {
         return runsource1(sh, src, iname, scratch, reader, line, fill, fillctx, comsub, hist);
     }
-    Lexer  *outer = sh->lexer;
-    Str     oname = sh->iname;
-    CmdSave cmd   = savecmd(sh, &scratch);
+    Lexer  *outer   = sh->lexer;
+    Str     oname   = sh->iname;
+    i32     ctlline = sh->ctlline;
+    CmdSave cmd     = savecmd(sh, &scratch);
     Escape *e     = alloc<Escape>(&scratch);
     escenter(sh, e);
     if (jmpset(e->jmp)) {
@@ -5242,6 +5245,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
     i32 status = runsource1(sh, src, iname, scratch, reader, line, fill, fillctx, comsub, hist);
     escleave(sh, e);
     restorecmd(sh, cmd);
+    sh->ctlline = ctlline;
     return status;
 }
 
