@@ -185,8 +185,9 @@ static i32 b_echo(Shell *sh, Str *args, iz nargs, Arena scratch)
 }
 
 struct PfCtx {
-    Shell *sh;
-    Arena *a;
+    Shell     *sh;
+    Arena     *a;
+    PrintfEnv *env;
 };
 
 static i64 pfnow(void *ctx)
@@ -207,6 +208,11 @@ static void pfsetint(void *ctx, Str name, i64 v)
     Arena  t = *c->a;  // past the output, which waits meanwhile
     Str    s = fmti64(&t, v);
     setvar(c->sh, t, name, s);
+    if (c->env->zone) {
+        // As bash, which sets the zone on each conversion: the name
+        // may be TZ, or a nameref to it
+        c->env->zone = shellzone(c->sh, c->a);
+    }
 }
 
 static void pferror(void *ctx, Str msg)
@@ -261,8 +267,8 @@ static i32 b_printf(Shell *sh, Str *args, iz nargs, Arena scratch)
         usageerror(sh, scratch, "printf");
         return 2;
     }
-    PfCtx ctx = {sh, &scratch};
     PrintfEnv env = {};
+    PfCtx ctx = {sh, &scratch, &env};
     env.ctx        = &ctx;
     env.utf8       = sh->utf8;
     env.radix      = sh->radix;

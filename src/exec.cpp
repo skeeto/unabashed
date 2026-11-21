@@ -2567,9 +2567,11 @@ static Str envvalue(Shell *sh, Arena *a, Str name)
 // busybox-w32, has no zoneinfo.
 static PfZone *shellzone(Shell *sh, Arena *a)
 {
+    // A copy: the zone keeps spans of it, and a caller may keep the
+    // zone while code assigns TZ (a prompt's ${ ...; })
     Str tz     = envvalue(sh, a, "TZ");
     b32 system = !tz.data;
-    if (system) tz = os_localtz(sh->os, a);
+    tz = system ? os_localtz(sh->os, a) : clone(a, tz);
     PfZone *z = alloc<PfZone>(a);
     Str name = startswith(tz, ":") ? cuthead(tz, 1) : tz;
     if (name.len && sh->pathmode!=PM_NATIVE) {

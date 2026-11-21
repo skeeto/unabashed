@@ -23,7 +23,7 @@ struct PrintfEnv {
     Str   tz;                               // TZ if exported, else null
     PfZone *zone;                           // local time's zone, else from tz
     void  (*error)(void *ctx, Str msg);     // "printf: ..." diagnostics
-    void  (*setint)(void *ctx, Str, i64);   // %n assignment, may be null
+    void  (*setint)(void *ctx, Str, i64);   // %n assignment, may set zone
     void  (*flush)(void *ctx, Str);         // line-buffered output, may be null
     iz    flushed;                          // output bytes already flushed
     Buf  *out;                              // (set by printfmt)
@@ -2393,6 +2393,7 @@ static i32 printfmt(PrintfEnv *env, Buf *out, Str fmt, Str *args, iz nargs)
                 }
                 if (env->setint) {
                     env->setint(env->ctx, name, out->len - pass);
+                    zone = env->zone;  // which may now follow a new TZ
                 }
             } break;
 
