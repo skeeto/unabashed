@@ -859,8 +859,9 @@ static Parsed parsetext(Arena *a, Str src, iz stackmax)
 // Chains of any length, elif arms and pipeline stages, cost the parser
 // and the tree walkers no stack, while what truly nests calls the
 // guard's overflow when walked past it, rather than overflowing the
-// real stack: 50000 elif arms fail no 64 KiB parse, and a deeply nested
-// body is sized, copied and printed within 16 KiB or not at all.
+// real stack: 50000 elif arms fail no 64 KiB parse, 5000 pipeline
+// stages print within 64 KiB, and a deeply nested body is sized, copied
+// and printed within 16 KiB or not at all.
 static void test_treestack(Test *t)
 {
     Os *os = t->os;
@@ -888,6 +889,7 @@ static void test_treestack(Test *t)
     expectint(t, "long pipeline parses", p.status, PARSE_OK);
     if (p.status == PARSE_OK) {
         expectint(t, "long pipeline walks", treewalks(&a, p.cmd, g, 0), 0);
+        expectint(t, "long pipeline prints", treewalks(&a, p.cmd, g, 1), 0);
     }
 
     b = Buf(&a, (iz)1<<16);

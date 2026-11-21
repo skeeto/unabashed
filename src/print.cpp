@@ -387,8 +387,8 @@ static void printfuncdef(Printer *p, Node *f)
     printfuncbody(p, f->a);
 }
 
-// A connector, then its right operand.
-static void printright(Printer *p, Node *n)
+// A connector, before its right operand.
+static void printconnector(Printer *p, Node *n)
 {
     i32 c = n->connector;
     switch (c) {
@@ -432,11 +432,46 @@ static void printright(Printer *p, Node *n)
         }
     } break;
     }
-    printcmd(p, n->b);
-    if (p->connection == 1) {
-        maybedeferred(p, "");
+}
+
+// Would printlist print n, with nothing of its own (flags,
+// redirections), as one operand and a connector to the right?
+static b32 rightlist(Node *n)
+{
+    if (!n || n->kind!=N_CONNECT || n->flags || n->redirs) return 0;
+    Node *a = n->a;
+    return !(a && a->kind==N_CONNECT && !a->flags && !a->redirs);
+}
+
+// A connector, then its right operand. Pipelines nest down their right
+// operands, a | (b | c), so that one there is followed in a loop rather
+// than by recursion, as printcmd and printlist would print it: a
+// pipeline of any length costs no stack.
+static void printright(Printer *p, Node *n)
+{
+    iz depth = 0;  // right operands followed: connections to end
+    for (;; depth++) {
+        printconnector(p, n);
+        if (!rightlist(n->b)) {
+            printcmd(p, n->b);
+            break;
+        }
+        n = n->b;
+        if (p->skipindent) {
+            p->skipindent--;
+        } else {
+            indent(p, p->indentation);
+        }
+        p->skipindent++;
+        p->connection++;
+        printcmd(p, n->a);
     }
-    p->connection--;
+    for (iz i = 0; i <= depth; i++) {
+        if (p->connection == 1) {
+            maybedeferred(p, "");
+        }
+        p->connection--;
+    }
 }
 
 // Lists nest down their left operands, a ; b ; c as ((a ; b) ; c), so
