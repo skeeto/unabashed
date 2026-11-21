@@ -1135,6 +1135,7 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     polljobs(sh);
     cleanupjobs(sh);
     throttlejobs(sh);
+    forkerrline(sh, n);
     // DEBUG for a simple command runs here, as bash runs it before it
     // forks, and not again in the job (debugdone, under functrace)
     if (stagedebug(sh, n, sh->status, scratch)) return;

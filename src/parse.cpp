@@ -137,6 +137,7 @@ struct Node {
     Cond  *cond;
     Word  *arith;      // arithmetic command or for expressions
     b32    inlist;     // for/select had an explicit "in"
+    i32    endline;    // N_SUBSHELL: the line of its ), which bash gives it
 };
 
 
@@ -2977,6 +2978,7 @@ static Node *parsecommand(Parser *p)
                 Node *sub = newnode(L, N_SUBSHELL);
                 sub->a = parsecompound(p);
                 expect(p, ')');
+                sub->endline = L->lineno;
                 popnest(L);
                 f->a = sub;
                 Redir *r = parseredirlist(p);
@@ -3505,6 +3507,7 @@ static Node *parseshell(Parser *p)
         advance(p);
         n->a = parsecompound(p);
         expect(p, ')');
+        n->endline = L->lineno;
         popnest(L);
         return n;
     case '{':

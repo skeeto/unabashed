@@ -1137,6 +1137,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         stages[k] = cur->a;
     }
     stages[nstages-1] = cur;
+    forkerrline(sh, n);
 
     Sched *s      = sh->sched;
     i32    before = sh->status;  // what $? is in every stage

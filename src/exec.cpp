@@ -643,6 +643,25 @@ static i32 fnline(Shell *sh, i32 line)
     return line;
 }
 
+// sh->errline, bash's line_number_for_err_trap: the line ERR shows
+// after a compound command's redirections fail, that of the last simple
+// command, ( ), (( )), [[ ]] or function definition run in this shell;
+// calls and nested source text put it back. bash sets it in the parent
+// for what it forks: here, for a pipeline (its current line, then each
+// simple or ( ) stage's) or a simple or ( ) command run with &.
+static void forkerrline(Shell *sh, Node *n)
+{
+    if (n->kind==N_CONNECT && n->connector=='|') sh->errline = sh->ctlline;
+    for (Node *c = n;; c = c->b) {  // the stages as runpipeline takes them
+        b32   more  = c->kind==N_CONNECT && c->connector=='|' &&
+                      (c==n || (!c->flags && !c->redirs));
+        Node *stage = more ? c->a : c;
+        if (stage->kind == N_SIMPLE)   sh->errline = fnline(sh, stage->line);
+        if (stage->kind == N_SUBSHELL) sh->errline = stage->endline;
+        if (!more) return;
+    }
+}
+
 static void runjob(Shell *sh, SubJob *j, Arena scratch)
 {
     switch (j->kind) {
@@ -2954,6 +2973,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     Str srcname = sh->srcname;
     sh->srcname = code->file;
     i32 ctlline = sh->ctlline;
+    i32 errline = sh->errline;
     i32 funcline = sh->funcline;
     sh->funcline = code->body->line;
 
@@ -2996,6 +3016,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     sh->loopdepth = loopdepth;
     sh->srcname   = srcname;
     sh->ctlline   = ctlline;
+    sh->errline   = errline;
     sh->funcline  = funcline;
     leaveframe(sh, &f);
     freeargs(sh->store, sh->argsown);  // what set made in the call
@@ -3332,6 +3353,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     sh->asyncnull = 0;
     safepoint(sh->sched);
     sh->line    = fnline(sh, n->line);
+    sh->errline = sh->line;
     sh->current = n;
     if (!sh->intrap) sh->cmdnode = n;  // in trap actions, what ran them
     if (sh->traps && !debugdone) {
@@ -4331,6 +4353,7 @@ static void execfuncdef(Shell *sh, Node *n, Arena scratch)
     // function, and elsewhere where the parser has got to
     Str name = n->name->text;
     sh->line = sh->funcdepth || !sh->lexer ? n->line : sh->lexer->lineno;
+    sh->errline = sh->ctlline;  // as bash, the line before it set its own
     if (n->name->flags & (W_HASDOLLAR|W_QUOTED)) {
         Str msg = concat3(&scratch, "`", name, "': not a valid identifier");
         shellerror(sh, scratch, msg);
@@ -4409,7 +4432,10 @@ static void execsubshell(Shell *sh, Node *n, Arena scratch)
     sh->taillevel = 0;
     if (!n->redirs) reportchild(sh, scratch, n);  // else once they are undone
     setpstat1(sh);
+    i32 line = sh->line;
+    sh->line = sh->errline;  // ERR's, as bash's: the list's own
     checkerrexit(sh);
+    sh->line = line;
     checksigs(sh, scratch);
 }
 
@@ -4609,7 +4635,8 @@ static b32 debugcompound(Shell *sh, Node *n, Arena scratch)
 [[gnu::noinline]]
 static void execarith(Shell *sh, Node *n, Arena scratch)
 {
-    sh->line = fnline(sh, n->line);
+    sh->line    = fnline(sh, n->line);
+    sh->errline = sh->line;
     if (sh->traps && debugcompound(sh, n, scratch)) return;
     Str text = expandstring(sh, &scratch, n->arith->text, XC_ARITH|XC_DQUOTE);
     if (sh->opt[O_XTRACE]) {
@@ -4625,7 +4652,8 @@ static void execarith(Shell *sh, Node *n, Arena scratch)
 [[gnu::noinline]]
 static void execcond(Shell *sh, Node *n, Arena scratch)
 {
-    sh->line = fnline(sh, n->line);
+    sh->line    = fnline(sh, n->line);
+    sh->errline = sh->line;
     if (sh->traps && debugcompound(sh, n, scratch)) return;
     sh->status = condeval(sh, &scratch, n->cond);
     setpstat1(sh);
@@ -4782,6 +4810,8 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     b32 inner      = n->kind==N_SUBSHELL || n->kind==N_COPROC;
     b32 forked     = sh->forkstdin;  // its own do not count (forkedstdin)
     sh->forkstdin  = 0;
+    // ERR's line, should a ( list ) fail, as bash sets it before forking
+    if (n->kind == N_SUBSHELL) sh->errline = n->endline;
     if (n->kind!=N_SIMPLE && n->kind!=N_CONNECT && n->kind!=N_FUNCDEF && n->redirs) {
         if (!forked) {
             sh->stdinredir = stdinredirects(n->redirs) || (inner && stdinredir);
@@ -4789,14 +4819,19 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         // As bash, a compound command's redirections are at its line
         // as only some commands set it: that of the enclosing for,
         // case, select or call, else where the parser finished the
-        // top-level command
-        sh->line = sh->ctlline;
+        // top-level command; but a ( list )'s child sets its own first
+        sh->line = n->kind==N_SUBSHELL ? n->endline : sh->ctlline;
         if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs, inner)) {
             if (inner) sh->stdinredir = stdinredir;
             unwind(sh, mark);
             sh->status = sh->redirfail;
-            if (invert) sh->noerrexit--;
-            else checkerrexit(sh);
+            if (invert) {
+                sh->noerrexit--;
+            } else {
+                sh->line = sh->errline;  // ERR's, as bash's
+                checkerrexit(sh);
+                sh->line = sh->ctlline;
+            }
             return;
         }
     }
@@ -5220,8 +5255,9 @@ static void checkcomplist(Shell *sh, Arena scratch, Str body)
 // it, as bash's parse_and_execute does, and the parser and its name go
 // back too, however it ends: the escape point for that is here, with
 // the parse in runsource1, whose frame it would otherwise grow. The
-// control line its commands set goes back on return, as bash protects
-// line_number there (an escape's catcher puts it back otherwise).
+// control line and ERR's line that its commands set go back too, as
+// bash protects line_number and line_number_for_err_trap there (on an
+// escape, the catcher's Escape state puts the control line back).
 static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i32 line,
                      b32 (*fill)(void *, Lexer *), void *fillctx, b32 comsub, b32 hist)
 {
@@ -5231,13 +5267,15 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
     Lexer  *outer   = sh->lexer;
     Str     oname   = sh->iname;
     i32     ctlline = sh->ctlline;
+    i32     errline = sh->errline;
     CmdSave cmd     = savecmd(sh, &scratch);
-    Escape *e     = alloc<Escape>(&scratch);
+    Escape *e       = alloc<Escape>(&scratch);
     escenter(sh, e);
     if (jmpset(e->jmp)) {
         escleave(sh, e);
-        sh->lexer = outer;
-        sh->iname = oname;
+        sh->lexer   = outer;
+        sh->iname   = oname;
+        sh->errline = errline;
         restorecmd(sh, cmd);
         if (e->why==ESC_EXIT && errexitdue(sh, 0)) {
             // set -e unwound the builtin that parsed this (eval), whose
@@ -5251,6 +5289,7 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
     escleave(sh, e);
     restorecmd(sh, cmd);
     sh->ctlline = ctlline;
+    sh->errline = errline;
     return status;
 }
 

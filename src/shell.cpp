@@ -704,6 +704,7 @@ struct Shell {
     i32      line;         // LINENO
     i32      ctlline;      // bash's line as only some commands set it
                            // (top level, calls, for, case, select)
+    i32      errline;      // bash's line_number_for_err_trap (forkerrline)
     i32      status;       // $?
     i32      npstat;       // PIPESTATUS: the last pipeline's statuses,
     u8       pstat[32];    // here, or past this many in a store buffer
