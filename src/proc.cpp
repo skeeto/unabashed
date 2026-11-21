@@ -664,7 +664,7 @@ static b32 forkedstdin(Shell *sh, Node *n, b32 piped)
     return old;
 }
 
-static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops)
+static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops, i32 uncounted)
 {
     Vproc *m = vprocwith(sh, in, out);
     Shell *c = m->sh;
@@ -675,7 +675,7 @@ static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops
         c->catchfatal = 1;
         c->subchild   = 1;
     }
-    c->simplestages += node->kind == N_SIMPLE;
+    c->simplestages += uncounted;
     Stackguard g = shellguard(sh);
     m->node = copynode(&m->perm, node, &g);
     // A simple command, or the last of a ( list ), is what bash would
@@ -1164,6 +1164,10 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
 
     Sched *s      = sh->sched;
     i32    before = sh->status;  // what $? is in every stage
+    // A job's stages, which bash forks from the shell, count at the
+    // job's own subshell level, not a level below it
+    b32    bg     = sh->bgpipe;
+    sh->bgpipe    = 0;
     for (i32 k = 0; k < nstages; k++) {
         ext[k]   = likelyexternal(sh, stages[k]);
         procs[k] = BADHANDLE;
@@ -1214,6 +1218,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         ran[k] = !skip;
         sh->debugdone = stages[k]->kind == N_SIMPLE;
         sh->forked    = stages[k]->kind == N_SIMPLE;
+        sh->forkstage = sh->forked && !bg;
         b32 redir = forkedstdin(sh, stages[k], k>0);
         if (!skip && ext[k] && directstage(sh, scratch, stages[k], !k)) {
             u64 group = setgroup(s, nexttag(s));  // tracing: as a stage task
@@ -1229,10 +1234,14 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             sh->status = before;
             sh->debugdone = stages[k]->kind == N_SIMPLE;  // for a retry
             sh->forked    = stages[k]->kind == N_SIMPLE;
+            sh->forkstage = sh->forked && !bg;
         }
         if (retry && grouped) {
             i64    pid  = 0;
+            i32    uncounted = bg || stages[k]->kind==N_SIMPLE;  // as spawnvproc's
+            sh->simplestages += uncounted;
             Handle proc = spawnstage(sh, stages[k], in[k], out[k], grp, &pid, scratch);
+            sh->simplestages -= uncounted;
             if (proc != BADHANDLE) {
                 procs[k] = proc;
                 pids[k]  = pid;
@@ -1242,15 +1251,17 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         }
         if (retry) {
             b32 newloops = stages[k]->kind != N_SIMPLE;  // as bash: break | x is silent
-            tasks[k] = spawnvproc(sh, stages[k], in[k], out[k], newloops);
+            tasks[k] = spawnvproc(sh, stages[k], in[k], out[k], newloops, bg || stages[k]->kind==N_SIMPLE);
             tasks[k]->group = tasks[k]->tag;  // tracing: runs alongside the last stage
             pids[k]  = ((Vproc *)tasks[k]->arg)->sh->bashpid;
             sh->debugdone = 0;
             sh->forked    = 0;
+            sh->forkstage = 0;
             yield(s);
         }
         sh->debugdone  = 0;
         sh->forked     = 0;
+        sh->forkstage  = 0;
         sh->stdinredir = redir;
         sh->forkstdin  = 0;
         // Drop the parent's ends at once: a later direct stage whose
@@ -1303,7 +1314,8 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             j.node = &group;
             sh->ctlline = stage->endline;  // the child's (see execsubshell)
         }
-        sh->simplestages += stage->kind == N_SIMPLE;
+        i32 uncounted = bg || stage->kind==N_SIMPLE;
+        sh->simplestages += uncounted;
         // A program as the last stage is reported with the pipeline
         sh->tailnode  = stage->kind==N_SIMPLE ? stage
                       : stage->kind==N_SUBSHELL ? tailcommand(stage->a) : 0;
@@ -1313,6 +1325,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         sh->sig->fgwait = 1;
         sh->debugdone = stage->kind == N_SIMPLE;
         sh->forked    = stage->kind == N_SIMPLE;
+        sh->forkstage = sh->forked && !bg;
         if (grouped && ext[last] && stage->kind==N_SIMPLE) {
             // a program joins the group, and its stop stops the job
             sh->spawngrp = grp ? grp : -1;
@@ -1350,9 +1363,10 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         sh->pipetail  = 0;
         sh->debugdone = 0;
         sh->forked    = 0;
+        sh->forkstage = 0;
         sh->tailnode  = 0;
         sh->taillevel = 0;
-        sh->simplestages -= stage->kind == N_SIMPLE;
+        sh->simplestages -= uncounted;
     }
     closegate(sh);  // also when the last stage was skipped
     sh->capdepth = depth - 1;

@@ -3499,8 +3499,10 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     // bash's forked child exits with the status of the whole command it
     // runs: no ERR action or set -e for it, only for what it runs
     b32 forked = sh->forked;
+    b32 stage  = sh->forkstage;
     b32 async  = sh->asyncpct;
-    sh->forked   = 0;
+    sh->forked    = 0;
+    sh->forkstage = 0;
     sh->asyncpct = 0;
     b32 asyncnull = sh->asyncnull;  // see runasync1
     sh->asyncnull = 0;
@@ -3848,6 +3850,10 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     }
 
     if (fn || bi) {
+        // bash's child for a stage counts as a subshell once its words
+        // expand, so only for what a builtin or function runs; the
+        // stage's subshell level puts it back
+        sh->simplestages -= stage;
         // As bash's frame for a builtin's or function's redirections:
         // set -e in what it runs unwinds the call first (errexittrap)
         Redirs redirs = sh->redirs;

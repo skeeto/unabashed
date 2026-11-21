@@ -873,6 +873,10 @@ struct Shell {
                            // compound command, which is not interactive
     b32      forked;       // the next simple command is a stage or job
                            // bash forks first: %N is no command there
+    b32      forkstage;    // a stage, whose builtin or function bash runs
+                           // a subshell level down once its words expand
+    b32      bgpipe;       // the next pipeline is a job's, whose stages bash
+                           // forks from the shell: one level down, not two
     b32      asyncnull;    // and a job whose input becomes /dev/null once
                            // its words expand, as in bash's child
     b32      asyncpct;     // the next simple command is "%N &", so bg
