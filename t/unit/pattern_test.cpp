@@ -1,6 +1,6 @@
 // Tests for pattern.cpp against results recorded from bash 5.3
 // $ g++ -std=c++20 -g3 -Wall -Wextra -Wconversion -Wno-sign-conversion
-//       -fsanitize=undefined -fsanitize-trap
+//       -Wno-unused-function -fsanitize=undefined -fsanitize-trap
 //       -o pattern_test.exe t/unit/pattern_test.cpp
 // $ ./pattern_test.exe [t/unit/pattern.golden]
 //
@@ -19,6 +19,7 @@
 #include <string.h>
 #include <time.h>
 #include "../../src/base.cpp"
+static void lib_step() {}  // the library's, which pattern.cpp names
 #include "../../src/unicode.cpp"
 #include "../../src/pattern.cpp"
 

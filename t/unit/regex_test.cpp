@@ -1,6 +1,6 @@
 // Tests for regex.cpp against results recorded from glibc
 // $ g++ -std=c++20 -g3 -Wall -Wextra -Wconversion -Wno-sign-conversion
-//       -fsanitize=undefined -fsanitize-trap
+//       -Wno-unused-function -fsanitize=undefined -fsanitize-trap
 //       -o regex_test.exe t/unit/regex_test.cpp
 // $ ./regex_test.exe [t/unit/regex.golden]
 //

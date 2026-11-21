@@ -789,10 +789,13 @@ static void cygcase(PathCtx *ctx, Arena scratch, iz line, Slice<Str> args,
     }
 }
 
+// want first: built in scratch, it must be there before cygcase gets
+// its copy, which the arguments' order of evaluation does not ensure
 #define CYG(want, status, ...) \
     do { \
         Str argv_[] = {"cygpath", __VA_ARGS__}; \
-        cygcase(ctx, scratch, __LINE__, {argv_, countof(argv_)}, want, status); \
+        Str want_   = want; \
+        cygcase(ctx, scratch, __LINE__, {argv_, countof(argv_)}, want_, status); \
     } while (0)
 
 static void testcygpath(PathCtx *ctx, Arena scratch)

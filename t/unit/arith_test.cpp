@@ -1,6 +1,12 @@
 // Unit tests for arith.cpp against expectations recorded from bash 5.3
-//   c++ -std=c++20 -o arith_test t/unit/arith_test.cpp && ./arith_test
-// Run from the repository root, or pass the golden file path.
+// $ g++ -std=c++20 -g3 -Og -Wall -Wextra -Wconversion -Wno-sign-conversion
+//       -Wno-unused-function -fsanitize=undefined -fsanitize-trap
+//       -o arith_test t/unit/arith_test.cpp
+// $ ./arith_test [t/unit/arith.golden]
+// Run from the repository root, or pass the golden file path. -Og, as
+// for main_test.cpp: the stack-use checks hold the evaluator's own
+// frames at bash's limits under 1 MiB, which clang's -O0 frames with
+// UBSan exceed several times over (GCC's at -O0 do not).
 // This is free and unencumbered software released into the public domain.
 #include <stdio.h>
 #include <stdlib.h>
