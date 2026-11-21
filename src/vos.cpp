@@ -2258,8 +2258,8 @@ static i32 vos_setrlimit(Os *os, i32 res, Rlimit r)
         default: return E_INVAL;
         }
     }
-    if (r.hard!=RL_INFINITY && (r.soft==RL_INFINITY || r.soft>r.hard)) return E_INVAL;
-    if (t->hard!=RL_INFINITY && (r.hard==RL_INFINITY || r.hard>t->hard)) return E_PERM;
+    if ((u64)r.soft > (u64)r.hard) return E_INVAL;
+    if ((u64)r.hard > (u64)t->hard) return E_PERM;
     t->soft = r.soft;
     t->hard = r.hard;
     return 0;

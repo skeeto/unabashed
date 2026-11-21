@@ -164,8 +164,8 @@ struct CpuTimes {
 };
 
 struct Rlimit {
-    i64 soft;  // in the system's units, RL_INFINITY for none
-    i64 hard;
+    i64 soft;  // in the system's units, RL_INFINITY for none; compared
+    i64 hard;  // unsigned, as rlim_t, so RL_INFINITY is the greatest
     i32 err;   // E_NOSYS: no such limit on this platform
 };
 

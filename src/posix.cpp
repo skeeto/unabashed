@@ -1596,7 +1596,7 @@ static void onsignal(int sig, siginfo_t *info, void *)
 
 static i64 fromrlim(rlim_t v)
 {
-    return v==RLIM_INFINITY || v>(rlim_t)0x7fffffffffffffff ? RL_INFINITY : (i64)v;
+    return v==RLIM_INFINITY ? RL_INFINITY : (i64)v;
 }
 
 static rlim_t torlim(i64 v)

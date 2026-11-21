@@ -4460,15 +4460,15 @@ static i32 b_getopts(Shell *sh, Str *args, iz nargs, Arena scratch)
 static struct {
     u8  opt;
     i32 res;
-    i64 scale;  // system units per unit shown
+    i64 scale;  // system units per unit shown, 0 for blocks (ulscale)
     Str desc;
     Str unit;
 } const ulimits[] = {
     {'R', RL_RTTIME,     1,    "real-time non-blocking time", "microseconds"},
-    {'c', RL_CORE,       512,  "core file size",       "blocks"},
+    {'c', RL_CORE,       0,    "core file size",       "blocks"},
     {'d', RL_DATA,       1024, "data seg size",        "kbytes"},
     {'e', RL_NICE,       1,    "scheduling priority",  ""},
-    {'f', RL_FSIZE,      512,  "file size",            "blocks"},
+    {'f', RL_FSIZE,      0,    "file size",            "blocks"},
     {'i', RL_SIGPENDING, 1,    "pending signals",      ""},
     {'l', RL_MEMLOCK,    1024, "max locked memory",    "kbytes"},
     {'m', RL_RSS,        1024, "max memory size",      "kbytes"},
@@ -4482,6 +4482,13 @@ static struct {
     {'v', RL_AS,         1024, "virtual memory",       "kbytes"},
     {'x', RL_LOCKS,      1,    "file locks",           ""},
 };
+
+// A block is 1024 bytes, or 512 in POSIX mode, as in bash.
+static u64 ulscale(Shell *sh, i32 u)
+{
+    i64 scale = ulimits[u].scale;
+    return scale ? (u64)scale : sh->opt[O_POSIX] ? 512 : 1024;
+}
 
 static Rlimit *rltable(Shell *sh)
 {
@@ -4510,9 +4517,10 @@ static i32 setrlimit(Shell *sh, i32 res, Rlimit r)
         if (!err) *t = os_getrlimit(sh->os, res);
         return err;
     }
+    // Unsigned, as rlim_t: RL_INFINITY is the greatest value.
     if (res == RL_PIPE) return E_INVAL;
-    if (r.hard!=RL_INFINITY && (r.soft==RL_INFINITY || r.soft>r.hard)) return E_INVAL;
-    if (t->hard!=RL_INFINITY && (r.hard==RL_INFINITY || r.hard>t->hard)) return E_PERM;
+    if ((u64)r.soft > (u64)r.hard) return E_INVAL;
+    if ((u64)r.hard > (u64)t->hard) return E_PERM;
     t->soft = r.soft;
     t->hard = r.hard;
     sh->rlmod = 1;
@@ -4540,7 +4548,16 @@ static void printulimit(Shell *sh, Arena a, i32 u, b32 hard, b32 named)
         for (iz n = unit.len; n < 20; n++) putbyte(&b, ' ');
         print(&b, finish(&unit));
     }
-    print(&b, v==RL_INFINITY ? Str("unlimited") : fmti64(&a, v/ulimits[u].scale));
+    if (v == RL_INFINITY) {
+        print(&b, "unlimited");
+    } else {
+        u64 q = (u64)v / ulscale(sh, u);  // unsigned, as rlim_t
+        if (q > 0x7fffffffffffffff) {
+            print(&b, (i64)(q/10));
+            q %= 10;
+        }
+        print(&b, (i64)q);
+    }
     print(&b, "\n");
     bprint(sh, finish(&b));
 }
@@ -4610,36 +4627,41 @@ static i32 b_ulimit(Shell *sh, Str *args, iz nargs, Arena scratch)
             continue;
         }
         Rlimit cur = rltable(sh)[res];
-        i64    v   = 0;
+        u64    v   = 0;
         if (arg == "unlimited") {
-            v = RL_INFINITY;
+            v = (u64)RL_INFINITY;
         } else if (arg == "hard") {
-            v = cur.hard;
+            v = (u64)cur.hard;
         } else if (arg == "soft") {
-            v = cur.soft;
+            v = (u64)cur.soft;
         } else {
             b32 digits = arg.len > 0;
             for (iz j = 0; j < arg.len; j++) digits &= arg[j]>='0' && arg[j]<='9';
             if (!digits) {
-                Str why = startswith(arg, "0x") ? Str(": invalid hex number") : ": invalid number";
+                Str why = ": invalid number";
+                if (arg.len>1 && arg[0]=='0' && arg[1]>='0' && arg[1]<='9') {
+                    why = ": invalid octal number";
+                } else if (startswith(arg, "0x")) {
+                    why = ": invalid hex number";
+                }
                 Str msg = concat(&scratch, arg, why);
                 builtinerror(sh, scratch, "ulimit", msg);
                 return 1;
             }
-            for (iz j = 0; j < arg.len; j++) {
-                i64 d = arg[j] - '0';
-                v = v > (0x7fffffffffffffff-d)/10 ? 0x7fffffffffffffff : v*10 + d;
-            }
-            if (v > 0x7fffffffffffffff/ulimits[u].scale) {
+            // As bash: the digits wrap as an unsigned rlim_t, and only
+            // the scaling is checked.
+            for (iz j = 0; j < arg.len; j++) v = v*10 + (u64)(arg[j] - '0');
+            u64 scale = ulscale(sh, u);
+            if (v > (u64)-1/scale) {
                 Str msg = concat(&scratch, arg, ": limit out of range");
                 builtinerror(sh, scratch, "ulimit", msg);
                 return 1;
             }
-            v *= ulimits[u].scale;
+            v *= scale;
         }
         Rlimit r = cur;
-        if (mode != SOFT) r.hard = v;
-        if (mode != HARD) r.soft = v;
+        if (mode != SOFT) r.hard = (i64)v;
+        if (mode != HARD) r.soft = (i64)v;
         i32 err = setrlimit(sh, res, r);
         if (err) {
             Str msg = concat3(&scratch, ulimits[u].desc, ": cannot modify limit: ", errtext(err));

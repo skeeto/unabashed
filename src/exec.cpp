@@ -1348,7 +1348,7 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                 return 0;
             }
             Rlimit nofile = nofilelimit(sh);
-            if (!nofile.err && nofile.soft!=RL_INFINITY && fd>=nofile.soft
+            if (!nofile.err && (u64)fd>=(u64)nofile.soft
                     && r->op!=R_CLOSE && r->op!=R_MOVEIN && r->op!=R_MOVEOUT) {
                 // ulimit -n below 10: bash's move up to 10 fails, then
                 // the redirection with it

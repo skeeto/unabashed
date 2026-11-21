@@ -797,7 +797,7 @@ static Str procsubst(Shell *sh, Arena *a, Str body, b32 output)
     Fdtab *t  = sh->fds;
     i32    fd = 63;
     Rlimit nofile = nofilelimit(sh);
-    if (!nofile.err && nofile.soft<=63) {
+    if (!nofile.err && (u64)nofile.soft<=63) {
         // Where 63 is beyond the limit bash's end stays where pipe made
         // it: the lowest free descriptor, a write end the next
         for (fd = 0; fd<FDMAX && t->fd[fd]; fd++) {}
