@@ -201,15 +201,6 @@ static Args copyargs(Arena *a, Args args)
     return r;
 }
 
-// A trap action's identity at a call or source, which only equality
-// with the running action uses: a copy's actions are other strings, so
-// in an image, which may hold no pointer outside itself, any non-null
-// stand-in compares the same.
-static u8 *copytrapat(u8 *p, b32 image)
-{
-    return image && p ? (u8 *)1 : p;
-}
-
 // Copy the call frames, pointing their locals at the copied variables.
 static Frame *copyframes(Shell *c, Arena *a, Frame *f, b32 image)
 {
@@ -234,7 +225,8 @@ static Frame *copyframes(Shell *c, Arena *a, Frame *f, b32 image)
             r->opts = (b32 *)salloc(st, O_COUNT*(iz)sizeof(b32));
             for (i32 i = 0; i < O_COUNT; i++) r->opts[i] = f->opts[i];
         }
-        for (i32 k = 0; k < 3; k++) r->trapat[k] = copytrapat(f->trapat[k], image);
+        // Only the call itself puts its saved trap actions back
+        for (i32 k = 0; k < 3; k++) r->trapsaved[k] = {};
         r->def = image ? 0 : f->def;
         *tail = r;
         tail  = &r->up;
@@ -243,8 +235,7 @@ static Frame *copyframes(Shell *c, Arena *a, Frame *f, b32 image)
 }
 
 // Copy the sourced files' frames, pointing them at the copied calls.
-static Srcframe *copysrcframes(Arena *a, Srcframe *s, Frame *from, Frame *to,
-                               b32 image)
+static Srcframe *copysrcframes(Arena *a, Srcframe *s, Frame *from, Frame *to)
 {
     Srcframe  *head = 0;
     Srcframe **tail = &head;
@@ -257,7 +248,7 @@ static Srcframe *copysrcframes(Arena *a, Srcframe *s, Frame *from, Frame *to,
         Frame *f = from, *g = to;
         for (; f && f!=s->frame; f = f->up, g = g->up) {}
         r->frame = f ? g : 0;
-        for (i32 k = 0; k < 3; k++) r->trapat[k] = copytrapat(s->trapat[k], image);
+        r->debug = {};  // as for a call
         *tail = r;
         tail  = &r->up;
     }
@@ -434,9 +425,8 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image)
     if (dirty > a->beg) __builtin_memset(a->beg, 0, (uz)(dirty - a->beg));
     c->cmdnode    = 0;
     c->frame      = copyframes(c, a, sh->frame, image);
-    c->srcframes  = copysrcframes(a, sh->srcframes, sh->frame, c->frame, image);
+    c->srcframes  = copysrcframes(a, sh->srcframes, sh->frame, c->frame);
     c->argvbase   = copyargs(a, sh->argvbase);
-    c->retsrc     = 0;
     c->shellname  = sclone(st, sh->shellname);
     c->hist       = copyhist(st, sh->hist);
     c->exe        = sclone(st, sh->exe);

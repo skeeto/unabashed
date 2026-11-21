@@ -65,6 +65,8 @@ static void     runerrtrap(Shell *);
 static b32      rundebugtrap(Shell *, Arena);
 static b32      trapset(Shell *, i32 idx);
 static void     runreturntrap(Shell *, Arena);
+static Str      traphide(Shell *, i32 idx);
+static void     trapunhide(Shell *, i32 idx, Str saved);
 static void     subshelltraps(Shell *);
 static void     chldreaped(Shell *, i32);
 static void     sigenter(Shell *, Sigproc *, i64 pid, Task *);
@@ -2833,6 +2835,7 @@ static void leaveframe(Shell *sh, Frame *f)
         }
         sfree(sh->store, f->opts, O_COUNT*(iz)sizeof(b32));
     }
+    for (i32 k = 0; k < 3; k++) trapunhide(sh, TRAP_DEBUG+k, f->trapsaved[k]);
     sh->funcdepth--;
     sh->frame = f->up;
 }
@@ -2866,9 +2869,13 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     f.args.v    = argv + 1;
     f.args.n    = argc - 1;
     f.argpushed = sh->shopt[S_EXTDEBUG];
-    if (sh->traps) {
-        for (i32 k = 0; k < 3; k++) f.trapat[k] = sh->traps[TRAP_DEBUG+k].data;
-    }
+    // As bash, it inherits DEBUG and RETURN with set -T or declare -ft
+    // (RETURN not while DEBUG runs), and ERR with set -E
+    b32 traced = sh->opt[O_FUNCTRACE] || (fn->attrs & V_TRACE);
+    b32 indebug = sh->trapbusy & 1<<(TRAP_DEBUG-TRAP_DEBUG);
+    if (!traced) f.trapsaved[0] = traphide(sh, TRAP_DEBUG);
+    if (!sh->opt[O_ERRTRACE]) f.trapsaved[1] = traphide(sh, TRAP_ERR);
+    if (!traced || indebug) f.trapsaved[2] = traphide(sh, TRAP_RETURN);
     Args saved = sh->args;
     Args own   = sh->argsown;
     sh->args.v = argv + 1;

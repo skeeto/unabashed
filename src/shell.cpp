@@ -301,8 +301,8 @@ struct Frame {       // a function call
     b32   *opts;     // local -: set options to restore, in the store
     i32    optchar;  // local OPTIND: getopts position to restore
     b32    optsaved;
-    u8    *trapat[3];  // DEBUG, ERR and RETURN actions at the call: those
-                       // run in it only if it set them (or with -T/-E)
+    Str    trapsaved[3];  // DEBUG, ERR and RETURN actions the call put
+                          // aside (traphide), in the store
 };
 
 struct Srcframe {    // a file being sourced: a frame of FUNCNAME ("source"),
@@ -312,8 +312,7 @@ struct Srcframe {    // a file being sourced: a frame of FUNCNAME ("source"),
     i32       line;  // where it was sourced
     Args      args;  // in BASH_ARGV and BASH_ARGC when argpushed
     b32       argpushed;
-    u8       *trapat[3];  // DEBUG, ERR and RETURN actions at the start: as
-                          // in a function, only its own run in it (or -T)
+    Str       debug;      // the DEBUG action it put aside (traphide)
 };
 
 enum : i32 {
@@ -548,7 +547,6 @@ struct Shell {
     // Execution state
     Frame   *frame;
     Srcframe *srcframes;   // files being sourced, innermost first
-    Srcframe *retsrc;      // the one whose RETURN action runs
     Args     argvbase;     // the bottom of BASH_ARGV, in the store
     b32      argvinit;     // argvbase is set
     b32      listing;      // listing every variable: BASH_ARGV stays as is

@@ -741,9 +741,9 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
         sf.args.n    = 1;
         sf.argpushed = 1;
     }
-    if (sh->traps) {
-        for (i32 k = 0; k < 3; k++) sf.trapat[k] = sh->traps[TRAP_DEBUG+k].data;
-    }
+    // As bash, the source builtin's file inherits DEBUG only with set -T,
+    // and ERR and RETURN always
+    if (!startup && !sh->opt[O_FUNCTRACE]) sf.debug = traphide(sh, TRAP_DEBUG);
     sh->srcframes = &sf;
     // Pop the frame and the arguments on the way out of an escape too,
     // as bash unwinds them
@@ -758,8 +758,8 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
             sh->exitcalled = 0;
             if (!sh->execed && !sh->killsig) runexittrap(sh, scratch);
         }
+        trapunhide(sh, TRAP_DEBUG, sf.debug);
         sh->srcframes = sf.up;
-        sh->retsrc    = 0;
         sh->srcname   = srcname;
         sourceargs(sh, nargs, saved, own, wasset);
         escape(sh, e->why);
@@ -770,13 +770,12 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
     sh->srcname = srcname;
     if (sh->traps) {
         // As bash, RETURN runs where the file was sourced, though
-        // DEBUG in its action follows the file's rules
-        sh->line   = line;
-        sh->retsrc = &sf;
+        // DEBUG in its action is still the file's
+        sh->line = line;
         runreturntrap(sh, scratch);
-        sh->retsrc = 0;
         status = sh->status;
     }
+    trapunhide(sh, TRAP_DEBUG, sf.debug);
     escleave(sh, e);
     if (sh->flow == FLOW_RETURN) {
         // Functions have taken their own returns: this one is the file's

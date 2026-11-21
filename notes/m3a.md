@@ -440,9 +440,11 @@ bound (unexported) to the trap's index while it runs (EXIT 0, DEBUG 65,
 ERR 66, RETURN 67, as bash 5.3). ERR runs from `checkerrexit` where set
 -e would act; DEBUG before simple commands, `(( ))`, `[[ ]]` and each
 `for` iteration (BASH_COMMAND the header); RETURN at the end of a
-function or a sourced file. In a function they run only if the function
-set them (`Frame.trapat` records them at the call) or with functrace
-(errtrace for ERR); `pseudotrap`. None of these runs inside its own
+function or a sourced file. As bash, a call that does not inherit them
+(functrace or `declare -ft` for DEBUG and RETURN, errtrace for ERR)
+starts with them unset: `traphide` puts the caller's action aside in
+`Frame.trapsaved`, and `trapunhide` puts it back on return unless the
+function set its own, which stays. None of these runs inside its own
 action (`Shell.trapbusy`); DEBUG does run inside other actions. For a
 simple command pipeline stage, bash runs DEBUG in the parent before
 forking, so `runpipeline` does too (`stagedebug`, with the parent's
@@ -875,10 +877,10 @@ twice and reads unset; `let` under assoc_expand_once evaluates
 subscripts as they are; an error evaluating a subscript abandons the
 whole -c, eval or source text) and dbg-support (`Srcframe`: a sourced
 file is a frame of FUNCNAME ("source"), BASH_SOURCE and BASH_LINENO;
-DEBUG and RETURN in a sourced file follow the function rules, RETURN
-runs where it was sourced, and DEBUG in that action follows the file's
-rules (`Shell.retsrc`); BASH_ARGV/BASH_ARGC, built from the frames'
-arguments and a bottom set up from the positional parameters when
+DEBUG in a sourced file follows the function rules (`Srcframe.debug`),
+ERR and RETURN are inherited, RETURN runs where it was sourced, and
+DEBUG in that action is still the file's; BASH_ARGV/BASH_ARGC, built
+from the frames' arguments and a bottom set up from the positional parameters when
 first read by name (not by a listing) or when extdebug is turned on;
 DEBUG before case and select; EXIT actions run at line 1).
 

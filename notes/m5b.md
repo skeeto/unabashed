@@ -171,7 +171,9 @@ empty fdtab and no coprocesses (the descriptors go to the process);
 and makes `Frame.trapat`/`Srcframe.trapat` a stand-in (1) where set.
 Those markers are only compared with the running trap action, which
 in any copy is another string, so a vproc's copy never matched them
-either: the stand-in keeps that.
+either: the stand-in keeps that. (Later replaced: the frames now hold
+the trap actions a call put aside, `Frame.trapsaved`/`Srcframe.debug`,
+which every copy clears, since only the call itself puts them back.)
 
 `imagebuild` lays out one region: an `ImageHead` (magic, a build
 stamp from `__DATE__ __TIME__` and the copied types' sizes, the Shell,

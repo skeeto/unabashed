@@ -682,33 +682,38 @@ static void runexittrap(Shell *sh, Arena)
     sh->exiting = 1;
 }
 
-// Should DEBUG, ERR or RETURN run now? Each runs once at a time, and in
-// a function only if the function set it, or with functrace (errtrace
-// for ERR): a caller's is not inherited.
-static b32 pseudotrap(Shell *sh, i32 idx, b32 opt)
+// As bash, a function call or sourced file that does not inherit DEBUG,
+// ERR or RETURN starts with it unset: it puts the caller's action aside
+// and, as it returns, puts it back if the trap is still unset. An action
+// it sets (or ignores) itself stays, for its callers too.
+static Str traphide(Shell *sh, i32 idx)
 {
-    i32 k = idx - TRAP_DEBUG;
-    if (!trapset(sh, idx) || (sh->trapbusy & 1<<k)) return 0;
-    Srcframe *s = idx==TRAP_DEBUG && sh->retsrc ? sh->retsrc : sh->srcframes;
-    if (idx!=TRAP_ERR && s && s->frame==sh->frame) {
-        // A sourced file, as a function: DEBUG and RETURN run only if
-        // it set them, or with functrace
-        return opt || sh->traps[idx].data!=s->trapat[k];
+    Str r = sh->traps ? sh->traps[idx] : Str{};
+    if (r.data) sh->traps[idx] = {};
+    return r;
+}
+
+static void trapunhide(Shell *sh, i32 idx, Str saved)
+{
+    if (!saved.data) return;
+    if (sh->traps[idx].data) {
+        sfreestr(sh->store, saved);
+    } else {
+        sh->traps[idx] = saved;
     }
-    if (idx!=TRAP_ERR && sh->frame && !opt) {
-        // a function with the trace attribute (declare -ft) inherits
-        // DEBUG and RETURN
-        Func *f = findfunc(sh, sh->frame->name);
-        opt = f && (f->attrs & V_TRACE);
-    }
-    return !sh->funcdepth || opt || !sh->frame || sh->traps[idx].data!=sh->frame->trapat[k];
+}
+
+// Should DEBUG, ERR or RETURN run now? Each runs once at a time.
+static b32 pseudotrap(Shell *sh, i32 idx)
+{
+    return trapset(sh, idx) && !(sh->trapbusy & 1<<(idx-TRAP_DEBUG));
 }
 
 // ERR: after a command fails where set -e would act. Subshells reset
 // it without errtrace.
 static void runerrtrap(Shell *sh)
 {
-    if (pseudotrap(sh, TRAP_ERR, sh->opt[O_ERRTRACE])) runtrap(sh, TRAP_ERR);
+    if (pseudotrap(sh, TRAP_ERR)) runtrap(sh, TRAP_ERR);
 }
 
 // DEBUG: before a simple command, (( )), [[ ]] or a for iteration.
@@ -717,7 +722,7 @@ static void runerrtrap(Shell *sh)
 // whether to skip.
 static b32 rundebugtrap(Shell *sh, Arena)
 {
-    if (!pseudotrap(sh, TRAP_DEBUG, sh->opt[O_FUNCTRACE])) return 0;
+    if (!pseudotrap(sh, TRAP_DEBUG)) return 0;
     i32 own = runtrap(sh, TRAP_DEBUG);
     if (!sh->shopt[S_EXTDEBUG] || !own || sh->flow) return 0;
     if (own==2 && (sh->funcdepth || sh->sourcedepth)) {
@@ -730,11 +735,7 @@ static b32 rundebugtrap(Shell *sh, Arena)
 // RETURN: as a function or a sourced file returns.
 static void runreturntrap(Shell *sh, Arena)
 {
-    // As bash, functions called while the DEBUG action runs do not
-    // inherit RETURN
-    b32 indebug = sh->trapbusy & 1<<(TRAP_DEBUG-TRAP_DEBUG);
-    if (indebug && sh->funcdepth>sh->trapfuncs) return;
-    if (!pseudotrap(sh, TRAP_RETURN, sh->opt[O_FUNCTRACE])) return;
+    if (!pseudotrap(sh, TRAP_RETURN)) return;
     i32 flow = sh->flow;
     sh->flow = FLOW_NONE;
     runtrap(sh, TRAP_RETURN);
