@@ -1050,13 +1050,17 @@ static i64 tmoutdeadline(Shell *sh)
 }
 
 // TMOUT passed with the command unread: bash's message, on standard
-// output, then an exit as the exit builtin's, without its checks.
-[[noreturn]] static void tmoutexit(Shell *sh, Arena scratch)
+// output, then an exit as the exit builtin's, without its checks. The
+// logout files run in the next depth's arena, and their command
+// substitutions at the one after: claim it.
+[[noreturn]] static void tmoutexit(Shell *sh)
 {
     fdwrite(sh, 1, "\atimed out waiting for input: auto-logout\n");
     i32 status = sh->status;
-    logoutfiles(sh, scratch);
-    sh->status  = status;
+    i32 depth  = ++sh->capdepth;
+    logoutfiles(sh, *scratchat(sh, depth));
+    sh->capdepth = depth - 1;
+    sh->status   = status;
     sh->exiting = 1;
     escape(sh, ESC_EXIT);
 }
@@ -1225,7 +1229,7 @@ static b32 fillline(void *ctx, Lexer *L)
         sfreestr(sh->store, sh->hist.preload);
         sh->hist.preload = {};
         i32   r  = editline(sh, ps, b, &opts);
-        if (r == ED_TIMEOUT) tmoutexit(sh, a);
+        if (r == ED_TIMEOUT) tmoutexit(sh);
         if (r != ED_NOTTY) {
             L->newunit = 0;
             if (r == ED_LINE) {
@@ -1271,7 +1275,7 @@ static b32 fillline(void *ctx, Lexer *L)
             self->deadline = 0;
             if (self->timedout) {
                 self->timedout = 0;
-                tmoutexit(sh, *scratchat(sh, sh->capdepth+1));
+                tmoutexit(sh);
             }
             if (n == 1) {
                 putbyte(b, c);
