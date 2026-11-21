@@ -1,0 +1,19 @@
+# completion-prefix-display-length is compared with the common prefix's
+# display width, as readline's rl_display_match_list does, not its
+# bytes: ééé is three columns in six bytes, under a length of 4 it is
+# shown whole; 日本 is four columns, over a length of 3, and elided.
+# As readline, a prefix longer in bytes than the widest match is never
+# elided (éééé, eight bytes, in matches five columns wide).
+size 16 70
+rc PS1='$ '
+rc complete -W 'éééa_tail_one éééb_tail_two' foo; complete -W '日本x_tail 日本y_tail' bar
+rc complete -W 'ééééa ééééb' baz
+rc bind 'set completion-prefix-display-length 4'
+keys foo \t\t\t
+snap
+keys \C-a\C-kbind 'set completion-prefix-display-length 3'\r
+keys bar \t\t\t
+snap
+keys \C-a\C-kbind 'set completion-prefix-display-length 2'\r
+keys baz \t\t\t
+snap

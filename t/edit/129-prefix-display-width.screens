@@ -1,0 +1,35 @@
+== snap 1
+$ foo ééé
+éééa_tail_one  éééb_tail_two
+$ foo ééé
+@ 2,9 bell 2
+== snap 2
+$ foo ééé
+éééa_tail_one  éééb_tail_two
+$ bind 'set completion-prefix-display-length 3'
+$ bar 日本
+...x_tail  ...y_tail
+$ bar 日本
+@ 5,10 bell 4
+== snap 3
+$ foo ééé
+éééa_tail_one  éééb_tail_two
+$ bind 'set completion-prefix-display-length 3'
+$ bar 日本
+...x_tail  ...y_tail
+$ bind 'set completion-prefix-display-length 2'
+$ baz éééé
+ééééa  ééééb
+$ baz éééé
+@ 8,10 bell 6
+== snap 4
+$ foo ééé
+éééa_tail_one  éééb_tail_two
+$ bind 'set completion-prefix-display-length 3'
+$ bar 日本
+...x_tail  ...y_tail
+$ bind 'set completion-prefix-display-length 2'
+$ baz éééé
+ééééa  ééééb
+$ baz éééé
+@ 8,10 bell 6

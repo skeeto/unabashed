@@ -1231,13 +1231,21 @@ static void complist(Editor *ed, Shell *sh, Comp *c)
     iz plen = 0;
     if (ed->vars.prefixdisplay > 0 && n > 1) {
         plen = items[0].len;
-        for (iz i = 1; i < n; i++) {
+        i32 widest = 0;
+        for (iz i = 0; i < n; i++) {
             iz k = 0;
             for (; k<plen && k<items[i].len && items[i][k]==items[0][k]; k++) {}
             plen = k;
+            i32 w = compwidth(items[i]);
+            widest = w>widest ? w : widest;
         }
         plen = compwhole(sh, items[0], plen);
-        if (plen<=ed->vars.prefixdisplay || plen<=3) plen = 0;
+        // As readline: decided by the prefix's display width, but never
+        // when its width or bytes exceed the widest match, and the
+        // ellipsis is printed only where its bytes exceed the length
+        i32 pw  = compwidth(takehead(items[0], plen));
+        i32 len = ed->vars.prefixdisplay;
+        if (pw>widest || plen>widest || pw<=len || pw<=3 || plen<=len) plen = 0;
     }
     Str *shown = alloc<Str>(a, n);
     for (iz i = 0; i < n; i++) {
