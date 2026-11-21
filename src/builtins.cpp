@@ -1969,7 +1969,7 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
         iz  n = nargs - i;
         Str *v = (Str *)salloc(sh->store, (n ? n : 1)*(iz)sizeof(Str));
         for (iz k = 0; k < n; k++) v[k] = sclone(sh->store, args[i+k]);
-        if (!argsviewed(sh)) freeargs(sh->store, sh->argsown);
+        freeargs(sh->store, sh->argsown);
         sh->args.v = v;
         sh->args.n = n;
         sh->argsown = sh->args;

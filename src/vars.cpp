@@ -746,19 +746,13 @@ static void assigned(Shell *sh, Value *val, Str name)
     varchanged(sh, name);
 }
 
-// Free positional parameters that set made (Shell.argsown).
+// Free positional parameters that set made (Shell.argsown). An
+// expansion viewing them, whose ${ cmd; } runs set, holds the store,
+// so they wait for it.
 static void freeargs(Store *st, Args own)
 {
     for (iz i = 0; i < own.n; i++) sfreestr(st, own.v[i]);
     sfree(st, own.v, (own.n ? own.n : 1)*(iz)sizeof(Str));
-}
-
-// Is a ${ cmd; } running with the current positional parameters? The
-// expansion that runs it may still hold views of them. Its frame has
-// no arguments, a function call's frame its own.
-static b32 argsviewed(Shell *sh)
-{
-    return sh->frame && !sh->frame->args.v;
 }
 
 // Set the bottom of BASH_ARGV from the positional parameters, once:
