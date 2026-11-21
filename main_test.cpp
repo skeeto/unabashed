@@ -130,7 +130,6 @@ static byte *plt_reserve(Os *os, iz len)
             if (os->nblocks < countof(os->blocks)) {
                 os->blocks[os->nblocks++] = {r, len, os->vos.cur};
             }
-            memset(r, 0x55, (uz)len);
             return r;
         }
     }
@@ -147,13 +146,18 @@ static byte *plt_reserve(Os *os, iz len)
     if (own && os->nblocks<countof(os->blocks)) {
         os->blocks[os->nblocks++] = {r, len, os->vos.cur};
     }
-    memset(r, 0x55, (uz)len);  // expose reads of uninitialized memory
+    if (os->vos.imaging) {
+        memset(r, 0x55, (uz)len);  // used without plt_commit
+    }
     return r;
 }
 
+// Poisoned to expose reads of uninitialized memory: as committed, so
+// that a reservation costs only what an arena uses of it.
 static b32 plt_commit(Os *os, byte *p, iz len)
 {
     assert(p>=os->heap && p+len<=os->heap+os->heapcap);
+    memset(p, 0x55, (uz)len);
     return 1;
 }
 
@@ -242,6 +246,11 @@ static b32 expectint(Test *t, Str name, i64 got, i64 want)
 // level (t/exec/981), within the main thread's stack and a vproc's.
 enum : iz { VOSSTACK = (iz)1<<22 };
 
+// Each shell's arena reservations (OsInfo.reserve): twice its stack
+// budget, as a level of function recursion keeps more in its arena
+// (its call frame and escape point, its words) than on the stack.
+enum : iz { VOSRESERVE = 2*VOSSTACK };
+
 // The thread's stack, for oracle runs, which give each shell what is
 // left of it rather than a fixed budget.
 static byte *stackbase;
@@ -315,7 +324,7 @@ static i32 fake_bash(Os *os, FakeCtx *ctx)
     }
     info.inherit = inherit;
     info.ownstd  = 1;
-    info.reserve = (iz)1<<22;
+    info.reserve = VOSRESERVE;
     info.image   = ctx->image;
     i32 status = sh_main(os, &info);
     os->marks[m].dead = 1;
@@ -425,7 +434,7 @@ static OsInfo baseinfo(Os *os, Str *args, iz nargs)
         info.std[i]      = (Handle)i;
         info.stdflags[i] = vaccess(osvos(os), (Handle)i);  // as the vos has it
     }
-    info.reserve = (iz)1<<22;
+    info.reserve = VOSRESERVE;
     info.stack   = VOSSTACK;
     info.chaos   = os->chaos;
     return info;
@@ -2335,7 +2344,7 @@ static b32 oracle(Test *t, char *suite, char *name, b32 verbose)
     info.std[0]  = 0;
     info.std[1]  = 1;
     info.std[2]  = 2;
-    info.reserve = (iz)1<<22;
+    info.reserve = VOSRESERVE;
     stackrest    = 1;
     info.stack   = stackleft();
     i32 status = sh_main(os, &info) & 255;
@@ -2364,7 +2373,7 @@ int main(int argc, char **argv)
     static Os os = {};
     byte base = 0;
     stackbase = &base;
-    os.heapcap         = (iz)1<<30;  // half for the shells: room for background
+    os.heapcap         = (iz)1<<31;  // half for the shells: room for background
                                      // vprocs, and the images of jobs not yet
                                      // started (read2.sub has some 50 at once)
     os.heap            = (byte *)malloc((uz)os.heapcap);
