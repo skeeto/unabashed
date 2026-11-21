@@ -1600,7 +1600,10 @@ static i32 compatlevel(Shell *sh, Arena scratch)
 }
 
 // With raw, an associative key is used as it is, not expanded
-// (array_expand_once).
+// (array_expand_once). With quiet, for an element a nameref names, a
+// subscript on a scalar is ignored and a bad one, though reported, is
+// not a failure, as bash's unset_builtin ignores unbind_array_element's
+// result there.
 static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b32 quiet = 0)
 {
     i32 rflags = 0;
@@ -1623,6 +1626,11 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
     }
     if (cur->arr && cur->arr->bucket) {
         Str key = raw ? sub : subkey(x, sub);
+        if (!key.len) {
+            Str msg = concat3(&scratch, "[", sub, "]: bad array subscript");
+            builtinerror(sh, scratch, "unset", msg);
+            return !quiet;
+        }
         // the expansion (${ cmd; }) may have unset or replaced it
         if (!v->top || !v->top->arr || !v->top->arr->bucket) return 0;
         Value *val = ownvalue(sh, &v->top);
@@ -1661,7 +1669,7 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
     if (idx < 0) {
         Str msg = concat3(&scratch, "[", sub, "]: bad array subscript");
         builtinerror(sh, scratch, "unset", msg);
-        return 1;
+        return !quiet;
     }
     Value *val = ownvalue(sh, &v->top);
     adel(sh->store, val->arr, idx);
@@ -1728,10 +1736,18 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         Str rn, rs;
         if (br.ok && splitref(name, &rn, &rs) && !refs) {
-            b32 raw = sh->shopt[S_ARRAY_EXPAND_ONCE] &&
-                      compflag(sh, args, i)!=2;
-            status |= unsetelem(sh, scratch, rn, rs, raw);
-            continue;
+            Value *t = rawlookup(sh, rn);
+            if (!t || !(t->attrs & V_NAMEREF) || !resolveref(sh, rn, 0, 1).hassub) {
+                b32 raw = sh->shopt[S_ARRAY_EXPAND_ONCE] &&
+                          compflag(sh, args, i)!=2;
+                status |= unsetelem(sh, scratch, rn, rs, raw);
+                continue;
+            }
+            // A nameref to an element, which bash does not find as a
+            // variable: nothing is unset, but with -v what it names,
+            // this subscript ignored
+            if (!vars) continue;
+            base = rn;
         }
         Value *top = rawlookup(sh, base);
         if (refs && !funcs) {
@@ -1749,6 +1765,7 @@ static i32 b_unset(Shell *sh, Str *args, iz nargs, Arena scratch)
             // what the nameref names, which may be an array element
             Ref r = resolveref(sh, base);
             if (r.hassub) {
+                // only a readonly array fails (bash unsets the element)
                 status |= unsetelem(sh, scratch, r.name, r.sub, 0, 1);
                 continue;
             } else if (r.name.data) {
