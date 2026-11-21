@@ -3125,6 +3125,13 @@ static void bindlastarg(Shell *sh, Arena scratch, Str last)
         if (!v || v->arr) {
             unsetvar(sh, "_");
             v = setattrs(sh, "_", 0, 0);
+        } else {
+            // A binding the level around a subshell owns gets a copy
+            Str name = "_";
+            if (rawlookup(sh, name) != v) name = resolveref(sh, name, 0, 1).name;
+            Value **slot = &findvar(sh, name)->top;
+            while (*slot != v) slot = &(*slot)->below;
+            v = ownvalue(sh, slot);
         }
         Str old = v->str;
         v->str    = {};
