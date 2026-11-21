@@ -645,12 +645,13 @@ static i32 fnline(Shell *sh, i32 line)
     return line;
 }
 
-// sh->errline, bash's line_number_for_err_trap: the line ERR shows
-// after a compound command's redirections fail, that of the last simple
-// command, ( ), (( )), [[ ]] or function definition run in this shell;
-// calls and nested source text put it back. bash sets it in the parent
-// for what it forks: here, for a pipeline (its current line, then each
-// simple or ( ) stage's) or a simple or ( ) command run with &.
+// sh->errline, bash's line_number_for_err_trap: the line ERR's action
+// goes on from, that of the last simple command, ( ), (( )), [[ ]] or
+// function definition run in this shell, as written (fnline numbers the
+// action's own commands, once); calls and nested source text put it
+// back. bash sets it in the parent for what it forks: here, for a
+// pipeline (its current line, then each simple or ( ) stage's) or a
+// simple or ( ) command run with &.
 static void forkerrline(Shell *sh, Node *n)
 {
     if (n->kind==N_CONNECT && n->connector=='|') sh->errline = sh->ctlline;
@@ -658,7 +659,7 @@ static void forkerrline(Shell *sh, Node *n)
         b32   more  = c->kind==N_CONNECT && c->connector=='|' &&
                       (c==n || (!c->flags && !c->redirs));
         Node *stage = more ? c->a : c;
-        if (stage->kind == N_SIMPLE)   sh->errline = fnline(sh, stage->line);
+        if (stage->kind == N_SIMPLE)   sh->errline = stage->line;
         if (stage->kind == N_SUBSHELL) sh->errline = stage->endline;
         if (!more) return;
     }
@@ -2902,7 +2903,10 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
 static void checkerrexit(Shell *sh)
 {
     if (sh->status && !sh->noerrexit && !sh->exiting && sh->traps) {
+        i32 line = sh->line;
+        sh->line = sh->errline;  // where bash's action goes on from
         runerrtrap(sh);
+        sh->line = line;
     }
     if (sh->status && sh->opt[O_ERREXIT] && !sh->noerrexit && !sh->exiting) {
         sh->exiting   = 1;
@@ -3382,7 +3386,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
     sh->asyncnull = 0;
     safepoint(sh->sched);
     sh->line    = fnline(sh, n->line);
-    sh->errline = sh->line;
+    sh->errline = n->line;
     sh->current = n;
     if (!sh->intrap) sh->cmdnode = n;  // in trap actions, what ran them
     if (sh->traps && !debugdone) {
@@ -4704,7 +4708,7 @@ static b32 debugcompound(Shell *sh, Node *n, Arena scratch)
 static void execarith(Shell *sh, Node *n, Arena scratch)
 {
     sh->line    = fnline(sh, n->line);
-    sh->errline = sh->line;
+    sh->errline = n->line;
     if (sh->traps && debugcompound(sh, n, scratch)) return;
     Str text = expandstring(sh, &scratch, n->arith->text, XC_ARITH|XC_DQUOTE);
     if (sh->opt[O_XTRACE]) {
@@ -4721,7 +4725,7 @@ static void execarith(Shell *sh, Node *n, Arena scratch)
 static void execcond(Shell *sh, Node *n, Arena scratch)
 {
     sh->line    = fnline(sh, n->line);
-    sh->errline = sh->line;
+    sh->errline = n->line;
     if (sh->traps && debugcompound(sh, n, scratch)) return;
     sh->status = condeval(sh, &scratch, n->cond);
     setpstat1(sh);
@@ -5329,8 +5333,16 @@ static void checkcomplist(Shell *sh, Arena scratch, Str body)
 static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i32 line,
                      b32 (*fill)(void *, Lexer *), void *fillctx, b32 comsub, b32 hist)
 {
-    if (reader || !sh->lexer) {
+    if (reader) {
         return runsource1(sh, src, iname, scratch, reader, line, fill, fillctx, comsub, hist);
+    }
+    if (!sh->lexer) {
+        // No parse to put back (-c, a trap action in a vproc or image),
+        // but ERR's line still goes back
+        i32 errline = sh->errline;
+        i32 status  = runsource1(sh, src, iname, scratch, reader, line, fill, fillctx, comsub, hist);
+        sh->errline = errline;
+        return status;
     }
     Lexer  *outer   = sh->lexer;
     Str     oname   = sh->iname;

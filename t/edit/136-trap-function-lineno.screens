@@ -1,0 +1,59 @@
+== snap 1
+$ :
+$ :
+$ f() {
+> :
+> false
+> true |
+> true
+> }
+$ f
+ERR 3
+$
+@ 10,2
+== snap 2
+$ :
+$ :
+$ f() {
+> :
+> false
+> true |
+> true
+> }
+$ f
+ERR 3
+$ trap 'echo D $LINENO' DEBUG; set -T; f
+D 10
+D 10
+D 1
+D 1
+D 1
+D 1
+ERR 3
+D 2
+D 3
+$
+@ 20,2
+== snap 3
+$ :
+$ :
+$ f() {
+> :
+> false
+> true |
+> true
+> }
+$ f
+ERR 3
+$ trap 'echo D $LINENO' DEBUG; set -T; f
+D 10
+D 10
+D 1
+D 1
+D 1
+D 1
+ERR 3
+D 2
+D 3
+$
+@ 20,2

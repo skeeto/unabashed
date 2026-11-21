@@ -1,0 +1,20 @@
+# In a function typed at the prompt over several lines, bash numbers
+# the commands of an ERR action from the function's first line once,
+# going on from the failing command's line as written, and those of a
+# DEBUG action twice, as for any simple command, a pipeline stage too
+size 24 40
+rc PS1='$ '
+rc trap 'echo ERR $LINENO' ERR
+rc set -E
+keys :\r
+keys :\r
+keys f() {\r
+keys :\r
+keys false\r
+keys true |\r
+keys true\r
+keys }\r
+keys f\r
+snap
+keys trap 'echo D $LINENO' DEBUG; set -T; f\r
+snap

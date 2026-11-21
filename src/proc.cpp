@@ -1060,7 +1060,7 @@ static b32 stagedebug(Shell *sh, Node *stage, i32 before, Arena scratch,
         return 0;
     }
     sh->status  = before;
-    sh->line    = stage->line;
+    sh->line    = fnline(sh, stage->line);  // as runsimple1
     sh->current = stage;
     b32 skip = started ? stagesdebugtrap(sh, scratch, started)
                        : rundebugtrap(sh, scratch);
