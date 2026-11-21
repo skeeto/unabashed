@@ -205,6 +205,21 @@ static T *alloccopy(Arena *a, T *p)
     return new (r) T(*p);
 }
 
+// Like alloc<T>, but default-initialized rather than zeroed: for a large
+// T that its user fills in, on a hot path.
+template<typename T>
+static T *allocraw(Arena *a)
+{
+    iz size = sizeof(T);
+    iz pad  = -(uz)a->beg & (alignof(T) - 1);
+    if (1 >= (a->end - a->beg - pad)/size) {
+        arenagrow(a, size, pad, 1);
+    }
+    T *r = (T *)(a->beg + pad);
+    a->beg += pad + size;
+    return new (r) T;
+}
+
 // Like alloc<u8>, but does not zero the memory.
 static u8 *allocbytes(Arena *a, iz count)
 {

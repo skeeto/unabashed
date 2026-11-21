@@ -3033,51 +3033,66 @@ static void checkfuncnest(Shell *sh, Str name, Arena scratch)
     }
 }
 
+// A function call's frame, its escape point and the state it puts
+// back, in the arena: recursion stacks up callfunction's own frame.
+struct Call {
+    Escape e;
+    Frame  f;
+    Args   saved;
+    Args   own;
+    Str    srcname;
+    i32    loopdepth;
+    i32    ctlline;
+    i32    errline;
+    i32    funcline;
+};
+
 static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
 {
     safepoint(sh->sched);
     checkstack(sh);
     checkfuncnest(sh, argv[0], scratch);
-    Frame f = {};
-    f.up   = sh->frame;
-    f.name = argv[0];
-    f.line = sh->line;
-    f.file = fn->code->file;
-    f.src  = fn->code->src;
-    f.args.v    = argv + 1;
-    f.args.n    = argc - 1;
-    f.argpushed = sh->shopt[S_EXTDEBUG];
-    f.lexer     = sh->lexer;
+    Call  *c = allocraw<Call>(&scratch);  // filled in below and by escenter
+    Frame *f = &c->f;
+    *f = {};
+    f->up   = sh->frame;
+    f->name = argv[0];
+    f->line = sh->line;
+    f->file = fn->code->file;
+    f->src  = fn->code->src;
+    f->args.v    = argv + 1;
+    f->args.n    = argc - 1;
+    f->argpushed = sh->shopt[S_EXTDEBUG];
+    f->lexer     = sh->lexer;
     // As bash, it inherits DEBUG and RETURN with set -T or declare -ft
     // (RETURN not while DEBUG runs), and ERR with set -E
     b32 traced = sh->opt[O_FUNCTRACE] || (fn->attrs & V_TRACE);
     b32 indebug = sh->trapbusy & 1<<(TRAP_DEBUG-TRAP_DEBUG);
-    if (!traced) f.trapsaved[0] = traphide(sh, TRAP_DEBUG);
-    if (!sh->opt[O_ERRTRACE]) f.trapsaved[1] = traphide(sh, TRAP_ERR);
-    if (!traced || indebug) f.trapsaved[2] = traphide(sh, TRAP_RETURN);
-    Args saved = sh->args;
-    Args own   = sh->argsown;
+    if (!traced) f->trapsaved[0] = traphide(sh, TRAP_DEBUG);
+    if (!sh->opt[O_ERRTRACE]) f->trapsaved[1] = traphide(sh, TRAP_ERR);
+    if (!traced || indebug) f->trapsaved[2] = traphide(sh, TRAP_RETURN);
+    c->saved = sh->args;
+    c->own   = sh->argsown;
     sh->args.v = argv + 1;
     sh->args.n = argc - 1;
     sh->argsown = {};
-    sh->frame  = &f;
+    sh->frame  = f;
     sh->funcdepth++;
-    i32 loopdepth = sh->loopdepth;
+    c->loopdepth  = sh->loopdepth;
     sh->loopdepth = 0;
 
     Code *code = fn->code;
     code->refs++;
-    Str srcname = sh->srcname;
-    sh->srcname = code->file;
-    i32 ctlline = sh->ctlline;
-    i32 errline = sh->errline;
-    i32 funcline = sh->funcline;
+    c->srcname   = sh->srcname;
+    sh->srcname  = code->file;
+    c->ctlline   = sh->ctlline;
+    c->errline   = sh->errline;
+    c->funcline  = sh->funcline;
     sh->funcline = code->body->line;
 
     // Pop this call on the way out of an escape too, so that a shell
     // that resumes after an expansion error has no stale frames
-    // (its escape point in the arena: recursion stacks up this frame)
-    Escape *e = alloc<Escape>(&scratch);
+    Escape *e = &c->e;
     escenter(sh, e);
     b32 escaped = jmpset(e->jmp);
     if (!escaped) {
@@ -3110,16 +3125,16 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     if (sh->flow == FLOW_RETURN) {
         sh->flow = FLOW_NONE;
     }
-    sh->loopdepth = loopdepth;
-    sh->srcname   = srcname;
-    sh->ctlline   = ctlline;
-    sh->errline   = errline;
-    sh->funcline  = funcline;
-    sh->line      = f.line;  // as bash, before the locals go (their hooks)
-    leaveframe(sh, &f);
+    sh->loopdepth = c->loopdepth;
+    sh->srcname   = c->srcname;
+    sh->ctlline   = c->ctlline;
+    sh->errline   = c->errline;
+    sh->funcline  = c->funcline;
+    sh->line      = f->line;  // as bash, before the locals go (their hooks)
+    leaveframe(sh, f);
     freeargs(sh->store, sh->argsown);  // what set made in the call
-    sh->args    = saved;
-    sh->argsown = own;
+    sh->args    = c->saved;
+    sh->argsown = c->own;
     sh->argsset = 0;  // as bash's pop_dollar_vars
     if (escaped && e->why==ESC_EXIT && errexitdue(sh, 1)) {
         // set -e unwound this call, whose command has redirections, as
