@@ -3888,9 +3888,12 @@ static Spawned libstartproc(Os *os, Arena scratch, Spawn *s, Str16 app,
     iz nblob = 0;
     for (i32 b = 0; b<4 && blob.len; b++) nblob |= (iz)blob[b] << (8*b);
 
-    // Records the program's holds need, made now (addlend)
-    for (i32 fd = 0; fd < top; fd++) {
-        if (!objs[fd]) continue;
+    // Records the program's holds need, made now (addlend), beyond those
+    // free already
+    i32 need = 0;
+    for (i32 fd = 0; fd < top; fd++) need += !!objs[fd];
+    for (Lend *l = os->freelend; l && need; l = l->next) need--;
+    for (; need > 0; need--) {
         Lend *l = alloc<Lend>(&os->perm);
         l->next = os->freelend;
         os->freelend = l;
