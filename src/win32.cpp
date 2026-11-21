@@ -2793,6 +2793,7 @@ static i32 chansend(i64 pid, i64 level, i32 sig)
         } else {
             while (__atomic_exchange_n(&c->lock, 1, __ATOMIC_ACQUIRE)) Sleep(0);
             i32 n = c->nlevels;
+            n = n<0 || n>countof(c->levels) ? (i32)countof(c->levels) : n;  // garbage: full
             b32 dup = 0;
             for (i32 i = 0; i < n; i++) {
                 dup |= c->levels[i].level==level && c->levels[i].sig==sig;
@@ -4437,6 +4438,10 @@ static LevelSig plt_levelsig(Os *os)
     if (!c || !__atomic_load_n(&c->nlevels, __ATOMIC_SEQ_CST)) return r;
     while (__atomic_exchange_n(&c->lock, 1, __ATOMIC_ACQUIRE)) Sleep(0);
     i32 n = c->nlevels;
+    if (n<0 || n>countof(c->levels)) {
+        n = 0;  // any process of the user may write here: garbage dropped
+        __atomic_store_n(&c->nlevels, 0, __ATOMIC_SEQ_CST);
+    }
     if (n) {
         r.level = c->levels[0].level;
         r.sig   = c->levels[0].sig;
