@@ -1,0 +1,21 @@
+# A line taller than the screen, as readline draws it: when the cursor
+# would be off the top, or leaves the first screenful for the bottom,
+# the screen is cleared and the line drawn from its top, only the first
+# screenful while the cursor is in it; C-l redraws the same way
+size 6 20
+rc PS1='$ '
+keys echo 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ
+keys \C-a
+snap
+keys X
+snap
+keys \C-l
+snap
+keys \C-e
+snap
+keys \C-l
+snap
+keys \e60\C-b\C-l
+snap
+keys \e30\C-b\C-l
+snap

@@ -1,0 +1,64 @@
+== snap 1
+$ echo 0123456789abc
+defghijklmnopqrstuvw
+xyz0123456789abcdefg
+hijklmnopqrstuvwxyz0
+123456789abcdefghijk
+lmnopqrstuvwxyz01234
+@ 0,2
+== snap 2
+$ Xecho 0123456789ab
+cdefghijklmnopqrstuv
+wxyz0123456789abcdef
+ghijklmnopqrstuvwxyz
+0123456789abcdefghij
+klmnopqrstuvwxyz0123
+@ 0,3
+== snap 3
+$ Xecho 0123456789ab
+cdefghijklmnopqrstuv
+wxyz0123456789abcdef
+ghijklmnopqrstuvwxyz
+0123456789abcdefghij
+klmnopqrstuvwxyz0123
+@ 0,3
+== snap 4
+cdefghijklmnopqrstuv
+wxyz0123456789abcdef
+ghijklmnopqrstuvwxyz
+0123456789abcdefghij
+klmnopqrstuvwxyz0123
+456789ABCDEFGHIJ
+@ 5,16
+== snap 5
+cdefghijklmnopqrstuv
+wxyz0123456789abcdef
+ghijklmnopqrstuvwxyz
+0123456789abcdefghij
+klmnopqrstuvwxyz0123
+456789ABCDEFGHIJ
+@ 5,16
+== snap 6
+$ Xecho 0123456789ab
+cdefghijklmnopqrstuv
+wxyz0123456789abcdef
+ghijklmnopqrstuvwxyz
+0123456789abcdefghij
+klmnopqrstuvwxyz0123
+@ 3,16
+== snap 7
+$ Xecho 0123456789ab
+cdefghijklmnopqrstuv
+wxyz0123456789abcdef
+ghijklmnopqrstuvwxyz
+0123456789abcdefghij
+klmnopqrstuvwxyz0123
+@ 2,6
+== snap 8
+$ Xecho 0123456789ab
+cdefghijklmnopqrstuv
+wxyz0123456789abcdef
+ghijklmnopqrstuvwxyz
+0123456789abcdefghij
+klmnopqrstuvwxyz0123
+@ 2,6

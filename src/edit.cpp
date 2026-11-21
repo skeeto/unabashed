@@ -707,6 +707,8 @@ struct Editor {
     Str      hlast;     // hscroll: what was drawn
     b32      notty;     // input not a terminal, read with the editor
     Layout   shown;
+    i32      visbot;    // readline's _rl_vis_botlin: the last row drawn,
+                        // or the screen's height after only a screenful
     i32      crow;      // where the cursor is, relative to the prompt's row
     i32      ccol;
     b32      pending;   // the terminal has a wrap pending (crow, ccol at
@@ -1640,13 +1642,15 @@ static i32 cellcol(DRow *r, i32 i)  // the column where cell i starts
     return i ? r->cols[i-1] : r->col0;
 }
 
-// Bring the screen from what is shown to the next layout. Rows that a
-// partial layout leaves out are left as they are; one drawn where the
-// old layout left it out is cleared past its end.
-static void edupdate(Editor *ed, Shell *sh, Layout *nl)
+// Bring the screen from what is shown to the next layout, its rows
+// from limit on left out. Rows that a partial layout leaves out are left
+// as they are; one drawn where the old layout left it out is cleared
+// past its end.
+static void edupdate(Editor *ed, Shell *sh, Layout *nl, i32 limit)
 {
     Layout *ol = &ed->shown;
     i32 n = nl->nrows>ol->nrows ? nl->nrows : ol->nrows;
+    n = n<limit ? n : limit;
     for (i32 row = 0; row < n; row++, edspill(ed, sh)) {
         DRow *o = layrow(ol, row);
         DRow *w = layrow(nl, row);
@@ -1853,7 +1857,30 @@ static void redisplay(Editor *ed, Shell *sh)
     if (ed->hscroll) {
         hredisplay(ed, &nl, a, sh->utf8 && !ed->vars.byteoriented);
     } else {
-        edupdate(ed, sh, &nl);
+        // A line taller than the screen, as readline: with the cursor
+        // where drawing it all would scroll it off the top, or going
+        // past the bottom of a screenful, the screen is cleared and the
+        // line drawn from its top; only a screenful while the cursor is
+        // within the first
+        i32 rows  = ed->tty.rows;
+        i32 bot   = nl.nrows - 1;
+        i32 limit = 0x7fffffff;  // the rows drawn
+        if (rows>0 && bot>=rows) {
+            i32 extra = bot - rows;  // rows off the top
+            if (nl.prow<=extra || (nl.prow>=rows && ed->visbot<=rows)) {
+                if (nl.prow <= extra) limit = rows;
+                edput(ed, "\x1b[H\x1b[2J");
+                ed->shown   = {};
+                ed->visbot  = 0;
+                ed->crow    = 0;
+                ed->ccol    = 0;
+                ed->pending = 0;
+            } else if (nl.prow<=rows && ed->visbot<=rows) {
+                limit = rows;
+            }
+        }
+        edupdate(ed, sh, &nl, limit);
+        ed->visbot = limit<nl.nrows ? limit : bot;
     }
     ed->cur = !ed->cur;
     edflush(ed, sh);
@@ -1866,6 +1893,7 @@ static void redisplay(Editor *ed, Shell *sh)
 static void edredraw(Editor *ed, Shell *sh)
 {
     ed->shown   = {};
+    ed->visbot  = 0;
     ed->hlast   = {};
     ed->hshown  = 0;
     ed->crow    = 0;
@@ -6358,6 +6386,7 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     // As readline, the first draw starts wherever the cursor is, taken
     // as column 0, so a prompt follows output with no final newline.
     ed->shown   = {};
+    ed->visbot  = 0;
     ed->crow    = 0;
     ed->ccol    = 0;
     ed->pending = 0;
