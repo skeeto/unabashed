@@ -3009,7 +3009,10 @@ static iz plt_read(Os *os, Handle h, u8 *buf, iz len)
             // Its handle is off limits: a helper reads for us
             i32 op = w->kind==K_CONIN ? H_CONREAD : H_READ;
             if (!busy(w) && !issue(os, w, h, op, 0)) {
-                return w->kind==K_PIPE ? rawread(h, buf, len) : conread(os, w, h);
+                if (w->kind == K_PIPE) return rawread(h, buf, len);
+                n = conread(os, w, h);  // into the read-ahead
+                if (n <= 0) return n;
+                continue;
             }
             if (!waitidle(os, w)) return -1;
             continue;
