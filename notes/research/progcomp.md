@@ -525,8 +525,11 @@ the ignore hook (§8.4). **[oracle]** `compgen -G '*'` omits `.hid`;
 An expansion error aborts like any expansion error at top level: in a
 non-interactive shell the shell exits (**[oracle]** `compgen -W
 '${zz?boom} b'` prints `bash: line N: zz: boom` and the script ends);
-interactively the completion attempt is abandoned and the line is
-redisplayed (source comment PC:883).
+interactively the jump to the top level abandons the line itself, not
+only the completion attempt: a fresh prompt follows the message, `$?`
+is 1, and the line typed so far is gone, as after any escape out of a
+completion function (**[oracle]** t/edit/101; the source comment at
+PC:883 suggests a redisplay, which does not happen).
 
 ### 5.4 Splitting the line for `-F`/`-C` (PC:1316-1352, 1237-1246)
 
