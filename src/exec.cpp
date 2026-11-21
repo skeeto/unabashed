@@ -2077,8 +2077,10 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     i32     nclose = 0;
     Task   *pumps[16];
     i32     npumps = 0;
-    File   *capfile = 0;
+    File   *capfile = 0;  // the capture read in place
     Handle  capread = BADHANDLE;
+    Task   *cappumps[16];  // other captures', joined with it
+    i32     ncappumps = 0;
     for (i32 fd = 0; fd < t->top; fd++) {
         File *f = t->fd[fd];
         if (!f) continue;
@@ -2123,12 +2125,24 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
                 closeafter[nclose++] = sf.h;
                 break;
             }
+            if (capfile && ncappumps==countof(cappumps)) continue;
             OsPipe p = os_pipe(sh->os);
             if (p.err) continue;
-            capfile = f;
-            capread = p.r;
             sf.h = p.w;
             closeafter[nclose++] = p.w;
+            if (!capfile) {
+                capfile = f;
+                capread = p.r;
+                break;
+            }
+            // Another capture: pumped while the first is read, so that
+            // the program never blocks writing one that no one reads
+            Pump *pp = newpump(s);
+            pp->kind   = PUMP_TOBUF;
+            pp->h      = p.r;
+            pp->buf    = f->cap;
+            pp->wtrace = &((Capture *)f->cap)->wtrace;
+            cappumps[ncappumps++] = spawnpump(s, pp);
         } break;
         case F_PIPE: {
             if (f->flags & OF_READ) {
@@ -2295,6 +2309,9 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
             print(capfile->cap, {buf, n});
         }
         os_close(sh->os, capread);
+        for (i32 i = 0; i < ncappumps; i++) {
+            joinpump(s, cappumps[i]);
+        }
     }
     takeossigs(sh);  // those from before the wait are this level's own
     sh->sig->fgwait  = !r.err;
