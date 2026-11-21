@@ -263,6 +263,30 @@ static void copytraps(Shell *c, Shell *sh)
 
 // Running trap actions
 
+// A readonly BASH_TRAPSIG, which bash failed to set for an action: its
+// report_error, under set -e, ends the shell with $? or else 1 (with
+// no EXIT action, if this is its).
+static void trapsigexit(Shell *sh, i32 status)
+{
+    sh->status  = status ? status : 1;
+    sh->exiting = 1;
+    escape(sh, ESC_EXIT);
+}
+
+// After a trap action: BASH_TRAPSIG goes back to what it was. bound:
+// it was bound for the action; if not, it is readonly, and bash, which
+// tries to restore it as it tried to set it, fails again. Returns true
+// when that failure ends the shell, under set -e.
+static b32 trapsigdone(Shell *sh, Arena scratch, b32 bound)
+{
+    if (bound) {
+        poptemp(sh, "BASH_TRAPSIG");
+        return 0;
+    }
+    shellerror(sh, scratch, "BASH_TRAPSIG: readonly variable");
+    return sh->opt[O_ERREXIT];
+}
+
 // Run a trap's action as eval would, keeping $? (unless it returns
 // from a function), the current line and the command being run.
 // Returns the action's own status.
@@ -302,6 +326,7 @@ static i32 runtrap(Shell *sh, i32 idx)
     sh->evaldepth++;
     b32 escaped = jmpset(e.jmp);
     if (!escaped) {
+        if (!trapsig && sh->opt[O_ERREXIT]) trapsigexit(sh, status);
         // As bash, a signal's action is numbered from line 1, but DEBUG,
         // ERR and RETURN go on from the current line
         runsource(sh, cmd, sh->iname, a, 0, idx>=TRAP_DEBUG ? sh->line : 1);
@@ -309,14 +334,15 @@ static i32 runtrap(Shell *sh, i32 idx)
     i32 own = sh->status;
     escleave(sh, &e);
     escrestore(sh, &e);
-    if (!escaped && trapsig) {
-        poptemp(sh, "BASH_TRAPSIG");  // an abandoned action's stays, as in bash
-    }
     sh->line    = line;
     sh->lexeof  = lexeof;
+    // An abandoned action's stays, as in bash
+    b32 ends = !escaped && trapsigdone(sh, a, trapsig);
     restorecmd(sh, cmdsave);
     if (escaped) {
         escape(sh, e.why);
+    } else if (ends) {
+        trapsigexit(sh, own);
     }
     if (sh->flow != FLOW_RETURN) {
         sh->status = status;
@@ -670,14 +696,25 @@ static void runexittrap(Shell *sh, Arena)
     sh->trapstatus = status;
     sh->trapfuncs  = sh->funcdepth;
     sh->intrap++;
+    i32 line    = sh->line;
     b32 trapsig = pushtemp(sh, scratch, "BASH_TRAPSIG", "0", 1);
-    if (!jmpset(e.jmp)) {
+    b32 errexit = sh->opt[O_ERREXIT];
+    b32 escaped = jmpset(e.jmp);
+    if (!escaped) {
+        if (!trapsig && errexit) trapsigexit(sh, status);
         runsource(sh, cmd, sh->iname, scratch, 0, 1);  // as bash: line 1
-        sh->status = status;
     }
     // However the action ended: the depth, intrap and the rest go back
     escresume(sh, &e);
-    if (trapsig) poptemp(sh, "BASH_TRAPSIG");
+    sh->line = line;
+    i32 own  = sh->status;
+    if (!escaped) {
+        sh->status = status;
+    }
+    // Even after exit, as bash, unless it never ran
+    if ((trapsig || !errexit) && trapsigdone(sh, scratch, trapsig)) {
+        sh->status = own ? own : 1;  // as trapsigexit, already exiting
+    }
     sh->exiting = 1;
 }
 

@@ -437,7 +437,9 @@ without a status in an action uses the status from before it
 (`Shell.trapstatus`); so does `return` without a status in the action
 itself (not in a function it calls, `Shell.trapfuncs`). BASH_TRAPSIG is
 bound (unexported) to the trap's index while it runs (EXIT 0, DEBUG 65,
-ERR 66, RETURN 67, as bash 5.3). ERR runs from `checkerrexit` where set
+ERR 66, RETURN 67, as bash 5.3); over a readonly one, the error is
+reported twice, as bash fails both to set and to restore it, and under
+set -e the first ends the shell, as bash's report_error does. ERR runs from `checkerrexit` where set
 -e would act; DEBUG before simple commands, `(( ))`, `[[ ]]` and each
 `for` iteration (BASH_COMMAND the header); RETURN at the end of a
 function or a sourced file. As bash, a call that does not inherit them
