@@ -50,8 +50,10 @@ enum : iz {
 
 static SniffCache *newsniffcache(Arena *perm)
 {
-    // at most a sixteenth of what perm has left (small fuzz arenas)
-    iz          len = (perm->end - perm->beg) / 16;
+    // at most a sixteenth of what perm has left (small fuzz arenas), by
+    // its reservation: its end is only what is committed so far
+    byte       *lim = perm->mem ? perm->mem->limit : perm->end;
+    iz          len = (lim - perm->beg) / 16;
     SniffCache *c   = alloc<SniffCache>(perm);
     len = len<SNIFFCACHE ? len : SNIFFCACHE;
     c->base  = (byte *)allocbytes(perm, len);
@@ -142,9 +144,12 @@ static b32 bbstub(SniffFile *f, Arena scratch, PeInfo pe, Stat st)
 }
 
 // What the file at a canonical native path holds, given its status.
-static Sniff sniff(Shell *sh, Arena scratch, Str native, Stat st)
+// The #! line is a copy in a: the cache may start over at the next
+// sniff, and an uncached line has nowhere else to live.
+static Sniff sniff(Shell *sh, Arena *a, Str native, Stat st)
 {
     SniffCache *c = sh->sniffs;
+    Arena scratch = *a;  // dead before the line is copied to a
     Str key = clone(&scratch, native);
     for (iz i = 0; i < key.len; i++) key[i] = lowercase(key[i]);
 
@@ -152,7 +157,11 @@ static Sniff sniff(Shell *sh, Arena scratch, Str native, Stat st)
     for (u64 h = hash(key); slot && *slot; h <<= 2) {
         SniffEntry *e = *slot;
         if (e->key == key) {
-            if (e->mtime==st.mtime && e->size==st.size) return e->s;
+            if (e->mtime==st.mtime && e->size==st.size) {
+                Sniff s = e->s;
+                s.line  = clone(a, s.line);
+                return s;
+            }
             break;  // changed since: read it again
         }
         slot = &e->child[h>>62];
@@ -184,7 +193,7 @@ static Sniff sniff(Shell *sh, Arena scratch, Str native, Stat st)
     // room for one more object than it takes, and clone one more byte.
     iz need = 2*(iz)sizeof(SniffEntry) + key.len + s.line.len + 64;
     if (!c || need>(c->a.end-c->base)/4) {
-        s.line = clone(&scratch, s.line);
+        s.line = clone(a, s.line);
         return s;
     }
     if (c->a.end-c->a.beg < need) {
@@ -202,6 +211,7 @@ static Sniff sniff(Shell *sh, Arena scratch, Str native, Stat st)
     e->mtime = st.mtime;
     e->size  = st.size;
     e->s     = s;
+    s.line   = clone(a, s.line);
     return s;
 }
 
@@ -255,7 +265,7 @@ static i32 winmode(Shell *sh, Arena scratch, Str native, Stat st)
     } else if (knownext(native)) {
         x = 1;
     } else if (st.mode & 0111) {
-        Sniff s = sniff(sh, scratch, native, st);
+        Sniff s = sniff(sh, &scratch, native, st);
         i32 sub = s.pe.subsystem;
         b32 prog = s.kind==FK_PE && !s.pe.dll && (sub==1 || sub==2 || sub==3 || sub==7);
         x = s.kind==FK_SCRIPT || s.ape || prog;
@@ -866,7 +876,7 @@ static Target wintarget(Shell *sh, Arena *a, Str path, Str *argv, iz argc, Slice
             break;
         }
 
-        Sniff s = sniff(sh, *a, l.native, l.st);
+        Sniff s = sniff(sh, a, l.native, l.st);
         if (s.kind == FK_PE) {
             t = imagetarget(sh, a, l.native, l.st, s, v, env);
             break;

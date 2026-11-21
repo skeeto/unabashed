@@ -805,6 +805,17 @@ static void test_arena(Test *t)
     }
     oomjmp = 0;
     expectint(t, "arena oom", hit, 1);
+
+    // The sniff cache is sized by what the arena may grow to, not by
+    // what it has committed yet: full size from a fresh arena, a
+    // sixteenth of a small one
+    Arena big = newarena(os, (iz)1<<24);
+    SniffCache *c = newsniffcache(&big);
+    expectint(t, "sniff cache size", c->a.end - c->base, SNIFFCACHE);
+    Arena small = newarena(os, (iz)1<<20);
+    c = newsniffcache(&small);
+    expectint(t, "sniff cache small", c->a.end - c->base > (iz)1<<15, 1);
+    expectint(t, "sniff cache small", c->a.end - c->base <= (iz)1<<16, 1);
 }
 
 // f80digits has room for every integer digit it stores, 9 a division,
