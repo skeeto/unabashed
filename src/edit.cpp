@@ -5648,11 +5648,15 @@ static void edsize(Editor *ed, Shell *sh, Tty t)
     if (t.rows==ed->setrows && t.cols==ed->setcols) return;
     ed->setrows = t.rows;
     ed->setcols = t.cols;
-    Arena a = *scratchat(sh, sh->capdepth+1);
+    // An assignment may run a command substitution (a nameref's
+    // subscript) at the next depth: claim this one, as checkwinsize
+    i32   depth = ++sh->capdepth;
+    Arena a     = *scratchat(sh, depth);
     Str num = fmti64(&a, t.rows);
     setvar(sh, a, "LINES",   num);
     Str num2 = fmti64(&a, t.cols);
     setvar(sh, a, "COLUMNS", num2);
+    sh->capdepth = depth - 1;
 }
 
 // The number of characters in the line, for read -n.
