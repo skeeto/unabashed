@@ -694,6 +694,7 @@ struct Os {
     i32        ttykeys;    // atomic: reads give keys (TK_*), not lines
     i32        ttyinmode;  // and its modes before
     i32        ttyoutmode;
+    i32        conhi;      // conkeys: a high surrogate read, its low one not
     uz         jobkeys;    // completion keys handed out
     u32        jobflags;   // limits of each program's job (see newjob)
     c16        self[512];  // this program's image path (see sameimage)
@@ -1138,11 +1139,11 @@ static void conctrlc(Os *os)
 // Keys from a console in the editor's raw mode, as xterm bytes into
 // out (3*CONUNITS bytes): with VT input the console's own characters,
 // else key events turned into them (conkey). A resize raises SIGWINCH
-// and the read goes on. -1 on error with *code set.
+// and the read goes on. -1 on error with *code set. A high surrogate
+// last in one call waits in Os.conhi for its low one in the next.
 static iz conkeys(Os *os, uz h, u8 *out, i32 *code, b32 vtin)
 {
     InputRecord recs[64];
-    i32 hi = 0;
     for (;;) {
         i32 n = 0;
         if (!ReadConsoleInputW(h, recs, countof(recs), &n)) {
@@ -1168,7 +1169,7 @@ static iz conkeys(Os *os, uz h, u8 *out, i32 *code, b32 vtin)
             k.ch    = r->ch;
             k.state = r->state;
             u8  b[16];
-            i32 m   = vtin ? conchar(k, &hi, b) : conkey(k, &hi, b);
+            i32 m   = vtin ? conchar(k, &os->conhi, b) : conkey(k, &os->conhi, b);
             i32 rep = r->repeat<1 ? 1 : r->repeat>4 ? 4 : r->repeat;
             for (i32 j = 0; m && j<rep; j++) {
                 copybytes(out+len, b, m);
