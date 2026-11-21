@@ -68,8 +68,8 @@ int main(int argc, char **argv)
     byte here = 0;
     info.stack = mainstack(&here, stack);
     for (i32 i = 0; i < 3; i++) {
-        info.std[i]      = (Handle)i;
         info.stdflags[i] = fdaccess(i);
+        info.std[i]      = info.stdflags[i] ? (Handle)i : BADHANDLE;  // closed
     }
     info.sigign = os.entryign;
     os.reserve  = info.reserve;

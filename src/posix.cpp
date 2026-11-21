@@ -1305,8 +1305,8 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         info.stack    = os->stack;
         info.sigign   = os->entryign | s->sigign;
         for (i32 i = 0; i < 3; i++) {
-            info.std[i]      = (Handle)i;
             info.stdflags[i] = fdaccess(i);
+            info.std[i]      = info.stdflags[i] ? (Handle)i : BADHANDLE;  // closed
         }
         Fiber *f = os_fiber(os, &a, os->stack, imagefiber, &info);
         os_switch(os, f);
