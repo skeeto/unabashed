@@ -1223,7 +1223,8 @@ static Param getelems(X *x, Str name, Str sub, b32 length)
             r.li = l.idx;
             r.ln = l.n;
         } else {
-            Got g = getvar(sh, x->a, name);
+            // As bash, a subscripted nameref to an element is unset
+            Got g = getplain(sh, x->a, name);
             if (g.set) {
                 r.lv = onevalue(x->a, g.value);
                 r.li = alloc<i64>(x->a);
@@ -1269,7 +1270,7 @@ static Param getelems(X *x, Str name, Str sub, b32 length)
             r.set   = 1;
         }
     } else if (!idx) {
-        Got g = getvar(sh, x->a, name);
+        Got g = getplain(sh, x->a, name);  // as above
         r.value = g.value;
         r.set   = g.set;
     }
@@ -1332,7 +1333,7 @@ static Param getkeys(X *x, Str name, b32 star)
         AList l = alist(x->a, arr, 1);
         r.lv = l.keys;
         r.ln = l.n;
-    } else if (getvar(sh, x->a, name).set) {
+    } else if (getplain(sh, x->a, name).set) {  // as getelems
         r.lv = onevalue(x->a, "0");
         r.ln = 1;
     }
