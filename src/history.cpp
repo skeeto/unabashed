@@ -521,10 +521,12 @@ static void histoption(Shell *sh, i32 opt, b32 on)
 
 // Startup and set -o history: HISTSIZE defaults to 500 (1024 in native
 // mode, as w64devkit's busybox) and HISTFILESIZE to it, then the file
-// is read.
+// is read. An assignment may run a command substitution (a nameref's
+// subscript) at the next depth: claim this one.
 static void histload(Shell *sh)
 {
-    Arena a = *scratchat(sh, sh->capdepth+1);
+    i32   depth = ++sh->capdepth;
+    Arena a     = *scratchat(sh, depth);
     if (!getplain(sh, &a, "HISTSIZE").set) {
         Str n = sh->pathmode==PM_NATIVE ? Str("1024") : "500";
         setvar(sh, a, "HISTSIZE", n);
@@ -540,6 +542,7 @@ static void histload(Shell *sh)
     if (file.len && !pathstat(sh, a, file, 1).err) {
         if (!histread(sh, file, 0, a)) sh->hist.infile = sh->hist.readlines;
     }
+    sh->capdepth = depth - 1;
 }
 
 
