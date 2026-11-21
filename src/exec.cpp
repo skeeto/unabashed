@@ -4474,7 +4474,14 @@ static b32 stdinredirects(Redir *r)
 static void execsubshell(Shell *sh, Node *n, Arena scratch)
 {
     sh->stdinredir = stdinredirects(n->redirs);  // as bash's ( ) child
-    if (fgjobctl(sh) && runfgimage(sh, n, scratch)) return;
+    // and its line, as only some commands set it, is the list's ) line
+    // (cited by the hooks of temporary bindings, compound redirections)
+    i32 ctlline = sh->ctlline;
+    sh->ctlline = n->endline;
+    if (fgjobctl(sh) && runfgimage(sh, n, scratch)) {
+        sh->ctlline = ctlline;
+        return;
+    }
     SubJob j = {};
     j.kind = SUB_NODE;
     j.node = n->a;
@@ -4484,6 +4491,7 @@ static void execsubshell(Shell *sh, Node *n, Arena scratch)
     sh->tailnode  = tailcommand(n->a);
     sh->taillevel = sh->subshell + 2;
     sh->status = subshell(sh, &j, scratch, 0);
+    sh->ctlline = ctlline;
     chldreaped(sh, 1);
     sh->tailnode  = 0;
     sh->taillevel = 0;

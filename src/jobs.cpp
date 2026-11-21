@@ -828,6 +828,7 @@ static Node *bgnode(Shell *c, Arena *a, Node *n, b32 keepjobs)
     if (r->kind == N_SUBSHELL) {
         r->kind = N_GROUP;
         c->tailnode = tailcommand(r->a);
+        c->ctlline  = n->endline;  // see execsubshell
     }
     c->taillevel  = c->subshell + 1;
     c->keepredirs = r;

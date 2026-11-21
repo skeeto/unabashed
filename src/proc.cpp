@@ -675,9 +675,11 @@ static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops
     // exec in the forked stage: not a { list }'s
     c->tailnode  = node->kind==N_SIMPLE ? m->node : 0;
     if (m->node && m->node->kind==N_SUBSHELL) {
-        // ( list ) runs in the vproc's own subshell, not a nested one
+        // ( list ) runs in the vproc's own subshell, not a nested one,
+        // at its ) line (see execsubshell)
         m->node->kind = N_GROUP;
         c->tailnode = tailcommand(m->node->a);
+        c->ctlline  = node->endline;
     }
     c->taillevel = c->subshell + 1;
     return taskspawn(sh->sched, vprocmain, m, BIGSTACK);
@@ -1287,10 +1289,12 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         j.newloops = stage->kind != N_SIMPLE;
         j.nojobs   = stage->kind != N_SIMPLE;
         Node group;
+        i32  ctlline = sh->ctlline;
         if (stage->kind == N_SUBSHELL) {
             group = *stage;
             group.kind = N_GROUP;
             j.node = &group;
+            sh->ctlline = stage->endline;  // the child's (see execsubshell)
         }
         sh->simplestages += stage->kind == N_SIMPLE;
         // A program as the last stage is reported with the pipeline
@@ -1333,6 +1337,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         } else {
             status = subshell(sh, &j, child, 0);
         }
+        sh->ctlline   = ctlline;
         sh->spawngrp  = 0;
         sh->spawnfg   = 0;
         sh->pipetail  = 0;
