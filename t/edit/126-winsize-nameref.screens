@@ -1,0 +1,19 @@
+== snap 1
+$ declare -n COLUMNS='a[$(echo
+ 1)]'
+$
+@ 2,2
+== snap 2
+$ declare -n COLUMNS='a[$(echo
+ 1)]'
+$ declare -p a
+declare -a a=([1]="33")
+$
+@ 4,2
+== snap 3
+$ declare -n COLUMNS='a[$(echo
+ 1)]'
+$ declare -p a
+declare -a a=([1]="33")
+$
+@ 4,2

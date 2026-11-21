@@ -1,0 +1,9 @@
+# The editor sets COLUMNS after a resize through a nameref whose
+# subscript runs a command substitution
+size 8 30
+rc PS1='$ '
+keys declare -n COLUMNS='a[$(echo 1)]'\r
+snap
+resize 9 33
+keys declare -p a\r
+snap
