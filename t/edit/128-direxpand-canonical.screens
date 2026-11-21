@@ -1,0 +1,46 @@
+== snap 1
+$ #/home/oracle/d/fx
+$ #/home/oracle/d/x/../fx
+$ #/home/oracle/d/x/gx
+$ #ls ~/fx
+$ #ls /home/oracle/d/fx
+$ #ls d/fx
+$ #ls ./d/fx
+$ #ls /home/oracle/d/fx
+$ #ls /home/oracle/d/fx
+$ #/home/oracle/d/fx
+$ #./d/fx
+$ #d/fx
+$ #/home/oracle/d//fx
+$ HOME=/home/oracle/d/
+$ #/home/oracle/d//fx
+$ HOME=/home/oracle//d
+$ #/home/oracle/d/fx
+$ set -P; HOME=/home/oracle/d/../d
+$ #/home/oracle/d/../d/fx
+$ #ls /home/oracle/d///fx
+$
+@ 20,2
+== snap 2
+$ #/home/oracle/d/fx
+$ #/home/oracle/d/x/../fx
+$ #/home/oracle/d/x/gx
+$ #ls ~/fx
+$ #ls /home/oracle/d/fx
+$ #ls d/fx
+$ #ls ./d/fx
+$ #ls /home/oracle/d/fx
+$ #ls /home/oracle/d/fx
+$ #/home/oracle/d/fx
+$ #./d/fx
+$ #d/fx
+$ #/home/oracle/d//fx
+$ HOME=/home/oracle/d/
+$ #/home/oracle/d//fx
+$ HOME=/home/oracle//d
+$ #/home/oracle/d/fx
+$ set -P; HOME=/home/oracle/d/../d
+$ #/home/oracle/d/../d/fx
+$ #ls /home/oracle/d///fx
+$
+@ 20,2

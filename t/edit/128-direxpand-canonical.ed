@@ -1,0 +1,35 @@
+# With direxpand, bash's directory hook reads a directory as cd would
+# and the matches carry it when the hook rewrote it: one it expanded,
+# made canonical, or a relative one canonicalization changes (not one
+# starting with a dot). A ~ command word gets its prefix back expanded
+# and canonical (restore_tilde), but as typed with set -P; an argument's
+# ~ stays. A command word is expanded whole first, so its directory
+# then has nothing left to expand. Under a home with a $ in it the
+# rewritten directory is canonical, with no double slash (bash 5.3
+# itself aborts on that case, which is left out here).
+size 24 70
+rc PS1='$ '
+rc mkdir -p d/x e; : >d/fx; chmod +x d/fx; : >d/x/gx; chmod +x d/x/gx; v=d; w=/home/oracle/d/
+rc shopt -s direxpand
+rc HOME=$PWD/d/../d
+keys ~/f\t\C-a#\r
+keys ~/x/../f\t\C-a#\r
+keys ~/x/g\t\C-a#\r
+keys ls ~/f\t\C-a#\r
+keys ls d/../d/f\t\C-a#\r
+keys ls d/f\t\C-a#\r
+keys ls ./d/f\t\C-a#\r
+keys ls \$v/f\t\C-a#\r
+keys ls \$w//f\t\C-a#\r
+keys d/../d/f\t\C-a#\r
+keys ./d/f\t\C-a#\r
+keys \$v/f\t\C-a#\r
+keys \$w/f\t\C-a#\r
+keys HOME=/home/oracle/d/\r
+keys ~/f\t\C-a#\r
+keys HOME=/home/oracle//d\r
+keys ~/f\t\C-a#\r
+keys set -P; HOME=/home/oracle/d/../d\r
+keys ~/f\t\C-a#\r
+keys ls \$w//f\t\C-a#\r
+snap

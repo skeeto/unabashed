@@ -307,6 +307,27 @@ static Str compexpdir(Shell *sh, Arena *a, Str dir)
     return dir;
 }
 
+// A directory as bash's hook reads it, as cd would take it: absolute
+// against $PWD and canonical (../ under a symbolic link is its parent),
+// keeping a final slash; itself under set -P or if that names no
+// directory. *changed: canonical differs from merely absolute.
+static Str compcanon(Shell *sh, Arena *a, Str dir, b32 *changed)
+{
+    *changed = 0;
+    if (sh->opt[O_PHYSICAL] || !dir.len) return dir;
+    Str abs = dir;
+    if (!isabsolute(sh, dir)) {
+        Got pwd = getplain(sh, a, "PWD");
+        abs = joinpath(a, pwd.set && pwd.value.len ? pwd.value : sh->wd, dir);
+    }
+    Str  can = cdcanon(sh, a, abs);
+    Stat st  = pathstat(sh, *a, can, 1);
+    if (st.err || st.type!=FT_DIR) return dir;
+    if (abs[abs.len-1]=='/' && can.len && can[can.len-1]!='/') can = concat(a, can, "/");
+    *changed = can != abs;
+    return can;
+}
+
 static Slice<Str> compadd(Comp *c, Slice<Str> m, Str s)
 {
     return push(c->a, m, s);
@@ -362,23 +383,26 @@ static Slice<Str> compfiles(Editor *ed, Shell *sh, Comp *c, Str w, i32 keep)
             udir = slash ? odir : concat(a, odir, "/");
         }
     }
+    b32 moved = 0;  // the hook rewrote the directory, which direxpand shows
     if (c->dirhook) {
         // A directory the hook expands sets bash's quoting table for the
         // rest of the attempt (set_filename_quote_chars)
         Str keep = compexpchars(odir, 1);
         if (keep.len && !compexists(sh, *a, odir)) c->qkeep = keep;
-        odir = compexpdir(sh, a, odir);
-        if (sh->shopt[S_DIREXPAND] && udir.len) udir = odir;
+        Str e = compexpdir(sh, a, odir);
+        moved = e != odir;
+        odir  = e;
     }
-    if (c->dirhook && !sh->opt[O_PHYSICAL] && !isabsolute(sh, odir)) {
-        // As bash's hook, a relative directory is read as cd would take
-        // it, against $PWD: ../ under a symbolic link is its parent
-        Got pwd = getvar(sh, a, "PWD");
-        Str abs = joinpath(a, pwd.set && pwd.value.len ? pwd.value : sh->wd, odir);
-        Str can = cdcanon(sh, a, abs);
-        Stat st = pathstat(sh, *a, can, 1);
-        if (!st.err && st.type==FT_DIR) odir = can;
+    if (c->dirhook && (moved || !isabsolute(sh, odir))) {
+        // As bash's hook, the directory is read as cd would take it; a
+        // relative one that changes, unless it starts with a dot, counts
+        // as rewritten
+        b32 rel = !isabsolute(sh, odir), changed;
+        Str can = compcanon(sh, a, odir, &changed);
+        moved |= rel && changed && odir[0]!='.';
+        odir = can;
     }
+    if (sh->shopt[S_DIREXPAND] && moved && udir.len) udir = odir;
     if (c->dirhook && sh->shopt[S_DIREXPAND] && sh->shopt[S_DIRSPELL] &&
             udir.len && part.len && !compexists(sh, *a, odir)) {
         // As bash's directory hook, a misspelled directory is corrected
@@ -453,22 +477,40 @@ static Slice<Str> compcommands(Editor *ed, Shell *sh, Comp *c, Str w)
         if (w.len && w[0]=='~') {
             // The user's spelling is kept: complete the expanded name and
             // put the prefix back, unless direxpand or dirspell rewrote
-            // the directory, which the matches then carry, as bash's
+            // the directory, which the matches then carry, as bash's.
+            // With direxpand the prefix goes back as bash's hook reads
+            // it: expanded and canonical (restore_tilde).
             Str t = tildefilename(sh, a, w);
             Slice<Str> m = compfiles(ed, sh, c, t, 2);
             Str pre  = cut(w, '/').head;
             Str tpre = takehead(t, t.len - (w.len - pre.len));
             if (startswith(c->udir, tpre)) {
-                for (iz i = 0; i < m.len; i++) {
-                    m[i] = concat(a, pre, cuthead(m[i], tpre.len));
+                Str back = pre;
+                if (sh->shopt[S_DIREXPAND] && tpre!=pre) {
+                    b32 changed;
+                    back = compcanon(sh, a, tpre, &changed);
                 }
-                c->udir = concat(a, pre, cuthead(c->udir, tpre.len));
+                for (iz i = 0; i < m.len; i++) {
+                    m[i] = concat(a, back, cuthead(m[i], tpre.len));
+                }
+                c->udir = concat(a, back, cuthead(c->udir, tpre.len));
             }
             for (iz i = 0; i < m.len; i++) {
                 Str path = joinpath(a, c->odir, cuthead(m[i], c->udir.len));
                 m[i] = compexe(sh, *a, path, m[i]);
             }
             return m;
+        }
+        if (sh->shopt[S_DIREXPAND]) {
+            // bash runs its hook on the whole word first, so what the
+            // directory hook then sees has nothing left to expand
+            Str keep = compexpchars(w, 1);
+            if (keep.len && !compexists(sh, *a, w)) c->qkeep = keep;
+            Str e = compexpdir(sh, a, w);
+            if (e != w) {
+                b32 changed;
+                w = compcanon(sh, a, e, &changed);
+            }
         }
         Slice<Str> m = compfiles(ed, sh, c, w, 2);
         for (iz i = 0; i < m.len; i++) {
