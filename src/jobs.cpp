@@ -1306,8 +1306,12 @@ static void coprocfdclosed(Shell *sh, i32 fd)
         if (c->rfd!=fd && c->wfd!=fd) continue;
         if (c->rfd == fd) c->rfd = -1;
         if (c->wfd == fd) c->wfd = -1;
-        Arena scratch = *scratchat(sh, sh->capdepth+1);
+        // The assignments may run a command substitution (a nameref's
+        // subscript) at the next depth: claim this one
+        i32   depth   = ++sh->capdepth;
+        Arena scratch = *scratchat(sh, depth);
         setcoprocvars(sh, scratch, c);
+        sh->capdepth = depth - 1;
     }
 }
 
