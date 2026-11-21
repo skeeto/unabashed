@@ -3769,8 +3769,8 @@ static void tracecond(Shell *sh, Arena a, b32 invert, Str op, Str lhs, Str *rhs)
 }
 
 // Whether a signal that would end this level (an untrapped Ctrl-C) is
-// pending, to stop a regex search. Unlike glibc's, ours stops: some
-// patterns take minutes, or longer.
+// pending, to stop a regex compile or search. Unlike glibc's, ours
+// stops: some patterns take minutes, or longer.
 static b32 signoop(Shell *, i32);
 
 static b32 rxsigstop(void *ctx)
@@ -3792,7 +3792,11 @@ static i32 condregex(Shell *sh, Arena a, Str s, Str re)
     i32 flags = 0;
     if (sh->shopt[S_NOCASEMATCH]) flags |= REX_ICASE;
     if (sh->utf8) flags |= REX_UTF8;
-    RxComp rc = rxcompile(re, flags, &a);
+    RxComp rc = rxcompile(re, flags, &a, rxsigstop, sh);
+    if (!rc.re && rc.err<0) {
+        sigfatal(sh);  // stopped by a signal that ends this level
+        return 2;
+    }
     if (!rc.re) {
         Str msg = concat3(&a, "invalid regular expression `", re, "': ");
         Str msg2 = concat(&a, msg, rxerrors[rc.err]);

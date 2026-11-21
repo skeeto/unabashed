@@ -195,8 +195,22 @@ struct Regex {
 
 struct RxComp {
     Regex *re;
-    i32    err;  // RXE_*, with re null
+    i32    err;  // RXE_*, with re null, or -1 when stop gave up
 };
+
+// The caller's stop, polled now and then while compiling: true gives up
+struct RxStop {
+    b32  (*fn)(void *);
+    void  *ctx;
+    u32    ticks;
+    b32    stopped;
+};
+
+static b32 rxstopped(RxStop *s)
+{
+    if (!s->stopped && s->fn && !(++s->ticks & 0xfff)) s->stopped = s->fn(s->ctx);
+    return s->stopped;
+}
 
 // A register: a group's span, -1 when unset
 struct RxMatch {
@@ -951,11 +965,32 @@ static i32 rxedests(RxNode *x, i32 *d)
     return x->e2<0 ? 1 : 2;
 }
 
+// The latest copy of a node under some constraints, in a 4-ary hash trie
+struct RxDupKey {
+    RxDupKey *child[4];
+    i32       org;
+    i32       cons;
+    i32       idx;
+};
+
 struct RxBuild {
     Slice<RxNode> nodes;
+    RxDupKey     *dups;
+    RxStop       *stop;
     Arena        *a;
     i32           err;
 };
+
+static RxDupKey **rxdupslot(RxBuild *b, i32 org, i32 cons)
+{
+    u64        h = ((u64)(u32)org<<32 | (u32)cons) * 1111111111111111111u;
+    RxDupKey **e = &b->dups;
+    for (; *e; h <<= 2) {
+        if ((*e)->org==org && (*e)->cons==cons) break;
+        e = &(*e)->child[h>>62];
+    }
+    return e;
+}
 
 // glibc's duplicate_node: a copy of node org under constraints cons
 static i32 rxdupnode(RxBuild *b, i32 org, i32 cons)
@@ -970,17 +1005,24 @@ static i32 rxdupnode(RxBuild *b, i32 org, i32 cons)
     n.org   = org;
     n.next  = n.e1 = n.e2 = -1;
     b->nodes = push(b->a, b->nodes, n);
-    return (i32)b->nodes.len - 1;
+    RxDupKey **e = rxdupslot(b, org, n.cons);
+    if (!*e) {
+        *e = alloc<RxDupKey>(b->a);
+        (*e)->org  = org;
+        (*e)->cons = n.cons;
+    }
+    (*e)->idx = (i32)b->nodes.len - 1;
+    return (*e)->idx;
 }
 
-// glibc's search_duplicated_node: among the copies made last
+// glibc's search_duplicated_node: the latest of the copies made last.
+// glibc scans back over the nodes while they are copies, and those are
+// all rxdupnode's, the parse's last node being the end, no copy: the
+// trie finds the same one without the scan, quadratic in copies.
 static i32 rxfinddup(RxBuild *b, i32 org, i32 cons)
 {
-    for (i32 i = (i32)b->nodes.len-1; i>0 && b->nodes.data[i].dup; i--) {
-        RxNode *n = b->nodes.data + i;
-        if (n->org==org && n->cons==cons) return i;
-    }
-    return -1;
+    RxDupKey *e = *rxdupslot(b, org, cons);
+    return e ? e->idx : -1;
 }
 
 static void rxaddedest(RxNode *x, i32 d)
@@ -1009,6 +1051,10 @@ static void rxdupclosure(RxBuild *b, i32 root, i32 cons)
     i32 org   = root;
     i32 clone = root;
     for (;;) {
+        if (rxstopped(b->stop)) {
+            b->err = -1;
+            return;
+        }
         RxNode *on = b->nodes.data + org;
         b32     second = 0;
         if (on->type == RT_BACKREF) {
@@ -1076,52 +1122,39 @@ static void rxdupclosure(RxBuild *b, i32 root, i32 cons)
 
 // glibc's calc_eclosure, for its side effect: anchors get their copies
 // in the order glibc makes them, the first time its depth-first walk
-// reaches each. The walk's bookkeeping of unfinished closures decides
-// which nodes it enters again, so it is kept.
+// reaches each. glibc enters again a node whose closure it left
+// unfinished, exponentially often under nested empty loops, as in
+// (|a){1,2}{1,2}{2,}{2}{2,}{1,3}, but entering a node again never
+// enters one for the first time: the ways out of a node it left were
+// all entered, and only a node entered for the first time gets copies
+// or changes its ways out. So the first entries, which alone matter,
+// are those of a plain depth-first walk.
 static void rxeclosures(RxBuild *b)
 {
-    struct Frame {
-        i32 node;
-        i32 k;
-        b32 root;
-        b32 incomplete;
-    };
-    Slice<u8> status = {};  // 0 to do, 2 in progress, 1 done
-    for (iz i = 0; i < b->nodes.len; i++) status = push(b->a, status, (u8)0);
-    Slice<Frame> stack = {};
+    Slice<u8>  seen  = {};
+    Slice<i32> stack = {};
     for (i32 i = 0; i < b->nodes.len; i++) {
-        if (status.data[i]) continue;
-        Frame f = {i, 0, 1, 0};
-        stack = push(b->a, stack, f);
-        for (b32 enter = 1; stack.len;) {
-            Frame *t = stack.data + stack.len - 1;
-            if (enter) {
-                enter = 0;
-                status.data[t->node] = 2;
-                RxNode *x = b->nodes.data + t->node;
-                if (x->cons && x->e1>=0 && !b->nodes.data[x->e1].dup) {
-                    rxdupclosure(b, t->node, x->cons);
-                    if (b->err) return;
-                    while (status.len < b->nodes.len) status = push(b->a, status, (u8)0);
-                    t = stack.data + stack.len - 1;
-                }
+        while (seen.len < b->nodes.len) seen = push(b->a, seen, (u8)0);
+        if (seen.data[i]) continue;
+        stack = push(b->a, stack, i);
+        while (stack.len) {
+            i32 n = stack.data[--stack.len];
+            if (seen.data[n]) continue;
+            seen.data[n] = 1;
+            if (rxstopped(b->stop)) {
+                b->err = -1;
+                return;
             }
-            RxNode *x = b->nodes.data + t->node;
-            if (rxeps(x->type) && t->k<2 && (t->k ? x->e2 : x->e1)>=0) {
-                i32 d = t->k++ ? x->e2 : x->e1;
-                if (status.data[d] == 2) {
-                    t->incomplete = 1;
-                } else if (!status.data[d]) {
-                    Frame g = {d, 0, 0, 0};
-                    stack = push(b->a, stack, g);
-                    enter = 1;
-                }
-                continue;
+            RxNode *x = b->nodes.data + n;
+            if (x->cons && x->e1>=0 && !b->nodes.data[x->e1].dup) {
+                rxdupclosure(b, n, x->cons);
+                if (b->err) return;
+                while (seen.len < b->nodes.len) seen = push(b->a, seen, (u8)0);
+                x = b->nodes.data + n;
             }
-            status.data[t->node] = t->incomplete && !t->root ? 0 : 1;
-            b32 undone = !status.data[t->node];
-            stack.len--;
-            if (stack.len && undone) stack.data[stack.len-1].incomplete = 1;
+            if (!rxeps(x->type) || x->e1<0) continue;
+            if (x->e2 >= 0) stack = push(b->a, stack, x->e2);
+            stack = push(b->a, stack, x->e1);
         }
     }
 }
@@ -1145,10 +1178,12 @@ static void rxstatic(Regex *re, i32 x, u32 *set, i32 *stack)
     }
 }
 
-// Compile pat. The result lives in a.
-static RxComp rxcompile(Str pat, i32 flags, Arena *a)
+// Compile pat. The result lives in a. stop is polled as in rxexec.
+static RxComp rxcompile(Str pat, i32 flags, Arena *a,
+                        b32 (*stop)(void *) = 0, void *stopctx = 0)
 {
     RxComp  r = {};
+    RxStop  halt = {stop, stopctx, 0, 0};
     RxParse p = {};
     p.raw   = pat;
     p.pat   = pat;
@@ -1251,7 +1286,8 @@ static RxComp rxcompile(Str pat, i32 flags, Arena *a)
     }
 
     RxBuild b = {};
-    b.a = a;
+    b.a    = a;
+    b.stop = &halt;
     b.nodes.data = alloc<RxNode>(a, count);
     b.nodes.len  = b.nodes.cap = count;
     for (iz i = 0; i < nodes.len; i++) {
@@ -1335,17 +1371,18 @@ static RxComp rxcompile(Str pat, i32 flags, Arena *a)
     }
 
     re->refs = alloc<i32>(a, p.nsub);
+    i32 *closes = alloc<i32>(a, p.nsub);
+    for (i32 i = 0; i < count; i++) {
+        RxNode *x = re->nodes + i;
+        if (x->type == RT_CLOSE) closes[x->arg]++;
+    }
     for (i32 i = 0; i < count; i++) {
         RxNode *x = re->nodes + i;
         if (x->type != RT_BACKREF) continue;
         i32 k = 0;
         while (k<re->nrefs && re->refs[k]!=x->arg) k++;
         if (k == re->nrefs) re->refs[re->nrefs++] = x->arg;
-        i32 closes = 0;
-        for (i32 j = 0; j < count; j++) {
-            closes += re->nodes[j].type==RT_CLOSE && re->nodes[j].arg==x->arg;
-        }
-        re->copies |= closes > 1;
+        re->copies |= closes[x->arg] > 1;
     }
 
     // The initial state's nodes, as glibc's create_initial_state: the

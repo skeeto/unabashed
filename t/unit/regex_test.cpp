@@ -218,6 +218,28 @@ static void hostile(Arena perm)
         expect(seconds()-t < 5, "too big fails at once", {});
     }
     {
+        // Nested empty loops: glibc's closure walk enters nodes again
+        // exponentially often (minutes, for glibc too), and copies after
+        // anchors are found without a scan of all copies
+        Arena  a = perm;
+        double t = seconds();
+        Str    r = run(&a, "(|a){1,2}{1,2}{2,}{2}{2,}{1,3}", "", 0);
+        expect(r=="(0,0)(0,0)", "(|a){1,2}{1,2}{2,}{2}{2,}{1,3}", r);
+        r = run(&a, "(|a){1,2}{1,2}{2,}{2}{2,}{1,3}|^b", "b", 0);
+        expect(r=="(0,1)(-1,-1)", "(|a){1,2}{1,2}{2,}{2}{2,}{1,3}|^b", r);
+        r = run(&a, "(a|^){3000}", "a", 0);
+        expect(r=="err 12", "(a|^){3000}", r);
+        expect(seconds()-t < 5, "compiling nested empty loops is quick", {});
+    }
+    {
+        // A stop ends a long compile
+        Arena  a = perm;
+        RxComp c = rxcompile("(a|^){3000}", 0, &a, [](void *) -> b32 { return 1; });
+        expect(!c.re && c.err==-1, "stopped compile", {});
+        c = rxcompile("(|a){1,2}{1,2}{2,}{2}{2,}", 0, &a, [](void *) -> b32 { return 0; });
+        expect(!!c.re, "compile not stopped", {});
+    }
+    {
         // A long alternation and a long concatenation
         Arena a = perm;
         Str   p = repeat(&a, "x|", 20000);
