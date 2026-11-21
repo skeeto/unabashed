@@ -939,6 +939,9 @@ static Str promptdecode(X *x, Str s)
 // including those that its expansions produce.
 static Str nativeprompt(Shell *sh, Arena *a, Str s)
 {
+    // A copy of the variable's value: after an expansion error, which
+    // may follow code that assigned it, the text itself is decoded
+    s = clone(a, s);
     X *x = newx(sh, a);
     if (sh->shopt[S_PROMPTVARS] || sh->opt[O_POSIX]) {
         s = promptexpand(x, s, XC_DQUOTE|XC_PROMPT|XC_KEEPDS);
@@ -1263,11 +1266,14 @@ static Param getelems(X *x, Str name, Str sub, b32 length)
     return r;
 }
 
-// ${name[sub]} for one element, as a nameref to it reads.
+// ${name[sub]} for one element, as a nameref to it reads. The name and
+// subscript may be the nameref's text, which the subscript can free.
 static Got getelem(Shell *sh, Arena *a, Str name, Str sub)
 {
     X    *x = newx(sh, a);
+    storehold(sh->store);
     Param p = getelems(x, name, sub);
+    storeunhold(sh->store);
     Got   r = {};
     if (p.list) {
         r.value = joinparams(a, Args{p.lv, p.ln}, p.star ? starsep(sh, a) : Str(" "));
@@ -1585,6 +1591,8 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             hassub   = 0;
         }
     }
+    Str iname = name, isub = sub;  // the indirection, for := to resolve
+    b32 ihassub = hassub;          // again
     if (indirect) {
         if (q.list && !q.ln) {
             if (hassub && !lookup(sh, name)) {  // a missing array, as above
@@ -1708,6 +1716,22 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         if (op == '-') {
             expandinto(x, word, wctx);
         } else if (op == '=') {
+            Str v = {};
+            if (indirect) {
+                // As bash, the word first, then the indirection again,
+                // as the word may have changed it: it must name a variable
+                v = expandword(x, word, wctx);
+                Param r = ihassub ? getelems(x, iname, isub) : getparam(x, iname);
+                if (r.list) r.value = joinparams(x->a, Args{r.lv, r.ln}, " ");
+                if (!r.value.len || !validvarname(r.value)) {
+                    Arena a = *x->a;
+                    Str   m = !r.value.len ? concat(&a, uname, ": invalid indirect expansion")
+                            : concat(&a, r.value, ": invalid variable name");
+                    expansionerror(sh, a, m);
+                }
+                name   = r.value;
+                hassub = elem = 0;
+            }
             // an associative array takes @ and * as keys
             Value *av   = hassub && !elem ? lookup(sh, name) : 0;
             b32    akey = av && av->arr && av->arr->bucket;
@@ -1716,7 +1740,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
                 Str   m = concat3(&a, "$", hassub ? uname : name, ": cannot assign in this way");
                 expansionerror(sh, a, m);
             }
-            Str v = expandword(x, word, wctx);
+            if (!indirect) v = expandword(x, word, wctx);
             Value *self = elem ? 0 : rawlookup(sh, name);
             b32 refself = self && (self->attrs & V_NAMEREF) && !self->str.len;
             b32 ok = akey ? setelem(sh, *x->a, name, 0, sub, v)
@@ -3465,7 +3489,11 @@ static b32 assignelem(Shell *sh, Arena scratch, Str name, Str sub, Str word, Str
 {
     if (!(flags & SV_NOREF)) name = arraytarget(sh, scratch, name, &flags);
     if (!name.data) return 0;
-    name = clone(&scratch, name);  // the subscript may run code
+    // Copies of what may be a nameref's text: the subscript may run
+    // code that frees it, and so may an integer's value, evaluated
+    // before a raw key is stored
+    name = clone(&scratch, name);
+    sub  = clone(&scratch, sub);
     Sub s = evalsub(sh, &scratch, name, sub, word, flags & SV_RAWKEY);
     if (!s.ok) return 0;
     return setelem(sh, scratch, name, s.idx, s.key, value, flags & ~SV_RAWKEY);

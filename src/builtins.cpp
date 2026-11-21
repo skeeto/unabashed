@@ -1597,7 +1597,8 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
     i32 rflags = 0;
     name = arraytarget(sh, scratch, name, &rflags);
     if (!name.data) return 1;
-    name = clone(&scratch, name);  // the subscript may run code
+    name = clone(&scratch, name);  // the subscript may run code, which
+    sub  = clone(&scratch, sub);   // may free a nameref's text
     Var *v = findvar(sh, name);
     if (!v || !v->top) return 0;
     Value *cur = v->top;

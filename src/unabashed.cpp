@@ -493,7 +493,8 @@ static void envfile(Shell *sh, Arena scratch, Str var, Startup *s)
 {
     Got g = getplain(sh, &scratch, var);
     if (!g.value.len) return;
-    Str name = expandfilename(sh, &scratch, g.value);
+    // A copy: the file may assign the variable whose value this may be
+    Str name = clone(&scratch, expandfilename(sh, &scratch, g.value));
     if (name.len) startupfile(sh, scratch, name, s);
 }
 
