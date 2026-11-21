@@ -3043,6 +3043,7 @@ static i32 callfunction(Shell *sh, Func *fn, Str *argv, iz argc, Arena scratch)
     sh->ctlline   = ctlline;
     sh->errline   = errline;
     sh->funcline  = funcline;
+    sh->line      = f.line;  // as bash, before the locals go (their hooks)
     leaveframe(sh, &f);
     freeargs(sh->store, sh->argsown);  // what set made in the call
     sh->args    = saved;
@@ -3799,7 +3800,12 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             }
         }
         sh->redirs = redirs;
+        // bash puts its line back to the enclosing command's before it
+        // drops the temporary environment: hooks (setlocale) cite that
+        i32 line = sh->line;
+        sh->line = sh->ctlline;
         poptemps(sh, tb);
+        sh->line = line;
     } else {
         // bash redirects a program in its forked child, so a procsub
         // there does not set $! here
