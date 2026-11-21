@@ -4928,7 +4928,7 @@ static i32 b_title(Shell *sh, Str *args, iz nargs, Arena scratch)
 static void compaliases(Alias *t, Arena *a, Slice<Str> *out)
 {
     if (!t) return;
-    *out = push(a, *out, t->name);
+    if (t->value.data) *out = push(a, *out, t->name);  // else unaliased
     for (i32 i = 0; i < 4; i++) compaliases(t->child[i], a, out);
 }
 
