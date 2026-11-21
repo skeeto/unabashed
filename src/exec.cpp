@@ -3524,6 +3524,77 @@ static Slice<Str> envlastarg(Shell *sh, Arena *a, Slice<Str> env, Str name)
     return env;
 }
 
+// Run builtin bi as a simple command does, its output buffered. Out of
+// line, as runsimple1's frame is one per function call level.
+[[gnu::noinline]]
+static void callbuiltin(Shell *sh, Builtin *bi, Str name, Slice<Str> argv,
+                        Slice<u8> compargs, DeclTrace *dt, b32 forked, b32 special,
+                        Arena scratch)
+{
+    BOut  b     = {};
+    BOut *saved = sh->bout;
+    b.b  = Buf(&scratch, (iz)1<<12);
+    sh->bout = &b;
+    Slice<u8> savedcomp = sh->compargs;
+    sh->compargs = compargs;
+    Str  savedname  = sh->bltname;
+    Str *savedargs  = sh->bltargs;
+    iz   savednargs = sh->nbltargs;
+    sh->bltname  = name;
+    sh->bltargs  = argv.data;
+    sh->nbltargs = argv.len;
+    sh->nowriteerr = 0;
+    sh->bifatal    = 0;
+    sh->rawstatus  = 0;
+    sh->decltrace  = dt;
+    // As bash, eval, source and command run as a condition turn
+    // off set -e for report_error's errors in all they run
+    b32 errexitoff = sh->errexitoff;
+    if (sh->noerrexit && !forked &&
+        (bi->fn==b_eval || bi->fn==b_source || bi->fn==b_command)) {
+        sh->errexitoff = 1;
+    }
+    sh->status = runbuiltin(sh, bi, argv.data, argv.len, scratch);
+    sh->errexitoff = errexitoff;
+    if (sh->decltrace) tracedecl(sh, scratch, sh->decltrace);
+    sh->decltrace = 0;
+    // Only bash's forked child, which exits with the builtin's
+    // own status, shows an internal one; the shell maps it to 1
+    if (forked && sh->status && sh->rawstatus) {
+        sh->status = sh->rawstatus & 0xff;
+    }
+    sh->rawstatus = 0;
+    b32 fatal = special && sh->bifatal && posixfatal(sh) && !sh->noerrexit;
+    sh->bifatal = 0;
+    if (fatal) {
+        // As bash, a special builtin's error (a usage error, an
+        // invalid identifier, ...) ends a POSIX shell
+        sh->bltname  = savedname;
+        sh->bltargs  = savedargs;
+        sh->nbltargs = savednargs;
+        sh->compargs = savedcomp;
+        sh->bout     = saved;
+        if (b.b.len) fdwrite(sh, 1, finish(&b.b));
+        sh->exiting = 1;
+        escape(sh, ESC_EXIT);
+    }
+    sh->bltname  = savedname;
+    sh->bltargs  = savedargs;
+    sh->nbltargs = savednargs;
+    sh->compargs = savedcomp;
+    sh->bout = saved;
+    b32 failed = (b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed;
+    if (failed && !sh->nowriteerr) {
+        i32 e   = sh->writeerr;
+        b32 keep = e==E_PIPE || e==E_NOSPC || e==E_ACCES || e==E_NOMEM ||
+                   e==E_FBIG || e==E_DQUOT;
+        Str why  = errtext(keep ? e : E_BADF);
+        Str msg = concat(&scratch, "write error: ", why);
+        builtinerror(sh, scratch, name, msg);
+        sh->status = 1;
+    }
+}
+
 static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, Temps *tb)
 {
     // A direct pipeline stage's program starts without waiting, but not
@@ -3889,7 +3960,6 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
         escape(sh, special&&!fn ? ESC_FATAL : ESC_DISCARD);
     }
 
-    b32 tempsbind = 0;
     if (fn || bi) {
         // bash's child for a stage counts as a subshell once its words
         // expand, so only for what a builtin or function runs; the
@@ -3949,73 +4019,12 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
             callfunction(sh, fn, argv.data, argv.len, scratch);
             sh->line = fnline(sh, n->line);
         } else {
-            BOut  b     = {};
-            BOut *saved = sh->bout;
-            b.b  = Buf(a, (iz)1<<12);
-            sh->bout = &b;
-            Slice<u8> savedcomp = sh->compargs;
-            sh->compargs = compargs;
-            Str  savedname  = sh->bltname;
-            Str *savedargs  = sh->bltargs;
-            iz   savednargs = sh->nbltargs;
-            sh->bltname  = name;
-            sh->bltargs  = argv.data;
-            sh->nbltargs = argv.len;
-            sh->nowriteerr = 0;
-            sh->bifatal    = 0;
-            sh->rawstatus  = 0;
-            sh->decltrace  = dt;
-            // As bash, eval, source and command run as a condition turn
-            // off set -e for report_error's errors in all they run
-            b32 errexitoff = sh->errexitoff;
-            if (sh->noerrexit && !forked &&
-                (bi->fn==b_eval || bi->fn==b_source || bi->fn==b_command)) {
-                sh->errexitoff = 1;
-            }
-            sh->status = runbuiltin(sh, bi, argv.data, argv.len, scratch);
-            sh->errexitoff = errexitoff;
-            if (sh->decltrace) tracedecl(sh, scratch, sh->decltrace);
-            sh->decltrace = 0;
-            // Only bash's forked child, which exits with the builtin's
-            // own status, shows an internal one; the shell maps it to 1
-            if (forked && sh->status && sh->rawstatus) {
-                sh->status = sh->rawstatus & 0xff;
-            }
-            sh->rawstatus = 0;
-            b32 fatal = special && sh->bifatal && posixfatal(sh) && !sh->noerrexit;
-            sh->bifatal = 0;
-            if (fatal) {
-                // As bash, a special builtin's error (a usage error, an
-                // invalid identifier, ...) ends a POSIX shell
-                sh->bltname  = savedname;
-                sh->bltargs  = savedargs;
-                sh->nbltargs = savednargs;
-                sh->compargs = savedcomp;
-                sh->bout     = saved;
-                if (b.b.len) fdwrite(sh, 1, finish(&b.b));
-                sh->exiting = 1;
-                escape(sh, ESC_EXIT);
-            }
-            sh->bltname  = savedname;
-            sh->bltargs  = savedargs;
-            sh->nbltargs = savednargs;
-            sh->compargs = savedcomp;
-            sh->bout = saved;
-            b32 failed = (b.b.len && !fdwrite(sh, 1, finish(&b.b))) || b.failed;
-            if (failed && !sh->nowriteerr) {
-                i32 e   = sh->writeerr;
-                b32 keep = e==E_PIPE || e==E_NOSPC || e==E_ACCES || e==E_NOMEM ||
-                           e==E_FBIG || e==E_DQUOT;
-                Str why  = errtext(keep ? e : E_BADF);
-                Str msg = concat(&scratch, "write error: ", why);
-                builtinerror(sh, scratch, name, msg);
-                sh->status = 1;
-            }
+            callbuiltin(sh, bi, name, argv, compargs, dt, forked, special, scratch);
         }
         sh->redirs = redirs;
-        // bash binds $_ while a builtin's temporary bindings last
-        tempsbind = !fn && tb && tb->n && bindintemps(sh, argv);
-        if (!tempsbind) {
+        // bash binds $_ while a builtin's temporary bindings last (they
+        // stay in tb until then)
+        if (fn || !tb || !tb->n || !bindintemps(sh, argv)) {
             // bash puts its line back to the enclosing command's before
             // it drops the temporary environment: hooks (setlocale) cite
             // that
@@ -4087,7 +4096,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
     // before ERR and set -e, as bash binds it
     bindlastarg(sh, scratch, *last, *who);
     *last = {};
-    if (tempsbind) {
+    if (tb && tb->n) {
         i32 line = sh->line;  // the enclosing command's, as above
         sh->line = sh->ctlline;
         poptemps(sh, tb);
