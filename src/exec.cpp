@@ -3265,11 +3265,12 @@ struct Temps {
     Str   *names;  // bound now, the innermost last
     iz     n;
     Str   *argv;   // once runprogram undoes them, its argv (undotemps)
+    b32    keep;   // a stage or job's builtin or function: never unbound
 };
 
 static void poptemps(Shell *sh, Temps *tb)
 {
-    while (tb && tb->n) poptemp(sh, tb->names[--tb->n]);
+    while (tb && !tb->keep && tb->n) poptemp(sh, tb->names[--tb->n]);
 }
 
 // The xtrace of a declaration builtin given a literal name=(...): bash
@@ -3822,6 +3823,10 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
                 }
             }
         }
+        // bash's child forked for a stage or job exits once the builtin
+        // or function returns, these still bound: no hook runs again (a
+        // setlocale warning), and its EXIT trap still sees them
+        if (tb) tb->keep = forked;
         if (fn) {
             // Until its first simple command ends, a function's name
             // prefixes errors from declaration arguments name=(...)
