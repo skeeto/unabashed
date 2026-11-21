@@ -1,0 +1,20 @@
+== snap 1
+$
+@ 0,2
+== snap 2
+$ xxx
+@ 0,2
+== snap 3
+$ xxx
+bash: xxx: command not found
+$ echo ok
+ok
+$
+@ 4,2 bell 1
+== snap 4
+$ xxx
+bash: xxx: command not found
+$ echo ok
+ok
+$
+@ 4,2 bell 1

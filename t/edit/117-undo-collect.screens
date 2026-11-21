@@ -1,0 +1,16 @@
+== snap 1
+$ Xecho one
+@ 0,11
+== snap 2
+$ echo one
+@ 0,2
+== snap 3
+$ echo one
+one
+$
+@ 2,2
+== snap 4
+$ echo one
+one
+$
+@ 2,2

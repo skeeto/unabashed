@@ -1,0 +1,14 @@
+# One line's undo list longer than hmem holds: 45 times 100000
+# characters inserted and deleted, each deletion's text kept for undo,
+# once ran the vos out of memory. Now the list is cut to its newer half
+# as it fills hmem, and undo still goes back over the last changes.
+rc PS1='$ '
+keys \e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u
+keys \e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u
+keys \e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u\e100000x\C-u
+keys \C-l
+snap
+keys \C-_\C-a\e99997\C-d\C-l
+snap
+keys \C-u\recho ok\r
+snap

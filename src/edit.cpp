@@ -698,6 +698,7 @@ struct Editor {
     u8       lastc;     // the first key of the last command
     // EdUndo, and the kill ring, lasting from line to line
     Arena    hmem;      // undo lists, which history entries keep
+    iz       hlive;     // its size when last collected (edundogc)
     EdUndo    *undo;
     b32      undoing;
     Arena    kmem[2];   // the kill ring, compacted from one to the other
@@ -2311,6 +2312,109 @@ static void ednexthist(Editor *ed, Shell *sh, i64 count)
     } else {
         edload(ed, sh, ed->hpos+(iz)count);
         edhistset(ed);
+    }
+}
+
+// Undo records last while history entries keep them, so hmem, where
+// they are, starts again with a line only when none does (edline).
+// Otherwise its dropped records are collected before a command, when
+// hmem has doubled since the last time, or is three quarters full: the
+// records still in lists, of
+// the line, the saved new line and the entries, are copied out to the
+// scratch, then back to the start of hmem, each list given its copy.
+// Not in a nested call, whose outer line's lists it cannot see. In a
+// subshell, a list going on into the parent's records (outside hmem)
+// keeps them as they are.
+//
+// Should the lists still fill half of hmem, each is cut to its newer
+// half and they are copied again, until they fit: undo then goes back
+// only so far, where running out would have ended the shell. A command
+// adds less than a quarter (an insert or deletion is at most a line).
+enum : i32 { U_MOVED = -1 };  // copied: next is the copy
+
+struct EdUndoGc {
+    byte *lo, *hi;   // the records copied, in hmem
+    byte *to;        // where the copies go in the end
+    byte *at;        // where they are copied first, in the scratch
+    Arena a;
+};
+
+static b32 edwithin(void *p, byte *lo, byte *hi)
+{
+    return (byte *)p>=lo && (byte *)p<hi;
+}
+
+static EdUndo *edundocopy(EdUndoGc *g, EdUndo *u)
+{
+    EdUndo  *head = 0;
+    EdUndo **tail = &head;
+    for (;;) {
+        if (!u || !edwithin(u, g->lo, g->hi)) {
+            *tail = u;
+            break;
+        } else if (u->kind == U_MOVED) {
+            *tail = u->next;
+            break;
+        }
+        EdUndo *next = u->next;
+        EdUndo *c    = alloc<EdUndo>(&g->a);
+        *c = *u;
+        c->next = 0;
+        if (u->text.len && edwithin(u->text.data, g->lo, g->hi)) {
+            byte *t = (byte *)clone(&g->a, u->text).data;
+            c->text.data = (u8 *)(g->to + (t - g->at));
+        }
+        u->kind = U_MOVED;
+        u->next = (EdUndo *)(g->to + ((byte *)c - g->at));
+        *tail   = u->next;
+        tail    = &c->next;
+        u = next;
+    }
+    return head;
+}
+
+static void edundocut(Editor *ed, EdUndo *u)  // to its newer half
+{
+    Mem *m = ed->hmem.mem;
+    iz   n = 0;
+    for (EdUndo *p = u; p && edwithin(p, (byte *)(m+1), m->limit); p = p->next) n++;
+    for (iz i = 1; i < (n+1)/2; i++) u = u->next;
+    if (n > 1) u->next = 0;
+}
+
+static void edundogc(Editor *ed, Shell *sh)
+{
+    Mem  *m    = ed->hmem.mem;
+    byte *base = (byte *)(m+1);
+    iz    used = ed->hmem.beg - base;
+    iz    cap  = m->limit - base;
+    if (ed->busy!=1 || used<((iz)1<<16)) return;
+    if (used<2*ed->hlive && used<cap/4*3) return;
+    Hist *h = &sh->hist;
+    for (i32 round = 0;; round++) {
+        EdUndoGc g = {};
+        g.lo = base;
+        g.hi = ed->hmem.beg;
+        g.to = base;
+        g.a  = *scratchat(sh, sh->capdepth+1);
+        allocbytes(&g.a, -(uz)(g.a.beg - base) & 15);  // copies as aligned
+        g.at = g.a.beg;
+        ed->undo       = edundocopy(&g, ed->undo);
+        ed->hsavedundo = ed->hsaved ? edundocopy(&g, ed->hsavedundo) : 0;
+        for (iz i = 0; i < h->len; i++) {
+            HistEnt *e = h->ents[i];
+            if (edwithin(e->undo, g.lo, g.hi)) {
+                histedit(sh, i, e->line, edundocopy(&g, e->undo));
+            }
+        }
+        iz live = g.a.beg - g.at;
+        copybytes(base, g.at, live);
+        ed->hmem.beg = base + live;
+        ed->hlive    = live;
+        if (live<=cap/2 || round==8) break;
+        edundocut(ed, ed->undo);
+        edundocut(ed, ed->hsavedundo);
+        for (iz i = 0; i < h->len; i++) edundocut(ed, h->ents[i]->undo);
     }
 }
 
@@ -5691,7 +5795,10 @@ static void edresetarg(Editor *ed)
 // one. False at the end of input.
 static b32 eddispatch(Editor *ed, Shell *sh)
 {
-    if (!ed->incmd) ed->cmdmem = *scratchat(sh, ed->cmddepth);
+    if (!ed->incmd) {
+        ed->cmdmem = *scratchat(sh, ed->cmddepth);
+        edundogc(ed, sh);
+    }
     ed->seqstart = ed->kbdrec.len;
     EdSeq s = edreadseq(ed, sh);
     if (s.status == ED_INTR) {
@@ -6019,7 +6126,10 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     // outer line, which a nested call returns to, still edits
     b32 kept = ed->busy > 1;
     for (iz i = 0; i < sh->hist.len; i++) kept |= !!sh->hist.ents[i]->undo;
-    if (!kept) ed->hmem = {(byte *)(ed->hmem.mem+1), ed->hmem.end, ed->hmem.mem};
+    if (!kept) {
+        ed->hmem  = {(byte *)(ed->hmem.mem+1), ed->hmem.end, ed->hmem.mem};
+        ed->hlive = 0;
+    }
 
     // Lines of the prompt before its last are written once
     iz nl = prompt.len;

@@ -1,0 +1,23 @@
+# Undo records dropped while a history entry keeps its own list: hmem,
+# where they are, once started again only when no entry kept one, and
+# a long session ran out of it (os_oom). Here each line's 100000-byte
+# deletion is dropped with its line, and on the vos 45 of them filled
+# hmem. The entry's own list still undoes its change afterward.
+rc PS1='$ '
+keys echo one\r
+keys \C-p\C-aX\C-n
+keys \e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r
+keys \e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r
+keys \e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r
+keys \e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r
+keys \e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r
+keys \e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r
+keys \e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r
+keys \e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r
+keys \e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r\e100000x\C-u\r
+keys \C-l\C-p
+snap
+keys \C-_
+snap
+keys \r
+snap
