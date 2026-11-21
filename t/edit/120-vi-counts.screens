@@ -1,0 +1,31 @@
+== snap 1
+$
+@ 0,2
+== snap 2
+$ zy
+@ 0,3
+== snap 3
+$ 0123456789abcdef
+@ 0,3
+== snap 4
+$ xxxxxxxxxxxxcdefb
+@ 0,18
+== snap 5
+$ xxyxyxy789abcdef
+@ 0,8
+== snap 6
+$ xy23456789abcdef
+@ 0,5
+== snap 7
+$ xy23456789abcdef
+@ 0,5
+== snap 8
+$ echo ok
+ok
+$
+@ 2,2
+== snap 9
+$ echo ok
+ok
+$
+@ 2,2

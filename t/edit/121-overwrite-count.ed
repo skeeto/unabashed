@@ -1,0 +1,13 @@
+# overwrite-mode with a count: the characters typed over, and undone,
+# as readline's, now built as one insert and one deletion, where on a
+# long line the count once took an undo record or two per character.
+rc PS1='$ '
+rc bind '"\C-xo": overwrite-mode'
+keys abcdefgh\C-a\C-f\C-xo\e3x
+snap
+keys \C-_
+snap
+keys \e\C-e\e9y
+snap
+keys \C-_
+snap

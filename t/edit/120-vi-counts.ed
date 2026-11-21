@@ -1,0 +1,27 @@
+# vi commands with a large count: p and . once put or inserted count
+# times, an undo record each time, and on the vos 100000 of them ran
+# out of memory for undo. Now . builds its text once, the same text and
+# undo (it is one group), as does p when its records would take too
+# much of hmem. r and R's ., also built once, undo as before, and r
+# keeps each character's kill, the ring's last ten of them.
+rc PS1='$ '
+rc set -o vi
+keys abcd\e0l2x
+keys 100000p
+keys 0d$\C-l
+snap
+keys izy\e100000.
+keys u\C-l
+snap
+keys cc0123456789abcdef\e012rxu
+snap
+keys 012rx$p
+snap
+keys cc0123456789abcdef\e0Rxy\e3.
+snap
+keys u
+snap
+keys \C-l
+snap
+keys cc\eiecho ok\r
+snap

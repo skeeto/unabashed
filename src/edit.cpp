@@ -1884,6 +1884,8 @@ static void edpush(Editor *ed, i32 c)
 // The bell, as bell-style says: a flash of reverse video for visible
 static void edbell(Editor *ed)
 {
+    // Not piled up without end in the output, as a count's loop could
+    if (ed->out_.len >= (1<<16)) return;
     switch (ed->vars.bellstyle) {
     case 0: break;
     case 1: edput(ed, "\x1b[?5h\x1b[?5l"); break;
@@ -2057,6 +2059,21 @@ static b32 edinsert(Editor *ed, Str s)
     ed->line.len += s.len;
     ed->point    += s.len;
     return 1;
+}
+
+// s count times, built once and inserted as one: false, and the bell,
+// past the longest line.
+static b32 edinsertn(Editor *ed, Str s, iz count)
+{
+    if (count<=0 || !s.len) return 1;
+    if (count > (edlinemax(ed)-ed->line.len)/s.len) {
+        edbell(ed);
+        return 0;
+    }
+    Arena a = ed->cmdmem;
+    Buf   b(&a, s.len*count);
+    for (iz i = 0; i < count; i++) print(&b, s);
+    return edinsert(ed, finish(&b));
 }
 
 // Delete [beg, end), either way round; point stays on the same text.
@@ -3778,14 +3795,23 @@ static void edplay(Editor *ed, Shell *sh, Str keys, i32 count = 1)
 
 // Readline's _rl_overwrite_char: ch in place of the character at
 // point, count times, undone as one.
+// More than once, as one deletion and one insert: the same text and
+// undo, in records not growing with the count.
 static void edoverchar(Editor *ed, Str ch, i32 count)
 {
     edgroup(ed, U_BEGIN);
-    for (i32 i = 0; i < count; i++) {
+    if (count == 1) {
         edinsert(ed, ch);
         if (ed->point < ed->line.len) {
             eddelete(ed, ed->point, ednext(ed, ed->point));
         }
+    } else if (count > 1) {
+        iz end = ed->point;
+        for (i32 i = 0; i<count && end<ed->line.len; i++) end = ednext(ed, end);
+        // Inserted, then the characters after deleted, so that undo
+        // leaves point where the count of each would
+        iz n = end - ed->point;
+        if (edinsertn(ed, ch, count)) eddelete(ed, ed->point, ed->point+n);
     }
     edgroup(ed, U_END);
 }
@@ -3811,10 +3837,8 @@ static void edselfinsert(Editor *ed, Shell *sh, u8 key, i32 count)
         edoverchar(ed, ch, count);
     } else if (count == 1) {
         edinsert(ed, ch);
-    } else if (edfits(ed, ed->line.len + len*count)) {
-        Buf b(&ed->cmdmem, len*count);
-        for (i32 i = 0; i < count; i++) print(&b, ch);
-        edinsert(ed, finish(&b));
+    } else {
+        edinsertn(ed, ch, count);
     }
 }
 
@@ -4326,7 +4350,21 @@ static void viput(Editor *ed, u8 key, i32 count)  // p and P
         // yank-pop of a put at column 0 leaves the point at -1
         ed->point = ed->point<0 ? 0 : ednext(ed, ed->point);
     }
-    while (count-- > 0) edyank(ed);
+    // As readline's, count yanks, one after another, each undone on its
+    // own. So many that their undo records would take an eighth of
+    // what hmem has left are instead built once and inserted as one,
+    // the same text, undone at once.
+    Mem *m   = ed->hmem.mem;
+    iz   max = (m->limit - ed->hmem.beg) / 8 / (iz)sizeof(EdUndo);
+    if (count<=max || !ed->nkills) {
+        for (iz len = -1; count-- > 0 && len!=ed->line.len;) {
+            len = ed->line.len;
+            edyank(ed);  // until it fails
+        }
+    } else {
+        Str k = ed->kills[ed->killidx];
+        if (edinsertn(ed, k, count)) ed->mark = ed->point - k.len;
+    }
     ed->point = edcharmove(ed, ed->point, -1);
 }
 
@@ -4628,22 +4666,28 @@ static void viredo(Editor *ed, Shell *sh, i32 count)
         if (last == 'I') ed->point = 0;
         if (last == 'a') ed->point = viadvance(ed, ed->point);
         if (last == 'A') ed->point = ed->line.len;
+        // Built once, the same text and undo as count inserts
         edgroup(ed, U_BEGIN);
-        for (i32 i = 0; i < count; i++) edinsert(ed, ed->vibuf);
+        edinsertn(ed, ed->vibuf, count);
         edgroup(ed, U_END);
         if (ed->point > 0) ed->point = edprev(ed, ed->point);
     } else if (text && last=='R') {
-        iz n = ed->vibuf.len;
-        edgroup(ed, U_BEGIN);
-        for (i32 i = 0; i < count; i++) {
+        // Each time the next n bytes replaced, all at once
+        iz n  = ed->vibuf.len;
+        iz at = ed->point;
+        iz end = count>(ed->line.len-at)/n ? ed->line.len : at+n*count;
+        if (count <= (edlinemax(ed) - ed->line.len + (end-at))/n) {
+            // The first n alone, as undo leaves point past them
             edgroup(ed, U_BEGIN);
-            iz at = ed->point;
-            eddelete(ed, at, at+n);
+            iz first = at+n<end ? at+n : end;
+            eddelete(ed, at, first);
+            eddelete(ed, at, end-(first-at));
             ed->point = at;
-            edinsert(ed, ed->vibuf);
+            edinsertn(ed, ed->vibuf, count);
             edgroup(ed, U_END);
+        } else {
+            edbell(ed);
         }
-        edgroup(ed, U_END);
         if (ed->point > 0) ed->point = edprev(ed, ed->point);
     } else if (last=='.' && ed->vicmd) {
         edbell(ed);
@@ -4698,13 +4742,33 @@ static void vichangechar(Editor *ed, Shell *sh, i32 count)
     u8 c = ed->virepl[0];
     if (c==0x1b || c==0x03) return;
     Str ch = {ed->virepl, ed->vireplen};
+    // As readline's, each character killed in turn (each its own kill
+    // in vi mode) and ch put in its place: the ones the ring would
+    // drop deleted at once, the change inserted at once
+    iz n = 0, q = ed->point;
+    for (; n<count && q<ed->line.len; n++) q = ednext(ed, q);
+    iz kept = n<(iz)KILLMAX ? n : (iz)KILLMAX;
+    iz room = edlinemax(ed) - (ed->line.len - (q - ed->point));
+    if (n && n>room/ch.len) {
+        edbell(ed);
+        return;
+    }
     edgroup(ed, U_BEGIN);
-    while (count-- && ed->point<ed->line.len) {
+    if (n > kept) {
+        // The first alone, as undo leaves point past it
+        eddelete(ed, ed->point, ednext(ed, ed->point));
+        iz e = ed->point;
+        for (iz i = 1; i < n-kept; i++) e = ednext(ed, e);
+        eddelete(ed, ed->point, e);
+    }
+    iz p0 = ed->point;
+    for (iz i = 0; i < kept; i++) {
         iz p = ed->point;
         videlete(ed, 1);
         if (ed->point < p) ed->point = viadvance(ed, ed->point);
-        edinsert(ed, ch);
     }
+    ed->point = p0;
+    edinsertn(ed, ch, n);
     ed->point = edcharmove(ed, ed->point, -1);  // on the last one changed
     edgroup(ed, U_END);
 }

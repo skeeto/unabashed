@@ -1,0 +1,15 @@
+== snap 1
+$ axxxefgh
+@ 0,6
+== snap 2
+$ abcdefgh
+@ 0,3
+== snap 3
+$ abcdefghyyyyyyyyy
+@ 0,19
+== snap 4
+$ abcdefgh
+@ 0,10
+== snap 5
+$ abcdefgh
+@ 0,10
