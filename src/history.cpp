@@ -1938,14 +1938,23 @@ static Str fcreplace(Arena *a, Str s, Str pat, Str rep)
     return finish(&b);
 }
 
-// Run a string with history off, as bash's parse_and_execute does.
+// Run a string with history off, as bash's parse_and_execute does,
+// turned back on however it ends.
 static i32 fcrun(Shell *sh, Str src, Arena scratch)
 {
     b32 saved = sh->opt[O_HISTORY];
+    Escape e;
+    escenter(sh, &e);
+    if (jmpset(e.jmp)) {
+        escleave(sh, &e);
+        sh->opt[O_HISTORY] = saved;
+        escape(sh, e.why);
+    }
     sh->opt[O_HISTORY] = 0;
     sh->evaldepth++;
     i32 line   = sh->line;
     i32 status = runsource(sh, src, "fc", scratch, 0, line);
+    escleave(sh, &e);
     sh->line = line;
     sh->evaldepth--;
     sh->opt[O_HISTORY] = saved;
@@ -2150,6 +2159,7 @@ static i32 b_fc(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     Str cmd    = concat3(&scratch, editor, " ", file);
     i32 status = fcrun(sh, cmd, scratch);
+    Str full   = absolute(sh, &scratch, file);
     if (!status) {
         i32 err = 0;
         Str src = readwholefile(sh, &scratch, file, &err);
@@ -2157,24 +2167,35 @@ static i32 b_fc(Shell *sh, Str *args, iz nargs, Arena scratch)
             b32 hist    = sh->opt[O_HISTORY];
             b32 verbose = sh->opt[O_VERBOSE];
             b32 noexp   = h->noexpand;
-            sh->opt[O_HISTORY] = 1;
-            sh->opt[O_VERBOSE] = 1;
-            h->noexpand = 1;
-            sh->evaldepth++;
-            i32 line = sh->line;
-            status = runsource(sh, src, file, scratch, 0, 1, 0, 0, 0, 1);
-            sh->line = line;
-            sh->evaldepth--;
+            // As bash, the options go back and the file goes however
+            // the commands end
+            Escape e;
+            escenter(sh, &e);
+            b32 escaped = jmpset(e.jmp);
+            if (!escaped) {
+                sh->opt[O_HISTORY] = 1;
+                sh->opt[O_VERBOSE] = 1;
+                h->noexpand = 1;
+                sh->evaldepth++;
+                i32 line = sh->line;
+                status = runsource(sh, src, file, scratch, 0, 1, 0, 0, 0, 1);
+                sh->line = line;
+                sh->evaldepth--;
+            }
+            escleave(sh, &e);
             h->noexpand = noexp;
             sh->opt[O_VERBOSE] = verbose;
             sh->opt[O_HISTORY] = hist;
+            if (escaped) {
+                os_unlink(sh->os, scratch, full);
+                escape(sh, e.why);
+            }
         } else {
             status = 1;
         }
     } else {
         status = 1;
     }
-    Str full = absolute(sh, &scratch, file);
     os_unlink(sh->os, scratch, full);
     return status;
 }
