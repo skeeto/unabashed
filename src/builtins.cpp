@@ -3491,6 +3491,34 @@ static void mfsync(MfIn *in)
     }
 }
 
+// Read from what the descriptor is now: at the start, and after a
+// callback that replaced it. buf holds 64 KiB, for modes that copy.
+static void mfopen(MfIn *in, u8 *buf, b32 exact)
+{
+    Shell *sh = in->sh;
+    File  *f  = sh->fds->fd[in->fd];
+    in->f   = f;
+    in->buf = buf;
+    in->cap = (iz)1 << 16;
+    in->pos = in->len = 0;
+    if (f && f->kind==F_MEM && (f->flags & OF_READ)) {
+        in->mode = MF_MEM;
+        in->buf  = f->mem.data;
+        in->pos  = f->pos<f->mem.len ? f->pos : f->mem.len;
+        in->len  = f->mem.len;
+    } else if (f && f->kind==F_OS && os_peek(sh->os, f->h, 0, 0)<0 &&
+               os_seek(sh->os, f->h, 0, 1)>=0) {
+        in->mode = MF_SEEK;
+    } else if (!exact) {
+        in->mode = MF_BLOCK;
+    } else if (f && f->kind==F_OS && os_peek(sh->os, f->h, 0, 0)>=0) {
+        in->mode = MF_PEEK;
+        in->cap  = 1 << 12;
+    } else {
+        in->mode = MF_BYTE;
+    }
+}
+
 // After a callback, which may have read the input too.
 static void mfresync(MfIn *in)
 {
@@ -3644,30 +3672,27 @@ static i32 b_mapfile(Shell *sh, Str *args, iz nargs, Arena scratch)
 
     MfIn in  = {};
     in.sh    = sh;
-    in.f     = sh->fds->fd[fd];
     in.fd    = fd;
     in.delim = delim;
-    in.cap   = (iz)1 << 16;
     b32 exact = count || callback.data;
-    File *f = in.f;
-    if (f && f->kind==F_MEM && (f->flags & OF_READ)) {
-        in.mode = MF_MEM;
-        in.buf  = f->mem.data;
-        in.pos  = f->pos<f->mem.len ? f->pos : f->mem.len;
-        in.len  = f->mem.len;
-    } else if (f && f->kind==F_OS && os_peek(sh->os, f->h, 0, 0)<0 &&
-               os_seek(sh->os, f->h, 0, 1)>=0) {
-        in.mode = MF_SEEK;
-    } else if (!exact) {
-        in.mode = MF_BLOCK;
-    } else if (f && f->kind==F_OS && os_peek(sh->os, f->h, 0, 0)>=0) {
-        in.mode = MF_PEEK;
-        in.cap  = 1 << 12;
-    } else {
-        in.mode = MF_BYTE;
-    }
-    if (in.mode != MF_MEM) {
-        in.buf = allocbytes(&scratch, in.cap);
+    u8 *buf   = allocbytes(&scratch, (iz)1 << 16);
+    mfopen(&in, buf, exact);
+
+    // A callback may close or replace the input (exec 0</dev/null),
+    // freeing its File and text: keep it open meanwhile, also through
+    // an escape, so that a File at the descriptor is never another one
+    // at the same address. volatile: it changes after jmpset.
+    File *volatile held = 0;
+    Escape e;
+    if (callback.data) {
+        held = in.f;
+        if (held) held->refs++;
+        escenter(sh, &e);
+        if (jmpset(e.jmp)) {
+            escleave(sh, &e);
+            fileunref(sh, held);
+            escape(sh, e.why);
+        }
     }
 
     for (i64 n = 0; n < skip; n++) {
@@ -3706,12 +3731,24 @@ static i32 b_mapfile(Shell *sh, Str *args, iz nargs, Arena scratch)
             sh->evaldepth--;
             sh->line   = lineno;
             sh->status = status;
-            mfresync(&in);
+            if (sh->fds->fd[fd] != held) {
+                // As bash, the rest comes from what it is now
+                fileunref(sh, held);
+                mfopen(&in, buf, exact);
+                held = in.f;
+                if (held) held->refs++;
+            } else {
+                mfresync(&in);
+            }
         }
         setelem(sh, t, arrname, idx, {}, line, aflags|SV_NOREF);
         if (count && n>=count) break;
     }
     mfsync(&in);
+    if (callback.data) {
+        escleave(sh, &e);
+        fileunref(sh, held);
+    }
     return 0;
 }
 
