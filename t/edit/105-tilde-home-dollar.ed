@@ -1,0 +1,12 @@
+# A command word under a home directory with a $ in it, with direxpand:
+# the directory hook expands the $, rewriting the directory shorter
+# than the home's expansion, and the ~ was put back by cutting the
+# home's length off the rewritten match (SIGBUS). Now such a match
+# keeps the rewritten directory, as bash's direxpand does. bash 5.3
+# aborts here ("malloc: assertion botched"), so these screens are
+# unabashed's (the vos's tests binary), not bash's.
+size 10 70
+rc PS1='$ '
+rc mkdir d; : >d/fx; chmod +x d/fx; shopt -s direxpand
+rc HOME=$PWD/d/\$NOPE
+keys ~/f\t\C-a\C-kecho alive\r

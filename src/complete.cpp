@@ -425,15 +425,18 @@ static Slice<Str> compcommands(Editor *ed, Shell *sh, Comp *c, Str w)
     if (compin(w, '/')) {
         if (w.len && w[0]=='~') {
             // The user's spelling is kept: complete the expanded name and
-            // put the prefix back
+            // put the prefix back, unless direxpand or dirspell rewrote
+            // the directory, which the matches then carry, as bash's
             Str t = tildefilename(sh, a, w);
             Slice<Str> m = compfiles(ed, sh, c, t, 2);
             Str pre  = cut(w, '/').head;
             Str tpre = takehead(t, t.len - (w.len - pre.len));
-            for (iz i = 0; i < m.len; i++) {
-                m[i] = concat(a, pre, cuthead(m[i], tpre.len));
+            if (startswith(c->udir, tpre)) {
+                for (iz i = 0; i < m.len; i++) {
+                    m[i] = concat(a, pre, cuthead(m[i], tpre.len));
+                }
+                c->udir = concat(a, pre, cuthead(c->udir, tpre.len));
             }
-            c->udir = concat(a, pre, cuthead(c->udir, tpre.len));
             for (iz i = 0; i < m.len; i++) {
                 Str path = joinpath(a, c->odir, cuthead(m[i], c->udir.len));
                 m[i] = compexe(sh, *a, path, m[i]);
