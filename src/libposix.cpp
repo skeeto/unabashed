@@ -796,6 +796,16 @@ static i64 virtualpid()
     return ((i64)1<<22)*f + getpid();
 }
 
+// The run's own close-on-exec copy of a host descriptor, from 10 up
+// where it can, as highfd: -1 with no descriptor to give. Ends the run
+// with E_BADF if the host's is not open.
+static i32 hostcopy(Os *os, i32 fd)
+{
+    if (!fdaccess(fd)) lib_abort(os, E_BADF);
+    i32 r = fcntl(fd, F_DUPFD_CLOEXEC, 10);
+    return r<0 ? fcntl(fd, F_DUPFD_CLOEXEC, 3) : r;
+}
+
 // The run's shell fiber: the process's main.
 static void runmain(Os *os, void *arg)
 {
@@ -841,25 +851,28 @@ static void runmain(Os *os, void *arg)
     info.stack    = l->cfg.stack;
     info.sigign   = os->entryign;
 
-    // The run's own copies of the host's descriptors, which it closes
+    // The run's own copies of the host's descriptors, which it closes. A
+    // host descriptor that is not open is the host's error. One the run
+    // has no descriptor to copy to (a low ulimit -n, its budget) it goes
+    // without, as the executable goes without one its parent closed
     for (i32 i = 0; i < 3; i++) {
         i32 fd;
         if (cmd->std[i] < 0) {
             fd = highfd(open("/dev/null", O_RDWR|O_CLOEXEC));
         } else {
-            fd = fcntl((i32)cmd->std[i], F_DUPFD_CLOEXEC, 10);
+            fd = hostcopy(os, (i32)cmd->std[i]);
         }
-        if (fdtake(l, fd) < 0) lib_abort(os, E_BADF);
-        info.std[i]      = (Handle)fd;
-        info.stdflags[i] = fdaccess(fd);
+        fd = fdtake(l, fd);
+        info.std[i]      = fd<0 ? BADHANDLE : (Handle)fd;
+        info.stdflags[i] = fd<0 ? 0 : fdaccess(fd);
     }
     l->errfd = (i32)info.std[2];
     info.inherit = alloc<InheritFd>(a, cmd->nfds);
     for (i32 i = 0; i < cmd->nfds; i++) {
         i32 src = (i32)cmd->fds[i].h;
         i32 fl  = fdaccess(src);
-        i32 fd  = !fl ? -1 : fcntl(src, F_DUPFD_CLOEXEC, 10);
-        if (fdtake(l, fd) < 0) lib_abort(os, E_BADF);
+        i32 fd  = fdtake(l, hostcopy(os, src));
+        if (fd < 0) continue;
         InheritFd *e = info.inherit + info.ninherit++;
         e->fd    = cmd->fds[i].fd;
         e->h     = (Handle)fd;
