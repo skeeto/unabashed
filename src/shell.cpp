@@ -697,7 +697,8 @@ struct Shell {
     i32      evaldepth;
     ArithEnv *arith;       // arithmetic being evaluated, which one nested
                            // in it (a subscript) continues, as bash's one
-                           // expression stack; reset by an escape
+                           // expression stack; an escape puts back the
+                           // one around its escape point
     b32      lexeof;       // the last parse read its input's end (bash's
                            // shared current_token): see resumeaftereof
     i32      sourcedepth;
