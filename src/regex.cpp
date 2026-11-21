@@ -354,16 +354,6 @@ static Rt *rtdup(RxParse *p, Rt *t)
     return t->copy;
 }
 
-static void rtmarkopt(RxParse *p, Rt *t, i32 group)
-{
-    Slice<Rt *> nodes = rtnodes(t, p->a);
-    for (iz i = 0; i < nodes.len; i++) {
-        if (nodes[i]->type==RT_SUBEXP && nodes[i]->arg==group) {
-            nodes[i]->opt = 1;
-        }
-    }
-}
-
 static i32 rxclassid(Str name, i32 flags)
 {
     static Str names[] = {
@@ -748,12 +738,14 @@ static Rt *rxdup(RxParse *p, Rt *elem)
     rxfetch(p);
     if (!elem || (!start && !end)) return 0;
 
-    // e{n,m} is n copies of e, then ((e?e)?e)? for the rest
+    // e{n,m} is n copies of e, then ((e?e)?e)? for the rest. Once the
+    // tree is too big nothing grows it, as it only waits for the end or
+    // a syntax error.
     Rt *old = 0;
     Rt *t   = 0;
     if (start > 0) {
         t = elem;
-        for (i32 i = 2; i <= start; i++) {
+        for (i32 i = 2; i<=start && !p->toobig; i++) {
             elem = rtdup(p, elem);
             if (p->err) return 0;
             t = newrt(p, RT_CONCAT, t, elem);
@@ -763,9 +755,13 @@ static Rt *rxdup(RxParse *p, Rt *elem)
         if (p->err) return 0;
         old = t;
     }
-    if (elem->type == RT_SUBEXP) rtmarkopt(p, elem, elem->arg);
+    // glibc marks the nodes of elem's group in elem optional, which is
+    // only elem itself: groups inside have later numbers, and copies of
+    // it lie outside. No walk: once the tree is too big, copies are
+    // shared, and a walk would take each once for every sharer.
+    if (elem->type == RT_SUBEXP) elem->opt = 1;
     t = newrt(p, end==-1 ? RT_STAR : RT_ALT, elem);
-    for (i32 i = start+2; i <= end; i++) {
+    for (i32 i = start+2; i<=end && !p->toobig; i++) {
         elem = rtdup(p, elem);
         if (p->err) return 0;
         t = newrt(p, RT_CONCAT, t, elem);

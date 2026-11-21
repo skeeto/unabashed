@@ -19,6 +19,7 @@
 #include <string.h>
 #include <time.h>
 #include "../../src/base.cpp"
+static void lib_step() {}  // the library's, which pattern.cpp names
 #include "../../src/unicode.cpp"
 #include "../../src/pattern.cpp"
 #include "../../src/regex.cpp"
@@ -200,6 +201,21 @@ static void hostile(Arena perm)
         expect(r=="err 12", "intervals of intervals", r);
         r = run(&a, "a{1000}b", cat(&a, repeat(&a, "a", 1000), "b"), 0);
         expect(r=="(0,1001)", "a{1000}b", r);
+    }
+    {
+        // Past the size limit nothing grows or walks the tree by the
+        // counts that follow (each ran out of memory in 1 GiB)
+        Arena  a = perm;
+        double t = seconds();
+        Str    r = run(&a, "((a{32767}){32767})*", "x", 0);
+        expect(r=="err 12", "((a{32767}){32767})*", r);
+        r = run(&a, "((a{32767}){32767}){1,2}", "x", 0);
+        expect(r=="err 12", "((a{32767}){32767}){1,2}", r);
+        r = run(&a, repeat(&a, "b{32767}", 8000), "x", 0);
+        expect(r=="err 12", "8000 b{32767}", r);
+        r = run(&a, cat(&a, repeat(&a, "b{32767}", 100), "\\"), "x", 0);
+        expect(r=="err 5", "100 b{32767} then a syntax error", r);
+        expect(seconds()-t < 5, "too big fails at once", {});
     }
     {
         // A long alternation and a long concatenation
