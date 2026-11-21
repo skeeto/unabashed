@@ -712,7 +712,9 @@ static i32 pecrt(Str dll)
 // Sniff a PE image: its machine, subsystem, CRT and POSIX runtime by
 // the import directory, and our own marker section. Reads through the
 // callback, which sees no offset past what the headers point at. With
-// keep, also the names of the imported DLLs, allocated there.
+// keep, also the names of the imported DLLs, allocated there along
+// with the section table, which they would otherwise overwrite when
+// scratch is a copy of keep.
 static PeInfo pesniff(PeRead read, void *ctx, Arena scratch, Arena *keep = 0)
 {
     PeInfo r = {};
@@ -751,9 +753,10 @@ static PeInfo pesniff(PeRead read, void *ctx, Arena scratch, Arena *keep = 0)
     }
 
     nsect = nsect<1024 ? nsect : 1024;
-    u8 *raw = allocbytes(&scratch, 40*nsect);
+    Arena *t   = keep ? keep : &scratch;
+    u8    *raw = allocbytes(t, 40*nsect);
     nsect = read(ctx, pe+24+optsize, raw, 40*nsect) / 40;
-    PeSection *sects = alloc<PeSection>(&scratch, nsect);
+    PeSection *sects = alloc<PeSection>(t, nsect);
     for (iz i = 0; i < nsect; i++) {
         u8 *s = raw + 40*i;
         r.ours |= Str{s, 8} == ".unabash";

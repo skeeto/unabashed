@@ -771,6 +771,25 @@ static void pes(Arena scratch)
         expect(finish(&w), showpe(&t, p), cases[i].want);
     }
 
+    // The DLLs' names, kept in the arena the scratch copies, as
+    // missingdll asks for them: they must not overwrite the section
+    // table while later imports are looked up through it
+    for (i32 mark = 0; mark <= 1; mark++) {
+        Arena  k   = scratch;
+        PeSpec s   = {0x8664, 1, 3, 0, mark,
+                      {"KERNEL32.dll", "msvcrt.dll", "USER32.dll", "msys-2.0.dll"}};
+        Str    img = mkpe(&k, s);
+        PeInfo p   = pesniff(memread, &img, k, &k);
+        Buf    w(&k);
+        for (iz i = 0; i < p.dlls.len; i++) {
+            print(&w, i ? Str(" ") : Str(""));
+            print(&w, p.dlls[i]);
+        }
+        expect("pesniff keep", finish(&w),
+               "KERNEL32.dll msvcrt.dll USER32.dll msys-2.0.dll");
+        expectint("pesniff keep posix", p.posix, POSIX_MSYS);
+    }
+
     // Damaged images
     Arena  t   = scratch;
     PeSpec ok  = {0x8664, 1, 3, 0, 1, {"msvcrt.dll"}};
