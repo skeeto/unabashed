@@ -420,7 +420,8 @@ static Param getparam(X *x, Str name)
     }
     Value *v = rawlookup(sh, name);
     if (v && (v->attrs & V_NAMEREF)) {
-        // A nameref to arr[@] expands like "${arr[@]}"
+        // A nameref to arr[@] expands like "${arr[@]}" (but see
+        // joinedref for braces)
         Ref ref = resolveref(sh, name);
         if (ref.hassub) return getelems(x, ref.name, ref.sub);
         v = !ref.name.data ? 0
@@ -431,6 +432,32 @@ static Param getparam(X *x, Str name)
     r.value = g.value;
     r.set   = g.set;
     return r;
+}
+
+// In braces a nameref to arr[@] or arr[*] is no list: bash finds no
+// variable of that name and expands the reference for one word, the
+// elements joined as ${arr[@]} joins them (by the first character of
+// IFS, else a space, and by a space where nothing splits), or arr[*]
+// quoted as "$*"; unset if there are none.
+static Param joinedref(X *x, Param p, i32 ctx)
+{
+    b32 dq  = ctx & (XC_DQUOTE|XC_HEREDOC);
+    Str sep = starsep(x->sh, x->a);
+    if (!p.star || !(dq || x->nosplit)) {
+        if (x->nosplit || !sep.len) sep = " ";
+    }
+    Param r = {};
+    r.value = joinparams(x->a, Args{p.lv, p.ln}, sep);
+    r.set   = p.ln > 0;
+    return r;
+}
+
+// Is name a nameref to an array reference, arr[sub]? Then bash finds
+// no variable for ${name@a} or ${name@A}.
+static b32 refsarray(Shell *sh, Str name)
+{
+    Value *v = identstart(name[0]) ? rawlookup(sh, name) : 0;
+    return v && (v->attrs & V_NAMEREF) && resolveref(sh, name, 0, 1).hassub;
 }
 
 static void unbound(X *x, Str name)
@@ -1644,6 +1671,9 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     if (!got) {
         p = hassub ? getelems(x, name, sub, length) : getparam(x, name);
     }
+    // Only a length counts a nameref's elements (see joinedref)
+    b32 reflist = p.list && p.array && !hassub;
+    if (reflist && !length) p = joinedref(x, p, ctx);
     // The operator's words may change the variable, as (x=1) or
     // ${ unset x; } do, freeing the value: the expansion holds the store,
     // so the value stays as it was until the word is done
@@ -1652,10 +1682,12 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     if (length) {
         if (rest.len) badsubst(x, whole);
         i64 n = 0;
-        if (hassub && !p.set && sh->opt[O_NOUNSET] && !varvisible(sh, name)) {
+        // A nameref to arr[@] counts as ${#arr[@]}, naming arr
+        Str target = reflist && sh->opt[O_NOUNSET] ? resolveref(sh, name, 0, 1).name : name;
+        if ((hassub || reflist) && !p.set && sh->opt[O_NOUNSET] && !varvisible(sh, target)) {
             // not fatal, unlike other unbound variables
             Arena a = *x->a;
-            Str msg = concat(&a, allsub(sub) ? name : uname, ": unbound variable");
+            Str msg = concat(&a, allsub(sub) || reflist ? target : uname, ": unbound variable");
             expansionerror(sh, a, msg);
         }
         if (p.list) {
@@ -1980,6 +2012,9 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         return;
     }
 
+    if (op=='@' && (rest=="@a" || rest=="@A") && !hassub && refsarray(sh, name)) {
+        return;
+    }
     if (op=='@' && rest=="@A" && p.list && p.array) {
         // An array variable's declaration even when it has no elements;
         // a scalar's assignment, as ${name@A}
