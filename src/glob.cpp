@@ -221,6 +221,7 @@ static Dirent *pathlist(Shell *sh, Arena *a, Str dir, i32 *err)
 
 static void takeossigs(Shell *);
 static void sigfatal(Shell *);
+static void checkstack(Shell *);
 
 static GlobDir *listdir(Glob *g, Str dir)
 {
@@ -343,8 +344,12 @@ static Slice<GlobName> dirtoarray(Arena *a, Str dir, Slice<GlobName> v)
     return v;
 }
 
+// Each component of a directory part with glob characters recurses, as
+// in bash, which crashes on a pattern of enough of them: this level
+// dies of it the same way (checkstack).
 static GlobRes globfile(Glob *g, Str path, i32 flags)
 {
+    checkstack(g->sh);
     GlobRes r = {};
     Arena  *a = g->a;
     iz slash = globslash(path, g->pf & PM_EXTGLOB);
