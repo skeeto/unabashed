@@ -271,6 +271,11 @@ static UserName os_username(Os *os, Arena *a)
     return osvtable(os)->username(os, a);
 }
 
+static iz os_ready(Os *os, Handle h)
+{
+    return osvtable(os)->ready(os, h);
+}
+
 static void os_tasktag(Os *os, u64 tag, iz ntasks, u64 group)
 {
     osvtable(os)->tasktag(os, tag, ntasks, group);

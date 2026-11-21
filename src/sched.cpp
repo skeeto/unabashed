@@ -114,6 +114,8 @@ struct Sigproc {
                        // for a foreground child (see waitdone)
     b32      fgwait;   // waiting for a foreground program or stages
     b32      comsub;   // its synchronous subshell is a comsub
+    b32      keepint;  // while that subshell runs in place, with traps
+                       // of its own: this level's keepsint
     u64      bydefault;  // pending ones to act on by default, trap or
                          // not (an interactive loop's job died of INT)
     i64      execpid;  // the program in its place, which bash would have
@@ -143,6 +145,8 @@ struct Sched {
                          // SRANDOM (os_entropy once, on first use), or 0
     Chacha  chacha;      // /dev/random and /dev/urandom
     iz      ntasks;      // live tasks, including the main task
+    u64     caught;      // signals the process catches (os_sigmode's
+                         // SIGM_CATCH or SIGM_CLAIM), as a mask
     iz      npending;    // tasks blocked on an Io
     i32     budget;      // safe points until the next yield check
     Sigproc *sigprocs;   // every live virtual process
@@ -669,11 +673,24 @@ static void taskio(Sched *s, Io *io)
 static iz taskread(Sched *s, Handle h, u8 *buf, iz len)
 {
     // A library's run never blocks outside os_wait, so that it can be
-    // signalled or cancelled while it waits
-    if (!LIBMODE && s->ntasks==1 && !s->cur->deadline && !s->cur->anysig) {
-        return os_read(s->os, h, buf, len);
+    // signalled or cancelled while it waits; nor does a read builtin
+    // while the process catches a signal, which interrupts it there,
+    // where a direct read would go on through it
+    Task *t = s->cur;
+    if (!LIBMODE && s->ntasks==1 && !t->deadline && !t->anysig) {
+        if (!t->introk || !s->caught) return os_read(s->os, h, buf, len);
+        // But a read that cannot block needs no wait: take the bytes
+        // os_ready says are waiting directly (the read builtin reads a
+        // pipe a byte at a time, and the platform remembers the count).
+        // No signal can be missed: one that comes meanwhile is acted
+        // on at the next wait, whose poll sees it at once. Only another
+        // process reading the same pipe, taking those bytes first,
+        // makes the read block, and the signal then acts when data
+        // comes, as it did before the read builtin was interruptible.
+        iz ready = os_ready(s->os, h);
+        if (ready > 0) return os_read(s->os, h, buf, len<ready ? len : ready);
     }
-    Io *io = &s->cur->io;
+    Io *io = &t->io;
     *io = {};
     io->op  = IO_READ;
     io->h   = h;

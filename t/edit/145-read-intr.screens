@@ -1,0 +1,61 @@
+== snap 1
+$ read x
+zz^C
+$ echo "a $?"
+a 130
+$ read -n 5 -s x
+
+$ echo "b $?"
+b 130
+$ read -t 5 x
+zz^C
+$ echo "c $?"
+c 130
+$ mapfile m
+zz^C
+$ echo "d $? ${#m[@]}"
+d 130 0
+$
+@ 16,2
+== snap 2
+$ select v in a b; do echo "$v"; done
+1) a
+2) b
+#? zz^C
+$ echo "e $?"
+e 130
+$ x=$(read y; echo "got $y")
+zz^C
+$ echo "f $? <$x>"
+f 130 <>
+$ x=$(while :; do :; done)
+^C
+$ echo "g $?"
+g 130
+$ trap 'echo T' INT; read x; echo "h $? $x"
+zz^CT
+ab
+h 0 ab
+$
+@ 18,2
+== snap 3
+$ select v in a b; do echo "$v"; done
+1) a
+2) b
+#? zz^C
+$ echo "e $?"
+e 130
+$ x=$(read y; echo "got $y")
+zz^C
+$ echo "f $? <$x>"
+f 130 <>
+$ x=$(while :; do :; done)
+^C
+$ echo "g $?"
+g 130
+$ trap 'echo T' INT; read x; echo "h $? $x"
+zz^CT
+ab
+h 0 ab
+$
+@ 18,2

@@ -88,6 +88,7 @@ static i64      newvpid(Shell *);
 static void     sigleave(Shell *, Sigproc *);
 static void     reportsig(Shell *, Arena, i32 sig, i64 pid, Str text);
 static void     intrnewline(Shell *);
+static b32      keepsint(Shell *);
 
 // Under job control the terminal's INT reached only the foreground job,
 // which died of it. As bash, the shell acts as if it had it too in a
@@ -730,6 +731,8 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     // abandoned frames left, as bash's does, then saved restores all
     Escape    e;
     escenter(sh, &e);
+    Sigproc *up = sh->sig;
+    up->keepint = keepsint(sh);  // before the level's traps replace these
     sh->subshell++;
     sh->bashpid = newvpid(sh);
     sh->psubs   = 0;
@@ -748,7 +751,6 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
                       (j->kind==SUB_NODE && j->node->kind!=N_SIMPLE);
     sh->subchild   |= sh->catchfatal;
     subshelltraps(sh);
-    Sigproc *up = sh->sig;
     up->comsub = j->comsub;
     Sigproc sig;
     sigenter(sh, &sig, sh->bashpid, sh->sched->cur);
@@ -2858,6 +2860,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         Watermark w = storeenter(sh->store);
         Escape e;
         escenter(sh, &e);
+        sh->sig->keepint = keepsint(sh);  // before the script's traps
         sh->args.v = argv + 1;
         sh->args.n = argc - 1;
         sh->argsown = {};

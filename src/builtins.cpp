@@ -3820,11 +3820,14 @@ struct MfIn {
 
 static b32 mfrefill(MfIn *in)
 {
-    Shell *sh = in->sh;
-    iz     n  = 0;
+    if (in->mode == MF_MEM) return 0;
+    Shell *sh   = in->sh;
+    Task  *self = sh->sched->cur;
+    iz     n    = 0;
+    // As read's, a signal interrupts the wait: its trap action runs at
+    // once and the read goes on, or it ends the command (bash's zread)
+    sh->intrread = self->introk = 1;
     switch (in->mode) {
-    case MF_MEM:
-        return 0;
     case MF_SEEK:
     case MF_BLOCK:
         n = fdread(sh, in->fd, in->buf, in->cap);
@@ -3843,7 +3846,10 @@ static b32 mfrefill(MfIn *in)
     case MF_BYTE:
         n = fdread(sh, in->fd, in->buf, 1);
         break;
+    case MF_MEM:
+        break;
     }
+    sh->intrread = self->introk = 0;
     in->pos = 0;
     in->len = n>0 ? n : 0;
     return n > 0;

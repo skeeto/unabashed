@@ -43,6 +43,8 @@ struct Os {
     i32    werr;        // why the last write failed (os_writeerr)
     b32    wcatch;      // the deadly signals are caught (wcatchsigs)
     u64    refault;     // host signals onsignal left at default (faultsure)
+    i32    readyfd;     // os_ready: the descriptor it counted, and the
+    iz     readyn;      // bytes waiting there that no read took since
     u8     wkind[256];  // per descriptor: FK_* (fdkind)
     u8     wbuf[1<<14];
     u64    entropyn;    // os_entropy's fallback counter
@@ -316,6 +318,9 @@ static iz plt_read(Os *os, Handle h, u8 *buf, iz len)
     for (;;) {
         iz n = read((i32)h, buf, (uz)(len<max ? len : max));
         if (n<0 && errno==EINTR) continue;
+        // another descriptor may be the same pipe
+        b32 same = os->readyfd==(i32)h && n>0 && n<=os->readyn;
+        os->readyn = same ? os->readyn-n : 0;
         return n;
     }
 }
@@ -620,6 +625,7 @@ static i32 plt_close(Os *os, Handle h)
     if (h == BADHANDLE) return 0;
     i32 fd = (i32)h;
     if (fd>=0 && fd<countof(os->wkind)) os->wkind[fd] = 0;  // the number may come back
+    os->readyn = 0;  // likewise
     i32 err = wfailed(os, fd);
     close((i32)h);
     return err;
@@ -1229,6 +1235,7 @@ static void threadmask(i32 how, sigset_t *set, sigset_t *old)
 static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
 {
     flushw(os);
+    os->readyn = 0;  // the child may read what os_ready counted
     if (s->image.base) return forkimage(os, scratch, s);
     Spawned r = {};
     r.proc = BADHANDLE;
@@ -1460,6 +1467,7 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
 static i32 plt_forkexec(Os *os, Arena scratch, Spawn *s)
 {
     flushw(os);
+    os->readyn = 0;  // as for plt_spawn
     i32 sync[2];
     if (pipe(sync)) return coreerr(errno);
     for (i32 i = 0; i < 2; i++) sync[i] = highfd(sync[i]);
@@ -1961,6 +1969,7 @@ static struct pollfd *pollroom(Os *os, iz n)
 static void plt_submit(Os *os, Io *io)
 {
     flushw(os);
+    if (io->op == IO_READ) os->readyn = 0;  // its read is not plt_read's
     io->done = 0;
     io->next = 0;
     if (!isproc(io) && (i32)io->h<0) {
@@ -2134,6 +2143,23 @@ static UserName plt_username(Os *, Arena *a)
     return {fromcstr(p->pw_name), 0};
 }
 
+// FIONREAD answers for pipes, FIFOs, sockets and regular files on Linux
+// and macOS alike. The count stands until a read of another descriptor
+// (perhaps the same pipe), a close (the number may come back) or a
+// spawn. Not for a terminal: its INT, QUIT or TSTP discards its queue,
+// and a read counted on would then block.
+static iz plt_ready(Os *os, Handle h)
+{
+    i32 fd = (i32)h;
+    if (os->readyn>0 && os->readyfd==fd) return os->readyn;
+    i32 avail = 0;
+    if (ioctl(fd, FIONREAD, &avail) || avail<0) return -1;
+    if (avail && isatty(fd)) return -1;
+    os->readyfd = fd;
+    os->readyn  = avail;
+    return avail;
+}
+
 // The platform table (api.cpp, OsVtable)
 static constexpr OsVtable pltvtable = {
     .version    = OSVTABLE_VERSION,
@@ -2192,6 +2218,7 @@ static constexpr OsVtable pltvtable = {
     .racy       = plt_racy,
     .writeerr   = plt_writeerr,
     .username   = plt_username,
+    .ready      = plt_ready,
 };
 
 

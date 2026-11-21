@@ -522,6 +522,13 @@ static Str     os_localtz(Os *, Arena *);
 // database lacks the account, E_NOSYS where the platform has none to
 // ask (the core then reads /etc/passwd, else takes USER).
 static UserName os_username(Os *, Arena *);
+// How many bytes reads of the handle can take now without blocking:
+// those waiting in a pipe, FIFO or socket, or a file's rest. 0 when
+// none are, as at end of file; -1 where the platform cannot tell, and
+// for a terminal, whose ^C may discard its queue. The count may be
+// remembered, less what os_read takes, until something else could
+// take the bytes; another process reading the same pipe still may.
+static iz      os_ready(Os *, Handle);
 // The currently running fiber, converting the thread on first use.
 static Fiber  *os_self(Os *);
 // Create a suspended fiber running fn(os, arg), which must never
@@ -596,7 +603,8 @@ static Str     lib_root(Os *);
 // 6: os_getcwd
 // 7: os_tty's TTY_RAWSIG and Tty.mode
 // 8: os_username
-enum : i32 { OSVTABLE_VERSION = 8 };
+// 9: os_ready
+enum : i32 { OSVTABLE_VERSION = 9 };
 
 struct OsVtable {
     i32 version;  // the OSVTABLE_VERSION it implements
@@ -655,6 +663,7 @@ struct OsVtable {
     decltype(os_racy)       *racy;
     decltype(os_writeerr)   *writeerr;
     decltype(os_username)   *username;
+    decltype(os_ready)      *ready;
 };
 // Entry point, called by the platform after it fills in OsInfo. Given a
 // table of another OSVTABLE_VERSION, it writes a message to std[2]

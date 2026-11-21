@@ -5002,6 +5002,7 @@ static WinDate windate(SysTime t)
 
 // No user database: USERNAME as the shell started stands in
 static UserName plt_username(Os *, Arena *) { return {{}, E_NOSYS}; }
+static iz plt_ready(Os *, Handle) { return -1; }  // the shell waits as before
 
 // The system zone as a POSIX TZ string (the core's wintz). Vista and
 // later report whether automatic daylight saving time is off, which
@@ -5167,5 +5168,6 @@ static constexpr OsVtable pltvtable = {
     .racy       = plt_racy,
     .writeerr   = plt_writeerr,
     .username   = plt_username,
+    .ready      = plt_ready,
 };
 

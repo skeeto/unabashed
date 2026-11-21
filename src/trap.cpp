@@ -179,6 +179,9 @@ static void updatesigmode(Shell *sh, i32 sig)
     }
     if (mode==SIGM_CATCH && (sh->entryign & sigbit(sig))) mode = SIGM_CLAIM;
     os_sigmode(sh->os, sig, mode);
+    Sched *s = sh->sched;
+    s->caught = mode==SIGM_DEFAULT || mode==SIGM_IGNORE ? s->caught & ~sigbit(sig)
+                                                        : s->caught | sigbit(sig);
 }
 
 // Set (cmd.data), ignore (empty cmd) or reset (null cmd) a trap.
@@ -380,6 +383,14 @@ static b32 signoop(Shell *sh, i32 sig)
            (sig==15 && interactivetop(sh));
 }
 
+// Whether the level acts on an INT sent to it alone (kill) itself
+// while it waits for a child: trapped or ignored. Bash otherwise acts
+// only if the child died of it too (see ossignals).
+static b32 keepsint(Shell *sh)
+{
+    return trapignored(sh, 2) || trapset(sh, 2) || signoop(sh, 2);
+}
+
 // Die by a signal: the EXIT trap runs first, except for KILL and the
 // signals bash leaves at their defaults (STKFLT PROF IO PWR, real
 // time), then the level exits with 128+sig, reported as a death by
@@ -512,8 +523,9 @@ static b32 ossignals(Sched *s)
     if ((own & sigbit(2)) && s->top && !s->top->execpid) {
         Sigproc *p  = s->top;
         Shell   *sh = p->sh;
-        if (((sh->sig!=p && !p->comsub) || p->fgwait) && !trapignored(sh, 2) &&
-                !trapset(sh, 2) && !signoop(sh, 2)) {
+        // the Shell holds a nested level's traps while it runs in place
+        b32 keep = sh->sig!=p ? p->keepint : keepsint(sh);
+        if (((sh->sig!=p && !p->comsub) || p->fgwait) && !keep) {
             p->waitsig |= sigbit(2);
             own &= ~sigbit(2);
         }

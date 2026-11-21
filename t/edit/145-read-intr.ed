@@ -1,0 +1,64 @@
+# The terminal's ^C interrupts a builtin waiting for input: read in
+# every mode, mapfile and select, also in a comsub, end at once with
+# status 130 and a new line, as does a comsub busy in a loop. With INT
+# trapped, read runs the trap and reads on.
+size 24 60
+rc PS1='$ '
+keys read x\r
+pause 300
+keys zz
+pause 100
+keys \C-c
+pause 200
+keys echo "a $?"\r
+keys read -n 5 -s x\r
+pause 300
+keys zz
+pause 100
+keys \C-c
+pause 200
+keys echo "b $?"\r
+keys read -t 5 x\r
+pause 300
+keys zz
+pause 100
+keys \C-c
+pause 200
+keys echo "c $?"\r
+keys mapfile m\r
+pause 300
+keys zz
+pause 100
+keys \C-c
+pause 200
+keys echo "d $? ${#m[@]}"\r
+snap
+keys \C-l
+keys select v in a b; do echo "$v"; done\r
+pause 300
+keys zz
+pause 100
+keys \C-c
+pause 200
+keys echo "e $?"\r
+keys x=$(read y; echo "got $y")\r
+pause 300
+keys zz
+pause 100
+keys \C-c
+pause 200
+keys echo "f $? <$x>"\r
+keys x=$(while :; do :; done)\r
+pause 300
+keys \C-c
+pause 200
+keys echo "g $?"\r
+keys trap 'echo T' INT; read x; echo "h $? $x"\r
+pause 300
+keys zz
+pause 100
+keys \C-c
+pause 200
+keys ab\r
+pause 200
+snap

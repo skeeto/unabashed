@@ -1227,10 +1227,11 @@ static iz vttyget(Os *os, Vos *v, u8 *buf, iz len)
                 return 1;
             } else if (vnocanon(y)) {
                 // A byte at a time, with ^C, CR as \n and the echo
+                // (of ^C too, as the kernel's: none without it)
                 u8 c = k->text[y->pos++];
                 c = c=='\r' ? '\n' : c;
                 if (c == 0x03) {
-                    vttyout(v, (u8 *)"^C", 2);
+                    if (y->mode == TTY_CHARS) vttyout(v, (u8 *)"^C", 2);
                     vttysignal(os, v, 2);
                     continue;
                 }
@@ -2096,6 +2097,7 @@ static u64 vos_entropy(Os *os)
 
 // No user database but the virtual /etc/passwd, which the core reads
 static UserName vos_username(Os *, Arena *) { return {{}, E_NOSYS}; }
+static iz vos_ready(Os *, Handle) { return -1; }  // the shell waits as before
 
 // The system zone: UTC as in the oracle's container, unless a test
 // configures another (a spec's "# localtz:" line).
@@ -4511,6 +4513,7 @@ static OsVtable const vosvtable = {
     .racy       = vos_racy,
     .writeerr   = vos_writeerr,
     .username   = vos_username,
+    .ready      = vos_ready,
 };
 
 static i32 os_umask(Os *)
