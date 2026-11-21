@@ -328,8 +328,8 @@ static char *cpath(Arena *a, Str s)
 }
 
 // The lowest descriptor above every target of a spawn's map: sources
-// move there first, out of the targets' way. Not a fixed high number,
-// which a low `ulimit -n` would put out of reach.
+// move from there up first, out of the targets' way (fdaside). Not a
+// fixed high number, which a low `ulimit -n` would put out of reach.
 static i32 fdbase(i32 *dst, i32 n)
 {
     i32 base = 3;
@@ -902,6 +902,43 @@ static void closefds(i32 lo, i32 hi)
     for (i32 fd = lo; fd <= (hi<0 ? max : hi); fd++) close(fd);
 }
 
+// Close every descriptor but the n in keep and also (negatives ignored).
+static void closeexcept(i32 *keep, i32 n, i32 also = -1)
+{
+    for (i32 lo = 0;;) {
+        i32 next = also>=lo ? also : -1;  // the lowest kept from lo up
+        for (i32 i = 0; i < n; i++) {
+            if (keep[i]>=lo && (next<0 || keep[i]<next)) next = keep[i];
+        }
+        if (next < 0) {
+            closefds(lo, -1);
+            return;
+        }
+        if (next > lo) closefds(lo, next-1);
+        lo = next + 1;
+    }
+}
+
+// A copy of fd out of the way of a spawn's n targets, by fcntl's cmd:
+// from base (fdbase) up, or where a low `ulimit -n` leaves no room there
+// (a target at 63, a process substitution's), the lowest free number
+// that is no target. -1 with none.
+static i32 fdaside(i32 fd, i32 base, i32 *dst, i32 n, i32 cmd)
+{
+    i32 r = fcntl(fd, cmd, base);
+    for (i32 lo = 3; r<0 && lo<base;) {
+        r = fcntl(fd, cmd, lo);
+        if (r < 0) return r;
+        b32 target = 0;
+        for (i32 i = 0; i < n; i++) target |= dst[i]==r;
+        if (!target) return r;
+        close(r);
+        lo = r + 1;
+        r  = -1;
+    }
+    return r;
+}
+
 static Spawned forkimage(Os *, Arena, Spawn *);
 static i32     rlres(i32);
 static rlim_t  torlim(i64);
@@ -971,19 +1008,19 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
         joingroup(0, p->pgid, p->fg, p->tty);
         // Move the pipe and the sources out of the way first, then
         // install the map
-        i32 base = fdbase(p->dst, p->nfds);
-        i32 w = fcntl(sync[1], F_DUPFD_CLOEXEC, base);
-        for (i32 i = 0; i < p->nfds; i++) {
-            if (p->src[i] < base) p->src[i] = fcntl(p->src[i], F_DUPFD, base);
+        i32 n    = p->nfds;
+        i32 base = fdbase(p->dst, n);
+        i32 w    = fdaside(sync[1], base, p->dst, n, F_DUPFD_CLOEXEC);
+        for (i32 i = 0; i < n; i++) {
+            if (p->src[i]>=0 && p->src[i]<base) {
+                p->src[i] = fdaside(p->src[i], base, p->dst, n, F_DUPFD);
+            }
         }
-        closefds(0, base-1);
-        for (i32 i = 0; i < p->nfds; i++) dup2(p->src[i], p->dst[i]);
-        if (w < 0) {
-            closefds(base, -1);
-        } else {
-            closefds(base, w-1);
-            closefds(w+1, -1);
+        closeexcept(p->src, n, w);
+        for (i32 i = 0; i < n; i++) {
+            if (p->src[i] >= 0) dup2(p->src[i], p->dst[i]);
         }
+        closeexcept(p->dst, n, w);
         // Every handler of the shell's goes too, as an exec would take
         // them, so that none runs here before it
         for (i32 sig = 1; sig < NSIG; sig++) {
@@ -1061,7 +1098,7 @@ static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
     for (i32 i = 0; i < p->nfds; i++) {
         src[i] = p->src[i];
         if (src[i]<0 || src[i]>=base || err) continue;
-        src[i] = fcntl(p->src[i], F_DUPFD_CLOEXEC, base);
+        src[i] = fdaside(p->src[i], base, p->dst, p->nfds, F_DUPFD_CLOEXEC);
         if (src[i] < 0) err = errno;
     }
 
@@ -1242,11 +1279,15 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         b32 entered = !enterdir(cwdfd, cwd);
         i32 base = fdbase(dst, nfds);
         for (i32 i = 0; i < nfds; i++) {
-            if (src[i] < base) src[i] = fcntl(src[i], F_DUPFD, base);
+            if (src[i]>=0 && src[i]<base) {
+                src[i] = fdaside(src[i], base, dst, nfds, F_DUPFD);
+            }
         }
-        closefds(0, base-1);
-        for (i32 i = 0; i < nfds; i++) dup2(src[i], dst[i]);
-        closefds(base, -1);
+        closeexcept(src, nfds);
+        for (i32 i = 0; i < nfds; i++) {
+            if (src[i] >= 0) dup2(src[i], dst[i]);
+        }
+        closeexcept(dst, nfds);
         for (i32 i = 0; i < NPIN; i++) os->pins[i].fd = 0;
         for (i32 i = 0; s->rlimits && i<RL_COUNT; i++) {
             i32 k = rlres(i);

@@ -789,9 +789,17 @@ static Str procsubst(Shell *sh, Arena *a, Str body, b32 output)
     }
     Fdtab *t  = sh->fds;
     i32    fd = 63;
-    for (; fd>3 && t->fd[fd]; fd--) {}
-    if (t->fd[fd]) {
-        for (fd = 64; fd<FDMAX && t->fd[fd]; fd++) {}
+    Rlimit nofile = nofilelimit(sh);
+    if (!nofile.err && nofile.soft<=63) {
+        // Where 63 is beyond the limit bash's end stays where pipe made
+        // it: the lowest free descriptor, a write end the next
+        for (fd = 0; fd<FDMAX && t->fd[fd]; fd++) {}
+        for (fd += output; fd<FDMAX && t->fd[fd]; fd++) {}
+    } else {
+        for (; fd>3 && t->fd[fd]; fd--) {}
+        if (t->fd[fd]) {
+            for (fd = 64; fd<FDMAX && t->fd[fd]; fd++) {}
+        }
     }
     File *mine   = 0;
     File *theirs = 0;
