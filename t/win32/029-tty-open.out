@@ -1,0 +1,10 @@
+stdin 0
+stdout 1
+fd 3 0
+fd 4 0
+fd 5 0
+fd 6 0
+fd 7 0
+write 0
+no files 1
+status 0

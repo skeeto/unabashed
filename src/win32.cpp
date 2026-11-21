@@ -3203,9 +3203,17 @@ static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
         attr = FILE_ATTRIBUTE_READONLY;
     }
 
-    Str16 w = {};
+    Str16 w   = {};
+    Str   dev = startswith(path, "//./") ? cuthead(path, 4) : Str{};
     if (path == "/dev/tty") {
         w      = towide(&scratch, flags&OF_WRITE ? Str("CONOUT$") : "CONIN$");
+        access = GENERIC_READ | GENERIC_WRITE;
+        disp   = OPEN_EXISTING;
+    } else if (equalfold(dev, "CONIN$") || equalfold(dev, "CONOUT$")) {
+        // The console (the core's /dev/tty too) always with read access,
+        // without which GetConsoleMode fails: written only, it would
+        // be no terminal and take bytes, not text (track, plt_write)
+        w      = widepath(&scratch, path);
         access = GENERIC_READ | GENERIC_WRITE;
         disp   = OPEN_EXISTING;
     } else {
