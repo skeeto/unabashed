@@ -1613,8 +1613,17 @@ static void hredisplay(Editor *ed, Layout *nl)
     edput(ed, "\r");
     print(&ed->out_, {vis.data, vis.len});
     for (i32 i = shown; i < ed->hshown; i++) edput(ed, " ");
-    edput(ed, "\r");
-    print(&ed->out_, {vis.data, atcur});
+    // To the cursor as readline's _rl_move_cursor_relative: not at all
+    // when there already, else by CR and the text before it when that
+    // is shorter (CR_FASTER), else by backspaces
+    i32 col = shown>ed->hshown ? shown : ed->hshown;
+    i32 to  = cpos - lm;
+    if (to!=col && (!to || to>col || to+1<col-to)) {
+        edput(ed, "\r");
+        print(&ed->out_, {vis.data, atcur});
+    } else {
+        for (i32 i = to; i < col; i++) edput(ed, "\b");
+    }
     ed->hshown = shown;
     ed->crow   = 0;
     ed->ccol   = cpos - lm;
@@ -5874,8 +5883,10 @@ static i32 edline(Shell *sh, Editor *ed, Str prompt, Buf *out, EdRead *opts,
     // Leave the cursor past the line
     Layout *l = &ed->shown;
     b32 crlf = 1;
-    if (ed->result==ED_EOF && ed->notty) {
-        crlf = 0;  // the end of input that is no terminal: "exit" follows
+    if (ed->result==ED_EOF && ed->notty && !ed->line.len) {
+        // The end of input that is no terminal: "exit" follows. After a
+        // partial line, readline takes the end as a newline.
+        crlf = 0;
     } else if (ed->result == ED_ABORT) {
         ed->line.len = ed->point = 0;  // the message is past the line
         crlf = 0;
