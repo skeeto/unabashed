@@ -4482,18 +4482,25 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     b32   invert = n->flags & CMD_INVERT;
     if (invert) sh->noerrexit++;
 
+    // A control structure's redirections decide whether & reads the
+    // shell's input from then on, as bash's stdin_redir: until the next
+    // one with redirections, however it ends. A subshell's or coproc's
+    // apply in it only.
     b32 stdinredir = sh->stdinredir;
+    b32 inner      = n->kind==N_SUBSHELL || n->kind==N_COPROC;
     if (n->kind!=N_SIMPLE && n->kind!=N_CONNECT && n->kind!=N_FUNCDEF && n->redirs) {
+        b32 in = 0;
         for (Redir *r = n->redirs; r; r = r->next) {
-            sh->stdinredir |= r->src==0 && !r->srcvar;  // & reads it then
+            in |= r->src==0 && !r->srcvar;  // & reads it then
         }
+        sh->stdinredir = in || (inner && stdinredir);
         // As bash, a compound command's redirections are at its line
         // as only some commands set it: that of the enclosing for,
         // case, select or call, else where the parser finished the
         // top-level command
         sh->line = sh->ctlline;
         if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs)) {
-            sh->stdinredir = stdinredir;
+            if (inner) sh->stdinredir = stdinredir;
             unwind(sh, mark);
             sh->status = sh->redirfail;
             if (invert) sh->noerrexit--;
@@ -4624,7 +4631,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     if (n->kind!=N_SIMPLE && n->kind!=N_CONNECT && n->kind!=N_COPROC) {
         unwind(sh, mark);  // a coproc's descriptors stay open
     }
-    sh->stdinredir = stdinredir;
+    if (inner) sh->stdinredir = stdinredir;
     if (n->kind==N_SUBSHELL && n->redirs) {
         reportchild(sh, scratch, n);
     }
