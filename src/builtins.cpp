@@ -1788,10 +1788,12 @@ static void posixinit(Shell *sh, b32 on)
 static void setposix(Shell *sh, b32 on)
 {
     if (sh->opt[O_POSIX] == on) return;
-    byte  mem[256];
-    Arena a = {mem, mem+sizeof(mem)};
     if (on) {
+        // a nameref's subscript or an integer's expression may run commands
+        i32   depth = ++sh->capdepth;
+        Arena a     = *scratchat(sh, depth);
         setvar(sh, a, "POSIXLY_CORRECT", "y");
+        sh->capdepth = depth - 1;
     } else {
         unsetvar(sh, "POSIXLY_CORRECT");
     }
@@ -1815,10 +1817,11 @@ static i32 setoptionbyname(Shell *sh, Str name, b32 on)
             if ((k==O_EMACS || k==O_VI) && on) edmodechanged(sh);
             if (k == O_IGNOREEOF) {
                 // as bash, the option and IGNOREEOF follow one another
-                byte  mem[256];
-                Arena a = {mem, mem+sizeof(mem)};
                 if (on) {
+                    i32   depth = ++sh->capdepth;  // as setposix
+                    Arena a     = *scratchat(sh, depth);
                     setvar(sh, a, "IGNOREEOF", "10");
+                    sh->capdepth = depth - 1;
                 } else {
                     unsetvar(sh, "IGNOREEOF");
                 }
