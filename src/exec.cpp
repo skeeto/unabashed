@@ -57,6 +57,7 @@ static void     notifyjobs(Shell *, Arena);
 static void     notifyprompt(Shell *, Arena, Job *only);
 static void     polljobs(Shell *);
 static void     cleanupjobs(Shell *);
+static void     reapended(Shell *);
 static void     orphanjobs(Shell *);
 static void     reaporphans(Sched *);
 static void     coprocfdclosed(Shell *, i32 fd);
@@ -723,13 +724,14 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     // locals are not journaled: restore it by hand
     Frame frame = sh->frame ? *sh->frame : Frame{};
     if (j->newloops) sh->loopdepth = 0;
+    // Saved first: the coprocesses' descriptors it hides are the parent's
+    Fdsave fds = savefds(sh, &scratch);
     if (j->nojobs) {
         sh->jobs   = 0;
         sh->curjob = sh->prevjob = 0;
         sh->bgstats = 0;
         if (sh->coprocs) hidecoproc(sh, &scratch);
     }
-    Fdsave fds = savefds(sh, &scratch);
     if (cap) {
         File *out = newfile(sh, F_CAPTURE, OF_WRITE);
         out->cap = cap;
@@ -789,6 +791,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
         }
         waitdone(sh, died, 0);
     }
+    if (j->kind != SUB_FUNSUB) reapended(sh);  // bash forked for it
     return status;
 }
 
@@ -5511,6 +5514,7 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
             sh->line    = L->lineno;
             sh->ctlline = L->lineno;
             if (sh->jobs && !outer) notifyjobs(sh, *L->a);
+            if (outer) reapended(sh);  // bash's shell_getc, any input
             if (fill && sh->interactive) {
                 histnative(sh);
                 showps0(sh);

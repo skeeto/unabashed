@@ -1390,6 +1390,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     i32 forked = 0;
     for (i32 k = 0; k < nstages; k++) forked += ran[k] && (k<last || !inhere);
     chldreaped(sh, forked);
+    reapended(sh);  // as bash after forking the stages
     for (i32 k = 0; k < last; k++) {
         if (procs[k] != BADHANDLE) {
             checkwinsize(sh);

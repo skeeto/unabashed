@@ -404,6 +404,28 @@ static void deletejob(Shell *sh, Job *j)
 
 static void disposecoproc(Shell *, Coproc *);
 
+// Drop the coprocesses that ended, as bash's coproc_reap.
+static void reapcoprocs(Shell *sh)
+{
+    for (Coproc *c = sh->coprocs; c && c->owner==sh->bashpid;) {
+        Coproc *next = c->next;
+        if (c->dead) disposecoproc(sh, c);
+        c = next;
+    }
+}
+
+// Notice the coprocesses that ended and drop them, where bash's
+// cleanup_dead_jobs would: after wait collects a job, after each fork
+// (a subshell, a substitution, a pipeline), and as each line of eval,
+// source, a trap or ${ ...; } is read. Jobs stay: a trap may run while
+// wait holds one.
+static void reapended(Shell *sh)
+{
+    if (!sh->coprocs) return;
+    polljobs(sh);
+    reapcoprocs(sh);
+}
+
 // Drop the jobs whose end was reported, and coprocesses that ended.
 static void cleanupjobs(Shell *sh)
 {
@@ -412,11 +434,7 @@ static void cleanupjobs(Shell *sh)
         if (j->done && j->notified) deletejob(sh, j);
         j = next;
     }
-    for (Coproc *c = sh->coprocs; c && c->owner==sh->bashpid;) {
-        Coproc *next = c->next;
-        if (c->dead) disposecoproc(sh, c);
-        c = next;
-    }
+    reapcoprocs(sh);
 }
 
 // Start a job table entry for a command started in the background.
@@ -614,15 +632,17 @@ static void notifyprompt(Shell *sh, Arena scratch, Job *only)
 
 // wait collected a job: an interactive shell reports it now (outside
 // POSIX mode, else at the prompt), a script only if a signal killed it,
-// and it is dropped.
+// and it is dropped. Any coprocess that ended goes too, the one waited
+// for or another, as bash's wait_for ends in coproc_reap.
 static void collected(Shell *sh, Arena scratch, Job *j)
 {
     if (sh->interactive && !sh->subshell) {
         if (!sh->opt[O_POSIX]) notifyprompt(sh, scratch, j);
-        return;
+    } else {
+        reportkilled(sh, scratch, j);
+        j->notified = 1;
     }
-    reportkilled(sh, scratch, j);
-    j->notified = 1;
+    reapended(sh);
 }
 
 // Find the job a job spec names, as bash's %N %+ %- %% %name %?text,
@@ -1257,14 +1277,16 @@ static i32 highfd(Shell *sh, i32 *taken, i32 ntaken)
     return -1;
 }
 
-// In a ( list ): the parent's coprocesses are not there.
+// In a ( list ): the parent's coprocesses are not there. Their
+// descriptors are dropped for good, not as a redirection to undo: the
+// subshell saved them (savefds) and puts them back as it ends.
 static void hidecoproc(Shell *sh, Arena *scratch)
 {
     Fdtab *t = sh->fds;
     for (Coproc *c = sh->coprocs; c; c = c->next) {
         i32 fds[2] = {c->rfd, c->wfd};
         for (i32 i = 0; i < 2; i++) {
-            if (fds[i]>=0 && fds[i]<t->top && t->fd[fds[i]]) fdset(sh, fds[i], 0, 0, scratch);
+            if (fds[i]>=0 && fds[i]<t->top && t->fd[fds[i]]) fdset(sh, fds[i], 0, 1, scratch);
         }
     }
     sh->coprocs = 0;
@@ -1371,8 +1393,6 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
         sh->status = 1;
         return;
     }
-    polljobs(sh);
-    cleanupjobs(sh);
     throttlejobs(sh);
     // Two pipes, their ends moved high as bash does: the shell keeps
     // the read end of the first and the write end of the second
@@ -1450,6 +1470,10 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
     }
     fileunref(sh, r2);
     fileunref(sh, w1);
+    // Only now, as bash after the fork (stop_pipeline): an ended
+    // coprocess still held its descriptors when the pipes were made
+    polljobs(sh);
+    cleanupjobs(sh);
 
     Coproc *c = (Coproc *)salloc(sh->store, sizeof(Coproc));
     c->name  = sclone(sh->store, name);
