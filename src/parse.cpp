@@ -425,12 +425,13 @@ static void message(Lexer *L, i32 line, Str text, i32 kind = MSG_ERROR)
 }
 
 // Give up on nesting deep enough to exhaust the stack, where bash would
-// crash. The whole parse fails.
-static void checkstack(Lexer *L)
+// crash. The whole parse fails. A parse that keeps what it has open off
+// the stack (a conditional expression's) charges it as extra.
+static void checkstack(Lexer *L, iz extra = 0)
 {
     byte here = 0;
     byte *at  = STACKAT(here);
-    if ((L->stackmax && L->stacktop-at > L->stackmax) || at < L->stackfloor) {
+    if ((L->stackmax && L->stacktop-at+extra > L->stackmax) || at < L->stackfloor) {
         L->overflow = 1;
         parsefail(L);
     }
@@ -2312,8 +2313,6 @@ static Str condtokentext(CondParser *p)
     return {};
 }
 
-static Cond *condor(CondParser *);
-
 // bash's yacc number for tokens that have no spelling.
 static i32 yacctoken(i32 t)
 {
@@ -2331,29 +2330,16 @@ static i32 yacctoken(i32 t)
     return t;
 }
 
-static Cond *condterm(CondParser *p)
+// A term of a conditional expression that is neither ( expr ) nor
+// ! term, at its first token, tok.
+static Cond *condprimary(CondParser *p, i32 tok)
 {
-    checkstack(p->L);
     Lexer *L = p->L;
-    i32 tok  = condskip(p);
-    i32 line = L->lineno;
     Cond *term = 0;
 
     if (tok == T_CONDEND) {
         p->token = T_ERROR;
         return 0;
-    } else if (tok == '(') {
-        term = condor(p);
-        if (p->token != ')') {
-            Str t = condtokentext(p);
-            return t.data ? conderr(p, line, "unexpected token `", t, "', expected `)'")
-                          : conderr(p, line, "expected `)'", "", "");
-        }
-        term = newcond(L->a, C_EXPR, 0, term, 0);
-        condskip(p);
-    } else if (tok==T_BANG || (tok==T_WORD && L->val.word->text=="!")) {
-        term = condterm(p);
-        if (term) term->invert = !term->invert;
     } else if (tok==T_WORD && testunop(L->val.word->text)) {
         Word *op = L->val.word;
         tok = condread(p);
@@ -2420,24 +2406,110 @@ static Cond *condterm(CondParser *p)
     return term;
 }
 
-static Cond *condand(CondParser *p)
+// What a conditional expression's parse has open around the term it
+// reads: an operator awaiting its right operand, a ( its ), or a !.
+struct CondOpen {
+    CondOpen *next;
+    Cond     *left;  // of && and ||
+    i32       kind;  // T_ANDAND, T_OROR, '(' or '!'
+    i32       line;  // of (
+};
+
+struct CondOpens {
+    CondOpen *top;
+    CondOpen *spare;  // popped, for reuse
+    iz        depth;
+};
+
+// Each construct open in the parse charges its stack budget this much,
+// as a frame of bash's recursive parse would: its 1 MiB holds about as
+// many as bash's 8 MiB stack (52346 parentheses), and so bounds the
+// depth of the tree for the code that walks it.
+enum : iz { CONDOPENCOST = 20 };
+
+static void condopen(Lexer *L, CondOpens *s, i32 kind, Cond *left)
 {
-    Cond *l = condterm(p);
-    if (p->token == T_ANDAND) {
-        Cond *r = condand(p);
-        l = newcond(p->L->a, C_AND, 0, l, r);
+    checkstack(L, ++s->depth*CONDOPENCOST);
+    CondOpen *o = s->spare;
+    if (o) {
+        s->spare = o->next;
+    } else {
+        o = alloc<CondOpen>(L->a);
     }
-    return l;
+    o->kind = kind;
+    o->left = left;
+    o->line = L->lineno;
+    o->next = s->top;
+    s->top  = o;
 }
 
-static Cond *condor(CondParser *p)
+// Close the innermost open construct if it is of kind.
+static CondOpen *condclose(CondOpens *s, i32 kind)
 {
-    Cond *l = condand(p);
-    if (p->token == T_OROR) {
-        Cond *r = condor(p);
-        l = newcond(p->L->a, C_OR, 0, l, r);
+    CondOpen *o = s->top;
+    if (!o || o->kind!=kind) return 0;
+    s->top   = o->next;
+    o->next  = s->spare;
+    s->spare = o;
+    s->depth--;
+    return o;  // valid until the next condopen
+}
+
+// The grammar, as bash's recursive descent has it:
+//   or   := and [ || or ]
+//   and  := term [ && and ]
+//   term := ( or ) | ! term | primary
+// parsed in a loop, with what it has open kept in the arena, so that
+// nesting costs no stack. As each term ends it completes what it closes,
+// innermost first, so that an error reports once for each ( it unwinds,
+// as in bash's COND_RETURN_ERROR.
+static Cond *condexpr(CondParser *p)
+{
+    Lexer    *L = p->L;
+    CondOpens s = {};
+    for (;;) {
+        i32 tok = condskip(p);
+        if (tok == '(') {
+            condopen(L, &s, '(', 0);
+            continue;
+        } else if (tok==T_BANG || (tok==T_WORD && L->val.word->text=="!")) {
+            condopen(L, &s, '!', 0);
+            continue;
+        }
+
+        Cond *c = condprimary(p, tok);
+        for (CondOpen *o;;) {
+            // c is a term, the operand of each ! open around it
+            while (condclose(&s, '!')) {
+                if (c) c->invert = !c->invert;
+            }
+            if (p->token == T_ANDAND) break;  // c is its left operand
+            // c ends an and, the right operand of each && open
+            while ((o = condclose(&s, T_ANDAND))) {
+                c = newcond(L->a, C_AND, 0, o->left, c);
+            }
+            if (p->token == T_OROR) break;
+            // c ends an or, the right operand of each || open
+            while ((o = condclose(&s, T_OROR))) {
+                c = newcond(L->a, C_OR, 0, o->left, c);
+            }
+            if (!s.top) {
+                return c;
+            }
+
+            // c ends the or inside a (, which makes a term
+            o = condclose(&s, '(');
+            if (p->token != ')') {
+                Str t = condtokentext(p);
+                c = t.data ? conderr(p, o->line, "unexpected token `", t, "', expected `)'")
+                           : conderr(p, o->line, "expected `)'", "", "");
+            } else {
+                c = newcond(L->a, C_EXPR, 0, c, 0);
+                condskip(p);
+            }
+        }
+        condopen(L, &s, p->token, c);
     }
-    return l;
 }
 
 static i32 condcommand(Lexer *L)
@@ -2447,7 +2519,7 @@ static i32 condcommand(Lexer *L)
     p.lineno = L->lineno;
     L->pst  &= ~PST_CMDBLTIN;
     L->pst  |= PST_CONDEXPR;
-    Cond *c  = condor(&p);
+    Cond *c  = condexpr(&p);
     if (p.token != T_CONDEND) {
         if (L->eofreached && p.token!=T_ERROR) {
             message(L, p.lineno, "unexpected EOF while looking for `]]'");
@@ -3874,15 +3946,35 @@ static Redir *copyredirs(Arena *a, Redir *r)
     return head;
 }
 
+// copycond and condbytes loop down the operand in which a [[ ]]
+// expression chains, as copynode does: a ( )'s expression, and the right
+// operand of && and ||, a && b && c being a && (b && c). They recurse
+// into the other.
+static b32 condchainsleft(Cond *c)
+{
+    return c->kind == C_EXPR;
+}
+
 static Cond *copycond(Arena *a, Cond *c, Stackguard *g)
 {
-    if (!c) return 0;
     guardstack(g);
-    Cond *r = alloccopy(a, c);
-    r->op    = copyword(a, c->op);
-    r->left  = copycond(a, c->left, g);
-    r->right = copycond(a, c->right, g);
-    return r;
+    Cond  *head = 0;
+    Cond **tail = &head;
+    while (c) {
+        Cond *r = alloccopy(a, c);
+        r->op = copyword(a, c->op);
+        *tail = r;
+        if (condchainsleft(c)) {
+            r->right = copycond(a, c->right, g);
+            tail = &r->left;
+            c = c->left;
+        } else {
+            r->left = copycond(a, c->left, g);
+            tail = &r->right;
+            c = c->right;
+        }
+    }
+    return head;
 }
 
 // An upper bound on the bytes copynode takes for n and what it holds,
@@ -3899,12 +3991,15 @@ static iz wordsbytes(Word *w)  // as copywords: the list
     return r;
 }
 
-static iz condbytes(Cond *c, Stackguard *g)
+static iz condbytes(Cond *c, Stackguard *g)  // as copycond
 {
-    if (!c) return 0;
     guardstack(g);
-    return (iz)(sizeof(Cond) + alignof(Cond)) + wordbytes(c->op) +
-           condbytes(c->left, g) + condbytes(c->right, g);
+    iz r = 0;
+    for (; c; c = condchainsleft(c) ? c->left : c->right) {
+        r += (iz)(sizeof(Cond) + alignof(Cond)) + wordbytes(c->op);
+        r += condbytes(condchainsleft(c) ? c->right : c->left, g);
+    }
+    return r;
 }
 
 // The child in which n's kind chains: lists nest down their left

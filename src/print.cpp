@@ -302,43 +302,44 @@ static void printredirs(Printer *p, Redir *list)
 
 static void printcmd(Printer *p, Node *n);
 
+// It recurses only into the left operands of && and ||, and loops
+// through parentheses and right operands, each the last of what
+// encloses it: their closing parentheses all follow it.
 static void printcond(Printer *p, Cond *c)
 {
     guardstack(&p->guard);
-    if (c->invert) {
-        put(p, "! ");
+    iz close = 0;
+    for (;;) {
+        if (c->invert) {
+            put(p, "! ");
+        }
+        if (c->kind == C_EXPR) {
+            put(p, "( ");
+            close++;
+            c = c->left;
+            continue;
+        } else if (c->kind==C_AND || c->kind==C_OR) {
+            printcond(p, c->left);
+            put(p, c->kind==C_AND ? " && " : " || ");
+            c = c->right;
+            continue;
+        } else if (c->kind == C_UNARY) {
+            put(p, c->op->text);
+            put(p, " ");
+            printcond(p, c->left);
+        } else if (c->kind == C_BINARY) {
+            printcond(p, c->left);
+            put(p, " ");
+            put(p, c->op->text);
+            put(p, " ");
+            printcond(p, c->right);
+        } else if (c->kind == C_TERM) {
+            put(p, c->op->text);
+        }
+        break;
     }
-    switch (c->kind) {
-    case C_EXPR:
-        put(p, "( ");
-        printcond(p, c->left);
+    for (; close; close--) {
         put(p, " )");
-        break;
-    case C_AND:
-        printcond(p, c->left);
-        put(p, " && ");
-        printcond(p, c->right);
-        break;
-    case C_OR:
-        printcond(p, c->left);
-        put(p, " || ");
-        printcond(p, c->right);
-        break;
-    case C_UNARY:
-        put(p, c->op->text);
-        put(p, " ");
-        printcond(p, c->left);
-        break;
-    case C_BINARY:
-        printcond(p, c->left);
-        put(p, " ");
-        put(p, c->op->text);
-        put(p, " ");
-        printcond(p, c->right);
-        break;
-    case C_TERM:
-        put(p, c->op->text);
-        break;
     }
 }
 

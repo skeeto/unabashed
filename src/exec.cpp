@@ -4382,25 +4382,51 @@ static i32 condregex(Shell *sh, Arena a, Str s, Str re)
     return !ok;
 }
 
+static i32 condevalprimary(Shell *sh, Arena *a, Cond *c);
+
 // The status of a [[ ]] expression: 0 true, 1 false, 2 for an error
 // (the -t operand's or a regular expression's), which || and ! treat as
-// false, as bash does.
+// false, as bash does. It recurses only into the left operands of &&
+// and ||, in a small frame, and loops through parentheses and right
+// operands, so that a deeply nested expression takes little stack.
 static i32 condeval(Shell *sh, Arena *a, Cond *c)
 {
-    checkstack(sh);  // it recurses as deep as the expression nests
+    checkstack(sh);
+    i32 inverts = 0;  // each ! applies to what the rest evaluates to
+    i32 r = 1;
+    for (;;) {
+        inverts += c->invert;
+        if (c->kind == C_EXPR) {
+            c = c->left;
+            continue;
+        } else if (c->kind == C_AND) {
+            r = condeval(sh, a, c->left);
+            if (!r) {
+                c = c->right;
+                continue;
+            }
+        } else if (c->kind == C_OR) {
+            r = condeval(sh, a, c->left);
+            if (r) {
+                c = c->right;
+                continue;
+            }
+        } else {
+            r = condevalprimary(sh, a, c);
+        }
+        break;
+    }
+    // The first ! makes 0 true and the rest false (an error too), and
+    // each further one negates that
+    return !inverts ? r : inverts&1 ? r==0 : r!=0;
+}
+
+// A [[ ]] primary's status, as condeval's, but for its !
+[[gnu::noinline]]
+static i32 condevalprimary(Shell *sh, Arena *a, Cond *c)
+{
     i32 r = 1;
     switch (c->kind) {
-    case C_AND:
-        r = condeval(sh, a, c->left);
-        if (!r) r = condeval(sh, a, c->right);
-        break;
-    case C_OR:
-        r = condeval(sh, a, c->left);
-        if (r) r = condeval(sh, a, c->right);
-        break;
-    case C_EXPR:
-        r = condeval(sh, a, c->left);
-        break;
     case C_TERM: {
         Str arg = condword(sh, a, c->op);
         tracecond(sh, *a, c->invert, "-n", arg, 0);
@@ -4451,7 +4477,7 @@ static i32 condeval(Shell *sh, Arena *a, Cond *c)
         }
     } break;
     }
-    return c->invert ? r==0 : r;
+    return r;
 }
 
 static b32 loopflow(Shell *sh)
