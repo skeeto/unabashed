@@ -668,7 +668,9 @@ static void f80pad(Buf *b, i64 n, u8 c)
 // and the body, spaces outside. The body may sit in scratch just past
 // b's capacity, where b grows in place when f80bound fell short (a
 // width or precision near 2^30), so everything is reserved first and
-// the body moved to its place before the padding is written.
+// the body moved to its place before the padding is written. When b is
+// not at its arena's tip, growing moves it there instead, which is
+// where that scratch starts, so the body is claimed first.
 static void f80emit(Buf *b, F80Spec *fs, Str sign, Str prefix, Str body, b32 zeros)
 {
     b32 z     = zeros && fs->zero && !fs->left;
@@ -677,6 +679,13 @@ static void f80emit(Buf *b, F80Spec *fs, Str sign, Str prefix, Str body, b32 zer
     pad = pad>0 ? pad : 0;
     i64 total = head + body.len + pad;
     if (total > (i64)((uz)-1 >> 1)) os_oom();
+    Arena *a = b->a;
+    if (b->cap-b->len<total && (byte *)(b->data+b->cap)!=a->beg) {
+        byte *beg = (byte *)body.data;
+        byte *end = beg + body.len;
+        byte *top = a->mem ? a->mem->commit : a->end;
+        if (beg>=a->beg && end<=top) allocbytes(a, end - a->beg);
+    }
     reserve(b, (iz)total);
     u8 *out = b->data + b->len;
     iz  at  = fs->left ? head : (iz)total - body.len;

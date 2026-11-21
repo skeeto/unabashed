@@ -835,6 +835,50 @@ static void test_f80ints(Test *t)
     }
 }
 
+// Formats v after "abc" in a Buf too small for it, as when f80bound
+// falls short, at the arena's tip or not.
+static Str f80grow(Arena *a, b32 tip, F80 v, u8 conv, F80Spec *fs)
+{
+    Buf b(a, 8);
+    print(&b, "abc");
+    if (!tip) {
+        allocbytes(a, 1);  // as printf's %b expansion
+    }
+    f80format(&b, v, conv, fs, *a);
+    return finish(&b);
+}
+
+// The number survives f80emit growing its output wherever it sits.
+static void test_f80grow(Test *t)
+{
+    Os *os = t->os;
+    heapreset(os);
+    Arena a = newarena(os, (iz)1<<20);
+    F80 five = f80fromint(5);
+    F80 inf  = {};
+    inf.m = 1ull << 63;
+    inf.e = F80_MAXE;
+    F80Spec fs = {};
+    fs.width = 20;
+    fs.prec  = 0;
+    for (b32 tip = 0; tip < 2; tip++) {
+        expect(t, "f80emit grow f", f80grow(&a, tip, five, 'f', &fs),
+               "abc                   5");
+        expect(t, "f80emit grow g", f80grow(&a, tip, five, 'g', &fs),
+               "abc                   5");
+        expect(t, "f80emit grow inf", f80grow(&a, tip, inf, 'f', &fs),
+               "abc                 inf");
+        fs.left = 1;
+        expect(t, "f80emit grow left", f80grow(&a, tip, five, 'e', &fs),
+               "abc5e+00               ");
+        fs.left = 0;
+        fs.zero = 1;
+        expect(t, "f80emit grow zero", f80grow(&a, tip, five, 'f', &fs),
+               "abc00000000000000000005");
+        fs.zero = 0;
+    }
+}
+
 // RANDOM's PCG64: pcg-c's published outputs for pcg64_srandom_r(42, 54),
 // and the 64-bit halves against 128-bit integers for other seeds.
 static void test_pcg(Test *t)
@@ -2119,6 +2163,7 @@ int main(int argc, char **argv)
     test_conkey(&t);
     test_arena(&t);
     test_f80ints(&t);
+    test_f80grow(&t);
     test_pcg(&t);
     test_chacha(&t);
     test_sched(&t);
