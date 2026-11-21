@@ -788,7 +788,15 @@ static void compfilter(Shell *sh, Comp *c)
     c->m = keep;
 }
 
-static void complcd(Editor *ed, Comp *c, Str typed)
+// A common prefix of s, n bytes, cut back to whole characters
+static iz compwhole(Shell *sh, Str s, iz n)
+{
+    if (!sh->utf8) return n;
+    while (n>0 && n<s.len && (s[n] & 0xc0)==0x80) n--;
+    return n;
+}
+
+static void complcd(Editor *ed, Shell *sh, Comp *c, Str typed)
 {
     Slice<Str> m = c->m;
     if (!m.len) return;
@@ -807,6 +815,7 @@ static void complcd(Editor *ed, Comp *c, Str typed)
         }
         n = k;
     }
+    n = compwhole(sh, m[0], n);
     c->lcd = takehead(m[0], n);
     if (ed->vars.ignorecase) {
         iz len = typed.len<n ? typed.len : n;
@@ -831,7 +840,7 @@ static void compprocess(Editor *ed, Shell *sh, Comp *c)
     m.len = n;
     c->m  = m;
     compfilter(sh, c);
-    complcd(ed, c, compbare(c));
+    complcd(ed, sh, c, compbare(c));
 }
 
 
@@ -1124,6 +1133,7 @@ static void complist(Editor *ed, Shell *sh, Comp *c)
             for (; k<plen && k<items[i].len && items[i][k]==items[0][k]; k++) {}
             plen = k;
         }
+        plen = compwhole(sh, items[0], plen);
         if (plen<=ed->vars.prefixdisplay || plen<=3) plen = 0;
     }
     Str *shown = alloc<Str>(a, n);

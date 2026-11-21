@@ -1,0 +1,12 @@
+# The common prefix of the matches, inserted and shortened in a listing,
+# ends at a whole UTF-8 character: aéx and aèy share a and half of é
+size 12 70
+rc PS1='$ '
+rc complete -W 'aéx aèy' foo; complete -W 'abcdéx abcdèy' bar
+rc mkdir u; : >u/aéx; : >u/aèy
+rc bind 'set completion-prefix-display-length 2'
+keys foo \t\t\t
+snap
+keys \C-a\C-kls u/\t\t\t
+snap
+keys \C-a\C-kbar ab\t\t\t

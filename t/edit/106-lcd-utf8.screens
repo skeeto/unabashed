@@ -1,0 +1,21 @@
+== snap 1
+$ foo a
+aèy  aéx
+$ foo a
+@ 2,7 bell 2
+== snap 2
+$ foo a
+aèy  aéx
+$ ls u/a
+aèy  aéx
+$ ls u/a
+@ 4,8 bell 4
+== snap 3
+$ foo a
+aèy  aéx
+$ ls u/a
+aèy  aéx
+$ bar abcd
+...èy  ...éx
+$ bar abcd
+@ 6,10 bell 6
