@@ -164,10 +164,24 @@ static void spawndir(posix_spawn_file_actions_t *fa, SpawnPlan *p)
 // After the map: nothing (POSIX_SPAWN_CLOEXEC_DEFAULT closed the rest)
 static void spawnpost(posix_spawn_file_actions_t *, SpawnPlan *, i32) {}
 
-// Whether the terminal sent the signal to its group: macOS cannot tell
-static b32 fromterminal(siginfo_t *)
+// Whether the terminal sent the signal to its group. macOS marks no
+// si_code for it, but names as its sender the process that wrote the
+// key to the terminal's master (the emulator, sshd), which lies outside
+// the session, where kill names the killer: ours, a child, or gone by
+// now. So a signal from a live process of another session, while this
+// process's group holds the controlling terminal, is the terminal's;
+// a kill from another session to a foreground shell is mistaken for it.
+// Called from onsignal: open, tcgetpgrp and close are signal-safe.
+static b32 fromterminal(siginfo_t *info)
 {
-    return 0;
+    if (!info || info->si_pid<=0) return 0;
+    pid_t sid = getsid(info->si_pid);
+    if (sid<0 || sid==getsid(0)) return 0;
+    i32 fd = open("/dev/tty", O_RDONLY|O_NOCTTY|O_NONBLOCK|O_CLOEXEC);
+    if (fd < 0) return 0;
+    b32 fg = tcgetpgrp(fd) == getpgrp();
+    close(fd);
+    return fg;
 }
 
 // Whether a fault (faulted) surely is the process's own: macOS gives an
