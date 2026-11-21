@@ -559,10 +559,9 @@ enum : i32 {
     GS_REVERSE = 16,
 };
 
-static i32 globsort(Shell *sh)
+static i32 globsort(Shell *sh, Arena scratch)
 {
-    Arena none = {};
-    Str   v    = getvar(sh, &none, "GLOBSORT").value;
+    Str v = getplain(sh, &scratch, "GLOBSORT").value;
     if (!v.len) return GS_NONE;
     for (; v.len && (v[0]==' ' || v[0]=='\t'); v = cuthead(v, 1)) {}
     i32 rev = 0;
@@ -624,7 +623,7 @@ static b32 globless(GlobKey *a, GlobKey *b)
 // numeric value for names of all digits, or not at all.
 static void sortglob(Shell *sh, Arena scratch, Slice<Str> m)
 {
-    i32 how = globsort(sh);
+    i32 how = globsort(sh, scratch);
     b32 rev = how & GS_REVERSE;
     how &= ~GS_REVERSE;
     if (how==GS_NOSORT || m.len<2) return;

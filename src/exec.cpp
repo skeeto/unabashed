@@ -34,7 +34,7 @@ static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i3
                           b32 (*fill)(void *, Lexer *) = 0, void *fillctx = 0,
                           b32 comsub = 0, b32 hist = 0);
 static Str      runfunsub(Shell *, Arena *, Str src, Capture *, Arena);
-static i32      compatlevel(Shell *);  // builtins.cpp
+static i32      compatlevel(Shell *, Arena);  // builtins.cpp
 static i32      b_read(Shell *, Str *, iz, Arena);  // builtins.cpp
 static void     joinpsubs(Shell *);
 static void     closeall(Shell *);
@@ -334,7 +334,7 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
         }
         Param p = getelems(x, ref->name, ref->sub);
         if (p.list) {
-            p.value = joinparams(a, Args{p.lv, p.ln}, starsep(c->sh));
+            p.value = joinparams(a, Args{p.lv, p.ln}, starsep(c->sh, a));
         }
         *isset = p.set || varvisible(c->sh, ref->name);
         return p.value;
@@ -387,7 +387,7 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
 static b32 arithliteralsub(void *ctx, Str name)
 {
     ShellArith *c = (ShellArith *)ctx;
-    if (compatlevel(c->sh)<=51 && !c->sh->shopt[S_ARRAY_EXPAND_ONCE]) return 0;
+    if (compatlevel(c->sh, *c->a)<=51 && !c->sh->shopt[S_ARRAY_EXPAND_ONCE]) return 0;
     Value *v = lookup(c->sh, name);
     return v && v->arr && v->arr->bucket;
 }
@@ -3666,8 +3666,8 @@ static b32 envvarset(void *ctx, Str name)
         }
         return getelems(x, rn, rs).set;
     }
-    Arena none = {};
-    return getvar(sh, &none, name).set;
+    Arena a = *((TestCtx *)ctx)->a;
+    return getplain(sh, &a, name).set;  // as bash, a nameref to an element is unset
 }
 
 static b32 envnameref(void *ctx, Str name)

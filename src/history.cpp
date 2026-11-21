@@ -157,10 +157,10 @@ static i32  histread(Shell *, Str file, i64 from, Arena);
 static void histvarchanged(Shell *sh, Str name)
 {
     Hist *h = &sh->hist;
-    Arena none = {};
     if (!h->ready) return;  // not from the environment
+    Arena a = *scratchat(sh, sh->capdepth+1);  // for a dynamic value
     if (name == "HISTSIZE") {
-        Got g = getvar(sh, &none, name);
+        Got g = getplain(sh, &a, name);
         i64 n = 0;
         if (!g.set || !g.value.len) {
             histstifle(sh, -1);
@@ -173,7 +173,7 @@ static void histvarchanged(Shell *sh, Str name)
             }
         }
     } else if (name == "HISTCONTROL") {
-        Str v = getvar(sh, &none, name).value;
+        Str v = getplain(sh, &a, name).value;
         h->control = 0;
         while (v.len) {
             Cut c = cut(v, ':');
@@ -184,7 +184,7 @@ static void histvarchanged(Shell *sh, Str name)
             v = c.tail;
         }
     } else if (name == "histchars") {
-        Got g = getvar(sh, &none, name);
+        Got g = getplain(sh, &a, name);
         if (!g.set) {
             h->expchar = '!';
             h->subchar = '^';
@@ -197,7 +197,7 @@ static void histvarchanged(Shell *sh, Str name)
     } else if (name == "HISTFILESIZE") {
         histfilesize(sh);
     } else if (name == "HISTTIMEFORMAT") {
-        b32 set = getvar(sh, &none, name).set;
+        b32 set = getplain(sh, &a, name).set;
         if (set && !h->comchar) h->comchar = '#';
         h->writets = set;
     }
@@ -524,16 +524,15 @@ static void histoption(Shell *sh, i32 opt, b32 on)
 // is read.
 static void histload(Shell *sh)
 {
-    Arena none = {};
-    Arena a    = *scratchat(sh, sh->capdepth+1);
-    if (!getvar(sh, &none, "HISTSIZE").set) {
+    Arena a = *scratchat(sh, sh->capdepth+1);
+    if (!getplain(sh, &a, "HISTSIZE").set) {
         Str n = sh->pathmode==PM_NATIVE ? Str("1024") : "500";
         setvar(sh, a, "HISTSIZE", n);
     }
     histvarchanged(sh, "HISTSIZE");
-    Got fs = getvar(sh, &none, "HISTFILESIZE");
+    Got fs = getplain(sh, &a, "HISTFILESIZE");
     if (!fs.set) {
-        Str n = clone(&a, getvar(sh, &none, "HISTSIZE").value);
+        Str n = clone(&a, getplain(sh, &a, "HISTSIZE").value);
         setvar(sh, a, "HISTFILESIZE", n);
     }
     histfilesize(sh);

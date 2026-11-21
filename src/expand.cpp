@@ -298,15 +298,16 @@ static Str backquotebody(Arena *a, Str s, b32 dquote)
 
 // Parameters
 
-static Str ifsvalue(Shell *sh, b32 *set)
+// IFS's value, allocated in a only through a nameref to a dynamic
+// variable.
+static Str ifsvalue(Shell *sh, Arena *a, b32 *set)
 {
     // Unset leaves a variable's entry in place, so IFS's is looked up
     // once per table
-    Arena  none = {};
-    Var   *e    = sh->ifs ? sh->ifs : (sh->ifs = findvar(sh, "IFS"));
-    Value *v    = e ? e->top : 0;
-    Got    g    = v && (v->attrs&V_NAMEREF) ? getvar(sh, &none, "IFS")
-                :                             getvalue(sh, &none, v);
+    Var   *e = sh->ifs ? sh->ifs : (sh->ifs = findvar(sh, "IFS"));
+    Value *v = e ? e->top : 0;
+    Got    g = v && (v->attrs&V_NAMEREF) ? getplain(sh, a, "IFS")
+             :                             getvalue(sh, a, v);
     *set = g.set;
     return g.set ? g.value : Str(" \t\n");
 }
@@ -322,10 +323,10 @@ static Str joinparams(Arena *a, Args args, Str sep)
 }
 
 // The separator for "$*": the first character of IFS.
-static Str starsep(Shell *sh)
+static Str starsep(Shell *sh, Arena *a)
 {
     b32 set;
-    Str ifs = ifsvalue(sh, &set);
+    Str ifs = ifsvalue(sh, a, &set);
     if (!set) return " ";
     if (!ifs.len) return "";
     iz  i = 0;
@@ -436,7 +437,7 @@ static void putvalue(X *x, Str v, i32 ctx)
     u8 flag = XF_QUOTED;
     if (!(ctx & (XC_DQUOTE|XC_HEREDOC))) {
         b32 set;
-        ifsvalue(x->sh, &set);
+        ifsvalue(x->sh, x->a, &set);
         flag = set ? XF_SPLIT : XF_SPLIT|XF_UNSET;
     }
     xput(x, v, flag);
@@ -449,12 +450,12 @@ static void putlist(X *x, Str *v, iz n, b32 star, i32 ctx)
     b32 dq = ctx & (XC_DQUOTE|XC_HEREDOC);
     if (dq && star) {
         Args a = {v, n};
-        xput(x, joinparams(x->a, a, starsep(sh)), XF_QUOTED);
+        xput(x, joinparams(x->a, a, starsep(sh, x->a)), XF_QUOTED);
         return;
     }
     if (x->nosplit) {
         Args a = {v, n};
-        Str  sep = star ? starsep(sh) : Str(" ");
+        Str  sep = star ? starsep(sh, x->a) : Str(" ");
         xput(x, joinparams(x->a, a, sep), dq ? XF_QUOTED : XF_SPLIT);
         return;
     }
@@ -463,7 +464,7 @@ static void putlist(X *x, Str *v, iz n, b32 star, i32 ctx)
         // word, IFS set and not starting with a space, is the
         // parameters joined by spaces as if quoted, so not split
         b32 set;
-        Str ifs = ifsvalue(sh, &set);
+        Str ifs = ifsvalue(sh, x->a, &set);
         if (set && ifs.len && ifs[0]!=' ') {
             Args a = {v, n};
             xput(x, joinparams(x->a, a, " "), XF_QUOTED);
@@ -483,8 +484,8 @@ static void putlist(X *x, Str *v, iz n, b32 star, i32 ctx)
     // spaces of what was expanded while IFS was unset, whatever IFS is
     // by then: unset IFS; $v${IFS=}$*.
     b32 set;
-    Str ifs = ifsvalue(sh, &set);
-    Str sep = !dq && (!set || ifs.len) ? starsep(sh) : Str{};
+    Str ifs = ifsvalue(sh, x->a, &set);
+    Str sep = !dq && (!set || ifs.len) ? starsep(sh, x->a) : Str{};
     u8  vflag = dq ? XF_QUOTED : !set ? XF_SPLIT|XF_UNSET
               : !ifs.len ? XF_SPLIT|XF_KEEP : XF_SPLIT;
     x->splitspace |= !dq && set && !ifs.len;
@@ -718,21 +719,20 @@ static i64     histnumber(Shell *);          // history.cpp
 // Is the prompt decoding taken for PS0, PS1 or PS2 (k = 3, 1, 2)? As
 // bash compares pointers: ${x@P} outside a prompt passes for any of them
 // unset, and in a non-interactive shell for all.
-static b32 promptis(Shell *sh, i32 k)
+static b32 promptis(Shell *sh, Arena scratch, i32 k)
 {
     if (sh->promptkind) return sh->promptkind == k;
     if (!sh->interactive) return 1;
-    Arena none = {};
-    return !getvar(sh, &none, k==3 ? Str("PS0") : k==1 ? Str("PS1") : "PS2").set;
+    return !getplain(sh, &scratch, k==3 ? Str("PS0") : k==1 ? Str("PS1") : "PS2").set;
 }
 
 // \! in a prompt: the number the next entry gets in PS1 (and in PS2
 // without cmdhist), the current one elsewhere.
-static i64 prompthistnum(Shell *sh)
+static i64 prompthistnum(Shell *sh, Arena scratch)
 {
     i64 n = histnumber(sh);
-    if (n==1 || promptis(sh, 1)) return n;
-    if (promptis(sh, 2) && !sh->shopt[S_CMDHIST]) return n;
+    if (n==1 || promptis(sh, scratch, 1)) return n;
+    if (promptis(sh, scratch, 2) && !sh->shopt[S_CMDHIST]) return n;
     return n - 1;
 }
 
@@ -795,7 +795,7 @@ static Str promptescapes(X *x, Str s, b32 expand, b32 bb)
                 putbyte(&b, '!');
                 i++;
             } else {
-                print(&b, prompthistnum(sh));
+                print(&b, prompthistnum(sh, *a));
             }
             continue;
         }
@@ -851,10 +851,10 @@ static Str promptescapes(X *x, Str s, b32 expand, b32 bb)
             if (expand && sh->euid) putbyte(&b, '\\');
             putbyte(&b, sh->euid ? '$' : '#');
             break;
-        case '!':  print(&b, prompthistnum(sh)); break;
+        case '!':  print(&b, prompthistnum(sh, *a)); break;
         case '#':
-            print(&b, sh->cmdnumber - !(promptis(sh, 1) || promptis(sh, 2) ||
-                                        promptis(sh, 3)));
+            print(&b, sh->cmdnumber - !(promptis(sh, *a, 1) || promptis(sh, *a, 2) ||
+                                        promptis(sh, *a, 3)));
             break;
         case 's':  promptput(&b, basename(sh->shellname), 1, expand); break;
         case 'j': {
@@ -1278,7 +1278,7 @@ static Got getelem(Shell *sh, Arena *a, Str name, Str sub)
     Param p = getelems(x, name, sub);
     Got   r = {};
     if (p.list) {
-        r.value = joinparams(a, Args{p.lv, p.ln}, p.star ? starsep(sh) : Str(" "));
+        r.value = joinparams(a, Args{p.lv, p.ln}, p.star ? starsep(sh, a) : Str(" "));
         r.set   = p.ln > 0;
     } else {
         r.value = p.value;
@@ -1703,7 +1703,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         Str word = cuthead(rest, 1);
         b32 isset = p.list ? p.ln>0 : p.set;
         // A list is null when its values joined are empty
-        Str sep   = p.star ? starsep(sh) : Str(" ");
+        Str sep   = p.star ? starsep(sh, x->a) : Str(" ");
         b32 null  = p.list ? !joinparams(x->a, Args{p.lv, p.ln}, sep).len : !p.value.len;
         b32 use   = colon ? isset && !null : isset;
         if (op == '+') {
@@ -2215,7 +2215,7 @@ static void expandinto(X *x, Str s, i32 ctx)
     u8  lit  = dq||hd ? XF_QUOTED : ctx&XC_PARAM ? XF_SPLIT : 0;
     if (lit == XF_SPLIT) {
         b32 set;
-        ifsvalue(sh, &set);
+        ifsvalue(sh, x->a, &set);
         lit |= set ? 0 : XF_UNSET;
     }
     b32 tildeok = !(ctx & (XC_DQUOTE|XC_HEREDOC|XC_ARITH));
@@ -3001,7 +3001,7 @@ static b32 simpleexpand(Shell *sh, Arena *a, Str text, Slice<Str> *out)
     if (!s.quoted) {
         if (!s.value.len) return 1;  // unquoted empty: removed
         b32 ifsset;
-        Str ifs = ifsvalue(sh, &ifsset);
+        Str ifs = ifsvalue(sh, a, &ifsset);
         u8  stop[256] = {};
         for (iz i = 0; i < ifs.len; i++) stop[ifs[i]] = 1;
         stop['*'] = stop['?'] = stop['['] = stop['('] = 1;
@@ -3159,7 +3159,7 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
             fields = push(a, fields, xfinish(x));
 
             // Split with IFS as it is now, after any ${IFS=...}
-            Str ifs = ifsvalue(sh, &ifsset);
+            Str ifs = ifsvalue(sh, a, &ifsset);
             split2.len = 0;
             for (iz k = 0; k < fields.len; k++) {
                 XField f = fields[k];

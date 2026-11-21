@@ -580,6 +580,15 @@ static Got getvar(Shell *sh, Arena *a, Str name)
     return getvalue(sh, a, v);
 }
 
+// A variable's value as the shell reads it for itself, as bash's
+// get_string_value: a nameref naming an element reads as unset, its
+// subscript never evaluated, so no commands run. Only a dynamic value
+// is allocated.
+static Got getplain(Shell *sh, Arena *a, Str name)
+{
+    return getvalue(sh, a, lookup(sh, name));
+}
+
 // A binding's value as a string, null when unset.
 static Got getvalue(Shell *sh, Arena *a, Value *v)
 {

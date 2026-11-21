@@ -1539,11 +1539,10 @@ static i32 b_readonly(Shell *sh, Str *args, iz nargs, Arena scratch)
 // unset 'name[sub]': one element, or for an indexed array's @ and *,
 // every element. Element 0 of a scalar is the scalar itself.
 // BASH_COMPAT as a number like 51, or 53 when unset or not understood.
-static i32 compatlevel(Shell *sh)
+static i32 compatlevel(Shell *sh, Arena scratch)
 {
-    Arena none = {};
-    Str   v    = getvar(sh, &none, "BASH_COMPAT").value;
-    i32   n    = 0;
+    Str v = getplain(sh, &scratch, "BASH_COMPAT").value;
+    i32 n = 0;
     for (iz i = 0; i < v.len; i++) {
         if (v[i] == '.') continue;
         if (v[i]<'0' || v[i]>'9' || n>1000) return 53;
@@ -1582,7 +1581,7 @@ static i32 unsetelem(Shell *sh, Arena scratch, Str name, Str sub, b32 raw = 0, b
         varchanged(sh, name);
         return 0;
     }
-    if (cur->arr && allsub(sub) && compatlevel(sh)<=51) {
+    if (cur->arr && allsub(sub) && compatlevel(sh, scratch)<=51) {
         return unsetvar(sh, name) ? 0 : 1;  // the whole array, as bash 5.1
     }
     if (cur->arr && allsub(sub)) {
@@ -3227,7 +3226,7 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
 
     b32 ifsset;
-    Str ifs = clone(&scratch, ifsvalue(sh, &ifsset));  // read may assign IFS
+    Str ifs = clone(&scratch, ifsvalue(sh, &scratch, &ifsset));  // read may assign IFS
     if (exact) ifs = {};  // -N does not split
     // IFS a character at a time (ifsmatch), but an ASCII IFS matches no
     // part of a multibyte character, so then a byte at a time

@@ -294,10 +294,10 @@ static u8 localeradix(Str v)
 // that cannot be set leaves the current one, as a failed setlocale.
 static void numericchanged(Shell *sh)
 {
-    Arena none = {};
-    Str v = getvar(sh, &none, "LC_ALL").value;
-    if (!v.len) v = getvar(sh, &none, "LC_NUMERIC").value;
-    if (!v.len) v = getvar(sh, &none, "LANG").value;
+    Arena a = *scratchat(sh, sh->capdepth+1);  // for a dynamic value
+    Str v = getplain(sh, &a, "LC_ALL").value;
+    if (!v.len) v = getplain(sh, &a, "LC_NUMERIC").value;
+    if (!v.len) v = getplain(sh, &a, "LANG").value;
     if (sh->pathmode == PM_NATIVE) {
         sh->radix = 0;  // busybox-w32 has no locales
     } else if (localeok(v)) {
@@ -327,15 +327,15 @@ static void varchanged(Shell *sh, Str name)
     } else if (name == "LC_ALL" || name == "LC_CTYPE" || name == "LANG") {
         {
             // As bash's lc_all (LANG at startup brings it in)
-            Arena none = {};
-            sh->lcall = getvar(sh, &none, "LC_ALL").value.len > 0;
+            Arena a = *scratchat(sh, sh->capdepth+1);
+            sh->lcall = getplain(sh, &a, "LC_ALL").value.len > 0;
         }
         if (name != "LANG") localewarn(sh, name);
         numericchanged(sh);
-        Arena none = {};
-        Str v = getvar(sh, &none, "LC_ALL").value;
-        if (!v.len) v = getvar(sh, &none, "LC_CTYPE").value;
-        if (!v.len) v = getvar(sh, &none, "LANG").value;
+        Arena a = *scratchat(sh, sh->capdepth+1);
+        Str v = getplain(sh, &a, "LC_ALL").value;
+        if (!v.len) v = getplain(sh, &a, "LC_CTYPE").value;
+        if (!v.len) v = getplain(sh, &a, "LANG").value;
         b32 utf8 = 0;
         for (iz i = 0; i+4 < v.len+1; i++) {
             Str t = cuthead(v, i);
@@ -348,8 +348,8 @@ static void varchanged(Shell *sh, Str name)
         sh->utf8 = utf8;
     } else if (name == "BASH_XTRACEFD") {
         // Traces go to an open descriptor it names, else to stderr
-        Arena none = {};
-        Got g = getvar(sh, &none, name);
+        Arena a = *scratchat(sh, sh->capdepth+1);
+        Got g = getplain(sh, &a, name);
         i64 fd = 0;
         sh->tracefd = 2;
         if (g.value.len && parsei64(g.value, &fd) && fd>=0 && fd<FDMAX && sh->fds->fd[fd]) {
@@ -369,8 +369,8 @@ static void varchanged(Shell *sh, Str name)
     } else if (name == "HOSTFILE") {
         // Unset, completion forgets its host names; set, it reads the
         // file again, adding to them (as bash's sv_hostfile)
-        Arena none = {};
-        if (!getvar(sh, &none, name).set) {
+        Arena a = *scratchat(sh, sh->capdepth+1);
+        if (!getplain(sh, &a, name).set) {
             sfreestr(sh->store, sh->hosts);
             sh->hosts = {};
         }
@@ -395,8 +395,8 @@ static void varchanged(Shell *sh, Str name)
         posixinit(sh, on);
     } else if (name == "GLOBIGNORE") {
         // A non-empty value turns dotglob on, and unsetting turns it off
-        Arena none = {};
-        Got g = getvar(sh, &none, name);
+        Arena a = *scratchat(sh, sh->capdepth+1);
+        Got g = getplain(sh, &a, name);
         if (g.value.len) {
             sh->shopt[S_DOTGLOB] = 1;
         } else if (!g.set) {
@@ -1026,8 +1026,8 @@ static i64 atoilike(Str v)
 // prompt on: TMOUT seconds as atoi reads them, as bash's alarm, or 0.
 static i64 tmoutdeadline(Shell *sh)
 {
-    Arena none = {};
-    i64 secs = atoilike(getvar(sh, &none, "TMOUT").value);
+    Arena a    = *scratchat(sh, sh->capdepth+1);
+    i64   secs = atoilike(getplain(sh, &a, "TMOUT").value);
     return secs>0 ? os_now(sh->os) + secs*1000000000 : 0;
 }
 
@@ -1290,8 +1290,8 @@ static b32 fillstdin(void *ctx, Lexer *L)
         byte  mem[64];
         Arena a = {mem, mem+sizeof(mem)};
         if (sh->opt[O_IGNOREEOF]) {
-            Arena none = {};
-            Str v = getvar(sh, &none, "IGNOREEOF").value;
+            Arena scratch = *scratchat(sh, sh->capdepth+1);
+            Str v = getplain(sh, &scratch, "IGNOREEOF").value;
             i64 limit = v.len ? atoilike(v) : 10;
             if (in->eofs < limit) {
                 in->eofs++;
