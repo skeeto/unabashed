@@ -2065,7 +2065,9 @@ static RxMemo newmemo(RxCtx *c, Arena *a, i32 len, iz base, iz span)
 }
 
 // The arena for size bytes of the search's own, from the memo's chunks
-// when the search's arena is short, which ends the memo.
+// when the search's arena is short, which ends the memo. Since alloc
+// refuses an exact fit, size counts one element more than is taken, and
+// alignment.
 static Arena *rxframes(RxMemo *m, iz size)
 {
     if (rxavail(m->a) >= size) return m->a;
@@ -2416,7 +2418,8 @@ static void rxrecord(RxCtx *c, RxLong *r, RxMemo *seen, Arena *a, RxEntry en)
         c->gaveup = c->espace = 1;
         return;
     }
-    *e = alloc<RxEntSet>(rxframes(seen, (iz)sizeof(RxEntSet)+16));
+    // alloc wants room for one more than it takes, and alignment
+    *e = alloc<RxEntSet>(rxframes(seen, 2*(iz)sizeof(RxEntSet)+16));
     (*e)->i = (i32)r->ents.len;
     r->ents = push(a, r->ents, en);
 }
@@ -2487,7 +2490,9 @@ static RxLong rxlongest(RxCtx *c, iz s, u32 *closes, b32 record, Arena *perm)
     stack    = f;
 
     RxMemo seen = newmemo(c, &scratch, 3 + 3*re->nrefs, s, c->s.len-s);
-    iz     size = (iz)sizeof(RxFrame) + ng*(iz)(sizeof(RxMatch)+1) + nw*4 + 32;
+    // alloc wants room for one more than it takes: for the frame itself,
+    // more than the rest and their alignment add
+    iz     size = 2*(iz)sizeof(RxFrame) + ng*(iz)(sizeof(RxMatch)+1) + nw*4 + 32;
 
     while (stack) {
         f = stack;

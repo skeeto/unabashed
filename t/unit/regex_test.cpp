@@ -240,6 +240,24 @@ static void hostile(Arena perm)
         expect(!!c.re, "compile not stopped", {});
     }
     {
+        // A back-reference's record from the search's arena when it has
+        // room for the record but not for alloc's one more
+        Arena  a    = perm;
+        RxCtx  c    = {};
+        c.memomax   = (iz)1 << 20;
+        RxLong lr   = {};
+        Arena  tiny = {};
+        tiny.beg    = (byte *)alloc<RxEntSet>(&a, 4);
+        tiny.end    = tiny.beg + (iz)sizeof(RxEntSet) + 24;
+        RxMemo m    = {};
+        m.a         = &tiny;
+        m.off       = 1;
+        m.chunks    = (RxChunk *)alloc<RxEntSet>(&a, 8);
+        m.chunks->end = (byte *)m.chunks + 8*(iz)sizeof(RxEntSet);
+        rxrecord(&c, &lr, &m, &a, {0, 0, 1});
+        expect(lr.ents.len==1 && m.blk.beg, "record from the memo's chunk", {});
+    }
+    {
         // A long alternation and a long concatenation
         Arena a = perm;
         Str   p = repeat(&a, "x|", 20000);
