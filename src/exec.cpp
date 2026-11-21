@@ -4560,22 +4560,33 @@ reject:;
 static void executenode(Shell *, Node *, Arena);
 static void executeone(Shell *, Node *, Arena);
 
+// A timed command, apart from execute: its frame, and the report's,
+// would otherwise be part of every level of shell recursion.
+[[gnu::noinline]]
+static void exectimed(Shell *sh, Node *n, Arena scratch)
+{
+    // As bash, a bare time in POSIX mode times the shell so far
+    // As bash, the shell's own CPU time and its reaped children's
+    b32 since = sh->opt[O_POSIX] && n->kind==N_SIMPLE && !n->words && !n->redirs;
+    i64 start = since ? sh->start : os_now(sh->os);
+    CpuTimes before = since ? CpuTimes{} : os_cputime(sh->os);
+    executeone(sh, n, scratch);
+    CpuTimes after = os_cputime(sh->os);
+    Usage u = {};
+    u.real = os_now(sh->os) - start;
+    u.user = after.user - before.user + after.cuser - before.cuser;
+    u.sys  = after.sys  - before.sys  + after.csys  - before.csys;
+    timereport(sh, scratch, u, n->flags & CMD_TIMEPOSIX, since);
+}
+
+// Not inlined: each call site's copy of the arena would grow the frame
+// of its caller, executenode among them.
+[[gnu::noinline]]
 static void execute(Shell *sh, Node *n, Arena scratch)
 {
     sh->intwho = {};  // not a builtin's own work, until one runs
     if (n && (n->flags & CMD_TIME) && !sh->exiting && !sh->flow) {
-        // As bash, a bare time in POSIX mode times the shell so far
-        // As bash, the shell's own CPU time and its reaped children's
-        b32 since = sh->opt[O_POSIX] && n->kind==N_SIMPLE && !n->words && !n->redirs;
-        i64 start = since ? sh->start : os_now(sh->os);
-        CpuTimes before = since ? CpuTimes{} : os_cputime(sh->os);
-        executeone(sh, n, scratch);
-        CpuTimes after = os_cputime(sh->os);
-        Usage u = {};
-        u.real = os_now(sh->os) - start;
-        u.user = after.user - before.user + after.cuser - before.cuser;
-        u.sys  = after.sys  - before.sys  + after.csys  - before.csys;
-        timereport(sh, scratch, u, n->flags & CMD_TIMEPOSIX, since);
+        exectimed(sh, n, scratch);
         return;
     }
     executenode(sh, n, scratch);
@@ -5037,6 +5048,8 @@ static void executelist(Shell *sh, Node *n, Arena scratch)
     }
 }
 
+// Not inlined: executenode's frame would take its size.
+[[gnu::noinline]]
 static void executeone(Shell *sh, Node *n, Arena scratch)
 {
     if (!n || sh->exiting || sh->flow) {
