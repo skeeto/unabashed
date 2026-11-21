@@ -57,6 +57,7 @@ struct CompSpec {
 struct PcCur {
     CompSpec cs;
     Str      key;
+    i32      subshell;  // the level it belongs to
 };
 
 struct CompEnt {
@@ -81,6 +82,19 @@ static CompSpec *pccopyspec(Store *st, CompSpec *cs)
     CompSpec *c = (CompSpec *)salloc(st, sizeof(CompSpec));
     *c = *cs;
     for (i32 i = 0; i < PS_COUNT; i++) c->str[i] = sclone(st, cs->str[i]);
+    return c;
+}
+
+// The running completion for a subshell's copy of the shell (shellcopy):
+// its compopt changes this copy, as bash's child changes its own
+static PcCur *pccurcopy(Store *st, PcCur *cur)
+{
+    if (!cur) return 0;
+    PcCur *c = (PcCur *)salloc(st, sizeof(PcCur));
+    c->cs = cur->cs;
+    for (i32 i = 0; i < PS_COUNT; i++) c->cs.str[i] = sclone(st, cur->cs.str[i]);
+    c->key = sclone(st, cur->key);
+    c->subshell = cur->subshell;
     return c;
 }
 
@@ -1310,9 +1324,17 @@ static i32 b_compopt(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
         if (!on && !off) {
             pcprintopts(sh, scratch, cur->cs.options, cur->key);
-        } else {
-            cur->cs.options = (cur->cs.options | on) & ~off;
+            return 0;
         }
+        if (cur->subshell != sh->subshell) {
+            // A subshell changes its own copy, dropped with the level,
+            // as bash's child does
+            PcCur *c = (PcCur *)salloc(sh->store, sizeof(PcCur));
+            *c = *cur;
+            c->subshell = sh->subshell;
+            sh->compcur = cur = c;
+        }
+        cur->cs.options = (cur->cs.options | on) & ~off;
         return 0;
     }
     i32 status = 0;
@@ -1440,6 +1462,7 @@ static PcLive pcrun(Shell *sh, Arena *a, PcCtx *x)
         PcCur cur = {};
         cur.cs  = *cs;
         cur.key = key;
+        cur.subshell = sh->subshell;
         PcCur *was  = sh->compcur;
         sh->compcur = &cur;
         PcRes r = pcgenerate(sh, a, &cur.cs, x);

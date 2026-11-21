@@ -1,0 +1,11 @@
+# compopt in a subshell of a completion function ($( ), ( ), a
+# pipeline) changes the subshell's own copy of the running compspec,
+# not the completion's: the match still gets its space
+size 12 120
+rc PS1='$ '
+rc f() { y=$(compopt -o nospace; echo $?; compopt); (compopt -o nospace; echo "s $?" >>out); compopt -o nospace | cat; COMPREPLY=(alpha); }
+rc complete -F f foo
+keys foo a\tX
+snap
+keys \C-a\C-k
+keys echo "$y"; cat out\r

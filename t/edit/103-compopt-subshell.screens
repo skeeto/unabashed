@@ -1,0 +1,10 @@
+== snap 1
+$ foo alpha X
+@ 0,13
+== snap 2
+$ echo "$y"; cat out
+0
+compopt +o bashdefault +o default +o dirnames +o filenames +o fullquote +o noquote +o nosort -o nospace +o plusdirs foo
+s 0
+$
+@ 4,2
