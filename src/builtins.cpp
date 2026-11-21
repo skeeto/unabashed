@@ -4095,6 +4095,7 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
             return 127;
         }
     }
+    env = envlastarg(sh, &scratch, env, found.data ? found : args[i]);
     i32 status = runexternal(sh, scratch, args+i, nargs-i, env, found);
     chldreaped(sh, 1);
     return status;

@@ -1001,7 +1001,8 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     dynamic(sh, "BASHOPTS", DYN_BASHOPTS, V_READONLY);
     dynamic(sh, "BASH_ALIASES", DYN_BASH_ALIASES, V_ASSOC);
     dynamic(sh, "BASH_CMDS", DYN_BASH_CMDS, V_ASSOC);
-    dynamic(sh, "_", DYN_UNDERSCORE);
+    g = getplain(sh, a, "_");  // else the shell's argv[0]
+    startlastarg(sh, scratch, g.set ? g.value : sh->shellname, g.set);
     Str versinfo[] = {"5", "3", "0", "1", "release", mach};
     for (iz i = 0; i < countof(versinfo); i++) {
         setelem(sh, scratch, "BASH_VERSINFO", i, {}, versinfo[i]);

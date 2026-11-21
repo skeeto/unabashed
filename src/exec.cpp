@@ -2742,6 +2742,8 @@ static PfZone *shellzone(Shell *sh, Arena *a)
     return z;
 }
 
+static void startlastarg(Shell *, Arena, Str, b32);
+
 // Execute an external command, by path or by searching PATH, unless
 // the caller has already found it.
 static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, Str found = {})
@@ -2865,6 +2867,12 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->cflag       = 0;
         sh->restricted  = 0;  // as bash, the script runs unrestricted
         sh->noerrexit   = 0;  // a new shell: no condition is pending
+        // and its $_ the path, exported, as bash's from the environment
+        Str last = slash ? name : path;
+        for (iz i = 0; i < env.len; i++) {
+            if (startswith(env[i], "_=")) last = cuthead(env[i], 2);
+        }
+        startlastarg(sh, a, last, 1);
         defaultoptions(sh, 1);
         if constexpr (LIBMODE) shebangoptions(sh, src);
         sh->capdepth++;
@@ -3401,6 +3409,27 @@ static void bindlastarg(Shell *sh, Arena scratch, Str last)
     }
 }
 
+// $_ as a shell starts, as bash's: a plain dynamic _ holding the value,
+// exported (when from the environment) until a command rebinds it.
+static void startlastarg(Shell *sh, Arena scratch, Str value, b32 exported)
+{
+    Store *st  = sh->store;
+    value = clone(&scratch, value);  // it may be the value replaced
+    Var   *var = upsertvar(sh, "_");
+    Value *v   = var->top ? ownvalue(sh, &var->top) : setattrs(sh, "_", 0, 0);
+    if (v->str.data && (byte *)v->str.data>=st->mark) sfreestr(st, v->str);
+    if (v->arr) afree(st, v->arr);
+    v->str   = {};
+    v->arr   = 0;
+    v->attrs = exported ? (u32)V_EXPORT : 0;
+    v->dyn   = DYN_UNDERSCORE;
+    sh->exportgen++;
+    sh->lastarg      = {};  // a fresh buffer: the old may be a parent's
+    sh->lastargdirty = 0;
+    bindlastarg(sh, scratch, value);
+    sh->lastargdirty = exported;  // so the next binding unexports it
+}
+
 static void runsimple(Shell *sh, Node *n, Arena scratch)
 {
     Str last = {};
@@ -3439,6 +3468,24 @@ static b32 arrayvarbuiltin(Shell *sh, Str name)
         if (name == names[i]) return !!usablebuiltin(sh, tablebuiltin(name));
     }
     return 0;
+}
+
+// As bash, a program finds its own path in $_, run directly or by
+// command (not by exec).
+static Slice<Str> envlastarg(Shell *sh, Arena *a, Slice<Str> env, Str name)
+{
+    Str path = find(name, "/")>=0 ? name : pathlookup(sh, a, name);
+    if (path.len) {
+        Str entry = concat(a, "_=", path);
+        for (iz k = 0; k < env.len; k++) {
+            if (startswith(env[k], "_=")) {
+                env[k] = entry;
+                return env;
+            }
+        }
+        env = push(a, env, entry);
+    }
+    return env;
 }
 
 static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
@@ -3959,19 +4006,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Temps *tb)
             }
         }
         sh->nolocwarn = 0;
-        // As bash, a program finds its own path in $_
-        Str path = find(name, "/")>=0 ? name : pathlookup(sh, a, name);
-        if (path.len) {
-            Str  entry = concat(a, "_=", path);
-            b32  done  = 0;
-            for (iz k = 0; k<env.len && !done; k++) {
-                if (startswith(env[k], "_=")) {
-                    env[k] = entry;
-                    done   = 1;
-                }
-            }
-            if (!done) env = push(a, env, entry);
-        }
+        env = envlastarg(sh, a, env, name);
         sh->childsig = 0;
         sh->spawnto = direct;
         sh->attail  = n==sh->tailnode && sh->taillevel==sh->subshell+1;
