@@ -2272,6 +2272,13 @@ static i32 cdas(Shell *sh, Str name, Str *args, iz nargs, Arena scratch)
     // As bash, a name that fails may be a variable holding one
     // (cdable_vars), then misspelled (cdspell, interactive only); those
     // print what they took
+    if (sh->pathmode==PM_POSIX && !sh->cwd.len && sh->cwderr) {
+        // bash first looks for the directory it has no name for
+        flushbout(sh);
+        fdwrite(sh, 2, concat3(&scratch,
+            "chdir: error retrieving current directory: getcwd: "
+            "cannot access parent directories: ", errtext(sh->cwderr), "\n"));
+    }
     i32 err = 0;
     i32 r   = cdtry(sh, scratch, dir, physical, 1, printdir, &err);
     if (r<0 && sh->shopt[S_CDABLE_VARS] && validvarname(dir)) {
@@ -2378,6 +2385,10 @@ static i32 cdtry(Shell *sh, Arena scratch, Str dir, b32 physical,
         }
     }
 
+    if (sh->pathmode==PM_POSIX && !isabsolute(sh, target)) {
+        *err = E_NOENT;  // no directory name to start from
+        return -1;
+    }
     Str logical = cdcanon(sh, &scratch, target);
     Stat st = pathstat(sh, scratch, physical ? target : logical, 1);
     if (st.err || st.type!=FT_DIR) {
@@ -2728,6 +2739,14 @@ static i32 b_pwd(Shell *sh, Str *args, iz nargs, Arena scratch)
                 return 2;
             }
         }
+    }
+    if (sh->pathmode==PM_POSIX && !sh->cwd.len && sh->cwderr) {
+        // Started in a directory with no name, and not left since
+        flushbout(sh);
+        fdwrite(sh, 2, concat3(&scratch,
+            "pwd: error retrieving current directory: getcwd: "
+            "cannot access parent directories: ", errtext(sh->cwderr), "\n"));
+        return 1;
     }
     Str wd = sh->wd;
     if (win && sh->pathmode==PM_MSYS) {

@@ -29,7 +29,10 @@ struct OsInfo {
     iz     nargs;
     Str   *env;      // "NAME=value", UTF-8 (WTF-8 on Windows)
     iz     nenv;
-    Str    cwd;      // absolute, native form
+    Str    cwd;      // absolute, native form; empty if it has no name
+    i32    cwderr;   // POSIX: why cwd is empty, or why the name does not
+                     // lead to it (E_NAMETOOLONG); either way the shell's
+                     // directory is the process's own, Spawn.cwd empty
     Str    exe;      // absolute path of the shell's own image, native
                      // form ("C:/x/sh.exe"), empty if unknown
     Str    cmdline;  // Windows: the raw command line, UTF-8 (WTF-8)
@@ -176,7 +179,7 @@ struct Spawn {
     iz       argc;
     Str     *env;    // "NAME=value"
     iz       nenv;
-    Str      cwd;
+    Str      cwd;    // empty: the process's own (OsInfo.cwderr)
     SpawnFd *fds;
     iz       nfds;
     u64      sigign; // signals the child starts out ignoring (bit n-1

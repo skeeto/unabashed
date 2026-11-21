@@ -153,6 +153,7 @@ static i32   hostsig(i32 sig);
 static i32   coresig(i32 sig);
 static i32   coreerr(i32 err);
 static iz    mainstack(byte *here, iz limit);
+static Str   fromcstr(char *);
 static u64   corebit(i32 sig);
 static b32   hostin(u64 set, i32 sig);
 static b32   spawnable(SpawnPlan *);
@@ -378,10 +379,46 @@ static i32 pinned(Os *os, Str dir)
     return p->fd;
 }
 
-// Enter the directory: by its pin, else by name. 0 or an errno.
+// Enter the directory: by its pin, else by name, where an empty name
+// is the process's own (OsInfo.cwderr). 0 or an errno.
 static i32 enterdir(i32 fd, char *path)
 {
+    if (fd<0 && !*path) return 0;
     return (fd>=0 ? fchdir(fd) : chdir(path)) ? errno : 0;
+}
+
+// The working directory's name for OsInfo.cwd: getcwd's, however long,
+// if it leads back, else an inherited absolute $PWD that names it. Empty,
+// the reason in *err, when it has no name (removed, or a parent cannot
+// be read); getcwd's name, but *err set, when too long to resolve.
+static Str cwdname(Arena *a, Str *env, iz nenv, i32 *err)
+{
+    *err = 0;
+    Str name = {};
+    for (iz cap = PATH_MAX; cap <= (iz)1<<20; cap *= 2) {
+        Arena save = *a;
+        char *buf = (char *)allocbytes(a, cap);
+        if (getcwd(buf, (uz)cap)) {
+            struct stat st;
+            name = fromcstr(buf);
+            if (!stat(buf, &st)) return name;
+            break;
+        }
+        *a = save;
+        if (errno != ERANGE) break;
+    }
+    i32 e = errno;
+    struct stat dot, st;
+    for (iz i = 0; i < nenv; i++) {
+        if (startswith(env[i], "PWD=/") && !stat(".", &dot)) {
+            char *pwd = cpath(a, cuthead(env[i], 4));
+            if (!stat(pwd, &st) && st.st_dev==dot.st_dev && st.st_ino==dot.st_ino) {
+                return fromcstr(pwd);
+            }
+        }
+    }
+    *err = coreerr(e);
+    return name;
 }
 
 static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
@@ -1106,7 +1143,7 @@ static Spawned forkimage(Os *os, Arena scratch, Spawn *s)
         os->entryign = entryign;  // as the parent had them
         // Pinned only now: taken before, inherited() would count the pin
         // as the program's and move it, leaving the record stale
-        if (entered) pinfd(os, s->cwd, open(".", O_PIN));
+        if (entered && s->cwd.len) pinfd(os, s->cwd, open(".", O_PIN));
         sigprocmask(SIG_SETMASK, &old, 0);
 
         info.image    = s->image;

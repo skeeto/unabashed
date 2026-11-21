@@ -656,9 +656,12 @@ struct Shell {
     Pcg      srandom;
     i64      srandompid;
     Str      cwd;          // native working directory, for the platform
-                           // (empty: a virtual msys directory, as /proc)
+                           // (empty: a virtual msys directory, as /proc,
+                           // or POSIX: the process's own, with no name
+                           // to use, OsInfo.cwderr)
     Str      wd;           // logical working directory (bash's
                            // the_current_working_directory), as PWD shows
+    i32      cwderr;       // why cwd has no name at all, for pwd
     Str      host;
     Str      hosts;        // completion's host names, one per line,
     b32      hostsread;    // kept from HOSTFILE once there are any

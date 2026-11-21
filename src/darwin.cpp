@@ -155,7 +155,7 @@ static void spawndir(posix_spawn_file_actions_t *fa, SpawnPlan *p)
 {
     if (p->cwdfd >= 0) {
         posix_spawn_file_actions_addfchdir_np(fa, p->cwdfd);
-    } else {
+    } else if (*p->cwd) {  // empty: the process's own (OsInfo.cwderr)
         posix_spawn_file_actions_addchdir_np(fa, p->cwd);
     }
 }

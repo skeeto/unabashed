@@ -2664,7 +2664,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         // in where the platform could not hold it (os_cwd): refused,
         // never run elsewhere. bash's child would be in it still.
         Str  cwd = spawncwd(sh, &a);
-        Stat st  = os_stat(sh->os, a, cwd, 1);
+        Stat st  = os_stat(sh->os, a, cwd.len ? cwd : Str("."), 1);
         if (st.err || st.type!=FT_DIR) {
             Buf b(&a, 128);
             print(&b, path);

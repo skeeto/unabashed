@@ -2805,10 +2805,10 @@ static i32 proctype(Str name)
 }
 
 // The working directory a program starts in: in a virtual msys
-// directory (/proc), the root.
+// directory (/proc), the root; on POSIX, empty for the process's own.
 static Str spawncwd(Shell *sh, Arena *a)
 {
-    if (sh->cwd.len) return sh->cwd;
+    if (sh->cwd.len || sh->pathmode==PM_POSIX) return sh->cwd;
     Str root = rootnative(sh->paths);
     return root.len==2 ? concat(a, root, "/") : root;
 }

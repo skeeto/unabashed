@@ -823,8 +823,7 @@ static void runmain(Os *os, void *arg)
     if (cmd->cwd) {
         info.cwd = libclone(a, cmd->cwd);
     } else {
-        char *cwd = getcwd((char *)allocbytes(a, 4096), 4096);
-        info.cwd  = cwd ? fromcstr(cwd) : Str("/");
+        info.cwd = cwdname(a, info.env, info.nenv, &info.cwderr);
     }
     info.pid  = l->pid;
     info.ppid = cmd->ppid ? cmd->ppid : getpid();

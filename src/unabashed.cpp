@@ -908,28 +908,49 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
 
     // PWD: inherited if it names the working directory
     g = getvar(sh, a, "PWD");
-    Str pwd = info->cwd.len ? info->cwd : Str("/");
-    Str cwd = pwd;
-    if (sh->pathmode != PM_POSIX) {
-        cwd = sh->paths->cwd;
-        pwd = cwd;
-        if (sh->pathmode == PM_MSYS) {
-            PathCtx c = pathctx(sh, a, {});
-            pwd = toposix(&c, a, cwd);
+    if (sh->pathmode==PM_POSIX && info->cwderr) {
+        // No usable name: the process's own directory is the shell's
+        // (an empty cwd). With no name at all bash reports it, keeps
+        // PWD as inherited, and its pwd fails; one too long to resolve
+        // is still the logical directory.
+        sh->cwd = {};
+        if (info->cwd.len) {
+            sh->wd = sclone(sh->store, info->cwd);
+            setvar(sh, scratch, "PWD", info->cwd);
+            setattrs(sh, "PWD", V_EXPORT, 0);
+        } else {
+            Str msg = concat3(&scratch,
+                "shell-init: error retrieving current directory: getcwd: "
+                "cannot access parent directories: ", errtext(info->cwderr), "\n");
+            fdwrite(sh, 2, msg);
+            sh->cwderr = info->cwderr;
+            b32 named  = g.set && isabsolute(sh, g.value);
+            sh->wd = named ? sclone(sh->store, g.value) : Str{};
         }
-    }
-    if (g.set && isabsolute(sh, g.value) && sh->pathmode!=PM_NATIVE) {
-        Stat x = os_stat(sh->os, scratch, absolute(sh, a, g.value), 1);
-        Stat y = os_stat(sh->os, scratch, cwd, 1);
-        if (!x.err && !y.err && x.ino==y.ino && x.dev==y.dev) {
-            pwd = clone(a, g.value);  // setvar frees PWD's old buffer
+    } else {
+        Str pwd = info->cwd.len ? info->cwd : Str("/");
+        Str cwd = pwd;
+        if (sh->pathmode != PM_POSIX) {
+            cwd = sh->paths->cwd;
+            pwd = cwd;
+            if (sh->pathmode == PM_MSYS) {
+                PathCtx c = pathctx(sh, a, {});
+                pwd = toposix(&c, a, cwd);
+            }
         }
+        if (g.set && isabsolute(sh, g.value) && sh->pathmode!=PM_NATIVE) {
+            Stat x = os_stat(sh->os, scratch, absolute(sh, a, g.value), 1);
+            Stat y = os_stat(sh->os, scratch, cwd, 1);
+            if (!x.err && !y.err && x.ino==y.ino && x.dev==y.dev) {
+                pwd = clone(a, g.value);  // setvar frees PWD's old buffer
+            }
+        }
+        setvar(sh, scratch, "PWD", pwd);
+        setattrs(sh, "PWD", V_EXPORT, 0);
+        sh->cwd = sclone(sh->store, cwd);
+        sh->wd  = pwd==cwd ? sh->cwd : sclone(sh->store, pwd);
+        if (sh->cwd.len) os_cwd(sh->os, scratch, sh->cwd);
     }
-    setvar(sh, scratch, "PWD", pwd);
-    setattrs(sh, "PWD", V_EXPORT, 0);
-    sh->cwd = sclone(sh->store, cwd);
-    sh->wd  = pwd==cwd ? sh->cwd : sclone(sh->store, pwd);
-    if (sh->cwd.len) os_cwd(sh->os, scratch, sh->cwd);
     g = getvar(sh, a, "OLDPWD");
     if (!g.set) setattrs(sh, "OLDPWD", V_EXPORT, 0);
 
