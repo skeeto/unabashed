@@ -6,6 +6,11 @@
 # the platform (main_linux.cpp, main_darwin.cpp, main_win32.cpp). CMake
 # builds everything at once, and gives hosts the library.
 #
+# --version names the commit built, as git describe does: CMake writes
+# it at each build, and git archive fills it into a tarball's
+# src/version.cpp. A one-command build in a checkout shows the release
+# alone, unless given -DUNABASHED_DESCRIBE='"..."'.
+#
 # As a subproject (FetchContent or add_subdirectory) it defines only the
 # library, target libunabashed with the alias unabashed::unabashed: an
 # object library of the platform's libunabashed_*.cpp, with unabashed.h
@@ -116,6 +121,21 @@ function(shell name source)  # name, then compile options
   endif()
 endfunction()
 
+# The commit the shell is built from, for --version (src/version.cpp):
+# unabashed_describe.h, written at every build, and changed only by a
+# commit or an edit. Only the shell, debug and the library include it, so
+# that a commit does not rebuild the tests.
+add_custom_target(describe
+  COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}
+          -DOUT=${CMAKE_CURRENT_BINARY_DIR}/describe/unabashed_describe.h
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/describe.cmake
+  BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/describe/unabashed_describe.h
+  VERBATIM)
+function(described name)
+  add_dependencies(${name} describe)
+  target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/describe)
+endfunction()
+
 shell(unabashed main_${UNABASHED_OS}.cpp -O2)
 # The debug build's frames are up to ten times larger: its fibers grow
 # to match (STACKSCALE), its main thread is the process's, so run it
@@ -126,6 +146,8 @@ target_link_options(unabashed PRIVATE -s)
 if(NOT WIN32)
   target_link_options(unabashed PRIVATE -nostdlib++)
 endif()
+described(unabashed)
+described(debug)
 set_target_properties(unabashed PROPERTIES OUTPUT_NAME unabashed${SUFFIX})
 set_target_properties(debug PROPERTIES OUTPUT_NAME debug${SUFFIX})
 
@@ -166,6 +188,7 @@ endif()
 # ubtiny, a CRT-free i686 host with no root or self.
 
 target_compile_options(libunabashed PRIVATE ${WARN} -O2)
+described(libunabashed)
 add_library(libunabashed-O0 OBJECT libunabashed_${UNABASHED_OS}.cpp)
 target_compile_options(libunabashed-O0 PRIVATE ${UNABASHED_FLAGS} ${WARN} -O0)
 

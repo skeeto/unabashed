@@ -1,3 +1,5 @@
 # Tests whose bytes matter: keep CRLF as committed
 t/msys/*-crlf-*.sh -text
 t/winvos/*.spec -text
+# git archive names the commit in the version (src/version.cpp)
+src/version.cpp export-subst
