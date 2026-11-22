@@ -1841,6 +1841,21 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     // scalar or one element keeps the value it had before them
     b32 relist = p.list && (!p.array || (hassub && varray(sh, x->a, lookup(sh, name))));
 
+    // As bash, these operators leave their words unexpanded for a
+    // parameter with no value: # and % for a null one (a list joined by
+    // spaces, so any two elements are not null), the others for an unset
+    // one or an empty list
+    b32 null  = p.list ? p.ln<2 && (!p.ln || !p.lv[0].len) : !p.value.len;
+    b32 unset = p.list ? !p.ln : !p.set;
+    if (op=='#' || op=='%' ? null : (op=='/' || op=='^' || op==',' || op=='~') && unset) {
+        if (p.list) {
+            putlist(x, p.lv, p.ln, p.star, ctx);
+        } else {
+            putvalue(x, p.value, ctx);
+        }
+        return;
+    }
+
     if (op=='#' || op=='%') {
         b32 longest = rest.len>1 && rest[1]==op;
         Str patword = cuthead(rest, longest ? 2 : 1);

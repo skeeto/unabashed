@@ -4878,6 +4878,15 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
 {
     sh->line    = n->line;
     sh->ctlline = n->line;
+    // As bash, the name is checked before the list is expanded
+    Str var = n->name->text;
+    if (!validvarname(var)) {
+        Str msg = concat3(&scratch, "`", var, "': not a valid identifier");
+        shellerror(sh, scratch, msg);
+        sh->status = 1;
+        posixbadvar(sh);
+        return;
+    }
     Slice<Str> list = {};
     if (n->words) {
         list = expandwords(sh, &scratch, n->words, 0);
@@ -4895,14 +4904,6 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
             print(&b, w->text);
         }
         head = finish(&b);
-    }
-    Str var = n->name->text;
-    if (!validvarname(var)) {
-        Str msg = concat3(&scratch, "`", var, "': not a valid identifier");
-        shellerror(sh, scratch, msg);
-        sh->status = 1;
-        posixbadvar(sh);
-        return;
     }
     // $? carries into the body, perhaps from the list's expansion
     if (!list.len) sh->status = 0;
@@ -5464,6 +5465,19 @@ static void selectmenu(Shell *sh, Arena scratch, Slice<Str> list)
 static void runselect(Shell *sh, Node *n, Arena scratch)
 {
     sh->line = n->line;
+    Str var = n->name->text;
+    if (!validvarname(var)) {
+        // As bash, which checks before it sets its line: the error cites
+        // the line of the enclosing for, case, call or top-level command,
+        // and before DEBUG and the list's expansion
+        sh->line = sh->ctlline;
+        Str msg = concat3(&scratch, "`", var, "': not a valid identifier");
+        shellerror(sh, scratch, msg);
+        sh->line = n->line;
+        sh->status = 1;
+        posixbadvar(sh);
+        return;
+    }
     if (sh->traps) {
         Buf b(&scratch, 64);
         print(&b, "select ");
@@ -5482,18 +5496,6 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
     } else if (!n->inlist) {
         list.data = sh->args.v;
         list.len  = sh->args.n;
-    }
-    Str var = n->name->text;
-    if (!validvarname(var)) {
-        // As bash, which checks before it sets its line: the error cites
-        // the line of the enclosing for, case, call or top-level command
-        sh->line = sh->ctlline;
-        Str msg = concat3(&scratch, "`", var, "': not a valid identifier");
-        shellerror(sh, scratch, msg);
-        sh->line = n->line;
-        sh->status = 1;
-        posixbadvar(sh);
-        return;
     }
     sh->ctlline = n->line;
     if (!list.len) {
