@@ -1,7 +1,7 @@
 # On a vX.Y.Z tag, publish a GitHub release of that tag with its source
 # tarball, unabashed-X.Y.Z.tar.gz, attached. The tarball is the committed
 # tree (git archive), so it includes the man page, unabashed.1. The tag
-# must match the VERSION macro in src/unabashed.cpp, and the release notes
+# must match the VERSION macro in src/version.cpp, and the release notes
 # are the annotated tag's message.
 
 name: release
@@ -23,7 +23,7 @@ jobs:
       - name: Build source tarball
         run: |
           version=${GITHUB_REF_NAME#v}
-          macro=$(sed -n 's/^#define VERSION "\(.*\)"$/\1/p' src/unabashed.cpp)
+          macro=$(sed -n 's/^#define VERSION "\(.*\)"$/\1/p' src/version.cpp)
           if [ "$version" != "$macro" ]; then
               echo "::error::tag $GITHUB_REF_NAME does not match VERSION \"$macro\""
               exit 1
