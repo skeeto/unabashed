@@ -1529,10 +1529,12 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 continue;
             }
             if (on & (V_READONLY|V_NAMEREF)) setattrs(sh, vname, on & (V_READONLY|V_NAMEREF), 0);
+            if ((on|aon) & V_EXPORT) exportread(sh, scratch, vname);
         } else if (on || off || local || hassub || !rawlookup(sh, vname)) {
             // Like bash, a new -i leaves the current value as it is:
             // only later assignments are evaluated
             setattrs(sh, vname, on | (aon & V_ARRAY), off);
+            if (on & V_EXPORT) exportread(sh, scratch, vname);
         }
         if ((eq==a.len && name!="export" && name!="readonly") || ownhook) {
             varchanged(sh, hookname);  // as bash's declare, even without a value

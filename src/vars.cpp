@@ -511,7 +511,41 @@ static Str wordbreaks(Shell *sh, b32 at)
     return s;
 }
 
+// A dynamic variable bash computes when read, keeping the value (a
+// scalar with a getter), as opposed to an array over the shell's state.
+static b32 dyncellular(i32 dyn)
+{
+    switch (dyn) {
+    case DYN_LINENO:   case DYN_RANDOM:    case DYN_SRANDOM:
+    case DYN_SECONDS:  case DYN_EPOCHSECONDS: case DYN_EPOCHREALTIME:
+    case DYN_BASHPID:  case DYN_BASH_SUBSHELL: case DYN_BASH_COMMAND:
+    case DYN_HISTCMD:  case DYN_BASH_ARGV0: case DYN_COMP_WORDBREAKS:
+        return 1;
+    }
+    return 0;
+}
+
+static void setdyncell(Shell *sh, i32 dyn, Str value)
+{
+    Store *st  = sh->store;
+    Str    old = sh->dyncell[dyn];
+    sh->dyncell[dyn] = value.data ? sclone(st, value) : Str{};
+    if ((byte *)old.data >= st->mark) sfreestr(st, old);
+}
+
+static Str dyncompute(Shell *sh, Arena *a, Value *v);
+static b32 parsei64(Str, i64 *);
+
 static Str dynvalue(Shell *sh, Arena *a, Value *v)
+{
+    Str s = dyncompute(sh, a, v);
+    if (!sh->listing && (v->attrs & V_EXPORT) && dyncellular(v->dyn)) {
+        setdyncell(sh, v->dyn, s);
+    }
+    return s;
+}
+
+static Str dyncompute(Shell *sh, Arena *a, Value *v)
 {
     switch (v->dyn) {
     case DYN_LINENO:   case DYN_RANDOM:    case DYN_SRANDOM:
@@ -542,7 +576,8 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
         return finish(&b);
     }
     case DYN_BASHPID:       return fmti64(a, sh->bashpid);
-    case DYN_BASH_SUBSHELL: return fmti64(a, sh->subshell - sh->simplestages);
+    case DYN_BASH_SUBSHELL:
+        return fmti64(a, sh->subshell - sh->simplestages + sh->subshelladj);
     case DYN_FUNCNAME:
     case DYN_BASH_LINENO:
     case DYN_BASH_SOURCE:
@@ -560,7 +595,8 @@ static Str dynvalue(Shell *sh, Arena *a, Value *v)
     case DYN_BASH_ARGV0:    return dollar0(sh);
     case DYN_PIPESTATUS:    return fmti64(a, sh->npstat ? pstatv(sh)[0] : 0);
     case DYN_UNDERSCORE:    return sh->lastarg.data ? sh->lastarg : Str("");
-    case DYN_COMP_WORDBREAKS: return wordbreaks(sh, 1);
+    case DYN_COMP_WORDBREAKS:  // as assigned, or else readline's
+        return v->str.data ? v->str : wordbreaks(sh, 1);
     case DYN_GROUPS: {
         Array *r = dynarray(sh, a, v);
         return r->len ? r->e[0].val : Str{};
@@ -762,6 +798,7 @@ static void assigned(Shell *sh, Value *val, Str name, i32 flags = 0)
 {
     if (sh->opt[O_ALLEXPORT]) {
         val->attrs |= V_EXPORT;
+        sh->dynexported |= dyncellular(val->dyn);
     }
     if (val->attrs & V_EXPORT) {
         sh->exportgen++;
@@ -1120,6 +1157,10 @@ static void restorepstat(Shell *sh)
     Var   *v  = upsertvar(sh, "PIPESTATUS");
     sh->pstatdirty = 0;
     if (v->top && v->top->dyn==DYN_PIPESTATUS && !v->top->arr) return;
+    if (v->top && !v->top->dyn && !(v->top->attrs & (V_ARRAY|V_ASSOC))) {
+        return;  // as bash, a scalar (inherited, or local) stays as it is
+    }
+    u32 keep = v->top ? v->top->attrs & V_EXPORT : 0;  // bash's array, updated
     while (v->top) {
         Value *t = v->top;
         jset(st, &v->top, t->below);
@@ -1127,7 +1168,7 @@ static void restorepstat(Shell *sh)
     }
     Value *n = (Value *)salloc(st, sizeof(Value));
     n->dyn   = DYN_PIPESTATUS;
-    n->attrs = V_ARRAY;
+    n->attrs = V_ARRAY | keep;
     jset(st, &v->top, n);
 }
 
@@ -1263,7 +1304,16 @@ static b32 setelem(Shell *sh, Arena scratch, Str name, i64 idx, Str key, Str val
     case DYN_BASH_CMDS:
         if (restrictedhash(sh, scratch, {}, value)) hashenter(sh, key, value, 0);
         return 1;
-    case DYN_DIRSTACK:     setdirelem(sh, idx, value); return 1;
+        case DYN_DIRSTACK:     setdirelem(sh, idx, value); return 1;
+    }
+    if (dyncellular(val->dyn)) {
+        // As bash, the conversion reads the value anew for element 0,
+        // RANDOM's twice
+        if (val->dyn == DYN_RANDOM) dynvalue(sh, &scratch, val);
+        Str now = dynvalue(sh, &scratch, val);
+        Str old = val->str;
+        val->str = sclone(st, now);
+        if ((byte *)old.data >= st->mark) sfreestr(st, old);
     }
     toarray(sh, val);
     Array *arr = val->arr;
@@ -1381,22 +1431,45 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
             return setelem(sh, scratch, name, 0, "0", value, flags);
         }
     }
-    if (val->dyn == DYN_RANDOM) {
+    // As bash, most dynamic variables take an assignment through a
+    // function of their own (hook), which leaves the environment as it
+    // was made and may set the value cell; the others are bound plainly
+    // and stay dynamic
+    i32 dyn  = val->dyn;
+    b32 hook = 1;
+    i64 num  = 0;
+    if (dyncellular(dyn)) sh->envvalid &= ~((u32)1 << dyn);
+    if (dyn==DYN_LINENO || dyn==DYN_BASH_SUBSHELL) {
+        if (!parsei64(trim(value), &num)) num = 0;  // valid_number
+    }
+    if (dyn == DYN_RANDOM) {
         // The same seed gives the same sequence, in this BASHPID
         sh->random    = pcgseed((u64)n, 0);
         sh->randompid = sh->bashpid;
-    } else if (val->dyn == DYN_SECONDS) {
+        setdyncell(sh, dyn, fmti64(&scratch, n));
+    } else if (dyn == DYN_SECONDS) {
         val->base = n - (dynnow(sh) - sh->start)/1000000000;
-    } else if (val->dyn == DYN_BASH_ARGV0) {
+        setdyncell(sh, dyn, fmti64(&scratch, n));
+    } else if (dyn == DYN_LINENO) {
+        setdyncell(sh, dyn, fmti64(&scratch, num));  // the line goes on
+    } else if (dyn == DYN_BASH_SUBSHELL) {
+        sh->subshelladj = num - (sh->subshell - sh->simplestages);
+    } else if (dyn == DYN_BASH_ARGV0) {
         // $0 follows, and keeps the value if BASH_ARGV0 is unset
         Str prev = sh->argv0;
         sh->argv0 = sclone(st, value);
         if ((byte *)prev.data >= st->mark) sfreestr(st, prev);
-    } else if (val->dyn==DYN_LINENO || val->dyn==DYN_BASH_SUBSHELL ||
-               val->dyn==DYN_FUNCNAME || val->dyn==DYN_BASH_LINENO ||
-               val->dyn==DYN_BASH_SOURCE || val->dyn==DYN_BASH_COMMAND ||
-               val->dyn==DYN_BASH_ARGV || val->dyn==DYN_BASH_ARGC) {
+    } else if (dyn==DYN_BASHPID || dyn==DYN_EPOCHSECONDS || dyn==DYN_EPOCHREALTIME ||
+               dyn==DYN_FUNCNAME || dyn==DYN_BASH_LINENO || dyn==DYN_BASH_SOURCE ||
+               dyn==DYN_BASH_ARGV || dyn==DYN_BASH_ARGC) {
         // bash ignores these assignments
+    } else if (dyn==DYN_SRANDOM || dyn==DYN_HISTCMD || dyn==DYN_BASH_COMMAND) {
+        hook = 0;
+        setdyncell(sh, dyn, value);
+    } else if (dyn == DYN_COMP_WORDBREAKS) {
+        // kept below, in str, which it then reads, as bash's hook does
+        // (sv_comp_wordbreaks looks it up)
+        setdyncell(sh, dyn, value);
     } else {
         val->dyn = 0;
     }
@@ -1405,7 +1478,9 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
     if ((byte *)old.data >= st->mark) {
         sfreestr(st, old);
     }
+    u64 gen = sh->exportgen;
     assigned(sh, val, name, flags);
+    if (dyn && hook) sh->exportgen = gen;
     return 1;
 }
 
@@ -1429,6 +1504,10 @@ static Value *setattrs(Shell *sh, Str name, u32 on, u32 off)
     val->attrs = (val->attrs | on) & ~off;
     if ((on|off) & V_EXPORT) {
         sh->exportgen++;
+    }
+    if ((on & V_EXPORT) && dyncellular(val->dyn)) {
+        sh->envvalid &= ~((u32)1 << val->dyn);
+        sh->dynexported = 1;
     }
     if (name.len==1 && name[0]=='_') {
         sh->lastargdirty = 1;  // readonly _ and the like: see bindlastarg
@@ -1460,6 +1539,7 @@ static b32 unsetvar(Shell *sh, Str name, b32 force = 0)
         val->attrs &= V_LOCAL | (tempexport ? (u32)V_EXPORT : 0u);
     } else {
         if (top->attrs & V_EXPORT) sh->exportgen++;
+        if (dyncellular(top->dyn)) sh->envvalid &= ~((u32)1 << top->dyn);
         jset(sh->store, &v->top, top->below);
         freevalue(sh, top);
     }
@@ -1572,6 +1652,16 @@ static Str tempname(Shell *sh, Str name)
 }
 
 // With noexport, it stays out of the environment (BASH_TRAPSIG).
+// As bash (assign_in_env), no temporary binding for the arrays it
+// ignores assignments to: neither the command nor a program sees one.
+static b32 tempignored(Value *v)
+{
+    if (!v) return 0;
+    i32 d = v->dyn;
+    return (v->attrs & V_NOASSIGN) || d==DYN_FUNCNAME || d==DYN_BASH_SOURCE ||
+           d==DYN_BASH_LINENO || d==DYN_BASH_ARGV || d==DYN_BASH_ARGC;
+}
+
 static b32 pushtemp(Shell *sh, Arena scratch, Str name, Str value, b32 noexport = 0)
 {
     Store *st = sh->store;
@@ -1582,6 +1672,7 @@ static b32 pushtemp(Shell *sh, Arena scratch, Str name, Str value, b32 noexport 
         shellerror(sh, scratch, msg);
         return 0;
     }
+    if (tempignored(v->top)) return 1;
     Value *n = (Value *)salloc(st, sizeof(Value));
     n->below = v->top;
     n->depth = sh->funcdepth + 1;
@@ -1719,6 +1810,71 @@ static void unsetfunc(Shell *sh, Str name)
 
 // Environment
 
+// Take the exported dynamic variables' values for programs, as bash
+// makes its environment: only once an exported variable has changed
+// since the last time (Shell.dyncell). As bash, the parent does so
+// before it starts a program, a pipeline or a command substitution.
+static void refreshenv(Shell *sh)
+{
+    if (sh->envgen == sh->exportgen) return;
+    sh->envgen = sh->exportgen;
+    if (!sh->dynexported) return;  // nothing to take, as nearly always
+    byte  mem[256];  // LINENO and the EPOCH ones
+    Arena scratch = {mem, mem+sizeof(mem)};
+    static struct { i32 dyn; Str name; } const vars[] = {
+        {DYN_LINENO, "LINENO"}, {DYN_RANDOM, "RANDOM"}, {DYN_SRANDOM, "SRANDOM"},
+        {DYN_SECONDS, "SECONDS"}, {DYN_EPOCHSECONDS, "EPOCHSECONDS"},
+        {DYN_EPOCHREALTIME, "EPOCHREALTIME"}, {DYN_BASHPID, "BASHPID"},
+        {DYN_BASH_SUBSHELL, "BASH_SUBSHELL"}, {DYN_BASH_COMMAND, "BASH_COMMAND"},
+        {DYN_HISTCMD, "HISTCMD"}, {DYN_BASH_ARGV0, "BASH_ARGV0"},
+        {DYN_COMP_WORDBREAKS, "COMP_WORDBREAKS"},
+    };
+    Store *st = sh->store;
+    for (iz i = 0; i < countof(vars); i++) {
+        i32    dyn = vars[i].dyn;
+        Value *v   = lookup(sh, vars[i].name);
+        Str    s   = {};
+        u32    bit = (u32)1 << dyn;
+        if (v && v->dyn==dyn && (v->attrs & V_EXPORT)) {
+            b32 regen = dyn==DYN_LINENO || dyn==DYN_EPOCHSECONDS || dyn==DYN_EPOCHREALTIME;
+            if (!regen && (sh->envvalid & bit)) continue;
+            s = regen ? dynvalue(sh, &scratch, v) : sh->dyncell[dyn];
+        }
+        sh->envvalid = s.data ? sh->envvalid|bit : sh->envvalid&~bit;
+        Str old = sh->envsnap[dyn];
+        sh->envsnap[dyn] = s.data ? sclone(st, s) : Str{};
+        if ((byte *)old.data >= st->mark) sfreestr(st, old);
+    }
+}
+
+// declare -x or export: as bash's, which looks the variable up, so
+// computes a dynamic one, as the environment will have it.
+static void exportread(Shell *sh, Arena scratch, Str name)
+{
+    Value *v = lookup(sh, name);
+    if (v && (v->attrs & V_EXPORT) && dyncellular(v->dyn)) dynvalue(sh, &scratch, v);
+}
+
+// Is n a simple command, or a pipeline with one as a stage? bash makes
+// the environment before it forks for one.
+static b32 simplestage(Node *n)
+{
+    for (; n->kind==N_CONNECT && n->connector=='|'; n = n->b) {
+        if (n->a->kind == N_SIMPLE) return 1;
+        if (n->b->flags || n->b->redirs) break;
+    }
+    return n->kind == N_SIMPLE;
+}
+
+// A command's temporary bindings are gone: as bash's parent drops its
+// temporary environment, the environment is made again, though not
+// for a function's.
+static void disposedtemps(Shell *sh)
+{
+    sh->exportgen++;
+    refreshenv(sh);
+}
+
 static void collectexports(Shell *sh, Var *v, Arena *a, Slice<Str> *out)
 {
     if (!v) return;
@@ -1726,8 +1882,10 @@ static void collectexports(Shell *sh, Var *v, Arena *a, Slice<Str> *out)
     // bash, the binding it shadows is the one they get
     Value *t = v->top;
     while (t && t->depth && !t->str.data && !t->dyn && !t->arr) t = t->below;
+    b32 cell = t && dyncellular(t->dyn);
+    if (cell && !sh->envsnap[t->dyn].data) t = 0;  // never read: none
     if (t && (t->attrs & V_EXPORT) && (t->str.data || t->dyn) && !(t->attrs & (V_ARRAY|V_ASSOC))) {
-        Str val = t->dyn ? dynvalue(sh, a, t) : t->str;
+        Str val = cell ? sh->envsnap[t->dyn] : t->dyn ? dynvalue(sh, a, t) : t->str;
         Buf b(a, v->name.len + val.len + 1);
         print(&b, v->name);
         putbyte(&b, '=');
@@ -1769,6 +1927,7 @@ static void exportfuncs(Func *f, Arena *a, Slice<Str> *out, Stackguard g)
 static Slice<Str> makeenv(Shell *sh, Arena *a)
 {
     Slice<Str> env = {};
+    refreshenv(sh);
     collectexports(sh, sh->vars, a, &env);
     for (iz i = 0; i < sh->nbadenv; i++) env = push(a, env, sh->badenv[i]);
     if (!sh->restricted) exportfuncs(sh->funcs, a, &env, shellguard(sh));  // as bash

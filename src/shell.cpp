@@ -702,6 +702,18 @@ struct Shell {
     u64      dynread;      // dynamic variables read so far, by DYN_ bit
     i32      lastrandom;   // RANDOM's last value, for listings
     i64      lastlineno;   // and LINENO's
+    // As bash, which keeps the last value read of each dynamic variable
+    // (its value cell), makes the environment again only once an
+    // exported variable changes (exportgen past envgen), and then reuses
+    // each variable's entry from the last time unless it was assigned
+    // since (its exportstr): an exported dynamic variable reaches
+    // programs as it was then, LINENO and the EPOCH ones computed anew
+    Str      dyncell[32];  // by DYN_: the last value read while exported
+    Str      envsnap[32];  // by DYN_: what programs get
+    u32      envvalid;     // by DYN_ bit: envsnap is still the entry
+    b32      dynexported;  // one of them was ever exported: they matter
+    u64      envgen;       // exportgen when envsnap was taken
+    i64      subshelladj;  // BASH_SUBSHELL as assigned, less the depth
     Str     *badenv;       // inherited entries that name no variable
     iz       nbadenv;
     Undo    *undo;

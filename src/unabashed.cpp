@@ -400,11 +400,27 @@ static void varchanged(Shell *sh, Str name)
     }
 }
 
+// Make a dynamic variable. As bash, one the environment set keeps its
+// value if an array (init_dynamic_array_var), so stays an ordinary
+// variable; a scalar drops it, though SECONDS counts on from it
+// (init_seconds_var).
 static void dynamic(Shell *sh, Str name, i32 dyn, u32 attrs = 0)
 {
+    Value *had = lookup(sh, name);
+    if (had && (attrs & (V_ARRAY|V_ASSOC))) return;
     Value *v = setattrs(sh, name, attrs & ~(V_ARRAY|V_ASSOC), 0);
     v->dyn    = dyn;
     v->attrs |= attrs;
+    if (had && dyn==DYN_SECONDS && v->str.data) {
+        i64 n = 0;
+        if (!parsei64(trim(v->str), &n)) n = 0;
+        v->base = n;
+        setdyncell(sh, dyn, v->str);
+    } else if (had && dyncellular(dyn)) {
+        sfreestr(sh->store, v->str);
+        v->str = {};
+    }
+    sh->dynexported |= had && dyncellular(dyn) && (v->attrs & V_EXPORT);
 }
 
 // Define a function a parent exported as BASH_FUNC_name%%="() {...}".
@@ -972,6 +988,7 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     setvar(sh, scratch, "SHLVL", num);
     setattrs(sh, "SHLVL", V_EXPORT, 0);
 
+    sh->envgen = ~(u64)0;  // programs get the environment made anew
     dynamic(sh, "LINENO", DYN_LINENO);
     dynamic(sh, "RANDOM", DYN_RANDOM, V_INTEGER);
     dynamic(sh, "SRANDOM", DYN_SRANDOM, V_INTEGER);

@@ -405,6 +405,10 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image, u32 skip = 0)
     c->iname      = sclone(st, sh->iname);
     c->srcname    = sclone(st, sh->srcname);
     c->argv0      = sclone(st, sh->argv0);
+    for (i32 i = 0; i < countof(sh->dyncell); i++) {
+        c->dyncell[i] = sclone(st, sh->dyncell[i]);
+        c->envsnap[i] = sclone(st, sh->envsnap[i]);
+    }
     c->cwd        = sclone(st, sh->cwd);
     c->wd         = sclone(st, sh->wd);
     c->dirs       = (Str *)salloc(st, (sh->ndirs ? sh->ndirs : 1)*(iz)sizeof(Str));
@@ -1178,6 +1182,7 @@ static void pipestopped(Shell *sh, Arena scratch, Node *n, Task **tasks,
 
 static void runpipeline(Shell *sh, Node *n, Arena scratch)
 {
+    if (simplestage(n)) refreshenv(sh);  // as bash, before it forks one
     // Flatten the right-nested chain, left to right, the per-stage
     // tables in scratch (calls below take scratch by value, after them)
     i32 nstages = 1;

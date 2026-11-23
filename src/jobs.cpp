@@ -1184,6 +1184,7 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     // DEBUG for a simple command runs here, as bash runs it before it
     // forks, and not again in the job (debugdone, under functrace)
     if (stagedebug(sh, n, sh->status, scratch)) return;
+    if (simplestage(n)) refreshenv(sh);  // as bash, before it forks one
     b32 debugged = n->kind==N_SIMPLE && sh->traps && sh->traps[TRAP_DEBUG].len;
     // and each simple stage of a pipeline, as runpipeline flattens it,
     // which the job runs without it (bgpipe), also under functrace

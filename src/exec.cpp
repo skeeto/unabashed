@@ -986,6 +986,7 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
     j.kind   = SUB_SOURCE;
     j.src    = src;
     j.comsub = kind == 0;
+    if (j.comsub) refreshenv(sh);  // as bash, before it forks
     j.line   = comsubline(sh, 1);
     if (kind==2 && src.len && src[0]=='|') {
         // ${| cmd; }: the current shell, expanding to a local REPLY
@@ -2197,6 +2198,7 @@ static void undotemps(Shell *sh, Str *argv)
     if (sh->nundo && sh->undoargv==argv) {
         for (iz i = sh->nundo-1; i >= 0; i--) poptemp(sh, sh->undonames[i]);
         sh->nundo = 0;
+        disposedtemps(sh);
     }
 }
 
@@ -3326,9 +3328,11 @@ struct Temps {
     iz      nhidden;
 };
 
-static void poptemps(Shell *sh, Temps *tb)
+static void poptemps(Shell *sh, Temps *tb, b32 fn = 0)
 {
+    b32 any = tb && !tb->keep && tb->n;
     while (tb && !tb->keep && tb->n) poptemp(sh, tb->names[--tb->n]);
+    if (any && !fn) disposedtemps(sh);
 }
 
 // The command's own temporary bindings are out of sight while its
@@ -3494,6 +3498,7 @@ static void bindlastarg(Shell *sh, Arena scratch, Str last, Str who = {})
         Str old = v->str;
         v->str    = {};
         v->dyn    = DYN_UNDERSCORE;
+        if (v->attrs & V_EXPORT) sh->exportgen++;  // bound while exported
         v->attrs &= ~V_EXPORT;
         if (old.data && (byte *)old.data >= st->mark) sfreestr(st, old);
         sh->lastargdirty = 0;
@@ -4103,6 +4108,7 @@ static void runprogram1(Shell *sh, Node *n, Simple *c, Temps *tb, Arena scratch)
         Str tname = tempname(sh, as[i].name);  // what a nameref names
         Value *cur = rawlookup(sh, tname);
         if (cur && (cur->attrs & V_READONLY)) continue;  // its binding fails below
+        if (tempignored(cur)) continue;
         Str entry = concat3(a, tname, "=", as[i].bound);
         b32 replaced = 0;
         for (iz k = 0; k < env.len; k++) {
@@ -4140,6 +4146,7 @@ static void runprogram1(Shell *sh, Node *n, Simple *c, Temps *tb, Arena scratch)
         for (iz i = npushed-1; i >= 0; i--) poptemp(sh, names[i]);
         sh->nolocwarn = 0;
         sh->nundo     = 0;
+        disposedtemps(sh);
     }
     reportchild(sh, scratch, n);
 }
@@ -4189,7 +4196,7 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
             // that
             i32 line = sh->line;
             sh->line = sh->ctlline;
-            poptemps(sh, tb);
+            poptemps(sh, tb, c->fn!=0);
             sh->line = line;
         }
     } else {
