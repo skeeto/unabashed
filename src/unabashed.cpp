@@ -1693,6 +1693,7 @@ static i32 imagemain(Os *os, OsInfo *info)
         execute(sh, h->node, scratch);
     }
     storerehold(sh->store, top.hold);  // after an escape, from any holder
+    cfatalstatus(sh, &top);
     if (!sh->execed && !sh->killsig) {
         // Its own EXIT trap, set in the background job
         sh->esc = &top;
@@ -2180,8 +2181,8 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         } else {
             readstdin(sh, scratch);
         }
-    } else if (top.why==ESC_FATAL && sh->cflag) {
-        sh->status = 127;  // as bash's -c reports a fatal error
+    } else if (top.why == ESC_FATAL) {
+        cfatalstatus(sh, &top);
     } else if (top.why==ESC_ABORT && sh->cflag) {
         sh->status = 1;  // as bash's -c, its text abandoned
     }

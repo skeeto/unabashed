@@ -598,6 +598,7 @@ static void vprocmain(Task *t)
     if (jmpset(top.jmp)) {
         // escaped, from holders now gone: frees take effect again
         storerehold(sh->store, top.hold);
+        cfatalstatus(sh, &top);
     } else if (m->sig.pending && (checksigs(sh, *scratchat(sh, 0)), sh->exiting)) {
         // killed before it ran
     } else if (sh->fdlost) {

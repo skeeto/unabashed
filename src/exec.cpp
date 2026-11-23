@@ -718,6 +718,17 @@ static void fatalunwind(Shell *sh, Undo *base)
     }
 }
 
+// As bash's -c, whose catch of a fatal error returns 127: a child
+// forked for a simple command (a stage, a job) has that same point of
+// return, while one that catches the error itself (catchfatal) keeps
+// the error's status.
+static void cfatalstatus(Shell *sh, Escape *e)
+{
+    if (e->why==ESC_FATAL && sh->cflag && !sh->catchfatal) {
+        sh->status = 127;
+    }
+}
+
 // Run a job in a synchronous subshell and return its exit status.
 // Everything it changes is rolled back. With cap, its standard output
 // is collected there.
@@ -781,6 +792,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
         // 1, while a script's reader keeps the command's
         sh->status = 1;
     }
+    cfatalstatus(sh, &e);
     storerehold(sh->store, e.hold);  // the level's own: its EXIT trap frees
     if (!sh->execed && !sh->killsig && sh->traps) {
         if (e.why == ESC_FATAL) fatalunwind(sh, body);
@@ -3662,7 +3674,12 @@ static void callbuiltin(Shell *sh, Simple *c, Arena scratch)
         (bi->fn==b_eval || bi->fn==b_source || bi->fn==b_command)) {
         sh->errexitoff = 1;
     }
+    // bash's forked child gives a builtin its own catch, so a fatal
+    // error in what it runs ends that child with 1
+    b32 catchfatal = sh->catchfatal;
+    sh->catchfatal |= forked;
     sh->status = runbuiltin(sh, bi, argv.data, argv.len, scratch);
+    sh->catchfatal = catchfatal;
     sh->errexitoff = errexitoff;
     // Only bash's forked child, which exits with the builtin's
     // own status, shows an internal one; the shell maps it to 1

@@ -1470,7 +1470,12 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
         // and bash's child for it leaves its line alone (bgnode)
         Node sub = *body;
         sub.endline = 0;
+        // whose child for it, even for a simple command, catches a
+        // fatal error, as a ( ) does
+        b32 catchfatal = sh->catchfatal;
+        sh->catchfatal = 1;
         task = spawnbg(sh, &sub, r2, w1, &pid, scratch);
+        sh->catchfatal = catchfatal;
         sh->stdinredir = redir;
         sh->forkstdin  = 0;
         sh->coprocs = mine.next;
