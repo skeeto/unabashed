@@ -499,6 +499,8 @@ static u64     os_siggroup(Os *);
 static void    os_sigmode(Os *, i32 sig, i32 mode);
 // Realtime clock, in ns since the epoch.
 static i64     os_now(Os *);
+// Monotonic clock, in ns since an unspecified start (usually boot).
+static i64     os_monotime(Os *);
 // The CPU time the shell and its reaped children have used.
 static CpuTimes os_cputime(Os *);
 // 64 bits from the system's random source. Never fails: without one,
@@ -604,7 +606,8 @@ static Str     lib_root(Os *);
 // 7: os_tty's TTY_RAWSIG and Tty.mode
 // 8: os_username
 // 9: os_ready
-enum : i32 { OSVTABLE_VERSION = 9 };
+// 10: os_monotime
+enum : i32 { OSVTABLE_VERSION = 10 };
 
 struct OsVtable {
     i32 version;  // the OSVTABLE_VERSION it implements
@@ -664,6 +667,7 @@ struct OsVtable {
     decltype(os_writeerr)   *writeerr;
     decltype(os_username)   *username;
     decltype(os_ready)      *ready;
+    decltype(os_monotime)   *monotime;
 };
 // Entry point, called by the platform after it fills in OsInfo. Given a
 // table of another OSVTABLE_VERSION, it writes a message to std[2]

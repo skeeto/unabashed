@@ -2080,6 +2080,13 @@ static i64 vos_now(Os *os)
     return v->clock += 1000;
 }
 
+// The same deterministic clock, from its own start.
+static i64 vos_monotime(Os *os)
+{
+    Vos *v = osvos(os);
+    return v->clock += 1000;
+}
+
 static CpuTimes vos_cputime(Os *os)
 {
     Vos *v = osvos(os);
@@ -4514,6 +4521,7 @@ static OsVtable const vosvtable = {
     .writeerr   = vos_writeerr,
     .username   = vos_username,
     .ready      = vos_ready,
+    .monotime   = vos_monotime,
 };
 
 static i32 os_umask(Os *)

@@ -997,6 +997,7 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     dynamic(sh, "EPOCHREALTIME", DYN_EPOCHREALTIME);
     dynamic(sh, "BASHPID", DYN_BASHPID, V_INTEGER);
     dynamic(sh, "BASH_SUBSHELL", DYN_BASH_SUBSHELL);
+    dynamic(sh, "BASH_MONOSECONDS", DYN_BASH_MONOSECONDS);
     dynamic(sh, "BASH_COMMAND", DYN_BASH_COMMAND);
     dynamic(sh, "FUNCNAME", DYN_FUNCNAME, V_ARRAY);
     dynamic(sh, "BASH_LINENO", DYN_BASH_LINENO, V_ARRAY);

@@ -34,7 +34,7 @@ enum : i32 {  // dynamic variables, computed when read
     DYN_BASH_SOURCE, DYN_BASH_ARGV0, DYN_PIPESTATUS, DYN_UNDERSCORE,
     DYN_BASH_ARGV, DYN_BASH_ARGC, DYN_DIRSTACK, DYN_BASH_ALIASES,
     DYN_BASH_CMDS, DYN_SHELLOPTS, DYN_BASHOPTS, DYN_COMP_WORDBREAKS,
-    DYN_GROUPS,
+    DYN_GROUPS, DYN_BASH_MONOSECONDS,
 };
 
 struct Value {
@@ -520,6 +520,7 @@ static b32 dyncellular(i32 dyn)
     case DYN_SECONDS:  case DYN_EPOCHSECONDS: case DYN_EPOCHREALTIME:
     case DYN_BASHPID:  case DYN_BASH_SUBSHELL: case DYN_BASH_COMMAND:
     case DYN_HISTCMD:  case DYN_BASH_ARGV0: case DYN_COMP_WORDBREAKS:
+    case DYN_BASH_MONOSECONDS:
         return 1;
     }
     return 0;
@@ -552,6 +553,7 @@ static Str dyncompute(Shell *sh, Arena *a, Value *v)
     case DYN_SECONDS:  case DYN_EPOCHSECONDS: case DYN_EPOCHREALTIME:
     case DYN_BASHPID:  case DYN_BASH_SUBSHELL: case DYN_BASH_COMMAND:
     case DYN_HISTCMD:  case DYN_BASH_ARGV0: case DYN_COMP_WORDBREAKS:
+    case DYN_BASH_MONOSECONDS:
         // bash computes these when read and keeps the value, so a
         // listing shows them valueless until then
         if (sh->listing && !(sh->dynread & (u64)1<<v->dyn)) return {};
@@ -567,6 +569,7 @@ static Str dyncompute(Shell *sh, Arena *a, Value *v)
     case DYN_SECONDS:
         return fmti64(a, (dynnow(sh) - sh->start)/1000000000 + v->base);
     case DYN_EPOCHSECONDS:  return fmti64(a, dynnow(sh)/1000000000);
+    case DYN_BASH_MONOSECONDS: return fmti64(a, os_monotime(sh->os)/1000000000);
     case DYN_EPOCHREALTIME: {
         i64 t = dynnow(sh);
         Buf b(a, 32);
@@ -1463,7 +1466,8 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
                dyn==DYN_FUNCNAME || dyn==DYN_BASH_LINENO || dyn==DYN_BASH_SOURCE ||
                dyn==DYN_BASH_ARGV || dyn==DYN_BASH_ARGC) {
         // bash ignores these assignments
-    } else if (dyn==DYN_SRANDOM || dyn==DYN_HISTCMD || dyn==DYN_BASH_COMMAND) {
+    } else if (dyn==DYN_SRANDOM || dyn==DYN_HISTCMD || dyn==DYN_BASH_COMMAND ||
+               dyn==DYN_BASH_MONOSECONDS) {
         hook = 0;
         setdyncell(sh, dyn, value);
     } else if (dyn == DYN_COMP_WORDBREAKS) {
@@ -1828,6 +1832,7 @@ static void refreshenv(Shell *sh)
         {DYN_BASH_SUBSHELL, "BASH_SUBSHELL"}, {DYN_BASH_COMMAND, "BASH_COMMAND"},
         {DYN_HISTCMD, "HISTCMD"}, {DYN_BASH_ARGV0, "BASH_ARGV0"},
         {DYN_COMP_WORDBREAKS, "COMP_WORDBREAKS"},
+        {DYN_BASH_MONOSECONDS, "BASH_MONOSECONDS"},
     };
     Store *st = sh->store;
     for (iz i = 0; i < countof(vars); i++) {

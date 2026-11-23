@@ -241,6 +241,11 @@ static i64 os_now(Os *os)
     return osvtable(os)->now(os);
 }
 
+static i64 os_monotime(Os *os)
+{
+    return osvtable(os)->monotime(os);
+}
+
 static CpuTimes os_cputime(Os *os)
 {
     return osvtable(os)->cputime(os);

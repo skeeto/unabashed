@@ -742,6 +742,7 @@ static Fibers *osfibers(Os *os)
 static decltype(os_read)  plt_read;
 static decltype(os_write) plt_write;
 static decltype(os_now)   plt_now;
+static decltype(os_monotime) plt_monotime;
 
 static i32 chunk(iz len)  // bound a single ReadFile/WriteFile
 {
@@ -4854,6 +4855,12 @@ static i64 plt_now(Os *os)
     return unixns(t);
 }
 
+static i64 plt_monotime(Os *os)
+{
+    i64 t = ticks();
+    return t/os->freq*1000000000 + t%os->freq*1000000000/os->freq;
+}
+
 static CpuTimes plt_cputime(Os *os)
 {
     CpuTimes c = {};
@@ -5169,5 +5176,6 @@ static constexpr OsVtable pltvtable = {
     .writeerr   = plt_writeerr,
     .username   = plt_username,
     .ready      = plt_ready,
+    .monotime   = plt_monotime,
 };
 

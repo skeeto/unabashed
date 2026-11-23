@@ -70,6 +70,7 @@ static Fibers *osfibers(Os *os)
 
 // Used before their definitions
 static decltype(os_now)  plt_now;
+static decltype(os_monotime) plt_monotime;
 static decltype(os_exec) plt_exec;
 static i32 coreerr(i32);
 
@@ -2082,6 +2083,11 @@ static i64 plt_now(Os *)
     return (i64)ts.tv_sec*1000000000 + ts.tv_nsec;
 }
 
+static i64 plt_monotime(Os *)
+{
+    return monons();
+}
+
 static i64 tvns(struct timeval t)
 {
     return (i64)t.tv_sec*1000000000 + (i64)t.tv_usec*1000;
@@ -2219,6 +2225,7 @@ static constexpr OsVtable pltvtable = {
     .writeerr   = plt_writeerr,
     .username   = plt_username,
     .ready      = plt_ready,
+    .monotime   = plt_monotime,
 };
 
 
