@@ -1120,7 +1120,7 @@ static Task *spawnbg(Shell *sh, Node *n, File *in, File *out, i64 *pid,
     Vproc *m = vprocwith(sh, in, out, scratch);
     Shell *c = m->sh;
     sh->asyncsub = async;
-    c->catchfatal |= n->kind != N_SIMPLE;  // as imagebuild
+    if (n->kind != N_SIMPLE) c->catchfatal = CATCH_LEVEL;  // as imagebuild
     c->subchild   |= n->kind != N_SIMPLE;
     closecoproc(c);
     detachcaptures(sh, c);
@@ -1472,8 +1472,8 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
         sub.endline = 0;
         // whose child for it, even for a simple command, catches a
         // fatal error, as a ( ) does
-        b32 catchfatal = sh->catchfatal;
-        sh->catchfatal = 1;
+        i32 catchfatal = sh->catchfatal;
+        sh->catchfatal = CATCH_LEVEL;
         task = spawnbg(sh, &sub, r2, w1, &pid, scratch);
         sh->catchfatal = catchfatal;
         sh->stdinredir = redir;

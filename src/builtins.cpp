@@ -1237,6 +1237,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             if (!pub || asg) sh->rawstatus = 260;
             status = 1;
             if (sh->opt[O_POSIX] && (name=="export" || name=="readonly")) {
+                if (!asg) sh->rawstatus = 263;  // EX_UTILERROR
                 return 1;  // as bash, the rest left alone
             }
             continue;

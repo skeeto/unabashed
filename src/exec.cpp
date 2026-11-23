@@ -758,9 +758,11 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     sh->incomsub |= j->comsub;
     // a simple command (a stage, a job) is transparent, as bash's child
     // for it goes on with the shell's own point of return
-    sh->catchfatal |= j->kind==SUB_SOURCE || j->nojobs ||
-                      (j->kind==SUB_NODE && j->node->kind!=N_SIMPLE);
-    sh->subchild   |= sh->catchfatal;
+    if (j->kind==SUB_SOURCE || j->nojobs ||
+            (j->kind==SUB_NODE && j->node->kind!=N_SIMPLE)) {
+        sh->catchfatal = CATCH_LEVEL;
+    }
+    sh->subchild |= sh->catchfatal!=CATCH_NONE;
     subshelltraps(sh);
     up->comsub = j->comsub;
     Sigproc sig;
@@ -2913,7 +2915,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->levellexer = sh->lexer;
         sh->penest     = 0;
         sh->redirs     = {};
-        sh->catchfatal = 1;
+        sh->catchfatal = CATCH_LEVEL;
         sh->subchild   = 1;
         subshelltraps(sh);
         sh->shown   = 0;
@@ -2992,6 +2994,7 @@ static void checkerrexit(Shell *sh)
     if (sh->status && sh->opt[O_ERREXIT] && !sh->noerrexit && !sh->exiting) {
         sh->exiting   = 1;
         sh->errexited = ERREXIT_ALL;
+        if (sh->catchfatal == CATCH_BUILTIN) sh->status = 1;
         sh->line      = sh->ctlline;  // bash's, put back after the command
         if (sh->traps) errexittrap(sh);
         escape(sh, ESC_EXIT);
@@ -3666,6 +3669,7 @@ static void callbuiltin(Shell *sh, Simple *c, Arena scratch)
     sh->nbltargs = argv.len;
     sh->nowriteerr = 0;
     sh->bifatal    = 0;
+    sh->bijump     = 0;
     sh->rawstatus  = 0;
     // As bash, eval, source and command run as a condition turn
     // off set -e for report_error's errors in all they run
@@ -3675,10 +3679,11 @@ static void callbuiltin(Shell *sh, Simple *c, Arena scratch)
         sh->errexitoff = 1;
     }
     // bash's forked child gives a builtin its own catch, so a fatal
-    // error in what it runs ends that child with 1
-    b32 catchfatal = sh->catchfatal;
-    sh->catchfatal |= forked;
+    // error or set -e in what it runs ends that child with 1
+    i32 catchfatal = sh->catchfatal;
+    if (forked) sh->catchfatal = CATCH_BUILTIN;
     sh->status = runbuiltin(sh, bi, argv.data, argv.len, scratch);
+    i32 catcher = sh->catchfatal;
     sh->catchfatal = catchfatal;
     sh->errexitoff = errexitoff;
     // Only bash's forked child, which exits with the builtin's
@@ -3687,8 +3692,13 @@ static void callbuiltin(Shell *sh, Simple *c, Arena scratch)
         sh->status = sh->rawstatus & 0xff;
     }
     sh->rawstatus = 0;
-    b32 fatal = special && sh->bifatal && posixfatal(sh) && !sh->noerrexit;
+    b32 jump  = sh->bijump;
+    b32 fatal = special && sh->bifatal && posixfatal(sh) && (jump || !sh->noerrexit);
     sh->bifatal = 0;
+    sh->bijump  = 0;
+    if (fatal && jump && catcher==CATCH_BUILTIN) {
+        sh->status = 1;  // the jump lands in a forked builtin's catch
+    }
     if (fatal) {
         // As bash, a special builtin's error (a usage error, an
         // invalid identifier, ...) ends a POSIX shell
@@ -5880,6 +5890,7 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
             if (sh->prettyprint && !outer) sh->status = 1;  // as bash's
             if (sh->evaldepth || sh->sourcedepth) {
                 sh->bifatal = 1;  // eval's or source's: fatal in POSIX mode
+                sh->bijump  = 1;
             }
             if (!sh->interactive && !sh->evaldepth && !sh->sourcedepth) {
                 sh->exiting = 1;

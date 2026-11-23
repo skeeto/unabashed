@@ -439,6 +439,12 @@ enum : i32 {
     FLOW_NONE, FLOW_BREAK, FLOW_CONTINUE, FLOW_RETURN,
 };
 
+enum : i32 {  // the nearest catch of a fatal error (Shell.catchfatal)
+    CATCH_NONE,
+    CATCH_LEVEL,
+    CATCH_BUILTIN,
+};
+
 enum : i32 {  // set -e is ending the level (Shell.errexited); its end
     ERREXIT_ALL = 1,  // undoes every redirection before the EXIT trap,
     ERREXIT_TO,       // those since errundo,
@@ -894,9 +900,11 @@ struct Shell {
                            // subshell other than a command substitution
     b32      incomsub;     // in a command substitution: fg and bg find
                            // no job of their own
-    b32      catchfatal;   // a fatal POSIX-mode expansion error ends it
-                           // with 1, not 127: bash's child for a ( ),
-                           // comsub or compound command catches it
+    i32      catchfatal;   // a fatal error ends it with 1, not 127:
+                           // bash's child for a ( ), comsub or compound
+                           // command catches it (CATCH_LEVEL), as does
+                           // its forked child around a builtin, which
+                           // also ends it with 1 on set -e (CATCH_BUILTIN)
     b32      subchild;     // in bash's child for a ( ), comsub, procsub or
                            // compound command, which is not interactive
     b32      asyncsub;     // in bash's child for a compound command run
@@ -925,6 +933,8 @@ struct Shell {
     i64      exitwarned;   // cmdnumber when exit warned of stopped jobs
     b32      bifatal;      // the builtin's error ends a POSIX shell, if
                            // the builtin is special (usage, identifier)
+    b32      bijump;       // and ends it even in a condition, as bash's
+                           // eval and source jump on a syntax error
 
     // Signals and traps (trap.cpp)
     Str     *traps;        // NTRAP actions in the store, or null

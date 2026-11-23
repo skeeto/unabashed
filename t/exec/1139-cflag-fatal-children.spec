@@ -1,4 +1,4 @@
-== stdout 220
+== stdout 376
 st 127
 ps 0 127
 ps 127 0
@@ -27,8 +27,32 @@ ps 0 1
 bg 1
 ps 0 127
 bg 127
+ps 0 1
+exit 1
+ps 0 1
+bg 1
+ps 0 1
+in 3 0
+ps 0 0
+cs 0
+ps 0 0
+ps 0 3
+ps 0 7
+ps 0 7
+ps 0 4
+ps 0 7
+ps 0 1
+or 1
+ps 0
+ps 0 1
+ps 0 2
+ps 0 2
+ps 0 2
+st 2
+st 2
+ps 0 2
 
-== stderr 886
+== stderr 1098
 bash: line 1: X: parameter not set
 bash: line 1: X: parameter not set
 bash: line 1: X: parameter not set
@@ -54,8 +78,12 @@ f17.sh: line 1: X: parameter not set
 f17.sh: line 2: X: parameter not set
 ./f17.sh: line 1: X: parameter not set
 ./f17.sh: line 2: X: parameter not set
+bash: line 1: export: `a b=1': not a valid identifier
+bash: line 1: readonly: `a b': not a valid identifier
+bash: line 1: export: `a[1]': not a valid identifier
+bash: line 1: unset: `a b': not a valid identifier
 
-== merged 1106
+== merged 1474
 bash: line 1: X: parameter not set
 st 127
 bash: line 1: X: parameter not set
@@ -109,5 +137,33 @@ bg 1
 ps 0 127
 ./f17.sh: line 2: X: parameter not set
 bg 127
+ps 0 1
+exit 1
+ps 0 1
+bg 1
+ps 0 1
+in 3 0
+ps 0 0
+cs 0
+ps 0 0
+ps 0 3
+bash: line 1: export: `a b=1': not a valid identifier
+ps 0 7
+bash: line 1: readonly: `a b': not a valid identifier
+ps 0 7
+bash: line 1: export: `a[1]': not a valid identifier
+ps 0 4
+bash: line 1: unset: `a b': not a valid identifier
+ps 0 7
+ps 0 1
+or 1
+ps 0
+ps 0 1
+ps 0 2
+ps 0 2
+ps 0 2
+st 2
+st 2
+ps 0 2
 
 == status 0
