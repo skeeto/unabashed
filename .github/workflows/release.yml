@@ -19,9 +19,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # history and tags, for git archive's %(describe)
 
       - name: Build source tarball
         run: |
+          # checkout leaves the tag lightweight; fetch the annotated tag
+          # for %(describe), which skips lightweight tags, and the notes.
+          git fetch --force origin "+$GITHUB_REF:$GITHUB_REF"
           version=${GITHUB_REF_NAME#v}
           macro=$(sed -n 's/^#define VERSION "\(.*\)"$/\1/p' src/version.cpp)
           if [ "$version" != "$macro" ]; then
@@ -31,6 +36,12 @@ jobs:
           name=unabashed-$version
           git archive --prefix="$name/" -o "$name.tar.gz" "$GITHUB_SHA"
           tar -tzf "$name.tar.gz" "$name/unabashed.1" >/dev/null
+          # src/version.cpp is export-subst: --version must say the tag
+          if ! tar -xOzf "$name.tar.gz" "$name/src/version.cpp" |
+                  grep -qF "UNABASHED_DESCRIBE \"$GITHUB_REF_NAME\""; then
+              echo "::error::the tarball does not describe itself as $GITHUB_REF_NAME"
+              exit 1
+          fi
           echo "TARBALL=$name.tar.gz" >>"$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v5
@@ -43,9 +54,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # checkout leaves the tag lightweight; fetch the annotated tag
-          # so its message (sans subject and signature) is the notes.
-          git fetch --force origin "+$GITHUB_REF:$GITHUB_REF"
+          # the annotated tag's message (sans subject and signature)
           git tag -l --format='%(contents:body)' "$GITHUB_REF_NAME" >notes.md
           gh release create "$GITHUB_REF_NAME" "$TARBALL" \
               --verify-tag --notes-file notes.md \
