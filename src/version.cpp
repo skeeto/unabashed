@@ -17,7 +17,7 @@
 //
 // This is free and unencumbered software released into the public domain.
 
-#define VERSION "0.5.0"
+#define VERSION "0.5.1"
 
 #ifndef UNABASHED_DESCRIBE
 #  if __has_include("unabashed_describe.h")
