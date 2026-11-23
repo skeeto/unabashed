@@ -1,4 +1,4 @@
-== stdout 1278
+== stdout 1317
 bash: --badopt: invalid option
 Usage:	bash [GNU long option] [option] ...
 	bash [GNU long option] [option] script-file ...
@@ -100,6 +100,11 @@ echo a
 st 0
 runs
 zz zz
+name name
+name
+zz zz
+a0.sh a0.sh
+a0.sh
 +i hBc
 -i +i hBc
 
@@ -110,7 +115,7 @@ bash: line 0: nosuch: invalid shell option name
 bad.sh: line 1: syntax error near unexpected token `newline'
 bad.sh: line 1: `echo ('
 
-== merged 1467
+== merged 1506
 bash: --badopt: invalid option
 Usage:	bash [GNU long option] [option] ...
 	bash [GNU long option] [option] script-file ...
@@ -217,6 +222,11 @@ echo a
 st 0
 runs
 zz zz
+name name
+name
+zz zz
+a0.sh a0.sh
+a0.sh
 +i hBc
 -i +i hBc
 

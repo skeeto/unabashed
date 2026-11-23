@@ -49,8 +49,12 @@ bash --pretty-print bad.sh; echo "st $?"
 printf 'echo a\n\n' | bash --pretty-print; echo "st $?"
 bash --pretty-print -c 'echo runs'
 
-# BASH_ARGV0 from the environment is $0
+# BASH_ARGV0 from the environment is $0, unless a script or -c names it
 BASH_ARGV0=zz bash -c 'echo $0 $BASH_ARGV0'
+BASH_ARGV0=zz bash -c 'echo $0 $BASH_ARGV0; printenv BASH_ARGV0' name
+echo 'echo $0 $BASH_ARGV0' | BASH_ARGV0=zz bash -s
+echo 'echo $0 $BASH_ARGV0; printenv BASH_ARGV0' > a0.sh
+BASH_ARGV0=zz bash a0.sh
 
 # The last of -i and +i wins
 bash +i -c 'echo "+i $-"'

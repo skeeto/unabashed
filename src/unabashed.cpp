@@ -2035,13 +2035,17 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             cmd = info->args[i++];
             havecmd = 1;
             setvar(sh, scratch, "BASH_EXECUTION_STRING", cmd);
-            if (i < info->nargs) sh->name = sh->cname = info->args[i++];
+            if (i < info->nargs) {
+                sh->name  = sh->cname = info->args[i++];
+                sh->argv0 = {};  // as bash, replacing BASH_ARGV0's
+            }
             sh->args.v = info->args + i;
             sh->args.n = info->nargs - i;
             sh->iname  = "-c";
         } else if (i<info->nargs && !sh->sflag) {
             file = info->args[i++];
             sh->name   = file;
+            sh->argv0  = {};  // as bash, replacing BASH_ARGV0's
             sh->iname  = file;
             sh->args.v = info->args + i;
             sh->args.n = info->nargs - i;
