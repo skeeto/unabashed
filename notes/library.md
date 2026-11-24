@@ -195,6 +195,16 @@ the records list, without calling the core.
   - a killed straggler that was not yet reapable after 1 s, which a
     later call reaps;
   - the Windows helper orphans described under Known deviations.
+- **Signals reach only its own programs (POSIX).** Each program leads
+  a process group, which may outlive it, and the run signals that
+  group (a group signal, teardown's kill). So that its id is never
+  another's by then, an exit is read with WNOWAIT and the zombie held,
+  its pid in use, until teardown's kill, which reaps it. Past 64 held,
+  the oldest is reaped, and its group is never signalled again.
+  Linux's raw `waitid` gives the program's resource usage at once.
+  macOS's gives none, so there a program alone in its group is reaped
+  at once, its group forgotten, and a held one's time is counted only
+  when it is reaped.
 
 **The host must:**
 - **Not reap children it did not spawn.** A SIGCHLD of SIG_IGN, or

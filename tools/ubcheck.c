@@ -246,8 +246,14 @@ enum { ANY = 1<<30 };
 
 // The hooks a case installs (Case.hooks), each logging its calls to
 // static storage, since snapshots compare the heap's mappings
+// H_HELD, with H_TRACE and H_EXIT: the exit hook logs "held N", how
+// many of the programs traced to their END are still zombies, kept so
+// that their groups' ids cannot be reused before the run ends
 enum { H_EXIT = 1<<0, H_ACCESS = 1<<1, H_SPAWN = 1<<2, H_TRACE = 1<<3,
-       H_ALL = H_EXIT|H_ACCESS|H_SPAWN|H_TRACE };
+       H_ALL = H_EXIT|H_ACCESS|H_SPAWN|H_TRACE, H_HELD = 1<<4 };
+
+static long long endpids[256];  // H_HELD: the programs traced to an END
+static int       nendpids;
 
 static char   hooklog[1<<16];
 static size_t hooklen;
@@ -274,6 +280,15 @@ static void onexit(void *user, ub_exit const *x)
     nexits++;
     exitstatus = x->status;
     logf_("EXIT %d pwd=%s cwd=%s\n", x->status, x->pwd ? x->pwd : "-", x->cwd ? x->cwd : "-");
+    if (nendpids) {
+        int held = 0;
+        for (int i = 0; i < nendpids; i++) {
+            siginfo_t si = {0};
+            held += !waitid(P_PID, (id_t)endpids[i], &si, WEXITED|WNOHANG|WNOWAIT) &&
+                    si.si_pid==(pid_t)endpids[i];
+        }
+        logf_("held %d\n", held);
+    }
     snprintf(exitcwd, sizeof(exitcwd), "%s", x->cwd ? x->cwd : "");
     size_t len = 0;
     int    n   = 0;
@@ -376,6 +391,7 @@ static void ontrace(void *user, ub_trace const *t)
     (void)user;
     if (t->phase == UB_TRACE_END) {
         logf_("E%lld %d%s\n", (long long)t->id, t->status, t->pid ? " p" : "");
+        if (t->pid && (curcase->hooks & H_HELD) && nendpids<256) endpids[nendpids++] = t->pid;
         return;
     }
     static char const kinds[] = "?bfp";
@@ -458,6 +474,7 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
     hooklen    = 0;
     hooklog[0] = 0;
     nexits     = 0;
+    nendpids   = 0;
     ub_os *os = ub_new(&cfg);
     if (!os) return -9999;
     int fd = open(outpath, O_RDWR|O_CREAT|O_TRUNC|O_CLOEXEC, 0600);
@@ -988,6 +1005,19 @@ static int check(char *argv0, int quick)
          .hooks = H_TRACE, .log = "S1 b exec /bin/echo hi\nE1 0 p\n"},
         {"trace: killed at the end", "sleep 100 & exit 4", 4, .hooks = H_TRACE|H_EXIT,
          .log = "S1+ p sleep 100\n", .log2 = "E1 393 p\n"},
+        // An exited program stays a zombie until the run ends, so that
+        // the id of its group, which may outlive it, stays the run's;
+        // past 64, the oldest are reaped. macOS reaps at once one that
+        // was alone in its group.
+        {"held: group outlives its leader", "sh -c 'sleep 100 & exit 3'; echo s=$?", 0,
+         "s=3", .hooks = H_TRACE|H_EXIT|H_HELD, .log = "held 1\n"},
+        {"held: at most 64", "for i in $(seq 100); do /bin/sh -c :; done", 0,
+         .hooks = H_TRACE|H_EXIT|H_HELD,
+#if __APPLE__
+         .log = "held 0\n"},
+#else
+         .log = "held 64\n"},
+#endif
         {"trace: stage without #!", "$T/ns | cat", 0, "ns\n", .hooks = H_TRACE,
          .log = "$T/ns\n", .logn = 1, .log2 = "S2+ b echo ns\nE2 0\n"},
         {"trace: spawn's id", "/bin/echo hi", 0, "hi", .hooks = H_TRACE|H_SPAWN,

@@ -157,12 +157,15 @@ static u64 bitstake(u64 volatile *p)
 // (LIBMODE)" branches: its fiber stacks are among the run's
 // reservations, spawnlock brackets descriptors not yet close-on-exec,
 // lib_reaped tracks the run's programs, with each status as
-// os_waitproc gives it, lib_dir the directory plt_list holds open,
-// and lib_tmpdir is TMPDIR from the run's environment.
+// os_waitproc gives it, lib_wait4 waits for them without reaping an
+// exit (its zombie keeps its group's id), lib_dir the directory
+// plt_list holds open, and lib_tmpdir is TMPDIR from the run's
+// environment.
 static byte *lib_fiberstack(Os *, iz size);
 static void  lib_fiberunstack(Os *, byte *, iz size);
 static void  lib_spawnlock(b32 lock);
 static void  lib_reaped(i64 pid, i32 status, struct rusage const *);
+static pid_t lib_wait4(pid_t, i32 *status, i32 flags, struct rusage *);
 static void  lib_dir(Os *, DIR *);
 static char *lib_tmpdir(Os *);
 
@@ -1937,7 +1940,11 @@ static b32 tryio(Io *io, i32 revents)
         pid_t r;
         struct rusage ru = {};  // the library's os_cputime
         do {
-            r = wait4((pid_t)io->h, &status, flags, &ru);
+            if constexpr (LIBMODE) {
+                r = lib_wait4((pid_t)io->h, &status, flags & ~WNOHANG, &ru);
+            } else {
+                r = wait4((pid_t)io->h, &status, flags, &ru);
+            }
         } while (r<0 && errno==EINTR);
         if (!r) return 0;
         i32 st = r<0 ? 127 : waitstatus(status);

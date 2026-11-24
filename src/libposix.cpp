@@ -35,9 +35,19 @@ struct LibKid {
     b32       reaped;
     i32       status;  // once reaped by the core: as os_waitproc returns it
     TraceRec *trace;   // the command that started it, while it waits
+    b32       held;    // exited, its zombie kept: its group still ours
+    b32       owed;    // its CPU time is counted only once it is reaped
+    i32       wstatus; // while held: its wait status
 };
 
-enum : i32 { MAXKIDS = 1024, FDBITS = 1<<16 };
+// A program reaped and not held is forgotten: its pid, and so its
+// group's id, may already be another's, so it is never signalled.
+static b32 ours(LibKid *k)
+{
+    return !k->reaped || k->held;
+}
+
+enum : i32 { MAXKIDS = 1024, MAXHELD = 64, FDBITS = 1<<16 };
 
 struct LibHooks;
 
@@ -73,6 +83,7 @@ struct Lib {
     // Programs, and the process groups they lead (each its own session)
     LibKid     kids[MAXKIDS];
     i32        nkids;
+    i32        nheld;     // kids held as zombies
     i32        waitfd;    // Linux: the run's epoll; macOS: a kqueue
 
     // CPU time (os_cputime): the run thread's as the run began, and
@@ -479,6 +490,12 @@ static void bury(i64 pid)
     lockgraves(0);
 }
 
+static void countcpu(Lib *l, struct rusage const *ru)
+{
+    l->cpu.cuser += tvns(ru->ru_utime);
+    l->cpu.csys  += tvns(ru->ru_stime);
+}
+
 static void lib_reaped(i64 pid, i32 status, struct rusage const *ru)
 {
     Lib    *l = curlib;
@@ -488,10 +505,121 @@ static void lib_reaped(i64 pid, i32 status, struct rusage const *ru)
         reapedkid(l, k);
         tracereaped(l, k, status);
     }
-    if (ru) {
-        l->cpu.cuser += tvns(ru->ru_utime);
-        l->cpu.csys  += tvns(ru->ru_stime);
+    if (ru) countcpu(l, ru);
+}
+
+// An exit is read without reaping (WNOWAIT): the zombie keeps its pid,
+// and with it its group's id, from reuse while the run may yet signal
+// the group (libsiggroup, teardown's kill). Zombies are reaped after
+// teardown's kill, or oldest first past MAXHELD, their groups then
+// forgotten (ours). Stops and continues are consumed, as wait4 does.
+
+// Reap a held zombie, its group forgotten.
+static void release(Lib *l, LibKid *k)
+{
+    if (!k->held) return;
+    k->held = 0;
+    l->nheld--;
+    i32 status;
+    struct rusage ru = {};
+    pid_t r;
+    do {
+        r = wait4((pid_t)k->pid, &status, WNOHANG, &ru);
+    } while (r<0 && errno==EINTR);
+    if (r>0 && k->owed) countcpu(l, &ru);
+    k->owed = 0;
+}
+
+// Is pid alone in the group it leads? Then its zombie need not be held.
+static b32 alone(pid_t pid)
+{
+    #if __APPLE__
+    pid_t pids[64];
+    i32 len = proc_listpids(PROC_PGRP_ONLY, (u32)pid, pids, sizeof(pids));
+    if (len<=0 || len>=(i32)sizeof(pids)) return 0;
+    for (i32 i = 0; i < len/(i32)sizeof(pid_t); i++) {
+        if (pids[i] && pids[i]!=pid) return 0;
     }
+    return 1;
+    #else
+    (void)pid;
+    return 0;
+    #endif
+}
+
+// A program's wait status as the siginfo of waitid gives it
+static i32 wstatusof(siginfo_t const *si)
+{
+    switch (si->si_code) {
+    case CLD_EXITED:    return (si->si_status & 0xff) << 8;
+    case CLD_KILLED:    return si->si_status & 0x7f;
+    case CLD_DUMPED:    return (si->si_status & 0x7f) | 0x80;
+    case CLD_STOPPED:
+    case CLD_TRAPPED:   return (si->si_status & 0xff)<<8 | 0x7f;
+    #if __APPLE__
+    case CLD_CONTINUED: return SIGCONT<<8 | 0x7f;
+    #else
+    case CLD_CONTINUED: return 0xffff;
+    #endif
+    }
+    return 0;
+}
+
+// wait4(pid, status, WNOHANG|flags, ru) for the run's programs, but an
+// exit leaves pid a zombie held (above). *ru is zero when the program's
+// time is counted only once it is reaped.
+static pid_t lib_wait4(pid_t pid, i32 *status, i32 flags, struct rusage *ru)
+{
+    Lib    *l = curlib;
+    LibKid *k = findkid(l, pid);
+    *ru = {};
+    if (!k || !ours(k)) return wait4(pid, status, WNOHANG|flags, ru);
+    if (k->held) {
+        *status = k->wstatus;
+        return pid;
+    }
+
+    siginfo_t si = {};
+    #if __linux__ && __LP64__
+    // The system call fills in rusage, as wait4 would; glibc's does not
+    b32  owed = 0;
+    long r    = syscall(SYS_waitid, P_PID, (long)pid, &si, WEXITED|WNOHANG|WNOWAIT, ru);
+    #else
+    b32  owed = 1;
+    long r    = waitid(P_PID, (id_t)pid, &si, WEXITED|WNOHANG|WNOWAIT);
+    #endif
+    if (r < 0) return -1;
+    if (si.si_pid == pid) {
+        *status = wstatusof(&si);
+        if (owed && alone(pid)) {
+            // Nothing else holds the group's id: reaped now, its time
+            // counted at once
+            return wait4(pid, status, WNOHANG, ru);
+        }
+        if (l->nheld == MAXHELD) {
+            for (i32 i = 0; i < l->nkids; i++) {
+                if (l->kids[i].held) {
+                    release(l, l->kids+i);
+                    break;
+                }
+            }
+        }
+        k->held    = 1;
+        k->owed    = owed;
+        k->wstatus = *status;
+        l->nheld++;
+        return pid;
+    }
+
+    if (!(flags & WUNTRACED)) return 0;
+    si = {};
+    do {
+        r = waitid(P_PID, (id_t)pid, &si, WSTOPPED|WCONTINUED|WNOHANG);
+    } while (r<0 && errno==EINTR);
+    if (r < 0) return -1;
+    if (si.si_pid != pid) return 0;
+    *status = wstatusof(&si);
+    return pid;
 }
 
 // Room for one more: reaped programs' groups are forgotten, oldest
@@ -503,6 +631,8 @@ static b32 kidroom(Lib *l)
     for (i32 i = 0; i < l->nkids; i++) {
         if (!l->kids[i].reaped || i>=l->nkids-MAXKIDS/2) {
             l->kids[n++] = l->kids[i];
+        } else {
+            release(l, l->kids+i);
         }
     }
     l->nkids = n;
@@ -581,10 +711,8 @@ static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
     Spawned r = plt_spawn(os, scratch, s);
     if (!r.err) {
         LibKid *k = l->kids + l->nkids++;
+        *k        = {};
         k->pid    = r.pid;
-        k->reaped = 0;
-        k->status = 0;
-        k->trace  = 0;
         tracelink(l, t, k);
         watchkid(l, k);
         if (l->cfg.child) l->cfg.child(l->cfg.user, r.pid, 1);
@@ -600,7 +728,7 @@ static i32 libwaitproc(Os *os, Handle proc)
         checkhard(l);
         i32   status = 0;
         struct rusage ru = {};
-        pid_t r = wait4((pid_t)proc, &status, WNOHANG, &ru);
+        pid_t r = lib_wait4((pid_t)proc, &status, 0, &ru);
         if (r<0 && errno==EINTR) continue;
         if (r) {
             i32 st = r<0 ? 127 : waitstatus(status);
@@ -791,7 +919,7 @@ static u64 libsiggroup(Os *os)
         i32 hsig = hostsig(__builtin_ctzll(b) + 1);
         if (!hsig) continue;
         for (i32 i = 0; i < l->nkids; i++) {
-            kill(-(pid_t)l->kids[i].pid, hsig);
+            if (ours(l->kids+i)) kill(-(pid_t)l->kids[i].pid, hsig);
         }
     }
     return bits;
@@ -1049,12 +1177,15 @@ static void teardown(Lib *l)
 
     traceleave(l);  // what is open now ends only with its program
 
-    // Every program, with whatever it started in its session
+    // Every program, with whatever it started in its session, while
+    // the held zombies keep their groups' ids ours; then those reaped
     for (i32 i = 0; i < l->nkids; i++) {
         LibKid *k = l->kids + i;
+        if (!ours(k)) continue;
         kill(-(pid_t)k->pid, SIGKILL);
         if (!k->reaped) kill((pid_t)k->pid, SIGKILL);
     }
+    for (i32 i = 0; i < l->nkids; i++) release(l, l->kids+i);
     i64 until = monons() + 1000000000;
     for (;;) {
         b32 left = 0;
