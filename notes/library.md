@@ -281,6 +281,10 @@ platform's call, with `ub_access`: an op, flags, and the path.
 - **Paths** are absolute, as the system gets them. On POSIX they are
   joined, not resolved: `.`, `..` and links remain, so `source ./s`
   shows `$PWD/./s`. A policy that cares resolves them itself.
+  On Windows they are native, with forward slashes, devices as
+  `//./NUL`; virtual paths (/proc, /dev/clipboard) are never asked;
+  nothing reads a link; and the file msys mode makes for a program to
+  read a procsub by name is asked as `UB_TEMPFILE`, in its directory.
 - **A refusal** fails the access as its error would, so a script sees
   what bash shows for that error: `f: Permission denied` and status 1
   for a redirection, no match for a glob, false for `test`, `command not

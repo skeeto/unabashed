@@ -82,6 +82,9 @@ W32(int,       ReadProcessMemory(uintptr_t, void const *, void *, size_t, size_t
 W32(uintptr_t, CreateEventW(void *, int, int, void *));
 W32(int,       SetEvent(uintptr_t));
 W32(int,       ResetEvent(uintptr_t));
+W32(int,       CreateDirectoryW(uint16_t const *, void *));
+W32(int,       RemoveDirectoryW(uint16_t const *));
+W32(int,       SetEnvironmentVariableW(uint16_t const *, uint16_t const *));
 
 static int strcmp(char const *a, char const *b)
 {
@@ -591,7 +594,7 @@ enum { ANY = 1<<30 };
 
 // The hooks a case installs (Case.hooks), each logging its calls to
 // static storage, since snapshots compare the process's memory
-enum { H_EXIT = 1<<0, H_ALL = H_EXIT };
+enum { H_EXIT = 1<<0, H_ACCESS = 1<<1, H_ALL = H_EXIT|H_ACCESS };
 
 static char hooklogbuf[1<<16];
 static Snap hooklog = {hooklogbuf, 0, sizeof(hooklogbuf)};
@@ -654,7 +657,28 @@ static void onexit(void *user, ub_exit const *x)
     exitenv[n] = 0;
 }
 
-typedef struct {
+// The cases' directory, $T in their environment, and the temporary
+// directory, with forward slashes, as the access hook's log shows them
+static char     tdir[1024];
+static char     tmpdir[1024];
+static uint16_t twide[300];
+
+// $T/name, for the system
+static uint16_t *tfile(uint16_t *buf, char const *name)
+{
+    int n = 0;
+    for (; twide[n]; n++) buf[n] = twide[n];
+    buf[n++] = '/';
+    for (; *name; name++) buf[n++] = (uint16_t)*name;
+    buf[n] = 0;
+    return buf;
+}
+
+static struct Case const *curcase;  // whose access hook rules apply
+static int  ndenied;                // the refusals in its run
+static char reasonbuf[1024];
+
+typedef struct Case {
     char const *name;
     char const *script;
     int         status;     // or ANY
@@ -676,7 +700,57 @@ typedef struct {
     char const *nolog;      // a substring the log must not hold, or null
     char const *rerun;      // then this script, from the state the exit
                             // hook was given: its status and output count
+    char const *deny;       // the access hook refuses an access whose log
+                            // line holds this ("OPEN wct $T/w"), or null
+    int         denyret;    // returning this; 0: -UB_EACCES
+    char const *reason;     // with this reason (%d: the refusal's count)
 } Case;
+
+// An access as a log line, "OP flags path", T and the temporary
+// directory shown as $T and $TMP; refused if the case's rule says so
+static int onaccess(void *user, ub_access const *a, char const **reason)
+{
+    (void)user;
+    static char const *const ops[] = {"?", "OPEN", "STAT", "READLINK", "LIST", "TEMPFILE"};
+    static char linebuf[8192];  // not on the run's stack
+    Snap line = {linebuf, 0, sizeof(linebuf)};
+    sput(&line, a->op>0 && a->op<6 ? ops[a->op] : "?");
+    char fl[9], *p = fl;
+    *p++ = ' ';
+    for (int i = 0; i < 7; i++) {
+        if (a->flags & 1<<i) *p++ = "rwctaxn"[i];
+    }
+    if (p == fl+1) *p++ = '-';
+    *p++ = ' ';
+    sputn(&line, fl, p-fl);
+    if (hasprefix(a->path, tdir)) {
+        sput(&line, "$T");
+        sput(&line, a->path+strlen(tdir));
+    } else if (hasprefix(a->path, tmpdir)) {
+        sput(&line, "$TMP");
+        sput(&line, a->path+strlen(tmpdir));
+    } else {
+        sput(&line, a->path);
+    }
+    sput(&line, "\n");
+    sput(&hooklog, linebuf);
+    Case const *c = curcase;
+    if (!c->deny || !strstr_(linebuf, c->deny)) return 0;
+    ndenied++;
+    if (c->reason) {
+        Snap r = {reasonbuf, 0, sizeof(reasonbuf)};
+        char const *d = strstr_(c->reason, "%d");
+        if (d) {
+            sputn(&r, c->reason, d-c->reason);
+            sputd(&r, ndenied);
+            sput(&r, d+2);
+        } else {
+            sput(&r, c->reason);
+        }
+        *reason = reasonbuf;
+    }
+    return c->denyret ? c->denyret : -UB_EACCES;
+}
 
 typedef struct {
     ub_os *os;
@@ -706,6 +780,9 @@ static int runcase(Case const *c, char *out, int outlen, double *secs, Snap *lef
     cfg.memlimit  = c->memlimit;
     cfg.fds       = c->fds;
     if (c->hooks & H_EXIT) cfg.exit = onexit;
+    if (c->hooks & H_ACCESS) cfg.access = onaccess;
+    curcase = c;
+    ndenied = 0;
     hooklog.len    = 0;
     hooklog.buf[0] = 0;
     nexits         = 0;
@@ -1065,6 +1142,26 @@ static int check(int quick)
     static uint16_t const name[] = u"ubcheck.out";
     for (int i = 0; i < (int)(sizeof(name)/2); i++) outpath[n+i] = name[i];
 
+    // The cases' directory, $T, with a file to read, a script to source
+    // and a directory, all with forward slashes
+    for (int i = 0; i < n; i++) twide[i] = outpath[i]=='\\' ? '/' : outpath[i];
+    wtf8(tmpdir, twide, n-1);  // less its trailing slash
+    static uint16_t const tname[] = u"ubcheck.t";
+    for (int i = 0; i < (int)(sizeof(tname)/2); i++) twide[n+i] = tname[i];
+    wtf8(tdir, twide, n+(int)(sizeof(tname)/2)-1);
+    CreateDirectoryW(twide, 0);
+    uint16_t tbuf[300];
+    CreateDirectoryW(tfile(tbuf, "d"), 0);
+    static char const *const tfiles[][2] = {{"f", "data\n"}, {"s", "echo sourced\n"}};
+    for (int i = 0; i < 2; i++) {
+        // GENERIC_WRITE, CREATE_ALWAYS
+        uintptr_t h = CreateFileW(tfile(tbuf, tfiles[i][0]), 0x40000000u, 0, 0, 2, 0, 0);
+        int w = 0;
+        WriteFile(h, tfiles[i][1], (int)strlen(tfiles[i][1]), &w, 0);
+        CloseHandle(h);
+    }
+    SetEnvironmentVariableW(u"T", twide);
+
     // A host pipe that must stay open and silent, never inherited
     uintptr_t sentr = 0, sentw = 0;
     CreatePipe(&sentr, &sentw, 0, 0);
@@ -1174,6 +1271,50 @@ static int check(int quick)
         {"exit hook: next run", "cd /Windows; export UBX_RT=rt; UBX_LOCAL=x", 0,
          "/Windows\nrt\nunset\n", .hooks = H_EXIT,
          .rerun = "pwd; echo $UBX_RT; echo ${UBX_LOCAL-unset}"},
+
+        // Paths: native, with forward slashes, devices as //./NUL
+        {"access: >", "echo a > $T/w", 0, .hooks = H_ACCESS, .log = "OPEN wct $T/w\n",
+         .logn = 1},
+        {"access: >>", "echo a >> $T/w", 0, .hooks = H_ACCESS, .log = "OPEN wca $T/w\n"},
+        {"access: <", "read x < $T/f; echo $x", 0, "data", .hooks = H_ACCESS,
+         .log = "OPEN r $T/f\n"},
+        {"access: /dev/null", "echo a > /dev/null", 0, .hooks = H_ACCESS,
+         .log = "OPEN wct //./NUL\n"},
+        {"access: test", "test -e $T/f; true", 0, .hooks = H_ACCESS,
+         .log = "STAT - $T/f\n"},
+        {"access: cd", "cd $T/d && echo ok", 0, "ok", .hooks = H_ACCESS,
+         .log = "STAT - $T/d\n"},
+        {"access: source", "cd $T; source ./s", 0, "sourced", .hooks = H_ACCESS,
+         .log = "OPEN r $T/s\n"},
+        {"access: glob", "cd $T; echo *", 0, "d f s", .hooks = H_ACCESS,
+         .log = "LIST r $T"},
+        {"access: here-document file", "x=$(printf %070000d 0); cat <<E | wc -c\n$x\nE", 0,
+         "70001", .hooks = H_ACCESS, .log = "TEMPFILE rwcx $TMP"},
+        {"access: cd /proc", "cd /proc && echo ok", 0, "ok", .hooks = H_ACCESS,
+         .nolog = "proc"},
+        {"access: not a program's head", "echo hi | cat", 0, "hi", .hooks = H_ACCESS,
+         .nolog = "OPEN r "},
+        {"access: not /dev/null", "sleep 0 & wait", 0, .hooks = H_ACCESS,
+         .nolog = "NUL"},
+        {"deny: redirection", "echo a > $T/w; echo s=$?", 0, "w: no way\ns=1",
+         .hooks = H_ACCESS, .deny = "OPEN wct $T/w", .reason = "no way"},
+        {"deny: ENOENT", "echo a > $T/w", 1, "w: No such file or directory",
+         .hooks = H_ACCESS, .deny = "OPEN wct $T/w", .denyret = -UB_ENOENT},
+        {"deny: cd", "cd $T/d; echo s=$?", 0, "d: no\ns=1", .hooks = H_ACCESS,
+         .deny = "STAT - $T/d", .reason = "no"},
+        {"deny: test", "test -e $T/f && echo yes || echo no", 0, "no", .notout = "yes",
+         .hooks = H_ACCESS, .deny = "STAT - $T/f", .reason = "no"},
+        {"deny: glob", "cd $T; echo *", 0, "*\n", .hooks = H_ACCESS, .deny = "LIST",
+         .reason = "no"},
+        {"deny: PATH search", "ls; echo s=$?", 0, "ls: command not found\ns=127",
+         .hooks = H_ACCESS, .deny = "/ls", .reason = "no"},
+        {"deny: here-document file",
+         "x=$(printf %070000d 0); cat <<E | wc -c\n$x\nE", ANY,
+         "cannot create temp file for here-document: no", .hooks = H_ACCESS,
+         .deny = "TEMPFILE", .reason = "no"},
+        {"deny: 40 reasons", "for i in {1..40}; do echo > $T/w$i; done", 1,
+         "w40: denied 40\n", .hooks = H_ACCESS, .deny = "OPEN wct $T/w",
+         .reason = "denied %d"},
     };
     int fails = 0;
     for (int i = 0; i < (int)(sizeof(cases)/sizeof(*cases)); i++) {
@@ -1233,6 +1374,14 @@ static int check(int quick)
         fails++;
     }
     DeleteFileW(outpath);
+    static char const *const tleft[] = {"f", "s", "w"};
+    for (int i = 0; i < 3; i++) DeleteFileW(tfile(tbuf, tleft[i]));
+    for (int i = 1; i <= 40; i++) {
+        char name[8] = {'w', (char)(i<10 ? '0'+i : '0'+i/10), (char)(i<10 ? 0 : '0'+i%10), 0};
+        DeleteFileW(tfile(tbuf, name));
+    }
+    RemoveDirectoryW(tfile(tbuf, "d"));
+    RemoveDirectoryW(twide);
     sputd(&report, fails);
     sput(&report, " failed\n");
     line(&report);

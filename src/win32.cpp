@@ -3115,14 +3115,11 @@ static i32 plt_rename(Os *os, Arena scratch, Str from, Str to)
     return MoveFileExW(f.data, t.data, MOVEFILE_REPLACE_EXISTING) ? 0 : errnum(GetLastError());
 }
 
-static Opened plt_tempfile(Os *os, Arena)
+// The directory plt_tempfile makes its files in, with its trailing
+// separator, into path (300 units): the run's TMPDIR in the library, or
+// GetTempPathW's. Its length, or 0 for none that fits.
+static i32 tempdirw(Os *os, c16 *path)
 {
-    flushw(os);
-    // A uniquely named file in the temporary directory, deleted by the
-    // system when its last handle closes
-    Opened r = {};
-    r.h = BADHANDLE;
-    c16 path[300];
     i32 len = 0;
     c16 *dir = 0;
     if constexpr (LIBMODE) dir = lib_tmpdir(os);
@@ -3131,7 +3128,19 @@ static Opened plt_tempfile(Os *os, Arena)
     } else {
         len = GetTempPathW(260, path);
     }
-    if (len<=0 || len>=260) {
+    return len>0 && len<260 ? len : 0;
+}
+
+static Opened plt_tempfile(Os *os, Arena)
+{
+    flushw(os);
+    // A uniquely named file in the temporary directory, deleted by the
+    // system when its last handle closes
+    Opened r = {};
+    r.h = BADHANDLE;
+    c16 path[300];
+    i32 len = tempdirw(os, path);
+    if (!len) {
         r.err = E_NOENT;
         return r;
     }

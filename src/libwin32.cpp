@@ -92,6 +92,8 @@ struct Lib {
     LibKid     kids[MAXKIDS];
     i32        nkids;
 
+    b32        spawning;  // inside the spawn window (lib_spawnlock)
+
     // The hooks' state (libhooks.cpp), from the run's arena
     LibHooks  *hooks;
 };
@@ -146,6 +148,7 @@ static void defaultlock(void *, int lock)
 static void lib_spawnlock(Os *os, b32 lock)
 {
     Lib *l = (Lib *)os;
+    l->spawning = lock;
     l->cfg.spawnlock(l->cfg.user, lock);
 }
 
@@ -360,6 +363,87 @@ static b32 owned(Lib *l, uz h)
 {
     i32 i = hfind(l, h);
     return i>=0 && l->hcount[i];
+}
+
+// The access hook (libhooks.cpp), asked of a file the script names
+// before the platform's call, but not of the shell's own (OF_OWN,
+// ST_OWN). Never inside the spawn window: the host's lock is held.
+static i32 askhost(Lib *, Arena, i32 op, i32 flags, Str path);
+
+static i32 askwin(Os *os, Arena scratch, i32 op, i32 flags, Str path)
+{
+    Lib *l = (Lib *)os;
+    assert(!l->spawning);
+    return askhost(l, scratch, op, flags, path);
+}
+
+static Opened libopen(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
+{
+    if (!(flags & OF_OWN)) {
+        i32 err = askwin(os, scratch, UB_OPEN, flags&~OF_OWN, path);
+        if (err) return {BADHANDLE, err};
+    }
+    return plt_open(os, scratch, path, flags&~OF_OWN, mode);
+}
+
+static Opened libtempfile(Os *os, Arena scratch)
+{
+    c16 buf[300];
+    i32 len = tempdirw(os, buf);
+    if (len) {
+        // As the core names directories: forward slashes, none trailing
+        Str dir = fromwide(&scratch, buf, len);
+        for (iz i = 0; i < dir.len; i++) {
+            if (dir.data[i] == '\\') dir.data[i] = '/';
+        }
+        if (dir.len>3 && dir.data[dir.len-1]=='/') dir.len--;
+        i32 flags = UB_READ|UB_WRITE|UB_CREATE|UB_EXCL;
+        i32 err   = askwin(os, scratch, UB_TEMPFILE, flags, dir);
+        if (err) return {BADHANDLE, err};
+    }
+    return plt_tempfile(os, scratch);
+}
+
+// A file made for a program to read by name (/dev/fd in msys mode)
+static NamedTemp libnamedtemp(Os *os, Arena *a, Str dir)
+{
+    i32 flags = UB_READ|UB_WRITE|UB_CREATE|UB_EXCL;
+    i32 err   = askwin(os, *a, UB_TEMPFILE, flags, dir);
+    if (err) {
+        NamedTemp r = {};
+        r.h   = BADHANDLE;
+        r.err = err;
+        return r;
+    }
+    return plt_namedtemp(os, a, dir);
+}
+
+// A rename is asked as an open of its target that replaces it
+static i32 librename(Os *os, Arena scratch, Str from, Str to)
+{
+    i32 err = askwin(os, scratch, UB_OPEN, UB_WRITE|UB_CREATE|UB_TRUNC, to);
+    return err ? err : plt_rename(os, scratch, from, to);
+}
+
+static Stat libstat(Os *os, Arena scratch, Str path, b32 follow)
+{
+    b32 own = follow & ST_OWN;
+    follow &= ~ST_OWN;
+    if (!own) {
+        i32 err = askwin(os, scratch, UB_STAT, follow ? 0 : UB_NOFOLLOW, path);
+        if (err) {
+            Stat s = {};
+            s.err = err;
+            return s;
+        }
+    }
+    return plt_stat(os, scratch, path, follow);
+}
+
+static Dirent *liblist(Os *os, Arena *a, Str dir, i32 *err)
+{
+    *err = askwin(os, *a, UB_LIST, UB_READ, dir);
+    return *err ? 0 : plt_list(os, a, dir, err);
 }
 
 static i32 libclose(Os *os, Handle h)
@@ -638,6 +722,12 @@ static constexpr OsVtable libtable(OsVtable t)
     t.reserve    = libreserve;
     t.commit     = libcommit;
     t.decommit   = libdecommit;
+    t.open       = libopen;
+    t.tempfile   = libtempfile;
+    t.namedtemp  = libnamedtemp;
+    t.rename     = librename;
+    t.stat       = libstat;
+    t.list       = liblist;
     t.close      = libclose;
     t.dup        = libdup;
     t.tty        = libtty;
