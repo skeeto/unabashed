@@ -2629,11 +2629,14 @@ static void shebangoptions(Shell *sh, Str src)
     }
 }
 
+// Is a file the system would not start (no #! line) shell code? As
+// bash, unless a NUL in its first 80 bytes marks it a binary. One that
+// cannot be read counts: bash commits to it and reports the read.
 static b32 isshellscript(Shell *sh, Arena a, Str path)
 {
     Str full = absolute(sh, &a, path);
     Opened o = os_open(sh->os, a, full, OF_READ, 0);
-    if (o.err) return 0;
+    if (o.err) return 1;
     u8 buf[80];
     iz n = os_read(sh->os, o.h, buf, countof(buf));
     os_close(sh->os, o.h);
@@ -2870,6 +2873,11 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
     if (err == E_NOEXEC && isshellscript(sh, a, path)) {
         // No #! line: bash runs it as a shell script in a subshell
         Str src = readwholefile(sh, &a, path, &err);
+        if (err) {
+            // that subshell cannot open it, and says so with no line
+            syserror(sh, a, concat3(&a, path, Str(": "), errtext(err)));
+            return err==E_NOENT ? 127 : 126;
+        }
         Shell *saved = alloc<Shell>(&a);  // large: not on the stack
         *saved = *sh;
         Fdsave fds = savefds(sh, &a);
