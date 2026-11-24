@@ -2789,8 +2789,11 @@ static PfZone *shellzone(Shell *sh, Arena *a)
 static void startlastarg(Shell *, Arena, Str, b32);
 
 // Execute an external command, by path or by searching PATH, unless
-// the caller has already found it.
-static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, Str found = {})
+// the caller has already found it. A script the shell runs itself has
+// that path as its $0, as bash's execve fallback, unless the caller
+// named it (exec -a).
+static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env,
+                       Str found = {}, b32 named = 0)
 {
     Spawnto *direct = sh->spawnto;  // for runprogram only
     sh->spawnto = 0;
@@ -2908,7 +2911,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         sh->args.v = argv + 1;
         sh->args.n = argc - 1;
         sh->argsown = {};
-        sh->name   = name;
+        sh->name   = named ? name : path;
         sh->argv0  = {};
         sh->frame  = 0;
         sh->srcframes = 0;  // nor sourcing: BASH_SOURCE is its own

@@ -2931,6 +2931,16 @@ static Str absolute(Shell *sh, Arena *a, Str path)
     return r.native.data ? r.native : path;
 }
 
+// bash's full_pathname: a relative path joined to the logical working
+// directory, less one leading "./" (sh_makepath's MP_RMDOT)
+static Str fullpathname(Shell *sh, Arena *a, Str path)
+{
+    if (isabsolute(sh, path)) return path;
+    if (!isabsolute(sh, sh->wd)) return absolute(sh, a, path);
+    if (startswith(path, "./")) path = cuthead(path, 2);
+    return joinpath(a, sh->wd, path);
+}
+
 static Stat pathstat(Shell *, Arena, Str, b32);  // exec.cpp
 
 // Is a resolved /proc entry ours: /proc/self or /proc/$$?

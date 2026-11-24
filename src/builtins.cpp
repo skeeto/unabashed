@@ -4429,7 +4429,10 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
             // Replacing the process keeps $$ for the program, as bash;
             // runprogram decides whether nothing else stops it
             sh->execing = !sh->shopt[S_EXECFAIL] && !sh->interactive;
-            status = runexternal(sh, scratch, argv, nargs-i, env, found);
+            // As bash, its path in full (full_pathname), in messages and
+            // a script's $0, allocated before scratch is passed on
+            Str whole = fullpathname(sh, &scratch, found);
+            status = runexternal(sh, scratch, argv, nargs-i, env, whole, argv0.data!=0);
             sh->execing = 0;
         }
     }
