@@ -1116,7 +1116,16 @@ static void teardown(Lib *l)
         }
     }
 
-    traceleave(l);  // what is open now ends only with its program
+    // What is open now ends only with its program. One that has exited
+    // ends with its own code: once killed, XP reads any as 0.
+    traceleave(l);
+    for (i32 i = 0; i < l->nkids; i++) {
+        LibKid *k = l->kids + i;
+        i32 code = 0;
+        if (!k->reaped && k->trace && GetExitCodeProcess(k->proc, &code) && code!=259) {
+            tracereaped(l, k, exitstatus((u32)code));  // 259: STILL_ACTIVE
+        }
+    }
 
     // Every program, with whatever it started (the job holds both)
     u32 code = SIGEXIT | (128+9);
@@ -1160,9 +1169,9 @@ static void teardown(Lib *l)
     for (i32 i = 0; i < l->nkids; i++) {
         LibKid *k = l->kids + i;
         if (k->reaped) continue;
-        i32 code = 0;
-        if (k->trace && GetExitCodeProcess(k->proc, &code) && code!=259) {  // STILL_ACTIVE
-            tracereaped(l, k, exitstatus((u32)code));
+        i32 end = 0;
+        if (k->trace && GetExitCodeProcess(k->proc, &end) && (u32)end!=259) {
+            tracereaped(l, k, exitstatus(end ? (u32)end : code));  // killed
         }
         CloseHandle(k->proc);
         if (k->announced && l->cfg.child) l->cfg.child(l->cfg.user, k->pid, 0);
