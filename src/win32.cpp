@@ -383,7 +383,8 @@ W32(b32,    WriteFile(uz, u8 *, i32, i32 *, uz));
 // (LIBMODE)" branches. A run records each handle it creates (lib_handle,
 // false if the run may hold no more; counted ones are its descriptors,
 // within its budget), each fiber and read-ahead buffer, each program it
-// starts inside the spawn lock (lib_spawned) and reaps (lib_reaped).
+// starts inside the spawn lock (lib_spawned) and reaps (lib_reaped,
+// with its status as os_waitproc gives it).
 // lib_hard is a cancel waiting; lib_tmpdir the temporary directory
 // from the run's environment, null-terminated with a trailing
 // backslash, or null.
@@ -395,7 +396,7 @@ static u8  *lib_ahead(Os *, iz cap);
 static void lib_unahead(Os *, u8 *buf, iz cap);
 static void lib_spawnlock(Os *, b32 lock);
 static void lib_spawned(Os *, uz proc, i64 pid, u64 sigign, b32 shared, b32 injob);
-static void lib_reaped(Os *, uz proc);
+static void lib_reaped(Os *, uz proc, i32 status);
 static c16 *lib_tmpdir(Os *);
 
 // Record a handle just created, else close it: false then.
@@ -1800,7 +1801,7 @@ static i32 procexit(Os *os, uz proc)
     }
     reapcpu(os, proc);
     i32 missed = !LIBMODE && takemissed(os, proc) ? WMISSED : 0;
-    if constexpr (LIBMODE) lib_reaped(os, proc);
+    if constexpr (LIBMODE) lib_reaped(os, proc, exitstatus((u32)code));
     CloseHandle(proc);
     releaselends(os, proc);
     return exitstatus((u32)code) | missed;

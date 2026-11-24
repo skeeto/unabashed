@@ -31,6 +31,7 @@ struct LibKid {
     i64 pid;
     i32 watch;   // Linux: its pidfd, or -1; macOS: in the kqueue
     b32 reaped;
+    i32 status;  // once reaped by the core: as os_waitproc returns it
 };
 
 enum : i32 { MAXKIDS = 1024, FDBITS = 1<<16 };
@@ -462,11 +463,14 @@ static void bury(i64 pid)
     lockgraves(0);
 }
 
-static void lib_reaped(i64 pid, struct rusage const *ru)
+static void lib_reaped(i64 pid, i32 status, struct rusage const *ru)
 {
     Lib    *l = curlib;
     LibKid *k = findkid(l, pid);
-    if (k) reapedkid(l, k);
+    if (k) {
+        k->status = status;
+        reapedkid(l, k);
+    }
     if (ru) {
         l->cpu.cuser += tvns(ru->ru_utime);
         l->cpu.csys  += tvns(ru->ru_stime);
@@ -559,6 +563,7 @@ static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
         LibKid *k = l->kids + l->nkids++;
         k->pid    = r.pid;
         k->reaped = 0;
+        k->status = 0;
         watchkid(l, k);
         if (l->cfg.child) l->cfg.child(l->cfg.user, r.pid, 1);
     }
@@ -576,8 +581,9 @@ static i32 libwaitproc(Os *os, Handle proc)
         pid_t r = wait4((pid_t)proc, &status, WNOHANG, &ru);
         if (r<0 && errno==EINTR) continue;
         if (r) {
-            lib_reaped((i64)proc, r<0 ? 0 : &ru);
-            return r<0 ? 127 : waitstatus(status);
+            i32 st = r<0 ? 127 : waitstatus(status);
+            lib_reaped((i64)proc, st, r<0 ? 0 : &ru);
+            return st;
         }
         struct pollfd p = {};
         p.fd     = os->wakefd[0];

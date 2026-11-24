@@ -156,12 +156,13 @@ static u64 bitstake(u64 volatile *p)
 // The library's own (libposix.cpp), named only in "if constexpr
 // (LIBMODE)" branches: its fiber stacks are among the run's
 // reservations, spawnlock brackets descriptors not yet close-on-exec,
-// lib_reaped tracks the run's programs, lib_dir the directory plt_list
-// holds open, and lib_tmpdir is TMPDIR from the run's environment.
+// lib_reaped tracks the run's programs, with each status as
+// os_waitproc gives it, lib_dir the directory plt_list holds open,
+// and lib_tmpdir is TMPDIR from the run's environment.
 static byte *lib_fiberstack(Os *, iz size);
 static void  lib_fiberunstack(Os *, byte *, iz size);
 static void  lib_spawnlock(b32 lock);
-static void  lib_reaped(i64 pid, struct rusage const *);
+static void  lib_reaped(i64 pid, i32 status, struct rusage const *);
 static void  lib_dir(Os *, DIR *);
 static char *lib_tmpdir(Os *);
 
@@ -1931,12 +1932,13 @@ static b32 tryio(Io *io, i32 revents)
             r = wait4((pid_t)io->h, &status, flags, &ru);
         } while (r<0 && errno==EINTR);
         if (!r) return 0;
+        i32 st = r<0 ? 127 : waitstatus(status);
         if constexpr (LIBMODE) {
             if (r<0 || WIFEXITED(status) || WIFSIGNALED(status)) {
-                lib_reaped((pid_t)io->h, r<0 ? 0 : &ru);
+                lib_reaped((pid_t)io->h, st, r<0 ? 0 : &ru);
             }
         }
-        io->n   = r<0 ? 127 : waitstatus(status);
+        io->n   = st;
         io->err = 0;
     } return 1;
     }

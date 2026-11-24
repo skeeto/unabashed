@@ -40,6 +40,7 @@ struct LibKid {
     b32 injob;      // in the run's job
     b32 announced;  // given to the child hook
     b32 reaped;
+    i32 status;     // once reaped by the core: as os_waitproc returns it
 };
 
 enum : i32 { MAXKIDS = 1024, HSET = 1<<12, MAXFIBS = 4096 };
@@ -490,14 +491,16 @@ static void lib_spawned(Os *os, uz proc, i64 pid, u64 sigign, b32 shared, b32 in
     k->injob     = injob;
     k->announced = 0;
     k->reaped    = 0;
+    k->status    = 0;
 }
 
-static void lib_reaped(Os *os, uz proc)
+static void lib_reaped(Os *os, uz proc, i32 status)
 {
     Lib    *l = (Lib *)os;
     LibKid *k = findkid(l, proc);
     if (!k) return;
     k->reaped = 1;
+    k->status = status;
     k->proc   = 0;
     if (k->announced && l->cfg.child) l->cfg.child(l->cfg.user, k->pid, 0);
 }
