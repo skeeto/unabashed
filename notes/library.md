@@ -318,6 +318,20 @@ and a wait here) are all asked.
 
   `env` cannot serve: it loses the split between the path and
   `argv[0]`. `ubhost --wrap` is the test's wrapper.
+- **A wrapper on Windows** gets a command line of `wrap[0]`,
+  `wrap[1...]`, the path (backslashes), then the program's own line as
+  one argument, so that splitting its line as any program does gives
+  both back whole. Its image is `wrap[0]`, with the program's standard
+  handles, CRT descriptors (`lpReserved2`), environment and directory.
+  A wrapper must:
+  - be a native program, and start the path with that line and all of
+    those, untouched;
+  - keep the program in a kill-on-close job of its own, since the run
+    ends a program it started by ending the wrapper;
+  - exit with the program's exit code.
+
+  In msys mode the program's line is as the shell built it, arguments
+  converted (`/c` is `C:/`, as in Git Bash).
 - **A refusal** fails the access as its error would, so a script sees
   what bash shows for that error: `f: Permission denied` and status 1
   for a redirection, no match for a glob, false for `test`, `command not

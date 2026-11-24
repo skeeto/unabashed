@@ -10,6 +10,7 @@
 // "ubhost --check [--quick]" checks the host contract instead
 // (ubcheckw.c), and "ubhost --fds" exits with 100 plus the number of
 // inheritable handles it has, or 0 for none (the check's probe).
+// "ubhost --wrap PATH LINE" is a spawn hook's wrapper (see wrap).
 //
 // $ cc -O2 -nostartfiles -nostdlib -o ubhost.exe tools/ubhost.c
 //       libunabashed.obj -lkernel32 -lgcc
@@ -242,6 +243,106 @@ static int argsare(uint16_t const *a, char const *s)
     return !*s && !*a;
 }
 
+// "ubhost --wrap PATH LINE": a spawn hook's wrapper, as the contract has
+// it (notes/library.md). It says "wrapped PATH" on stderr, then starts
+// PATH with the command line LINE and all it was given (the standard
+// handles, the CRT's descriptors, the environment and directory), in a
+// kill-on-close job of its own, since a kill reaches only the wrapper,
+// and exits as the program did.
+typedef struct {
+    int64_t   peruser, perjob;
+    unsigned  flags;
+    size_t    minws, maxws;
+    unsigned  active;
+    uintptr_t affinity;
+    unsigned  prio, sched;
+    uint64_t  io[6];
+    size_t    procmem, jobmem, peakproc, peakjob;
+} JobLimits;  // JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+W32(uintptr_t, CreateJobObjectW(void *, uint16_t const *));
+W32(int,       SetInformationJobObject(uintptr_t, int, void *, int));
+W32(int,       AssignProcessToJobObject(uintptr_t, uintptr_t));
+W32(int,       ResumeThread(uintptr_t));
+W32(int,       GetLastError(void));
+
+// The next argument of a command line, split as CommandLineToArgvW does
+static uint16_t *nextarg(uint16_t **ps, uint16_t *out)
+{
+    uint16_t *s = *ps, *o = out;
+    for (; *s==' ' || *s=='\t'; s++) {}
+    int quoted = 0;
+    while (*s && (quoted || (*s!=' ' && *s!='\t'))) {
+        if (*s == '\\') {
+            int n = 0;
+            for (; *s == '\\'; s++) n++;
+            int quote = *s == '"';
+            for (int i = 0; i < (quote ? n/2 : n); i++) *o++ = '\\';
+            if (quote && n%2) *o++ = *s++;  // an escaped quote
+        } else if (*s == '"') {
+            if (quoted && s[1]=='"') {
+                *o++ = *s;
+                s += 2;
+            } else {
+                quoted = !quoted;
+                s++;
+            }
+        } else {
+            *o++ = *s++;
+        }
+    }
+    *o = 0;
+    *ps = s;
+    return out;
+}
+
+static unsigned wrap(uint16_t *args)
+{
+    static uint16_t path[32768], line[32768];
+    static char     shown[3*32768];
+    nextarg(&args, path);  // --wrap
+    nextarg(&args, path);
+    nextarg(&args, line);
+    ptrdiff_t n = 0;
+    for (; path[n]; n++) {}
+    say("wrapped ");
+    say(wtf8(shown, path, n));
+    say("\n");
+
+    StartupInfo own = {0};
+    own.cb = sizeof(own);
+    GetStartupInfoW(&own);
+    StartupInfoW si = {0};
+    si.cb          = sizeof(si);
+    si.flags       = 0x100;  // STARTF_USESTDHANDLES
+    si.input       = GetStdHandle(-10);
+    si.output      = GetStdHandle(-11);
+    si.error       = GetStdHandle(-12);
+    si.cbreserved2 = own.cbreserved2;
+    si.reserved2   = own.reserved2;
+    uintptr_t job = CreateJobObjectW(0, 0);
+    JobLimits lim = {0};
+    lim.flags = 0x2000;  // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if (job) SetInformationJobObject(job, 9, &lim, sizeof(lim));
+    ProcessInfo pi = {0};
+    if (!CreateProcessW(path, line, 0, 0, 1, 4, 0, 0, &si, &pi)) {  // CREATE_SUSPENDED
+        int err = GetLastError();
+        say("ubhost: cannot start the program\n");
+        return err==2 || err==3 ? 127 : 126;  // not found, either way
+    }
+    if (job) AssignProcessToJobObject(job, pi.process);
+    ResumeThread(pi.thread);
+    WaitForSingleObject(pi.process, -1);
+    unsigned code = 0;
+    GetExitCodeProcess(pi.process, &code);
+    return code;
+}
+
+static int startswith(uint16_t const *a, char const *s)
+{
+    for (; *s && *a==(uint16_t)*s; a++, s++) {}
+    return !*s;
+}
+
 __attribute((force_align_arg_pointer))
 void mainCRTStartup(void)
 {
@@ -251,6 +352,7 @@ void mainCRTStartup(void)
     if (argsare(args, "--check")) ExitProcess((unsigned)check(0));
     if (argsare(args, "--check --quick")) ExitProcess((unsigned)check(1));
     if (argsare(args, "--fds")) ExitProcess((unsigned)inheritedfds());
+    if (startswith(args, "--wrap ")) ExitProcess(wrap(args));
     ptrdiff_t n = 0;
     for (; wl[n]; n++) {}
     cmd.cmdline = wtf8(line, wl, n);

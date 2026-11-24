@@ -66,9 +66,9 @@ enum {                          // ub_access.flags
 };
 
 typedef struct {                // a program about to start, for ub_config.spawn
-    char const        *path;    // absolute: the image (Windows: busybox.exe
-                                // for one of its stubs, ComSpec for a batch
-                                // file)
+    char const        *path;    // absolute: the image (Windows: ComSpec for
+                                // a batch file; in native mode busybox.exe
+                                // for one of its alias stubs)
     int                argc;
     char const *const *argv;    // argv[0] first, null-terminated
     char const *const *env;     // "NAME=value", null-terminated

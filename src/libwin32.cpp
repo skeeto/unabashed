@@ -369,6 +369,7 @@ static b32 owned(Lib *l, uz h)
 // before the platform's call, but not of the shell's own (OF_OWN,
 // ST_OWN). Never inside the spawn window: the host's lock is held.
 static i32 askhost(Lib *, Arena, i32 op, i32 flags, Str path);
+static i32 askspawn(Lib *, Arena *, Spawn *, Slice<Str> *wrap);
 
 static i32 askwin(Os *os, Arena scratch, i32 op, i32 flags, Str path)
 {
@@ -513,6 +514,49 @@ static b32 kidroom(Lib *l)
     return n < MAXKIDS;
 }
 
+// The spawn hook's: the program it asked of, or a wrapper that starts
+// it, wrap[0] with a line of wrap[1...], the path (backslashes) and the
+// program's own line as one argument, which the wrapper, splitting its
+// line as any program does, gets back whole
+static Spawn *asked(Lib *l, Arena *a, Spawn *s, i32 *err)
+{
+    Slice<Str> wrap = {};
+    *err = askspawn(l, a, s, &wrap);
+    if (*err || !wrap.len) return s;
+    Str line = s->cmdline;
+    if (!line.len) {
+        // as startproc makes it
+        Buf b(a, 1<<10);
+        quoteprogram(&b, s->argc ? s->argv[0] : s->path);
+        for (iz i = 1; i < s->argc; i++) {
+            putbyte(&b, ' ');
+            quotearg(&b, s->argv[i]);
+        }
+        line = finish(&b);
+    }
+    Str path = nativepath(a, s->path);
+    Buf b(a, 1<<10);
+    quoteprogram(&b, wrap[0]);
+    for (iz i = 1; i < wrap.len; i++) {
+        putbyte(&b, ' ');
+        quotearg(&b, wrap[i]);
+    }
+    putbyte(&b, ' ');
+    quotearg(&b, path);
+    putbyte(&b, ' ');
+    quotearg(&b, line);
+    Spawn *w = alloc<Spawn>(a);
+    *w = *s;
+    w->path    = wrap[0];
+    w->cmdline = finish(&b);
+    w->argc    = wrap.len + 2;
+    w->argv    = alloc<Str>(a, w->argc);
+    for (iz i = 0; i < wrap.len; i++) w->argv[i] = wrap[i];
+    w->argv[wrap.len]   = path;
+    w->argv[wrap.len+1] = line;
+    return w;
+}
+
 static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
 {
     Lib *l = (Lib *)os;
@@ -523,6 +567,17 @@ static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
         r.proc = BADHANDLE;
         r.err  = E_AGAIN;
         return r;
+    }
+    if (l->cfg.spawn) {
+        i32 err = 0;
+        s = asked(l, &scratch, s, &err);
+        if (err) {
+            flushw(os);
+            Spawned r = {};
+            r.proc = BADHANDLE;
+            r.err  = err;
+            return r;
+        }
     }
     i32 before = l->nkids;
     Spawned r = plt_spawn(os, scratch, s);

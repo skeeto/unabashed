@@ -594,7 +594,7 @@ enum { ANY = 1<<30 };
 
 // The hooks a case installs (Case.hooks), each logging its calls to
 // static storage, since snapshots compare the process's memory
-enum { H_EXIT = 1<<0, H_ACCESS = 1<<1, H_ALL = H_EXIT|H_ACCESS };
+enum { H_EXIT = 1<<0, H_ACCESS = 1<<1, H_SPAWN = 1<<2, H_ALL = H_EXIT|H_ACCESS|H_SPAWN };
 
 static char hooklogbuf[1<<16];
 static Snap hooklog = {hooklogbuf, 0, sizeof(hooklogbuf)};
@@ -700,10 +700,12 @@ typedef struct Case {
     char const *nolog;      // a substring the log must not hold, or null
     char const *rerun;      // then this script, from the state the exit
                             // hook was given: its status and output count
-    char const *deny;       // the access hook refuses an access whose log
-                            // line holds this ("OPEN wct $T/w"), or null
+    char const *deny;       // a hook refuses an access or a program whose
+                            // log line holds this ("OPEN wct $T/w"), or null
     int         denyret;    // returning this; 0: -UB_EACCES
     char const *reason;     // with this reason (%d: the refusal's count)
+    int         wrap;       // the spawn hook wraps each program in
+                            // "ubhost --wrap" (2: by a relative path)
 } Case;
 
 // An access as a log line, "OP flags path", T and the temporary
@@ -752,6 +754,37 @@ static int onaccess(void *user, ub_access const *a, char const **reason)
     return c->denyret ? c->denyret : -UB_EACCES;
 }
 
+static char selfutf8[3*32768];  // this program (check)
+
+// A program as a log line, "P<trace> name"; refused or wrapped if the
+// case's rule says so
+static int onspawn(void *user, ub_spawn *s)
+{
+    (void)user;
+    char const *name = s->path;
+    for (char const *p = s->path; *p; p++) {
+        if (*p=='/' || *p=='\\') name = p + 1;
+    }
+    static char linebuf[4200];  // not on the run's stack
+    Snap line = {linebuf, 0, sizeof(linebuf)};
+    sput(&line, "P");
+    sputd(&line, s->trace);
+    sput(&line, " ");
+    sput(&line, name);
+    sput(&line, "\n");
+    sput(&hooklog, linebuf);
+    Case const *c = curcase;
+    if (c->deny && strstr_(linebuf, c->deny)) {
+        ndenied++;
+        if (c->reason) s->reason = c->reason;
+        return c->denyret ? c->denyret : -UB_EACCES;
+    }
+    static char const *wrapabs[] = {selfutf8, "--wrap", 0};
+    static char const *wraprel[] = {"ubhost.exe", "--wrap", 0};
+    if (c->wrap) s->wrap = c->wrap==2 ? wraprel : wrapabs;
+    return 0;
+}
+
 typedef struct {
     ub_os *os;
     int    ms;
@@ -781,6 +814,7 @@ static int runcase(Case const *c, char *out, int outlen, double *secs, Snap *lef
     cfg.fds       = c->fds;
     if (c->hooks & H_EXIT) cfg.exit = onexit;
     if (c->hooks & H_ACCESS) cfg.access = onaccess;
+    if (c->hooks & H_SPAWN) cfg.spawn = onspawn;
     curcase = c;
     ndenied = 0;
     hooklog.len    = 0;
@@ -1135,6 +1169,11 @@ static int check(int quick)
     InitializeCriticalSection(&hostcs);
     GetModuleFileNameW(0, selfpath, 32768);
     {
+        ptrdiff_t n = 0;
+        for (; selfpath[n]; n++) {}
+        wtf8(selfutf8, selfpath, n);
+    }
+    {
         uint64_t e, k, u;
         GetProcessTimes(GetCurrentProcess(), &hostborn, &e, &k, &u);
     }
@@ -1152,8 +1191,11 @@ static int check(int quick)
     CreateDirectoryW(twide, 0);
     uint16_t tbuf[300];
     CreateDirectoryW(tfile(tbuf, "d"), 0);
-    static char const *const tfiles[][2] = {{"f", "data\n"}, {"s", "echo sourced\n"}};
-    for (int i = 0; i < 2; i++) {
+    static char const *const tfiles[][2] = {
+        {"f", "data\n"}, {"s", "echo sourced\n"}, {"sh1", "#!/bin/sh\necho sh1\n"},
+        {"b.bat", "@echo bat\r\n"},
+    };
+    for (int i = 0; i < 4; i++) {
         // GENERIC_WRITE, CREATE_ALWAYS
         uintptr_t h = CreateFileW(tfile(tbuf, tfiles[i][0]), 0x40000000u, 0, 0, 2, 0, 0);
         int w = 0;
@@ -1315,6 +1357,31 @@ static int check(int quick)
         {"deny: 40 reasons", "for i in {1..40}; do echo > $T/w$i; done", 1,
          "w40: denied 40\n", .hooks = H_ACCESS, .deny = "OPEN wct $T/w",
          .reason = "denied %d"},
+        // msys mode: //c, not /c, which becomes C:/
+        {"spawn: wrapped", "cmd //c echo hi", 0, "wrapped ", .hooks = H_SPAWN,
+         .log = "P0 cmd", .wrap = 1},
+        {"spawn: wrapped output", "cmd //c echo hi", 0, "hi", .hooks = H_SPAWN, .wrap = 1},
+        {"spawn: wrapped status", "cmd //c exit 7; echo s=$?", 0, "s=7", .hooks = H_SPAWN,
+         .wrap = 1},
+        {"spawn: wrapped stubs", "echo a | tr a b | cat", 0, "b", .hooks = H_SPAWN,
+         .log = "P0 tr.exe\n", .wrap = 1},
+        {"spawn: wrapped &", "sleep 0 & wait $!; echo s=$?", 0, "s=0", .hooks = H_SPAWN,
+         .wrap = 1},
+        {"spawn: wrapped batch file", "$T/b.bat", 0, "bat", .hooks = H_SPAWN,
+         .log = "P0 cmd", .wrap = 1},
+        {"spawn: #! script in-process", "$T/sh1", 0, "sh1", .notout = "wrapped",
+         .hooks = H_SPAWN, .nolog = "P0", .wrap = 1},
+        {"spawn: relative wrapper", "cmd //c echo hi; echo s=$?", 0,
+         "Invalid argument\ns=126", .hooks = H_SPAWN, .wrap = 2},
+        {"spawn refused: reason", "cmd //c echo hi; echo s=$?", 0, ": not allowed\ns=126",
+         .hooks = H_SPAWN, .deny = "P0 cmd", .reason = "not allowed"},
+        {"spawn refused: ENOENT", "cmd //c echo hi; echo s=$?", 0,
+         ": No such file or directory\ns=127", .hooks = H_SPAWN, .deny = "P0 cmd",
+         .denyret = -UB_ENOENT},
+        {"spawn refused: PIPESTATUS", "cmd //c echo hi | cat; echo ${PIPESTATUS[@]}", 0,
+         "126 0", .hooks = H_SPAWN, .deny = "P0 cmd", .reason = "no"},
+        {"spawn refused: exec", "exec cmd //c echo hi; echo after", 126, ": no",
+         .notout = "after", .hooks = H_SPAWN, .deny = "P0 cmd", .reason = "no"},
     };
     int fails = 0;
     for (int i = 0; i < (int)(sizeof(cases)/sizeof(*cases)); i++) {
@@ -1374,8 +1441,8 @@ static int check(int quick)
         fails++;
     }
     DeleteFileW(outpath);
-    static char const *const tleft[] = {"f", "s", "w"};
-    for (int i = 0; i < 3; i++) DeleteFileW(tfile(tbuf, tleft[i]));
+    static char const *const tleft[] = {"f", "s", "w", "sh1", "b.bat"};
+    for (int i = 0; i < 5; i++) DeleteFileW(tfile(tbuf, tleft[i]));
     for (int i = 1; i <= 40; i++) {
         char name[8] = {'w', (char)(i<10 ? '0'+i : '0'+i/10), (char)(i<10 ? 0 : '0'+i%10), 0};
         DeleteFileW(tfile(tbuf, name));
