@@ -2272,6 +2272,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     Task   *cappumps[16];  // other captures', joined with it
     i32     ncappumps = 0;
     i32     fderr = 0;  // a descriptor it cannot have: it does not run
+    i32     docerr = 0;  // so for a here-document, as bash reports it
     for (i32 fd = 0; fd < t->top; fd++) {
         File *f = t->fd[fd];
         if (!f) continue;
@@ -2305,7 +2306,10 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
             sf.h = f->h;
             break;
         case F_MEM:
-            if (!materialize(sh, a, f, &fderr)) continue;
+            if (!materialize(sh, a, f, &fderr)) {
+                docerr = docerr ? docerr : fderr;
+                continue;
+            }
             sf.h = f->h;
             break;
         case F_CAPTURE: {
@@ -2493,12 +2497,17 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
         os_close(sh->os, closeafter[i]);
     }
     if (!sh->spawnto) undotemps(sh, argv);
+    if (docerr) {
+        // bash's child makes the file as it redirects, and fails so
+        Str msg = concat(&a, "cannot create temp file for here-document: ", errtext(docerr));
+        shellerror(sh, a, msg);
+    }
     if (sh->spawnto) {
         // A pipeline stage started directly: its waiter is runpipeline
         assert(!npumps && !capfile);
         sh->spawnto->proc = r.err ? BADHANDLE : r.proc;
         sh->spawnto->pid  = r.pid;
-        return r.err ? -r.err : 0;
+        return docerr ? 1 : r.err ? -r.err : 0;
     }
     if (capfile) {
         iz  cap = (iz)1<<12;
@@ -2518,7 +2527,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     takeossigs(sh);  // those from before the wait are this level's own
     sh->sig->fgwait  = !r.err;
     sh->sig->execpid = sh->attail && !r.err ? r.pid : 0;
-    i32 status = r.err ? -r.err : group||stops ? taskwaitstop(s, r.proc) : taskwaitproc(s, r.proc);
+    i32 status = docerr ? 1 : r.err ? -r.err : group||stops ? taskwaitstop(s, r.proc) : taskwaitproc(s, r.proc);
     if (stops && !r.err && status>=0 && (status & WSTOP)) {
         s->stopproc = r.proc;
         s->stoppid  = r.pid;
