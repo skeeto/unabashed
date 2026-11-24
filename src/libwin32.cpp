@@ -1109,6 +1109,13 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     return 0;
 }
 
+// A run's status as ub_run returns it, from sh_main's: a signal death
+// in Linux numbering, as everywhere here.
+static i32 hoststatus(i32 status)
+{
+    return status & WSIGNALED ? WSIGNALED | (status & 255) : status & 255;
+}
+
 static i32 librun(Lib *l, ub_cmd const *cmd)
 {
     i32 idle = 0;
@@ -1119,13 +1126,7 @@ static i32 librun(Lib *l, ub_cmd const *cmd)
     i32 r = setup(l, cmd);
     if (!r) {
         os_switch(&l->os, l->shell);
-        if (l->why) {
-            r = -l->why;
-        } else if (l->status & WSIGNALED) {
-            r = WSIGNALED | (l->status & 255);  // Linux numbering here
-        } else {
-            r = l->status & 255;
-        }
+        r = l->why ? -l->why : hoststatus(l->status);
     }
     teardown(l);
     __atomic_store_n(&l->running, 0, __ATOMIC_RELEASE);

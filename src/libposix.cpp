@@ -1039,6 +1039,17 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     return 0;
 }
 
+// A run's status as ub_run returns it, from sh_main's. A signal death
+// is in host numbering, or, for one of Linux's the host lacks (the core
+// numbers as Linux), the plain status that the executable, unable to
+// die by it, exits with (exitwith).
+static i32 hoststatus(i32 status)
+{
+    if (!(status & WSIGNALED)) return status & 255;
+    i32 hsig = hostsig((status & 255) - 128);
+    return hsig ? WSIGNALED | (128 + hsig) : status & 255;
+}
+
 static i32 librun(Lib *l, ub_cmd const *cmd)
 {
     i32 idle = 0;
@@ -1049,17 +1060,7 @@ static i32 librun(Lib *l, ub_cmd const *cmd)
     i32 r = setup(l, cmd);
     if (!r) {
         os_switch(&l->os, l->shell);
-        if (l->why) {
-            r = -l->why;
-        } else if (l->status & WSIGNALED) {
-            // In host numbering, or, for one of Linux's the host lacks
-            // (the core numbers as Linux), the plain status that the
-            // executable, unable to die by it, exits with (exitwith)
-            i32 hsig = hostsig((l->status & 255) - 128);
-            r = hsig ? WSIGNALED | (128 + hsig) : l->status & 255;
-        } else {
-            r = l->status & 255;
-        }
+        r = l->why ? -l->why : hoststatus(l->status);
     }
     teardown(l);
     __atomic_store_n(&l->running, 0, __ATOMIC_RELEASE);
