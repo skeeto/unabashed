@@ -3873,6 +3873,8 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
     sh->spawnto = 0;
     b32 debugdone = sh->debugdone;  // a pipeline stage's, by its parent
     sh->debugdone = 0;
+    b32 xtracedone = sh->xtracedone;  // by a direct start that was shell code
+    sh->xtracedone = 0;
     // bash's forked child exits with the status of the whole command it
     // runs: no ERR action or set -e for it, only for what it runs
     b32 forked = sh->forked;
@@ -4056,7 +4058,7 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
                         special&&!fn ? ESC_FATAL : ESC_DISCARD, mark);
     if (tb && forked) tb->keep = keeptemp(bi, fn);
 
-    if (sh->opt[O_XTRACE]) {
+    if (sh->opt[O_XTRACE] && !xtracedone) {
         tracewords(sh, *a, argv.data, argv.len);
     }
 

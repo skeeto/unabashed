@@ -1280,6 +1280,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             if (grouped && !grp && procs[k]!=BADHANDLE) grp = pids[k];
             sh->status = before;
             sh->debugdone = stages[k]->kind == N_SIMPLE;  // for a retry
+            sh->xtracedone = retry;  // as bash, which forks once
             sh->forked    = stages[k]->kind == N_SIMPLE;
             sh->forkstage = sh->forked && !bg;
         }
@@ -1302,12 +1303,14 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
                                   bg || stages[k]->kind==N_SIMPLE, scratch);
             tasks[k]->group = tasks[k]->tag;  // tracing: runs alongside the last stage
             pids[k]  = ((Vproc *)tasks[k]->arg)->sh->bashpid;
-            sh->debugdone = 0;
+            sh->debugdone  = 0;
+            sh->xtracedone = 0;
             sh->forked    = 0;
             sh->forkstage = 0;
             yield(s);
         }
         sh->debugdone  = 0;
+        sh->xtracedone = 0;
         sh->forked     = 0;
         sh->forkstage  = 0;
         sh->stdinredir = redir;

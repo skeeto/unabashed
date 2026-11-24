@@ -1209,6 +1209,7 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     Task *t      = 0;
     i64   pid    = 0;
     b32   retry  = 1;
+    b32   traced = 0;  // a direct start retried: its words were
     i32   status = 0;
     // Under job control it is a process group of its own, which the
     // terminal's INT and QUIT do not reach (so not ignored), and it
@@ -1220,6 +1221,7 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
         if (!grouped) sh->asyncign |= (u64)1<<1 | (u64)1<<2;  // INT, QUIT
         Handle proc = spawndirect(sh, n, in, 0, scratch, &status, &retry, 0);
         sh->asyncign = ign;
+        traced = retry;
         pid = sh->childpid;
         if (proc != BADHANDLE) {
             t = spawnwaiter(s, proc, grouped);
@@ -1228,7 +1230,8 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
         }
     }
     if (retry) {
-        sh->debugdone = debugged;
+        sh->debugdone  = debugged;
+        sh->xtracedone = traced;
         sh->forked    = n->kind == N_SIMPLE;
         sh->bgpipe    = piped;
         // A simple command's words expand first, a procsub reading this
@@ -1237,6 +1240,7 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
         b32 redir = forkedstdin(sh, n, 0);
         t = spawnbg(sh, n, sh->asyncnull ? 0 : in, 0, &pid, scratch);
         sh->debugdone  = 0;
+        sh->xtracedone = 0;
         sh->forked     = 0;
         sh->bgpipe     = 0;
         sh->asyncnull  = 0;
@@ -1438,6 +1442,7 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
     Task *task = 0;
     i32   status = 0;
     b32   retry  = 1;
+    b32   traced = 0;
     if (directbg(sh, scratch, body, 1)) {
         // closed in the program, as bash's are close-on-exec
         File *save[2] = {t->fd[fds[0]], t->fd[fds[3]]};
@@ -1446,6 +1451,7 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
         sh->asyncign |= (u64)1<<1 | (u64)1<<2;  // INT, QUIT
         Handle proc = spawndirect(sh, body, r2, w1, scratch, &status, &retry, 0);
         sh->asyncign = ign;
+        traced = retry;
         t->fd[fds[0]] = save[0];
         t->fd[fds[3]] = save[1];
         pid = sh->childpid;
@@ -1474,7 +1480,9 @@ static void runcoproc(Shell *sh, Node *n, Arena scratch)
         // fatal error, as a ( ) does
         i32 catchfatal = sh->catchfatal;
         sh->catchfatal = CATCH_LEVEL;
+        sh->xtracedone = traced;
         task = spawnbg(sh, &sub, r2, w1, &pid, scratch);
+        sh->xtracedone = 0;
         sh->catchfatal = catchfatal;
         sh->stdinredir = redir;
         sh->forkstdin  = 0;
