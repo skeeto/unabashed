@@ -542,10 +542,12 @@ struct Image {
 enum : u64 { IMAGEMAGIC = 0x6567616d69736e75 };  // "unsimage"
 
 // Images pass only between processes of one build: the same binary.
+// The library passes none, and leaves the stamp out, so that its
+// builds reproduce (the executables' follow SOURCE_DATE_EPOCH).
 static u64 imagebuild_(void)
 {
     u64 h = 0x100;
-    char const *stamp = __DATE__ " " __TIME__;
+    char const *stamp = UB_LIBRARY ? "" : __DATE__ " " __TIME__;
     for (iz i = 0; stamp[i]; i++) h = (h ^ (u8)stamp[i]) * 1111111111111111111u;
     u64 sizes[] = {sizeof(Shell), sizeof(Node), sizeof(Value), sizeof(Store),
                    sizeof(Frame), sizeof(Func), sizeof(PathCtx)};
