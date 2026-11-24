@@ -44,6 +44,7 @@ struct LibKid {
     b32       reaped;
     i32       status;     // once reaped by the core: as os_waitproc returns it
     TraceRec *trace;      // the command that started it, while it waits
+    b32       termed;     // sent SIGTERM by a group signal, not ended
 };
 
 enum : i32 { MAXKIDS = 1024, HSET = 1<<12, MAXFIBS = 4096 };
@@ -505,6 +506,7 @@ static void lib_spawned(Os *os, uz proc, i64 pid, u64 sigign, b32 shared, b32 in
 {
     Lib    *l = (Lib *)os;
     LibKid *k = l->kids + l->nkids++;  // room made by libspawn
+    *k           = {};
     k->pid       = pid;
     k->proc      = proc;
     k->sigign    = sigign;
@@ -701,8 +703,12 @@ static u64 libsiggroup(Os *os)
             if (k->reaped || (k->sigign>>(sig-1) & 1)) continue;
             if (os->sharecon && k->shared && (sig==2 || sig==3)) continue;
             if (sig != 9) {
-                if (!chansend(k->pid, 0, sig)) continue;
+                if (!chansend(k->pid, 0, sig)) {
+                    k->termed |= sig == 15;
+                    continue;
+                }
                 if (l->cfg.softsig && !l->cfg.softsig(l->cfg.user, k->pid, sig)) {
+                    k->termed |= sig == 15;
                     continue;
                 }
             }
@@ -1105,6 +1111,7 @@ static void endhelpers(Lib *l)
 // With ub_config.linger and softsig, the programs still running are
 // sent SIGTERM through softsig and get up to linger ms to exit before
 // teardown's kill. Without softsig there is no way to ask, so none.
+// One SIGTERM per stop: not another to one a group signal sent one.
 static void lingerkids(Lib *l)
 {
     if (l->cfg.linger<=0 || !l->cfg.softsig) return;
@@ -1113,7 +1120,8 @@ static void lingerkids(Lib *l)
         LibKid *k = l->kids + i;
         if (!k->reaped && WaitForSingleObject(k->proc, 0)) {
             any = 1;
-            l->cfg.softsig(l->cfg.user, k->pid, 15);
+            if (!k->termed) l->cfg.softsig(l->cfg.user, k->pid, 15);
+            k->termed = 1;
         }
     }
     if (!any) return;

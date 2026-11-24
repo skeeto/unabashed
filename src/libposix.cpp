@@ -38,6 +38,7 @@ struct LibKid {
     b32       held;    // exited, its zombie kept: its group still ours
     b32       owed;    // its CPU time is counted only once it is reaped
     i32       wstatus; // while held: its wait status
+    b32       termed;  // its group was sent SIGTERM (a group signal)
 };
 
 // A program reaped and not held is forgotten: its pid, and so its
@@ -924,7 +925,10 @@ static u64 libsiggroup(Os *os)
         i32 hsig = hostsig(__builtin_ctzll(b) + 1);
         if (!hsig) continue;
         for (i32 i = 0; i < l->nkids; i++) {
-            if (ours(l->kids+i)) kill(-(pid_t)l->kids[i].pid, hsig);
+            LibKid *k = l->kids + i;
+            if (!ours(k)) continue;
+            kill(-(pid_t)k->pid, hsig);
+            k->termed |= hsig == SIGTERM;
         }
     }
     return bits;
@@ -1164,7 +1168,10 @@ static void runmain(Os *os, void *arg)
 // With ub_config.linger, the programs still running get a SIGTERM (and
 // a SIGCONT, should one be stopped), as do the groups still held, and
 // up to linger ms to exit before teardown's kill. Exits are read with
-// WNOWAIT, so the zombies keep the groups' ids for that kill.
+// WNOWAIT, so the zombies keep the groups' ids for that kill. Each
+// group gets one SIGTERM per stop: not another after a group signal
+// sent it one, as a trap that runs once per TERM (dash's) would run
+// twice. A program that left its group is sent its own.
 static void lingerkids(Lib *l)
 {
     if (l->cfg.linger <= 0) return;
@@ -1174,11 +1181,13 @@ static void lingerkids(Lib *l)
     for (i32 i = 0; i < l->nkids; i++) {
         LibKid *k = l->kids + i;
         if (!ours(k)) continue;
-        i32 sigs[] = {SIGTERM, SIGCONT};
-        for (i32 s = 0; s < countof(sigs); s++) {
-            kill(-(pid_t)k->pid, sigs[s]);
-            if (!k->reaped) kill((pid_t)k->pid, sigs[s]);
-        }
+        b32 apart = !k->reaped && getpgid((pid_t)k->pid)>0 &&
+                    getpgid((pid_t)k->pid)!=(pid_t)k->pid;
+        if (!k->termed) kill(-(pid_t)k->pid, SIGTERM);
+        if (apart) kill((pid_t)k->pid, SIGTERM);
+        k->termed = 1;
+        kill(-(pid_t)k->pid, SIGCONT);
+        if (apart) kill((pid_t)k->pid, SIGCONT);
     }
     i64 until = monons() + (i64)l->cfg.linger*1000000;
     for (;;) {

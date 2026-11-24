@@ -759,6 +759,8 @@ typedef struct Case {
     int         linger;     // ub_config.linger, with softsig logging
                             // "SIG pid sig" and ending the program
     int         flags;      // ub_config.flags
+    int         softkeep;   // with linger: softsig only logs, the program
+                            // keeps running
     int         ondrive;    // start in drive, a spare letter mapped to $T
 } Case;
 
@@ -773,6 +775,7 @@ static int onsoftsig(void *user, int64_t pid, int sig)
     sput(&hooklog, "SIG ");
     sputd(&hooklog, sig);
     sput(&hooklog, "\n");
+    if (curcase->softkeep) return 0;
     uintptr_t h = OpenProcess(1, 0, (int)pid);  // PROCESS_TERMINATE
     if (!h) return -1;
     TerminateProcess(h, 128u + (unsigned)sig);
@@ -1480,6 +1483,9 @@ static int check(int quick)
         // the wait ends once the programs have
         {"linger: softsig first", "sleep 100 & sleep 0.2", 0, 0, 2, .linger = 5000,
          .log = "SIG 15\n"},
+        // A group stop's SIGTERM is the stop's one: none again from linger
+        {"linger: one TERM per stop", "sleep 100", UB_SIGNALED|(128+15), 0, 2, 300,
+         15|UB_GROUP, .linger = 300, .softkeep = 1, .log = "SIG 15\n", .logn = 1},
         // With no root, / is the start directory's drive's, or with
         // UB_SYSROOT the system drive's, wherever the run starts
         {"sysroot: off", "cd /; [ -f sh1 ] && echo t", 0, "t\n", .hooks = H_EXIT,

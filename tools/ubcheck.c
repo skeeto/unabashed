@@ -922,7 +922,16 @@ static int check(char *argv0, int quick)
          "sh -c 'trap \"echo term >$T/lg; exit 0\" TERM; while :; do sleep 0.01; done' &"
          " sleep 0.2", 0, "term\n", 2, .hooks = H_EXIT, .linger = 5000,
          .rerun = "cat $T/lg; rm $T/lg"},
-        {"linger: ends at most then", "sh -c 'trap \"\" TERM; sleep 100' & sleep 0.2", 0,
+        // A group stop's SIGTERM is the stop's one: none again from
+        // linger. The shell's trap leaves time for a second to land
+        // apart, and the program's trap runs once for each.
+        {"linger: one TERM per stop",
+         "trap 'sleep 0.1; exit 0' TERM; sh -c 'trap \"echo t >>$T/tc\" TERM;"
+         " while :; do sleep 0.01; done' & wait", 0, "1\n", 3, 300,
+         SIGTERM|UB_GROUP, .hooks = H_EXIT, .linger = 600,
+         .rerun = "wc -l <$T/tc | tr -d ' '; rm -f $T/tc"},
+        {"linger: ends at most then",
+ "sh -c 'trap \"\" TERM; sleep 100' & sleep 0.2", 0,
          0, 1.5, .linger = 300},
         {"exit hook: next run",
 
