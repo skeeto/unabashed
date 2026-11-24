@@ -1293,9 +1293,11 @@ static int check(int quick)
         {"leftover procsub", ": > >(while :; do sleep 0.01; done)", 0, 0, 2.5},
         {"100 programs left", "for i in $(seq 100); do sleep 1000 & done; true; echo done",
          0, "done", 20},
+        // past WaitForMultipleObjects' 64, so with room for all 65 jobs'
+        // descriptors at once (each holds about 6)
         {"65 reads at once",
          "for i in $(seq 65); do { sleep 1; echo $i; } | { read x; echo r$x; } & done;"
-         " wait", 0, "r65", 20},
+         " wait", 0, "r65", 20, .fds = 512},
 
         {"hard: busy loop", "while :; do :; done", -UB_ECANCELED, 0, 0.35, 100},
         {"hard: arith loop", "while ((1)); do ((1)); done", -UB_ECANCELED, 0, 0.35, 100},
