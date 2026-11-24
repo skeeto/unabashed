@@ -2995,6 +2995,11 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
             Str msg = concat(&a, path, ": cannot execute: required file not found");
             shellerror(sh, a, msg);
             return 127;
+        } else if (err == E_NOEXEC) {
+            // Not a script either (isshellscript): bash's check_binary_file
+            Str msg = concat3(&a, path, Str(": cannot execute binary file: "), errtext(err));
+            shellerror(sh, a, msg);
+            return 126;
         }
     }
     if (err == E_NOENT) {
