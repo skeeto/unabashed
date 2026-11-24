@@ -41,6 +41,30 @@ typedef struct {                // how a run ended, for ub_config.exit
                                 // as a native program gets them)
 } ub_exit;
 
+typedef struct {                // a file the script names, for ub_config.access
+    int         op;             // UB_OPEN ... UB_TEMPFILE
+    int         flags;          // UB_READ ... UB_NOFOLLOW
+    char const *path;           // absolute, as the system is given it: POSIX
+                                // joined, not resolved (., .. and links
+                                // remain); Windows native, forward slashes,
+                                // devices as //./NUL. UB_TEMPFILE: the
+                                // directory it is made in
+} ub_access;
+enum {                          // ub_access.op
+    UB_OPEN = 1,                // open, flags as asked; also a rename's
+                                // target (UB_WRITE|UB_CREATE|UB_TRUNC)
+    UB_STAT,                    // examine; UB_NOFOLLOW: not its last link
+    UB_READLINK,                // read a link (UB_NOFOLLOW)
+    UB_LIST,                    // list a directory (UB_READ)
+    UB_TEMPFILE,                // make an anonymous file, as for a
+                                // here-document (UB_READ|UB_WRITE|
+                                // UB_CREATE|UB_EXCL)
+};
+enum {                          // ub_access.flags
+    UB_READ = 1<<0, UB_WRITE = 1<<1, UB_CREATE = 1<<2, UB_TRUNC = 1<<3,
+    UB_APPEND = 1<<4, UB_EXCL = 1<<5, UB_NOFOLLOW = 1<<6,
+};
+
 // Hooks run on ub_run's thread, inside the run, and must be brief: one
 // that blocks stalls the run, and a cancel takes effect only once it
 // returns. Deep in a recursion a hook has only part of the 64 KiB of
@@ -77,6 +101,15 @@ typedef struct {
     // start the next run from. Not called if it was aborted (ub_run
     // returning a negated error), as by a cancel or out of memory.
     void      (*exit)(void *user, ub_exit const *);
+    // Optional: each access to a file the script names (a redirection,
+    // source, test, cd, a glob, a PATH search, a script read), but not
+    // those the shell makes on its own (a program's first bytes,
+    // /dev/null, the password file). 0 allows it; a negated UB_E*
+    // refuses it, and any other value refuses it as -UB_EACCES. A
+    // refusal fails as that error would, with *reason, if set, as its
+    // message: its first line, up to 255 bytes. -UB_ENOENT without a
+    // reason looks as if the file is not there.
+    int       (*access)(void *user, ub_access const *, char const **reason);
 } ub_config;
 
 typedef struct { int fd; intptr_t h; } ub_fd;
@@ -102,8 +135,10 @@ enum { UB_GROUP = 0x100 };      // or'd into ub_signal's sig
 enum { UB_SIGNALED = 0x100 };   // status: the shell died of signal (s&0xff)-128
 enum { UB_SHARECONSOLE = 1 };   // ub_config.flags
 enum {                          // errors, negated; Linux numbering everywhere
-    UB_EBADF = 9, UB_ECHILD = 10, UB_ENOMEM = 12, UB_EBUSY = 16,
-    UB_EINVAL = 22, UB_EDEADLK = 35, UB_ECANCELED = 125,
+    UB_EPERM = 1, UB_ENOENT = 2, UB_EBADF = 9, UB_ECHILD = 10,
+    UB_ENOMEM = 12, UB_EACCES = 13, UB_EBUSY = 16, UB_EEXIST = 17,
+    UB_ENOTDIR = 20, UB_EISDIR = 21, UB_EINVAL = 22, UB_EROFS = 30,
+    UB_EDEADLK = 35, UB_ECANCELED = 125,
 };
 
 // A handle for runs, one at a time. A null config means the defaults.

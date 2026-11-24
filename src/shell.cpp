@@ -1305,6 +1305,12 @@ static Str concat3(Arena *a, Str x, Str y, Str z)
 // glibc's strerror text for the errno values the platforms report.
 static Str errtext(i32 err)
 {
+    if constexpr (LIBMODE) {
+        if (err>=E_HOST && err<E_HOST+NHOSTERR) {
+            Str r = lib_hosttext(err);  // a host refused, in its words
+            return r.len ? r : errtext(lib_hosterrno(err));
+        }
+    }
     switch (err) {
     case E_PERM:   return "Operation not permitted";
     case E_NOENT:  return "No such file or directory";

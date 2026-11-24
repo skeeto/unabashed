@@ -575,6 +575,13 @@ static Str     lib_root(Os *);
 static b32     lib_exitwanted(Os *);
 static void    lib_exit(Os *, Arena, i32 status, Str pwd, Str cwd, Slice<Str> env);
 
+// Errors a host's hook gave a reason for (libhooks.cpp): E_HOST+k, k below
+// NHOSTERR, above any error a platform reports. lib_hosttext is its
+// reason, lib_hosterrno the error it stands for (0: not a host's).
+enum : i32 { E_HOST = 1<<16, NHOSTERR = 16 };
+static Str     lib_hosttext(i32 err);
+static i32     lib_hosterrno(i32 err);
+
 // The platform as a table. The shell calls each entry above through its
 // Os's table (dispatch.cpp), which the platform layer's osvtable names.
 // src/posix.cpp and src/win32.cpp fill one with the real OS

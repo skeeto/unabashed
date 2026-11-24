@@ -46,6 +46,8 @@ enum : i32 { MAXKIDS = 1024, HSET = 1<<12, MAXFIBS = 4096 };
 
 using IsThreadAFiberFn = b32 (__stdcall *)();
 
+struct LibHooks;
+
 struct Lib {
     Os         os;  // first: an Os* is a Lib*
     ub_config  cfg;
@@ -89,6 +91,9 @@ struct Lib {
     // Programs
     LibKid     kids[MAXKIDS];
     i32        nkids;
+
+    // The hooks' state (libhooks.cpp), from the run's arena
+    LibHooks  *hooks;
 };
 
 // The run on this thread: the current fiber's (TEB FiberData). Not a
@@ -117,6 +122,10 @@ static Lib *runlib()
     Fiber *fb = *(Fiber **)f;
     return fb ? (Lib *)fb->os : 0;
 }
+
+// The hooks (libhooks.cpp, included after this module): hooksetup makes
+// a run's state.
+static void hooksetup(Lib *);
 
 
 // Hooks
@@ -1085,6 +1094,7 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
         !tryarena(l, &l->arena, l->cfg.reserve)) {
         return -E_NOMEM;
     }
+    hooksetup(l);  // within the arena's first commit
 
     // The thread as a fiber: the host's own if it is one already
     b32 isfiber = l->isfiber ? l->isfiber() : (uz)tebfiber()>=0x10000;

@@ -35,6 +35,8 @@ struct LibKid {
 
 enum : i32 { MAXKIDS = 1024, FDBITS = 1<<16 };
 
+struct LibHooks;
+
 struct Lib {
     Os         os;  // first: an Os* is a Lib*
     ub_config  cfg;
@@ -72,6 +74,9 @@ struct Lib {
     // CPU time (os_cputime): the run thread's as the run began, and
     // what the run's reaped programs used (cuser, csys)
     CpuTimes   cpu;
+
+    // The hooks' state (libhooks.cpp), from the run's arena
+    LibHooks  *hooks;
 };
 
 // The OS's own (liblinux.cpp, libdarwin.cpp), included after this
@@ -93,6 +98,14 @@ static void unraise();
 static CpuTimes threadcpu();  // the calling thread's own
 
 static __thread Lib *curlib;  // the run on this thread
+
+// The hooks (libhooks.cpp, included after this module): hooksetup makes
+// a run's state, and askhost asks the access hook, if any, of a file
+// the script names, 0 or the error to fail with. The wrappers below ask
+// before each platform call, but not of the shell's own (OF_OWN,
+// ST_OWN).
+static void hooksetup(Lib *);
+static i32  askhost(Lib *, Arena, i32 op, i32 flags, Str path);
 
 static Lib *runlib()
 {
@@ -275,7 +288,11 @@ static void fdgive(Lib *l, i32 fd)
 
 static Opened libopen(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
-    Opened r = plt_open(os, scratch, path, flags, mode);
+    if (!(flags & OF_OWN)) {
+        i32 err = askhost((Lib *)os, scratch, UB_OPEN, flags&~OF_OWN, path);
+        if (err) return {BADHANDLE, err};
+    }
+    Opened r = plt_open(os, scratch, path, flags&~OF_OWN, mode);
     if (r.h!=BADHANDLE && fdtake((Lib *)os, (i32)r.h)<0) {
         r.h   = BADHANDLE;
         r.err = E_MFILE;
@@ -285,12 +302,49 @@ static Opened libopen(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 
 static Opened libtempfile(Os *os, Arena scratch)
 {
+    i32 flags = UB_READ|UB_WRITE|UB_CREATE|UB_EXCL;
+    i32 err   = askhost((Lib *)os, scratch, UB_TEMPFILE, flags, tempdir(os));
+    if (err) return {BADHANDLE, err};
     Opened r = plt_tempfile(os, scratch);
     if (r.h!=BADHANDLE && fdtake((Lib *)os, (i32)r.h)<0) {
         r.h   = BADHANDLE;
         r.err = E_MFILE;
     }
     return r;
+}
+
+// A rename is asked as an open of its target that replaces it
+static i32 librename(Os *os, Arena scratch, Str from, Str to)
+{
+    i32 err = askhost((Lib *)os, scratch, UB_OPEN, UB_WRITE|UB_CREATE|UB_TRUNC, to);
+    return err ? err : plt_rename(os, scratch, from, to);
+}
+
+static Stat libstat(Os *os, Arena scratch, Str path, b32 follow)
+{
+    b32 own = follow & ST_OWN;
+    follow &= ~ST_OWN;
+    if (!own) {
+        i32 err = askhost((Lib *)os, scratch, UB_STAT, follow ? 0 : UB_NOFOLLOW, path);
+        if (err) {
+            Stat s = {};
+            s.err = err;
+            return s;
+        }
+    }
+    return plt_stat(os, scratch, path, follow);
+}
+
+static Str libreadlink(Os *os, Arena *a, Str path)
+{
+    if (askhost((Lib *)os, *a, UB_READLINK, UB_NOFOLLOW, path)) return {};
+    return plt_readlink(os, a, path);
+}
+
+static Dirent *liblist(Os *os, Arena *a, Str dir, i32 *err)
+{
+    *err = askhost((Lib *)os, *a, UB_LIST, UB_READ, dir);
+    return *err ? 0 : plt_list(os, a, dir, err);
 }
 
 static i32 libclose(Os *os, Handle h)
@@ -746,6 +800,10 @@ static constexpr OsVtable libtable(OsVtable t)
     t.decommit   = libdecommit;
     t.open       = libopen;
     t.tempfile   = libtempfile;
+    t.rename     = librename;
+    t.stat       = libstat;
+    t.readlink   = libreadlink;
+    t.list       = liblist;
     t.close      = libclose;
     t.dup        = libdup;
     t.pipe       = libpipe;
@@ -1030,6 +1088,7 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     for (i32 i = 0; i < countof(os->wkind); i++) os->wkind[i] = 0;
 
     if (!tryarena(l, &l->arena, l->cfg.reserve)) return -E_NOMEM;
+    hooksetup(l);  // within the arena's first commit
     l->prestack = libreserve(os, l->cfg.stack);
     if (!l->prestack || mprotect(l->prestack, (uz)l->cfg.stack, PROT_READ|PROT_WRITE)) {
         return -E_NOMEM;

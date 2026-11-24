@@ -572,11 +572,10 @@ static i32 plt_rename(Os *os, Arena scratch, Str from, Str to)
     return rename(f, t) ? coreerr(errno) : 0;
 }
 
-static Opened plt_tempfile(Os *os, Arena scratch)
+// The directory plt_tempfile makes its files in: TMPDIR (the run's, in
+// the library), or /tmp
+static Str tempdir(Os *os)
 {
-    flushw(os);
-    // As bash: created in TMPDIR (or /tmp), then unlinked, readable
-    // only by the user
     Str dir = {};
     char *t;
     if constexpr (LIBMODE) {
@@ -588,7 +587,15 @@ static Opened plt_tempfile(Os *os, Arena scratch)
         dir.data = (u8 *)t;
         for (; t[dir.len]; dir.len++) {}
     }
-    dir = dir.len ? dir : Str("/tmp");
+    return dir.len ? dir : Str("/tmp");
+}
+
+static Opened plt_tempfile(Os *os, Arena scratch)
+{
+    flushw(os);
+    // As bash: created in TMPDIR (or /tmp), then unlinked, readable
+    // only by the user
+    Str dir = tempdir(os);
     static u32 counter;
     Opened r = {};
     for (i32 try_ = 0; try_ < 100; try_++) {

@@ -265,6 +265,35 @@ so that the next command follows the agent's `cd` and `export`.
   `ub_run` refuses to start, so its status is never negative.
 - **Without the hook** the run builds no environment at its end.
 
+**`access`** is asked of each file the script names, before the
+platform's call, with `ub_access`: an op, flags, and the path.
+- **Asked:** redirections and `$(<f)`, `source`, `test`, `cd`, globs,
+  PATH and hash lookups, a script without `#!` as it is read, the
+  history file, and a here-document's anonymous file (`UB_TEMPFILE`,
+  with the directory it is made in). A rename is asked as an open of
+  its target that replaces it.
+- **Not asked:** what the shell opens or examines on its own, marked
+  `OF_OWN` or `ST_OWN` where it calls the platform: a program's first
+  bytes (the `#!` sniff), `/dev/null`, the password, services and hosts
+  files, zoneinfo, the inputrc, `BASH_ENV`, the checks that its
+  directory still leads there. A site never marked is merely shown to
+  the host, the safe direction for a mistake.
+- **Paths** are absolute, as the system gets them. On POSIX they are
+  joined, not resolved: `.`, `..` and links remain, so `source ./s`
+  shows `$PWD/./s`. A policy that cares resolves them itself.
+- **A refusal** fails the access as its error would, so a script sees
+  what bash shows for that error: `f: Permission denied` and status 1
+  for a redirection, no match for a glob, false for `test`, `command not
+  found` for a PATH search, 126 for a script read (127 for
+  `-UB_ENOENT`), "cannot create temp file for here-document" for
+  `UB_TEMPFILE`.
+- **A reason** replaces the error's text: its first line, at most 255
+  bytes, cut before a character it would split. The run keeps the last
+  16 reasons, each with its error, as error codes of their own above
+  any the system reports (`E_HOST`, src/libhooks.cpp); `errtext` shows
+  the reason. Without a reason the plain error stands, so `-UB_ENOENT`
+  still looks absent: the msys `.exe` retry and a PATH search move on.
+
 
 ## Known deviations and limits
 
@@ -372,8 +401,9 @@ several times after a warm-up, and compares the snapshots by identity:
 The cases cover:
 - statuses and refusals;
 - syntax checks (`bash -n -c`);
-- the hooks, through a log each case checks, and a second run started
-  from the state the exit hook was given;
+- the hooks, through a log each case checks, a second run started
+  from the state the exit hook was given, and refusals by rule, in a
+  directory of files made for the cases ($T);
 - leftovers and shutdown;
 - children's signal state;
 - concurrency (8 threads, 4 on 32-bit Windows);

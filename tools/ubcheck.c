@@ -246,7 +246,7 @@ enum { ANY = 1<<30 };
 
 // The hooks a case installs (Case.hooks), each logging its calls to
 // static storage, since snapshots compare the heap's mappings
-enum { H_EXIT = 1<<0, H_ALL = H_EXIT };
+enum { H_EXIT = 1<<0, H_ACCESS = 1<<1, H_ALL = H_EXIT|H_ACCESS };
 
 static char   hooklog[1<<16];
 static size_t hooklen;
@@ -292,7 +292,16 @@ static void onexit(void *user, ub_exit const *x)
     exitenv[n] = 0;
 }
 
-typedef struct {
+// The cases' directory, $T in their environment, and the run's TMPDIR,
+// as the access hook's log shows them
+static char tdir[256];
+static char const *tmpdir;
+
+static struct Case const *curcase;  // whose access hook rules apply
+static int  ndenied;                // the refusals in its run
+static char reasonbuf[1024];
+
+typedef struct Case {
     char const *name;
     char const *script;
     int         status;     // or ANY
@@ -314,7 +323,44 @@ typedef struct {
     char const *nolog;      // a substring the log must not hold, or null
     char const *rerun;      // then this script, from the state the exit
                             // hook was given: its status and output count
+    char const *deny;       // the access hook refuses an access whose log
+                            // line holds this ("OPEN wct $T/w"), or null
+    int         denyret;    // returning this; 0: -UB_EACCES
+    char const *reason;     // with this reason (%d: the refusal's count)
 } Case;
+
+// An access as a log line, "OP flags path", T and TMPDIR shown as $T and
+// $TMP; refused if the case's rule says so
+static int onaccess(void *user, ub_access const *a, char const **reason)
+{
+    (void)user;
+    static char const *const ops[] = {"?", "OPEN", "STAT", "READLINK", "LIST", "TEMPFILE"};
+    char const *op = a->op>0 && a->op<6 ? ops[a->op] : "?";
+    char fl[8], *p = fl;
+    for (int i = 0; i < 7; i++) {
+        if (a->flags & 1<<i) *p++ = "rwctaxn"[i];
+    }
+    if (p == fl) *p++ = '-';
+    *p = 0;
+    static char line[8192];  // not on the run's stack
+    size_t tlen = strlen(tdir), mlen = strlen(tmpdir);
+    if (!strncmp(a->path, tdir, tlen)) {
+        snprintf(line, sizeof(line), "%s %s $T%s\n", op, fl, a->path+tlen);
+    } else if (!strncmp(a->path, tmpdir, mlen)) {
+        snprintf(line, sizeof(line), "%s %s $TMP%s\n", op, fl, a->path+mlen);
+    } else {
+        snprintf(line, sizeof(line), "%s %s %s\n", op, fl, a->path);
+    }
+    logf_("%s", line);
+    Case const *c = curcase;
+    if (!c->deny || !strstr(line, c->deny)) return 0;
+    ndenied++;
+    if (c->reason) {
+        snprintf(reasonbuf, sizeof(reasonbuf), c->reason, ndenied);
+        *reason = reasonbuf;
+    }
+    return c->denyret ? c->denyret : -UB_EACCES;
+}
 
 typedef struct {
     ub_os *os;
@@ -347,6 +393,9 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
     cfg.memlimit = c->memlimit;
     cfg.fds      = c->fds;
     if (c->hooks & H_EXIT) cfg.exit = onexit;
+    if (c->hooks & H_ACCESS) cfg.access = onaccess;
+    curcase = c;
+    ndenied = 0;
     hooklen    = 0;
     hooklog[0] = 0;
     nexits     = 0;
@@ -623,6 +672,25 @@ static int check(char *argv0, int quick)
     int sentinel[2];
     if (hostpipe(sentinel)) return 1;
 
+    // The cases' directory, with a file to read, a script to source, one
+    // to run without #!, and a directory
+    snprintf(tdir, sizeof(tdir), "/tmp/ubcheck.t.%ld", (long)getpid());
+    tmpdir = getenv("TMPDIR") && *getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp";
+    char tpath[300];
+    mkdir(tdir, 0700);
+    snprintf(tpath, sizeof(tpath), "%s/d", tdir);
+    mkdir(tpath, 0700);
+    static char const *const tfiles[][2] = {
+        {"f", "data\n"}, {"s", "echo sourced\n"}, {"ns", "echo ns\n"},
+    };
+    for (int i = 0; i < 3; i++) {
+        snprintf(tpath, sizeof(tpath), "%s/%s", tdir, tfiles[i][0]);
+        int fd = open(tpath, O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0755);
+        if (fd<0 || write(fd, tfiles[i][1], strlen(tfiles[i][1]))<0) return 1;
+        close(fd);
+    }
+    setenv("T", tdir, 1);
+
     // Sized once, so that no snapshot sees the host's heap grow
     snapshot(&before);
     snapshot(&after);
@@ -643,6 +711,13 @@ static int check(char *argv0, int quick)
              "exec 3<$f; sleep 1 & while read -u3 l; do echo got $l; done; "
              "read -u3 l; echo again $?; cat <&3; read -u3 l; echo cat $?; "
              "exec 3<&-; rm -f $f; echo end", (long)getpid());
+
+    // A reason too long for one record, cut before a character it splits
+    char longreason[400], longout[300];
+    memset(longreason, 'A', 254);
+    snprintf(longreason+254, sizeof(longreason)-254, "\xc3\xa9%050d\nsecond", 0);
+    memset(longout, 'A', 254);
+    snprintf(longout+254, sizeof(longout)-254, "\n");
 
     Case cases[] = {
         {"exit status", "exit 3", 3},
@@ -738,6 +813,67 @@ static int check(char *argv0, int quick)
         {"exit hook: next run", "cd /usr; export UBX_RT=rt; UBX_LOCAL=x", 0,
          "/usr\nrt\nunset\n", .hooks = H_EXIT,
          .rerun = "pwd; echo $UBX_RT; echo ${UBX_LOCAL-unset}"},
+
+        {"access: >", "echo a > $T/w", 0, .hooks = H_ACCESS, .log = "OPEN wct $T/w\n",
+         .logn = 1},
+        {"access: >>", "echo a >> $T/w", 0, .hooks = H_ACCESS, .log = "OPEN wca $T/w\n"},
+        {"access: <", "read x < $T/f; echo $x", 0, "data", .hooks = H_ACCESS,
+         .log = "OPEN r $T/f\n"},
+        {"access: <>", "exec 3<> $T/w", 0, .hooks = H_ACCESS, .log = "OPEN rwc $T/w\n"},
+        {"access: $(<f)", "x=$(<$T/f); echo $x", 0, "data", .hooks = H_ACCESS,
+         .log = "OPEN r $T/f\n"},
+        {"access: test", "test -e $T/f && test -h $T/f; true", 0, .hooks = H_ACCESS,
+         .log = "STAT - $T/f\n", .log2 = "STAT n $T/f\n"},
+        {"access: cd", "cd $T/d && echo ok", 0, "ok", .hooks = H_ACCESS,
+         .log = "STAT - $T/d\n"},
+        {"access: source", "cd $T; source ./s", 0, "sourced", .hooks = H_ACCESS,
+         .log = "OPEN r $T/./s\n"},
+        {"access: glob", "cd $T; echo *", 0, "d f ns s", .hooks = H_ACCESS,
+         .log = "LIST r $T"},
+        {"access: here-document file", "x=$(printf %070000d 0); cat <<E | wc -c\n$x\nE", 0,
+         "70001", .hooks = H_ACCESS, .log = "TEMPFILE rwcx $TMP"},
+        {"access: script without #!", "$T/ns", 0, "ns", .hooks = H_ACCESS,
+         .log = "OPEN r $T/ns\n", .logn = 1},
+        {"access: not a program's head", "/bin/echo hi", 0, "hi", .hooks = H_ACCESS,
+         .nolog = "OPEN r /bin/echo"},
+        {"access: not /dev/null", "sleep 0 & wait", 0, .hooks = H_ACCESS,
+         .nolog = "/dev/null"},
+        {"access: not the password file", "echo ~root", 0, .hooks = H_ACCESS,
+         .nolog = "passwd"},
+        {"access: not zoneinfo", "TZ=Europe/Paris printf '%(%H)T\\n' 0", 0,
+         .hooks = H_ACCESS, .nolog = "zoneinfo"},
+        {"deny: redirection", "echo a > $T/w; echo s=$?", 0, "w: no way\ns=1",
+         .hooks = H_ACCESS, .deny = "OPEN wct $T/w", .reason = "no way"},
+        {"deny: unknown value", "echo a > $T/w", 1, "w: Permission denied",
+         .hooks = H_ACCESS, .deny = "OPEN wct $T/w", .denyret = 77},
+        {"deny: ENOENT", "echo a > $T/w", 1, "w: No such file or directory",
+         .hooks = H_ACCESS, .deny = "OPEN wct $T/w", .denyret = -UB_ENOENT},
+        {"deny: long reason", "echo a > $T/w", 1, longout, .notout = "\xc3",
+         .hooks = H_ACCESS, .deny = "OPEN wct $T/w", .reason = longreason},
+        {"deny: $(<f)", "x=$(<$T/f); echo \"x=$x\"", 0, "f: no\nx=\n",
+         .hooks = H_ACCESS, .deny = "OPEN r $T/f", .reason = "no"},
+        {"deny: source", "source $T/s; echo s=$?", 0, "s: no\ns=1", .notout = "sourced",
+         .hooks = H_ACCESS, .deny = "OPEN r $T/s", .reason = "no"},
+        {"deny: cd", "cd $T/d; echo s=$?", 0, "d: no\ns=1", .hooks = H_ACCESS,
+         .deny = "STAT - $T/d", .reason = "no"},
+        {"deny: test", "test -e $T/f && echo yes || echo no", 0, "no", .notout = "yes",
+         .hooks = H_ACCESS, .deny = "STAT - $T/f", .reason = "no"},
+        {"deny: glob", "cd $T; echo *", 0, "*\n", .hooks = H_ACCESS, .deny = "LIST",
+         .reason = "no"},
+        {"deny: PATH search", "ls; echo s=$?", 0, "ls: command not found\ns=127",
+         .hooks = H_ACCESS, .deny = "/ls\n", .reason = "no"},
+        {"deny: script read", "$T/ns; echo s=$?", 0, "ns: no\ns=126", .notout = "ns\n",
+         .hooks = H_ACCESS, .deny = "OPEN r $T/ns", .reason = "no"},
+        {"deny: script read, ENOENT", "$T/ns; echo s=$?", 0,
+         "ns: No such file or directory\ns=127", .hooks = H_ACCESS,
+         .deny = "OPEN r $T/ns", .denyret = -UB_ENOENT},
+        {"deny: here-document file",
+         "x=$(printf %070000d 0); cat <<E | wc -c\n$x\nE\necho s=${PIPESTATUS[0]}", 0,
+         "cannot create temp file for here-document: no", .hooks = H_ACCESS,
+         .deny = "TEMPFILE", .reason = "no"},
+        {"deny: 40 reasons", "for i in {1..40}; do echo > $T/w$i; done", 1,
+         "w40: denied 40\n", .hooks = H_ACCESS, .deny = "OPEN wct $T/w",
+         .reason = "denied %d"},
         {"descriptor budget", "for i in $(seq 40); do exec {fd}</dev/null || break; done; echo n=$i",
          0, "n=", 0, 0, 0, 0, 24},
     };
@@ -801,6 +937,9 @@ static int check(char *argv0, int quick)
     close(other);
     unlink(lockpath);
     unlink(outpath);
+    char rm[300];
+    snprintf(rm, sizeof(rm), "rm -rf %s", tdir);
+    if (system(rm)) printf("cannot remove %s\n", tdir);
     printf("%d failed\n", fails);
     return fails != 0;
 }
