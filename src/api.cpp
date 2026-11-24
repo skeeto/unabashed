@@ -565,7 +565,8 @@ static void    os_racy(Os *);
 // lib_abort ends the run with -err, from any of its fibers; lib_step
 // is called at each step of a long match, and ends a cancelled run.
 // lib_root is the directory the host named as the install's shell
-// directory (Windows), normalized, with its trailing slash, or empty.
+// directory (Windows), normalized, with its trailing slash, or empty;
+// lib_sysroot whether / is then the system drive's root (UB_SYSROOT).
 // lib_exitwanted says whether the host wants lib_exit's call, the run's
 // state as it ends (status as sh_main returns it; pwd and cwd empty for
 // none; env unknown when !envok). lib_exitbase records the exports the
@@ -573,6 +574,7 @@ static void    os_racy(Os *);
 [[noreturn]] static void lib_abort(Os *, i32 err);
 static void    lib_step();
 static Str     lib_root(Os *);
+static b32     lib_sysroot(Os *);
 static b32     lib_exitwanted(Os *);
 static void    lib_exitbase(Os *, Arena *, Slice<Str> env, b32 ok);
 static void    lib_exit(Os *, Arena, i32 status, Str pwd, Str cwd, Slice<Str> env, b32 envok);

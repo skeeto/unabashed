@@ -205,6 +205,11 @@ static Str lib_root(Os *os)
     return ((Lib *)os)->root;
 }
 
+static b32 lib_sysroot(Os *os)
+{
+    return !!(((Lib *)os)->cfg.flags & UB_SYSROOT);
+}
+
 static c16 *lib_tmpdir(Os *os)
 {
     return ((Lib *)os)->tmpdir;

@@ -194,6 +194,11 @@ static Str lib_root(Os *)
     return {};  // Windows only
 }
 
+static b32 lib_sysroot(Os *)
+{
+    return 0;  // Windows only
+}
+
 static void wakeup(Lib *l)
 {
     u8 c = 0;

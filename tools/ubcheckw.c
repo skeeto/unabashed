@@ -57,6 +57,8 @@ W32(int,       Thread32Next(uintptr_t, ThreadEntry *));
 W32(int,       CloseHandle(uintptr_t));
 W32(uintptr_t, OpenProcess(int, int, int));
 W32(int,       TerminateProcess(uintptr_t, unsigned));
+W32(int,       DefineDosDeviceW(int, uint16_t const *, uint16_t const *));
+W32(unsigned,  GetLogicalDrives(void));
 W32(uintptr_t, OpenThread(int, int, int));
 W32(int,       GetProcessTimes(uintptr_t, uint64_t *, uint64_t *, uint64_t *, uint64_t *));
 W32(int,       GetConsoleMode(uintptr_t, unsigned *));
@@ -756,7 +758,12 @@ typedef struct Case {
                             // "ubhost --wrap" (2: by a relative path)
     int         linger;     // ub_config.linger, with softsig logging
                             // "SIG pid sig" and ending the program
+    int         flags;      // ub_config.flags
+    int         ondrive;    // start in drive, a spare letter mapped to $T
 } Case;
+
+static char     drive[4];      // "X:/", or empty if none could be mapped
+static uint16_t drivew[3];     // "X:"
 
 // A signal to a program, as a host would deliver it: logged, and the
 // program ended with the signal's status
@@ -915,6 +922,7 @@ static int runcase(Case const *c, char *out, int outlen, double *secs, Snap *lef
     cfg.memlimit  = c->memlimit;
     cfg.fds       = c->fds;
     cfg.linger    = c->linger;
+    cfg.flags     = c->flags;
     if (c->linger) cfg.softsig = onsoftsig;
     if (c->hooks & H_EXIT) cfg.exit = onexit;
     if (c->hooks & H_ACCESS) cfg.access = onaccess;
@@ -943,6 +951,7 @@ static int runcase(Case const *c, char *out, int outlen, double *secs, Snap *lef
     cmd.std[0] = c->hostpipe ? (intptr_t)pr : -1;
     cmd.std[1] = (intptr_t)f;
     cmd.std[2] = (intptr_t)f;
+    if (c->ondrive) cmd.cwd = drive;
     cmd.pid    = c->pid ? c->pid : c->hooks & H_TRACE ? TRACEPID : 0;
     Stopper s = {os, c->stopms, c->stopsig, 0};
     uintptr_t t = 0;
@@ -1333,6 +1342,24 @@ static int check(int quick)
     }
     SetEnvironmentVariableW(u"T", twide);
 
+    // A spare drive letter for $T, as subst makes one (DefineDosDevice
+    // needs no rights), for runs that start on another drive
+    unsigned used = GetLogicalDrives();
+    for (int i = 25; i>=3 && !drive[0]; i--) {
+        if (used>>i & 1) continue;
+        uint16_t target[300];
+        int k = 0;
+        for (; twide[k]; k++) target[k] = twide[k]=='/' ? '\\' : twide[k];
+        target[k] = 0;
+        uint16_t letter[3] = {(uint16_t)('A'+i), ':', 0};
+        if (DefineDosDeviceW(0, letter, target)) {
+            memcpy(drivew, letter, sizeof(letter));
+            drive[0] = (char)('A'+i);
+            drive[1] = ':';
+            drive[2] = '/';
+        }
+    }
+
     // A host pipe that must stay open and silent, never inherited
     uintptr_t sentr = 0, sentw = 0;
     CreatePipe(&sentr, &sentw, 0, 0);
@@ -1450,7 +1477,14 @@ static int check(int quick)
         // the wait ends once the programs have
         {"linger: softsig first", "sleep 100 & sleep 0.2", 0, 0, 2, .linger = 5000,
          .log = "SIG 15\n"},
+        // With no root, / is the start directory's drive's, or with
+        // UB_SYSROOT the system drive's, wherever the run starts
+        {"sysroot: off", "cd /; [ -f sh1 ] && echo t", 0, "t\n", .hooks = H_EXIT,
+         .ondrive = 1, .nolog = "cwd=C:/"},
+        {"sysroot: on", "cd /; [ -d Windows ] && echo w", 0, "w\n", .hooks = H_EXIT,
+         .ondrive = 1, .flags = UB_SYSROOT, .log = "EXIT 0 pwd=/ cwd=C:/\n"},
         {"exit hook: next run",
+
 
  "cd /Windows; export UBX_RT=rt; UBX_LOCAL=x", 0,
          "/Windows\nrt\nunset\n", .hooks = H_EXIT,
@@ -1609,6 +1643,7 @@ static int check(int quick)
         char name[8] = {'w', (char)(i<10 ? '0'+i : '0'+i/10), (char)(i<10 ? 0 : '0'+i%10), 0};
         DeleteFileW(tfile(tbuf, name));
     }
+    if (drive[0]) DefineDosDeviceW(2, drivew, 0);  // DDD_REMOVE_DEFINITION
     RemoveDirectoryW(tfile(tbuf, "d"));
     RemoveDirectoryW(twide);
     sputd(&report, fails);

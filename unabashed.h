@@ -137,7 +137,7 @@ typedef struct {
                           // 256 MiB on 32-bit; negative: no limit
     int         fds;      // descriptors per run; 0: min(256, RLIMIT_NOFILE/4),
                           // 256 on Windows
-    int         flags;    // UB_SHARECONSOLE
+    int         flags;    // UB_SHARECONSOLE, UB_SYSROOT
     // Optional: as the run ends, after its EXIT trap, with the state to
     // start the next run from. Not called if it was aborted (ub_run
     // returning a negated error), as by a cancel or out of memory.
@@ -198,7 +198,10 @@ typedef struct {
 
 enum { UB_GROUP = 0x100 };      // or'd into ub_signal's sig
 enum { UB_SIGNALED = 0x100 };   // status: the shell died of signal (s&0xff)-128
-enum { UB_SHARECONSOLE = 1 };   // ub_config.flags
+// ub_config.flags, Windows. UB_SYSROOT: with no root, / is the system
+// drive's root (the Windows directory's), not the start directory's, so
+// a run started on another drive means the same by /
+enum { UB_SHARECONSOLE = 1, UB_SYSROOT = 2 };
 enum {                          // errors, negated; Linux numbering everywhere
     UB_EPERM = 1, UB_ENOENT = 2, UB_EBADF = 9, UB_ECHILD = 10,
     UB_ENOMEM = 12, UB_EACCES = 13, UB_EBUSY = 16, UB_EEXIST = 17,

@@ -695,7 +695,12 @@ static void pathsetup(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
         bindir = root;
         root.len -= 4;
     }
-    if (!root.len) root = nativeroot(c->cwd);
+    if (!root.len) {
+        // The start directory's drive, or with UB_SYSROOT the system's
+        b32 sys = 0;
+        if constexpr (LIBMODE) sys = none && lib_sysroot(sh->os) && c->windir.len;
+        root = nativeroot(sys ? c->windir : c->cwd);
+    }
     root = clone(perm, root);
 
     // fstab, read whole if it is there

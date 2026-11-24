@@ -164,7 +164,10 @@ the records list, without calling the core.
   - With no `self`, such scripts run in-process, as scripts without `#!`
     do, with the `#!` line's options applied.
   - With no `root`, built-in defaults apply, and paths show in msys form
-    with `/` as the drive of the working directory.
+    with `/` as the drive of the working directory, or with `UB_SYSROOT`
+    as the system drive (the Windows directory's), so that runs started
+    on other drives agree on what `/` means. Every drive is `/c/...`, and
+    a one-letter directory at the top is a drive, as in MSYS2.
 - **Signal numbers** are the host's on POSIX and Linux's on Windows.
 - **The interface has a version, not struct sizes.** `UB_VERSION`
   (0xMMmmpp) names the release that last changed unabashed.h.
