@@ -218,7 +218,7 @@ the records list, without calling the core.
 - **On POSIX, feed the `child` hook to a keeper** if programs must not
   outlive a crashed host. On Windows the job ends them.
 - **Not call the library from a hook, nor unwind out of one.** A hook
-  must be brief.
+  must be brief (see Hooks).
 
 **Threading:**
 - **`ub_run`** blocks its thread until the run ends. Each handle runs
@@ -229,6 +229,41 @@ the records list, without calling the core.
   one wake. Sent while no run is active, they apply to the next run, so
   a host that reuses a handle should not signal it while idle.
 - **`ub_free`** must not race any other call on the handle.
+
+
+## Hooks
+
+Every hook in `ub_config` is optional. Each runs on `ub_run`'s thread,
+inside the run, on whichever of its fibers reached it.
+- **Brief.** A hook that blocks stalls the whole run, and `ub_cancel`
+  takes effect only once it returns.
+- **Small frames.** Deep in a recursion, a hook has only part of the
+  64 KiB the shell's depth check keeps in reserve (stackroom,
+  src/unabashed.cpp).
+- **No reentry.** A hook never calls the library, nor unwinds out.
+- **Borrowed strings.** What a hook is given is the library's, for the
+  call only.
+
+**`exit`** is called once as a run ends, with `ub_exit`:
+- `status`, as `ub_run` will return it;
+- `pwd`, the logical directory as `pwd` shows it, or null once the
+  shell has lost its directory's name;
+- `cwd`, the native directory programs start in, or null where there
+  is none (Windows: a virtual directory, such as /proc);
+- `env`, the exports as a program the run starts gets them (Windows: a
+  native program, so converted from msys form).
+
+A host starts the next run from that state: `cwd` as its `ub_cmd.cwd`,
+`env` as its `ub_cmd.env`. Prospero keeps it beside the tool's output,
+so that the next command follows the agent's `cd` and `export`.
+- **When:** after the EXIT trap, history, the last flush and the procsubs'
+  second, before teardown. Programs left in the background are still
+  running then.
+- **What calls it:** `exit`, set -e, `exec` (a spawn and a wait here),
+  a signal's death, and the end of the script.
+- **Never on an abort** (a cancel, out of memory, a deadlock) nor when
+  `ub_run` refuses to start, so its status is never negative.
+- **Without the hook** the run builds no environment at its end.
 
 
 ## Known deviations and limits
@@ -337,11 +372,14 @@ several times after a warm-up, and compares the snapshots by identity:
 The cases cover:
 - statuses and refusals;
 - syntax checks (`bash -n -c`);
+- the hooks, through a log each case checks, and a second run started
+  from the state the exit hook was given;
 - leftovers and shutdown;
 - children's signal state;
 - concurrency (8 threads, 4 on 32-bit Windows);
 - soft and hard stops with timing;
-- out of memory, including a sweep that aborts everywhere;
+- out of memory, including a sweep that aborts everywhere, run again
+  with every hook set;
 - the descriptor budget;
 - SIGPIPE;
 - on Windows, helper queues, fibers and `ub_system`.

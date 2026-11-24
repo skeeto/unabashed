@@ -589,6 +589,71 @@ static void hostlock(void *user, int lock)
 
 enum { ANY = 1<<30 };
 
+// The hooks a case installs (Case.hooks), each logging its calls to
+// static storage, since snapshots compare the process's memory
+enum { H_EXIT = 1<<0, H_ALL = H_EXIT };
+
+static char hooklogbuf[1<<16];
+static Snap hooklog = {hooklogbuf, 0, sizeof(hooklogbuf)};
+static int  nexits;      // the exit hook's calls in a case's run
+static int  exitstatus;  // and the status it was last given
+
+static int hasprefix(char const *s, char const *p)
+{
+    for (; *p; s++, p++) {
+        if (*s != *p) return 0;
+    }
+    return 1;
+}
+
+// How many times the hooks' log holds s
+static int logcount(char const *s)
+{
+    int n = 0;
+    for (char const *p = hooklog.buf; (p = strstr_(p, s)); p++) n++;
+    return n;
+}
+
+// The state the exit hook was last given, to start a second run from
+static char        exitcwd[4096];
+static char        exitenvbuf[1<<16];
+static char const *exitenv[1024];
+
+static void onexit(void *user, ub_exit const *x)
+{
+    (void)user;
+    nexits++;
+    exitstatus = x->status;
+    sput(&hooklog, "EXIT ");
+    sputd(&hooklog, x->status);
+    sput(&hooklog, " pwd=");
+    sput(&hooklog, x->pwd ? x->pwd : "-");
+    sput(&hooklog, " cwd=");
+    sput(&hooklog, x->cwd ? x->cwd : "-");
+    sput(&hooklog, "\n");
+    size_t cwdlen = x->cwd ? strlen(x->cwd) : 0;
+    cwdlen = cwdlen<sizeof(exitcwd) ? cwdlen : 0;
+    memcpy(exitcwd, x->cwd ? x->cwd : "", cwdlen);
+    exitcwd[cwdlen] = 0;
+    size_t len = 0;
+    int    n   = 0;
+    for (char const *const *e = x->env; *e; e++) {
+        if (hasprefix(*e, "UBX_") || hasprefix(*e, "PWD=") || hasprefix(*e, "BASH_FUNC_")) {
+            sput(&hooklog, "env ");
+            sput(&hooklog, *e);
+            sput(&hooklog, "\n");
+        }
+        size_t elen = strlen(*e) + 1;
+        if (n<(int)(sizeof(exitenv)/sizeof(*exitenv))-1 && elen<=sizeof(exitenvbuf)-len) {
+            exitenv[n++] = memcpy(exitenvbuf+len, *e, elen);
+            len += elen;
+        } else {
+            sput(&hooklog, "env: truncated\n");
+        }
+    }
+    exitenv[n] = 0;
+}
+
 typedef struct {
     char const *name;
     char const *script;
@@ -604,6 +669,13 @@ typedef struct {
     int         hostpipe;   // stdin: a host pipe, written once the run ends
     char const *opt;        // an option before -c, or null
     char const *notout;     // a substring the output must not hold, or null
+    int         hooks;      // H_*
+    char const *log;        // a substring the hooks' log must hold, or null
+    char const *log2;       // and another, or null
+    int         logn;       // >0: the first, so many times
+    char const *nolog;      // a substring the log must not hold, or null
+    char const *rerun;      // then this script, from the state the exit
+                            // hook was given: its status and output count
 } Case;
 
 typedef struct {
@@ -633,6 +705,10 @@ static int runcase(Case const *c, char *out, int outlen, double *secs, Snap *lef
     cfg.spawnlock = hostlock;
     cfg.memlimit  = c->memlimit;
     cfg.fds       = c->fds;
+    if (c->hooks & H_EXIT) cfg.exit = onexit;
+    hooklog.len    = 0;
+    hooklog.buf[0] = 0;
+    nexits         = 0;
     ub_os *os = ub_new(&cfg);
     if (!os) return -9999;
     // GENERIC_READ|WRITE, share all, CREATE_ALWAYS, not inheritable
@@ -660,6 +736,15 @@ static int runcase(Case const *c, char *out, int outlen, double *secs, Snap *lef
     uintptr_t w = watch();
     double t0 = nowsec();
     int r = ub_run(os, &cmd);
+    if (c->rerun && r>=0 && nexits==1) {
+        // A second run, as a host starts the next from the first's end
+        char const *argv2[] = {"bash", "-c", c->rerun, 0};
+        cmd.argc = 3;
+        cmd.argv = argv2;
+        cmd.cwd  = exitcwd[0] ? exitcwd : 0;
+        cmd.env  = exitenv;
+        r = ub_run(os, &cmd);
+    }
     *secs = nowsec() - t0;
     if (fiber) {
         void *data = 0;
@@ -739,6 +824,32 @@ static int checkcase(Case const *c, int reps)
             sput(&why, c->notout);
             sput(&why, "\"");
             ok = 0;
+        } else if ((c->hooks & H_EXIT) && nexits!=(r<0 ? 0 : c->rerun ? 2 : 1)) {
+            sput(&why, "exit hook called ");
+            sputd(&why, nexits);
+            sput(&why, " times");
+            ok = 0;
+        } else if ((c->hooks & H_EXIT) && r>=0 && exitstatus!=r) {
+            sput(&why, "exit hook given ");
+            sputd(&why, exitstatus);
+            ok = 0;
+        } else if (c->log && (c->logn ? logcount(c->log)!=c->logn : !logcount(c->log))) {
+            sput(&why, "log holds \"");
+            sput(&why, c->log);
+            sput(&why, "\" ");
+            sputd(&why, logcount(c->log));
+            sput(&why, " times");
+            ok = 0;
+        } else if (c->log2 && !logcount(c->log2)) {
+            sput(&why, "log lacks \"");
+            sput(&why, c->log2);
+            sput(&why, "\"");
+            ok = 0;
+        } else if (c->nolog && logcount(c->nolog)) {
+            sput(&why, "log holds \"");
+            sput(&why, c->nolog);
+            sput(&why, "\"");
+            ok = 0;
         } else if (c->maxsec && secs>c->maxsec) {
             sput(&why, "took ");
             sputd(&why, (int64_t)(secs*1000));
@@ -766,6 +877,10 @@ static int checkcase(Case const *c, int reps)
         if (out[0]) {
             sput(&report, "\n     output: ");
             sputn(&report, out, strlen(out)<300 ? (ptrdiff_t)strlen(out) : 300);
+        }
+        if (hooklog.len) {
+            sput(&report, "\n     log: ");
+            sputn(&report, hooklog.buf, hooklog.len<600 ? hooklog.len : 600);
         }
     }
     sput(&report, "\n");
@@ -1030,6 +1145,35 @@ static int check(int quick)
         {"descriptor budget",
          "for i in $(seq 40); do exec {fd}</dev/null || break; done;"
          " ((i<24)) && echo capped", 0, "capped", 0, 0, 0, 0, 24},
+
+        // Paths: no root, so / is the working directory's drive
+        {"exit hook", "cd /; export UBX_A=1; UBX_B=2; exit 3", 3, .hooks = H_EXIT,
+         .log = "EXIT 3 pwd=/ cwd=", .log2 = "env UBX_A=1\n", .nolog = "UBX_B"},
+        {"exit hook: function", "f() { cd /Windows; exit 4; }; f; echo no", 4,
+         .notout = "no", .hooks = H_EXIT, .log = "EXIT 4 pwd=/Windows cwd=",
+         .log2 = ":/Windows\n"},
+        {"exit hook: set -e", "set -e; false; echo no", 1, .notout = "no", .hooks = H_EXIT,
+         .log = "EXIT 1 "},
+        {"exit hook: exit 300", "exit 300", 44, .hooks = H_EXIT, .log = "EXIT 44 "},
+        {"exit hook: exec", "cd /; exec true; echo no", 0, .notout = "no", .hooks = H_EXIT,
+         .log = "EXIT 0 pwd=/ "},
+        {"exit hook: signal", "kill -TERM $$", UB_SIGNALED|(128+15), .hooks = H_EXIT},
+        {"exit hook: EXIT trap", "trap 'cd /Windows; export UBX_T=t' EXIT; cd /", 0,
+         .hooks = H_EXIT, .log = "EXIT 0 pwd=/Windows cwd=", .log2 = "env UBX_T=t\n"},
+        // its value converted, as a native program gets it
+        {"exit hook: PWD reassigned", "cd /Windows; PWD=/nowhere", 0, .hooks = H_EXIT,
+         .log = "EXIT 0 pwd=/Windows cwd=", .log2 = ":/nowhere\n"},
+        {"exit hook: export -f", "f() { echo; }; export -f f", 0, .hooks = H_EXIT,
+         .log = "env BASH_FUNC_f%%=() {  echo\n}\n"},
+        {"exit hook: background", "cd /; sleep 100 & exit 5", 5, 0, 1, .hooks = H_EXIT,
+         .log = "EXIT 5 pwd=/ "},
+        {"exit hook: cancel", "cd /; while :; do :; done", -UB_ECANCELED, 0, 0.5, 100,
+         .hooks = H_EXIT},
+        {"exit hook: out of memory", "x=a; while :; do x=$x$x; done", -UB_ENOMEM,
+         "out of memory", 0, 0, 0, 32<<20, .hooks = H_EXIT},
+        {"exit hook: next run", "cd /Windows; export UBX_RT=rt; UBX_LOCAL=x", 0,
+         "/Windows\nrt\nunset\n", .hooks = H_EXIT,
+         .rerun = "pwd; echo $UBX_RT; echo ${UBX_LOCAL-unset}"},
     };
     int fails = 0;
     for (int i = 0; i < (int)(sizeof(cases)/sizeof(*cases)); i++) {
@@ -1045,15 +1189,19 @@ static int check(int quick)
         " : $(echo $y) | cat > >(cat >/dev/null); z=$z$y$x; done; w=a;"
         " while :; do w=$w$w; done",
         -UB_ENOMEM};
-    for (ptrdiff_t m = 2<<20; m <= 24<<20; m += quick ? 4<<20 : 1<<20) {
-        sweep.memlimit = m;
-        static char name[64];
-        Snap s = {name, 0, sizeof(name)};
-        sput(&s, "memlimit ");
-        sputd(&s, m>>10);
-        sput(&s, " KiB");
-        sweep.name = name;
-        fails += !checkcase(&sweep, 1);
+    for (int h = 0; h < 2; h++) {
+        // and again with every hook, which aborts never call
+        sweep.hooks = h ? H_ALL : 0;
+        for (ptrdiff_t m = 2<<20; m <= 24<<20; m += quick ? 4<<20 : 1<<20) {
+            sweep.memlimit = m;
+            static char name[64];
+            Snap s = {name, 0, sizeof(name)};
+            sput(&s, "memlimit ");
+            sputd(&s, m>>10);
+            sput(&s, h ? " KiB, hooks" : " KiB");
+            sweep.name = name;
+            fails += !checkcase(&sweep, 1);
+        }
     }
     Case again = {"a run after the sweep", "echo ok", 0, "ok"};
     fails += !checkcase(&again, 1);

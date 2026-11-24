@@ -1739,6 +1739,23 @@ static void readstdin(Shell *sh, Arena scratch)
     runsource(sh, {}, sh->name, scratch, 1, 1, fillstdin, &in);
 }
 
+// A library's run ends: the environment for the host's exit hook, which
+// the next run may start from, so as a native program gets it, as the
+// host passes it back. An escape point of its own, as sh_main's top one
+// is still armed: an escape in makeenv (checkstack) leaves it empty.
+static Slice<Str> exitenv(Shell *sh, Arena *a)
+{
+    Escape e;
+    escenter(sh, &e);
+    if (!jmpset(e.jmp)) {
+        Slice<Str> env = nativechildenv(sh, a, makeenv(sh, a));
+        escleave(sh, &e);
+        return env;
+    }
+    escleave(sh, &e);
+    return {};
+}
+
 static i32 sh_main(Os *os, OsInfo *osinfo)
 {
     if (osvtable(os)->version != OSVTABLE_VERSION) {
@@ -2229,8 +2246,15 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             if (!taskjoinby(sh->sched, p, until, &st)) break;
             sh->psubs = p->sib;
         }
-        if (sh->killsig) return WSIGNALED | (128 + sh->killsig);
-        return sh->status & 255;
+        i32 status = sh->killsig ? WSIGNALED|(128 + sh->killsig) : sh->status&255;
+        if (lib_exitwanted(os)) {
+            // The state the next run may start from
+            Arena      a   = scratch;
+            Slice<Str> env = exitenv(sh, &a);
+            Str        pwd = !sh->wdlost && isabsolute(sh, sh->wd) ? sh->wd : Str{};
+            lib_exit(os, a, status, pwd, sh->cwd, env);
+        }
+        return status;
     }
     if (sh->jobs) orphanjobs(sh);
     if (sh->psubs || sh->sched->orphans) {

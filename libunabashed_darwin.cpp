@@ -59,6 +59,7 @@ namespace {
 #include "src/darwin.cpp"
 #include "src/libposix.cpp"
 #include "src/libdarwin.cpp"
+#include "src/libhooks.cpp"
 }
 }
 #include "src/ub.cpp"

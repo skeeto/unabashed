@@ -57,6 +57,7 @@ namespace {
 #include "src/linux.cpp"
 #include "src/libposix.cpp"
 #include "src/liblinux.cpp"
+#include "src/libhooks.cpp"
 }
 }
 #include "src/ub.cpp"

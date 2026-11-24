@@ -244,6 +244,54 @@ static double nowsec(void)
 
 enum { ANY = 1<<30 };
 
+// The hooks a case installs (Case.hooks), each logging its calls to
+// static storage, since snapshots compare the heap's mappings
+enum { H_EXIT = 1<<0, H_ALL = H_EXIT };
+
+static char   hooklog[1<<16];
+static size_t hooklen;
+static int    nexits;      // the exit hook's calls in a case's run
+static int    exitstatus;  // and the status it was last given
+
+static void logf_(char const *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(hooklog+hooklen, sizeof(hooklog)-hooklen, fmt, ap);
+    va_end(ap);
+    if (n > 0) hooklen += (size_t)n<sizeof(hooklog)-hooklen ? (size_t)n : sizeof(hooklog)-1-hooklen;
+}
+
+// The state the exit hook was last given, to start a second run from
+static char        exitcwd[4096];
+static char        exitenvbuf[1<<16];
+static char const *exitenv[1024];
+
+static void onexit(void *user, ub_exit const *x)
+{
+    (void)user;
+    nexits++;
+    exitstatus = x->status;
+    logf_("EXIT %d pwd=%s cwd=%s\n", x->status, x->pwd ? x->pwd : "-", x->cwd ? x->cwd : "-");
+    snprintf(exitcwd, sizeof(exitcwd), "%s", x->cwd ? x->cwd : "");
+    size_t len = 0;
+    int    n   = 0;
+    for (char const *const *e = x->env; *e; e++) {
+        if (!strncmp(*e, "UBX_", 4) || !strncmp(*e, "PWD=", 4) ||
+                !strncmp(*e, "BASH_FUNC_", 10)) {
+            logf_("env %s\n", *e);
+        }
+        size_t elen = strlen(*e) + 1;
+        if (n<(int)(sizeof(exitenv)/sizeof(*exitenv))-1 && elen<=sizeof(exitenvbuf)-len) {
+            exitenv[n++] = memcpy(exitenvbuf+len, *e, elen);
+            len += elen;
+        } else {
+            logf_("env: truncated\n");
+        }
+    }
+    exitenv[n] = 0;
+}
+
 typedef struct {
     char const *name;
     char const *script;
@@ -259,6 +307,13 @@ typedef struct {
     int         hostfd;     // pass a host pipe as std[1], read end closed
     char const *opt;        // an option before -c, or null
     char const *notout;     // a substring the output must not hold, or null
+    int         hooks;      // H_*
+    char const *log;        // a substring the hooks' log must hold, or null
+    char const *log2;       // and another, or null
+    int         logn;       // >0: and so many times
+    char const *nolog;      // a substring the log must not hold, or null
+    char const *rerun;      // then this script, from the state the exit
+                            // hook was given: its status and output count
 } Case;
 
 typedef struct {
@@ -291,6 +346,10 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
     cfg.child    = onchild;
     cfg.memlimit = c->memlimit;
     cfg.fds      = c->fds;
+    if (c->hooks & H_EXIT) cfg.exit = onexit;
+    hooklen    = 0;
+    hooklog[0] = 0;
+    nexits     = 0;
     ub_os *os = ub_new(&cfg);
     if (!os) return -9999;
     int fd = open(outpath, O_RDWR|O_CREAT|O_TRUNC|O_CLOEXEC, 0600);
@@ -320,6 +379,15 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
     if (c->stopms) pthread_create(&t, 0, stopper, &s);
     double t0 = nowsec();
     int r = ub_run(os, &cmd);
+    if (c->rerun && r>=0 && nexits==1) {
+        // A second run, as a host starts the next from the first's end
+        char const *argv2[] = {"bash", "-c", c->rerun, 0};
+        cmd.argc = 3;
+        cmd.argv = argv2;
+        cmd.cwd  = exitcwd[0] ? exitcwd : 0;
+        cmd.env  = exitenv;
+        r = ub_run(os, &cmd);
+    }
     *secs = nowsec() - t0;
     if (c->stopms) {
         __atomic_store_n(&s.done, 1, __ATOMIC_RELEASE);
@@ -335,6 +403,14 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
 }
 
 static Snap before, after;
+
+// How many times the hooks' log holds s
+static int logcount(char const *s)
+{
+    int n = 0;
+    for (char const *p = hooklog; (p = strstr(p, s)); p++) n++;
+    return n;
+}
 
 static int checkcase(Case const *c, int reps)
 {
@@ -357,6 +433,21 @@ static int checkcase(Case const *c, int reps)
             ok = 0;
         } else if (c->notout && strstr(out, c->notout)) {
             snprintf(why, sizeof(why), "output holds \"%s\"", c->notout);
+            ok = 0;
+        } else if ((c->hooks & H_EXIT) && nexits!=(r<0 ? 0 : c->rerun ? 2 : 1)) {
+            snprintf(why, sizeof(why), "exit hook called %d times", nexits);
+            ok = 0;
+        } else if ((c->hooks & H_EXIT) && r>=0 && exitstatus!=r) {
+            snprintf(why, sizeof(why), "exit hook given %d", exitstatus);
+            ok = 0;
+        } else if (c->log && (c->logn ? logcount(c->log)!=c->logn : !logcount(c->log))) {
+            snprintf(why, sizeof(why), "log holds \"%s\" %d times", c->log, logcount(c->log));
+            ok = 0;
+        } else if (c->log2 && !logcount(c->log2)) {
+            snprintf(why, sizeof(why), "log lacks \"%s\"", c->log2);
+            ok = 0;
+        } else if (c->nolog && logcount(c->nolog)) {
+            snprintf(why, sizeof(why), "log holds \"%s\"", c->nolog);
             ok = 0;
         } else if (c->maxsec && secs>c->maxsec) {
             snprintf(why, sizeof(why), "took %.3fs, over %.3fs", secs, c->maxsec);
@@ -387,6 +478,7 @@ static int checkcase(Case const *c, int reps)
     printf("%s %-28s %.3fs%s%s\n", ok ? "PASS" : "FAIL", c->name, secs,
            ok ? "" : ": ", ok ? "" : why);
     if (!ok && out[0]) printf("     output: %.300s\n", out);
+    if (!ok && hooklen) printf("     log: %.600s\n", hooklog);
     return ok;
 }
 
@@ -620,6 +712,32 @@ static int check(char *argv0, int quick)
 
         {"out of memory", "x=a; while :; do x=$x$x; done", -UB_ENOMEM, "out of memory", 0, 0,
          0, 32<<20},
+
+        {"exit hook", "cd /; export UBX_A=1; UBX_B=2; exit 3", 3, .hooks = H_EXIT,
+         .log = "EXIT 3 pwd=/ cwd=/\nenv PWD=/\nenv UBX_A=1\n", .nolog = "UBX_B"},
+        {"exit hook: function", "f() { cd /usr; exit 4; }; f; echo no", 4, .notout = "no",
+         .hooks = H_EXIT, .log = "EXIT 4 pwd=/usr cwd=/usr\n"},
+        {"exit hook: set -e", "set -e; false; echo no", 1, .notout = "no", .hooks = H_EXIT,
+         .log = "EXIT 1 "},
+        {"exit hook: exit 300", "exit 300", 44, .hooks = H_EXIT, .log = "EXIT 44 "},
+        {"exit hook: exec", "cd /; exec true; echo no", 0, .notout = "no", .hooks = H_EXIT,
+         .log = "EXIT 0 pwd=/ "},
+        {"exit hook: signal", "kill -TERM $$", UB_SIGNALED|(128+SIGTERM), .hooks = H_EXIT},
+        {"exit hook: EXIT trap", "trap 'cd /usr; export UBX_T=t' EXIT; cd /", 0,
+         .hooks = H_EXIT, .log = "EXIT 0 pwd=/usr cwd=/usr\nenv PWD=/usr\nenv UBX_T=t\n"},
+        {"exit hook: PWD reassigned", "cd /usr; PWD=/nowhere", 0, .hooks = H_EXIT,
+         .log = "EXIT 0 pwd=/usr cwd=/usr\nenv PWD=/nowhere\n"},
+        {"exit hook: export -f", "f() { echo; }; export -f f", 0, .hooks = H_EXIT,
+         .log = "env BASH_FUNC_f%%=() {  echo\n}\n"},
+        {"exit hook: background", "cd /; sleep 100 & exit 5", 5, 0, 0.5, .hooks = H_EXIT,
+         .log = "EXIT 5 pwd=/ "},
+        {"exit hook: cancel", "cd /; while :; do :; done", -UB_ECANCELED, 0, 0.35, 100,
+         .hooks = H_EXIT},
+        {"exit hook: out of memory", "x=a; while :; do x=$x$x; done", -UB_ENOMEM,
+         "out of memory", 0, 0, 0, 32<<20, .hooks = H_EXIT},
+        {"exit hook: next run", "cd /usr; export UBX_RT=rt; UBX_LOCAL=x", 0,
+         "/usr\nrt\nunset\n", .hooks = H_EXIT,
+         .rerun = "pwd; echo $UBX_RT; echo ${UBX_LOCAL-unset}"},
         {"descriptor budget", "for i in $(seq 40); do exec {fd}</dev/null || break; done; echo n=$i",
          0, "n=", 0, 0, 0, 0, 24},
     };
@@ -653,12 +771,16 @@ static int check(char *argv0, int quick)
         " : $(echo $y) | cat > >(cat >/dev/null); z=$z$y$x; done; w=a;"
         " while :; do w=$w$w; done",
         -UB_ENOMEM};
-    for (ptrdiff_t m = 1<<20; m <= 24<<20; m += quick ? 4<<20 : 1<<20) {
-        sweep.memlimit = m;
-        char name[64];
-        snprintf(name, sizeof(name), "memlimit %ld KiB", (long)(m>>10));
-        sweep.name = name;
-        fails += !checkcase(&sweep, 1);
+    for (int h = 0; h < 2; h++) {
+        // and again with every hook, which aborts never call
+        sweep.hooks = h ? H_ALL : 0;
+        for (ptrdiff_t m = 1<<20; m <= 24<<20; m += quick ? 4<<20 : 1<<20) {
+            sweep.memlimit = m;
+            char name[64];
+            snprintf(name, sizeof(name), "memlimit %ld KiB%s", (long)(m>>10), h ? ", hooks" : "");
+            sweep.name = name;
+            fails += !checkcase(&sweep, 1);
+        }
     }
     Case after = {"a run after the sweep", "echo ok", 0, "ok"};
     fails += !checkcase(&after, 1);

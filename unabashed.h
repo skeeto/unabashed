@@ -31,6 +31,22 @@ extern "C" {
 
 typedef struct ub_os ub_os;
 
+typedef struct {                // how a run ended, for ub_config.exit
+    int                status;  // what ub_run returns: 0-255, UB_SIGNALED|(128+n)
+    char const        *pwd;     // the logical directory, as pwd shows it; 0: none
+    char const        *cwd;     // the native one programs start in; 0: none
+                                // (Windows: a virtual one, as /proc)
+    char const *const *env;     // the exports, "NAME=value", null-terminated,
+                                // as ub_cmd.env takes them back (Windows:
+                                // as a native program gets them)
+} ub_exit;
+
+// Hooks run on ub_run's thread, inside the run, and must be brief: one
+// that blocks stalls the run, and a cancel takes effect only once it
+// returns. Deep in a recursion a hook has only part of the 64 KiB of
+// stack the shell keeps in reserve. A hook must not call the library,
+// nor unwind out. The strings it is given are the library's, for the
+// call only.
 typedef struct {
     void       *user;     // the host's: ub_user returns it, hooks receive it
     // Brackets every moment the library holds a handle a spawned program
@@ -57,6 +73,10 @@ typedef struct {
     int         fds;      // descriptors per run; 0: min(256, RLIMIT_NOFILE/4),
                           // 256 on Windows
     int         flags;    // UB_SHARECONSOLE
+    // Optional: as the run ends, after its EXIT trap, with the state to
+    // start the next run from. Not called if it was aborted (ub_run
+    // returning a negated error), as by a cancel or out of memory.
+    void      (*exit)(void *user, ub_exit const *);
 } ub_config;
 
 typedef struct { int fd; intptr_t h; } ub_fd;

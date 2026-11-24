@@ -558,9 +558,14 @@ static void    os_racy(Os *);
 // is called at each step of a long match, and ends a cancelled run.
 // lib_root is the directory the host named as the install's shell
 // directory (Windows), normalized, with its trailing slash, or empty.
+// lib_exitwanted says whether the host wants lib_exit's call, the run's
+// state as it ends (status as sh_main returns it; pwd and cwd empty for
+// none).
 [[noreturn]] static void lib_abort(Os *, i32 err);
 static void    lib_step();
 static Str     lib_root(Os *);
+static b32     lib_exitwanted(Os *);
+static void    lib_exit(Os *, Arena, i32 status, Str pwd, Str cwd, Slice<Str> env);
 
 // The platform as a table. The shell calls each entry above through its
 // Os's table (dispatch.cpp), which the platform layer's osvtable names.

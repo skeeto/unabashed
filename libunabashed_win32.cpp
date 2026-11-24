@@ -25,6 +25,7 @@ namespace {
 #include "src/unabashed.cpp"
 #include "src/win32.cpp"      // and fibers_win32.cpp, after its declarations
 #include "src/libwin32.cpp"
+#include "src/libhooks.cpp"
 }
 }
 #include "src/ub.cpp"
