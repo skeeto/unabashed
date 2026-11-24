@@ -574,7 +574,7 @@ static i32 plt_rename(Os *os, Arena scratch, Str from, Str to)
 }
 
 // The directory plt_tempfile makes its files in: TMPDIR (the run's, in
-// the library), or /tmp
+// the library) if it can, else a system one
 static Str tempdir(Os *os)
 {
     Str dir = {};
@@ -584,18 +584,26 @@ static Str tempdir(Os *os)
     } else {
         t = getenv("TMPDIR");
     }
-    if (t && *t) {
-        dir.data = (u8 *)t;
-        for (; t[dir.len]; dir.len++) {}
+    // As bash's sh_get_tmpdir: TMPDIR only if a directory it can write,
+    // else the first of the system's that is
+    char const *sys[] = {"/tmp", "/var/tmp", "/usr/tmp"};
+    for (i32 i = -1; i < countof(sys); i++) {
+        char const *d = i<0 ? t : sys[i];
+        struct stat st;
+        if (d && *d && !stat(d, &st) && S_ISDIR(st.st_mode) && !access(d, W_OK|X_OK)) {
+            dir.data = (u8 *)d;
+            for (; d[dir.len]; dir.len++) {}
+            return dir;
+        }
     }
-    return dir.len ? dir : Str("/tmp");
+    return Str(".");
 }
 
 static Opened plt_tempfile(Os *os, Arena scratch)
 {
     flushw(os);
-    // As bash: created in TMPDIR (or /tmp), then unlinked, readable
-    // only by the user
+    // As bash: created in TMPDIR (or /tmp, see tempdir), then unlinked,
+    // readable only by the user
     Str dir = tempdir(os);
     static u32 counter;
     Opened r = {};
