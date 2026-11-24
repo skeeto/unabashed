@@ -95,6 +95,8 @@ static b32 hasname(char const *const *env, char const *name, iz len)
 
 // What the run changed of the exports since base: entries that are new
 // or differ, then bare names of those gone. Null if either is unknown.
+// Never "_", which the shell sets as it runs commands: one inherited
+// as an export is no longer one by the end.
 static char const **envdelta(Arena *a, char const *const *base, char const *const *env)
 {
     if (!base || !env) return 0;
@@ -106,11 +108,11 @@ static char const **envdelta(Arena *a, char const *const *base, char const *cons
     for (iz i = 0; i < nenv; i++) {
         b32 same = 0;
         for (iz j = 0; !same && j<nbase; j++) same = samestr(env[i], base[j]);
-        if (!same) r[n++] = env[i];
+        if (!same && (envname(env[i])!=1 || env[i][0]!='_')) r[n++] = env[i];
     }
     for (iz j = 0; j < nbase; j++) {
         iz len = envname(base[j]);
-        if (!hasname(env, base[j], len)) {
+        if (!hasname(env, base[j], len) && (len!=1 || base[j][0]!='_')) {
             char *name = (char *)allocbytes(a, len+1);
             copybytes(name, (void *)base[j], len);
             name[len] = 0;

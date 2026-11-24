@@ -1341,6 +1341,9 @@ static int check(int quick)
         CloseHandle(h);
     }
     SetEnvironmentVariableW(u"T", twide);
+    // "_" as a POSIX shell leaves it for the programs it starts, which
+    // the run imports and the exit hook's delta must not show
+    SetEnvironmentVariableW(u"_", u"/usr/bin/ubhost");
 
     // A spare drive letter for $T, as subst makes one (DefineDosDevice
     // needs no rights), for runs that start on another drive

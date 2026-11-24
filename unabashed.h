@@ -45,8 +45,9 @@ typedef struct {                // how a run ended, for ub_config.exit
     // Against the exports as the command starts, after the startup
     // files: a host that applies carried exports to ub_cmd.env sees
     // neither one the profile sets again nor the library's own HOME
-    // and PATH, by design. 0: unknown (makeenv escaped, or the run
-    // ended within its startup files).
+    // and PATH, by design. Never "_", which the shell sets itself. 0:
+    // unknown (makeenv escaped, or the run ended within its startup
+    // files).
     char const *const *delta;
 } ub_exit;
 
