@@ -18,6 +18,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// The interface's version, 0xMMmmpp: the release that last changed it.
+// Its structs only gain fields, at their ends, and in those the host
+// fills (ub_config, ub_cmd) zero means the default, or off: a host
+// written for an older version, its structs zeroed, builds and runs as
+// before. Build the host with the header beside the library's source.
+#define UB_VERSION 0x000600
+
 #ifdef __cplusplus
 extern "C" {
 #endif

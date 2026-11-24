@@ -602,6 +602,8 @@ typedef struct {
     int64_t     pid;
     int         fiber;      // the host's thread is a fiber already
     int         hostpipe;   // stdin: a host pipe, written once the run ends
+    char const *opt;        // an option before -c, or null
+    char const *notout;     // a substring the output must not hold, or null
 } Case;
 
 typedef struct {
@@ -635,9 +637,14 @@ static int runcase(Case const *c, char *out, int outlen, double *secs, Snap *lef
     if (!os) return -9999;
     // GENERIC_READ|WRITE, share all, CREATE_ALWAYS, not inheritable
     uintptr_t f = CreateFileW(outpath, 0xc0000000u, 7, 0, 2, 0, 0);
-    char const *argv[] = {"bash", "-c", c->script, 0};
+    char const *argv[] = {"bash", "-c", c->script, 0, 0};
+    if (c->opt) {
+        argv[1] = c->opt;
+        argv[2] = "-c";
+        argv[3] = c->script;
+    }
     ub_cmd cmd = {0};
-    cmd.argc   = 3;
+    cmd.argc   = c->opt ? 4 : 3;
     cmd.argv   = argv;
     uintptr_t pr = 0, pw = 0;
     if (c->hostpipe) CreatePipe(&pr, &pw, 0, 0);
@@ -725,6 +732,11 @@ static int checkcase(Case const *c, int reps)
         } else if (c->out && !strstr_(out, c->out)) {
             sput(&why, "output lacks \"");
             sput(&why, c->out);
+            sput(&why, "\"");
+            ok = 0;
+        } else if (c->notout && strstr_(out, c->notout)) {
+            sput(&why, "output holds \"");
+            sput(&why, c->notout);
             sput(&why, "\"");
             ok = 0;
         } else if (c->maxsec && secs>c->maxsec) {
@@ -970,6 +982,13 @@ static int check(int quick)
         {"suspend", "suspend 2>/dev/null; echo s=$?", 0, "s=1"},
         {"title", "printf '\\033]0;x\\007'; echo ok", 0, "ok"},
         {"bad pid", "true", -UB_EINVAL, 0, 0, 0, 0, 0, 0, (int64_t)1<<47},
+        {"-n: syntax error", "echo ok; if", 2,
+         "syntax error: unexpected end of file", .opt = "-n", .notout = "ok\n"},
+        {"-n: unexpected token", "case x in esac; echo )", 2,
+         "syntax error near unexpected token `)'", .opt = "-n"},
+        {"-n: no errors", "echo hi; exit 3", 0, .opt = "-n", .notout = "hi"},
+        {"-n: open here-document", "cat <<E\nx", 0,
+         "here-document at line 1 delimited by end-of-file", .opt = "-n", .notout = "x\n"},
         {"already a fiber", "echo $((6*7)) | cat", 0, "42", 0, 0, 0, 0, 0, 0, 1},
         {"programs and pipes", "x=$(echo a | tr a b); echo $x; sh -c 'exit 4'; echo s=$?",
          0, "b\ns=4"},

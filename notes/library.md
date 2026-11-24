@@ -160,6 +160,16 @@ the records list, without calling the core.
   - With no `root`, built-in defaults apply, and paths show in msys form
     with `/` as the drive of the working directory.
 - **Signal numbers** are the host's on POSIX and Linux's on Windows.
+- **The interface has a version, not struct sizes.** `UB_VERSION`
+  (0xMMmmpp) names the release that last changed unabashed.h.
+  - Its structs only gain fields, at their ends.
+  - In the structs the host fills (`ub_config`, `ub_cmd`), zero means
+    the default, or off.
+  - So a host written for an older version, its structs zeroed, builds
+    and runs as before.
+  - A host is built with the header beside the library's source, as
+    the library is only built from source, so the two cannot disagree
+    on a layout.
 
 
 ## The host contract
@@ -326,6 +336,7 @@ several times after a warm-up, and compares the snapshots by identity:
 
 The cases cover:
 - statuses and refusals;
+- syntax checks (`bash -n -c`);
 - leftovers and shutdown;
 - children's signal state;
 - concurrency (8 threads, 4 on 32-bit Windows);

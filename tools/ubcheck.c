@@ -257,6 +257,8 @@ typedef struct {
     int64_t     pid;
     int         ignchld;    // SIGCHLD set to SIG_IGN for the run
     int         hostfd;     // pass a host pipe as std[1], read end closed
+    char const *opt;        // an option before -c, or null
+    char const *notout;     // a substring the output must not hold, or null
 } Case;
 
 typedef struct {
@@ -292,9 +294,14 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
     ub_os *os = ub_new(&cfg);
     if (!os) return -9999;
     int fd = open(outpath, O_RDWR|O_CREAT|O_TRUNC|O_CLOEXEC, 0600);
-    char const *argv[] = {"bash", "-c", c->script, 0};
+    char const *argv[] = {"bash", "-c", c->script, 0, 0};
+    if (c->opt) {
+        argv[1] = c->opt;
+        argv[2] = "-c";
+        argv[3] = c->script;
+    }
     ub_cmd cmd = {0};
-    cmd.argc   = 3;
+    cmd.argc   = c->opt ? 4 : 3;
     cmd.argv   = argv;
     cmd.std[0] = -1;
     cmd.std[1] = fd;
@@ -347,6 +354,9 @@ static int checkcase(Case const *c, int reps)
             ok = 0;
         } else if (c->out && !strstr(out, c->out)) {
             snprintf(why, sizeof(why), "output lacks \"%s\"", c->out);
+            ok = 0;
+        } else if (c->notout && strstr(out, c->notout)) {
+            snprintf(why, sizeof(why), "output holds \"%s\"", c->notout);
             ok = 0;
         } else if (c->maxsec && secs>c->maxsec) {
             snprintf(why, sizeof(why), "took %.3fs, over %.3fs", secs, c->maxsec);
@@ -568,6 +578,13 @@ static int check(char *argv0, int quick)
         {"title and stty", "printf '\\033]0;x\\007'; stty 2>/dev/null; echo ok", 0, "ok"},
         {"bad pid", "true", -UB_EINVAL, 0, 0, 0, 0, 0, 0, (int64_t)1<<22},
         {"SIGCHLD ignored", "true", -UB_ECHILD, 0, 0, 0, 0, 0, 0, 0, 1},
+        {"-n: syntax error", "echo ok; if", 2,
+         "syntax error: unexpected end of file", .opt = "-n", .notout = "ok\n"},
+        {"-n: unexpected token", "case x in esac; echo )", 2,
+         "syntax error near unexpected token `)'", .opt = "-n"},
+        {"-n: no errors", "echo hi; exit 3", 0, .opt = "-n", .notout = "hi"},
+        {"-n: open here-document", "cat <<E\nx", 0,
+         "here-document at line 1 delimited by end-of-file", .opt = "-n", .notout = "x\n"},
 
         {"leftover sleep &", "sleep 100 &", 0, 0, 0.5},
         {"leftover sh -c &", "sh -c 'sleep 100 &'", 0, 0, 0.5},
