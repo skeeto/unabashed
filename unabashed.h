@@ -23,7 +23,7 @@
 // fills (ub_config, ub_cmd) zero means the default, or off: a host
 // written for an older version, its structs zeroed, builds and runs as
 // before. Build the host with the header beside the library's source.
-#define UB_VERSION 0x000600
+#define UB_VERSION 0x000700
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,6 +39,15 @@ typedef struct {                // how a run ended, for ub_config.exit
     char const *const *env;     // the exports, "NAME=value", null-terminated,
                                 // as ub_cmd.env takes them back (Windows:
                                 // as a native program gets them)
+    // What the run changed of env, as env (functions too, as
+    // "BASH_FUNC_f%%=() {...}"), null-terminated: "NAME=value" for each
+    // export set or changed, a bare "NAME" for each unset or unexported.
+    // Against the exports as the command starts, after the startup
+    // files: a host that applies carried exports to ub_cmd.env sees
+    // neither one the profile sets again nor the library's own HOME
+    // and PATH, by design. 0: unknown (makeenv escaped, or the run
+    // ended within its startup files).
+    char const *const *delta;
 } ub_exit;
 
 typedef struct {                // a file the script names, for ub_config.access

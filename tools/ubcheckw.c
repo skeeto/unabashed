@@ -696,6 +696,12 @@ static void onexit(void *user, ub_exit const *x)
         }
     }
     exitenv[n] = 0;
+    if (!x->delta) sput(&hooklog, "delta unknown\n");
+    for (char const *const *e = x->delta; e && *e; e++) {
+        sput(&hooklog, "delta ");
+        sput(&hooklog, *e);
+        sput(&hooklog, "\n");
+    }
 }
 
 // The cases' directory, $T in their environment, and the temporary
@@ -1415,7 +1421,13 @@ static int check(int quick)
          .hooks = H_EXIT},
         {"exit hook: out of memory", "x=a; while :; do x=$x$x; done", -UB_ENOMEM,
          "out of memory", 0, 0, 0, 32<<20, .hooks = H_EXIT},
-        {"exit hook: next run", "cd /Windows; export UBX_RT=rt; UBX_LOCAL=x", 0,
+        // The delta: none for HOME, PATH or the like, which the library
+        // rewrites before the command starts, even from a run's own end
+        {"exit hook: delta", "export UBX_N=n; f() { :; }; export -f f; unset T", 0,
+         .hooks = H_EXIT, .log = "delta BASH_FUNC_f%%=() {  :\n}\ndelta UBX_N=n\ndelta T\n"},
+        {"exit hook: no delta", ":", 0, .hooks = H_EXIT, .nolog = "delta ", .rerun = ":"},
+        {"exit hook: next run",
+ "cd /Windows; export UBX_RT=rt; UBX_LOCAL=x", 0,
          "/Windows\nrt\nunset\n", .hooks = H_EXIT,
          .rerun = "pwd; echo $UBX_RT; echo ${UBX_LOCAL-unset}"},
 

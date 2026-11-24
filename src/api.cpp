@@ -568,12 +568,14 @@ static void    os_racy(Os *);
 // directory (Windows), normalized, with its trailing slash, or empty.
 // lib_exitwanted says whether the host wants lib_exit's call, the run's
 // state as it ends (status as sh_main returns it; pwd and cwd empty for
-// none).
+// none; env unknown when !envok). lib_exitbase records the exports the
+// exit hook's delta is against, in a (unknown when !ok).
 [[noreturn]] static void lib_abort(Os *, i32 err);
 static void    lib_step();
 static Str     lib_root(Os *);
 static b32     lib_exitwanted(Os *);
-static void    lib_exit(Os *, Arena, i32 status, Str pwd, Str cwd, Slice<Str> env);
+static void    lib_exitbase(Os *, Arena *, Slice<Str> env, b32 ok);
+static void    lib_exit(Os *, Arena, i32 status, Str pwd, Str cwd, Slice<Str> env, b32 envok);
 
 // Errors a host's hook gave a reason for (libhooks.cpp): E_HOST+k, k below
 // NHOSTERR, above any error a platform reports. lib_hosttext is its

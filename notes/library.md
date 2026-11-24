@@ -261,11 +261,24 @@ inside the run, on whichever of its fibers reached it.
 - `cwd`, the native directory programs start in, or null where there
   is none (Windows: a virtual directory, such as /proc);
 - `env`, the exports as a program the run starts gets them (Windows: a
-  native program, so converted from msys form).
+  native program, so converted from msys form);
+- `delta`, what the run changed of those: `NAME=value` for each export
+  set or changed, exported functions included (`BASH_FUNC_f%%=...`),
+  and a bare `NAME` for each unset or unexported. It is against the
+  exports as the command starts, after the startup files, compared as
+  `env` is built, so neither the library's own HOME and PATH (Windows)
+  nor a profile's PATH prefix shows in it. Null when unknown: the run
+  ended within its startup files, or building the environment escaped
+  (a deep function's export).
 
 A host starts the next run from that state: `cwd` as its `ub_cmd.cwd`,
-`env` as its `ub_cmd.env`. Prospero keeps it beside the tool's output,
-so that the next command follows the agent's `cd` and `export`.
+and `env` as its `ub_cmd.env`, or its own environment with `delta`
+applied. Prospero keeps the directory and delta beside the tool's
+output, so that the next command follows the agent's `cd` and
+`export`. It applies the carried exports to the environment it passes
+in, before the startup files, so one that a profile sets again shows in
+neither the base nor the delta: by design, as the profile has the last
+word on the next run too.
 - **When:** after the EXIT trap, history, the last flush and the procsubs'
   second, before teardown. Programs left in the background are still
   running then.
@@ -273,7 +286,8 @@ so that the next command follows the agent's `cd` and `export`.
   a signal's death, and the end of the script.
 - **Never on an abort** (a cancel, out of memory, a deadlock) nor when
   `ub_run` refuses to start, so its status is never negative.
-- **Without the hook** the run builds no environment at its end.
+- **Without the hook** the run builds no environment, at its start or
+  its end.
 
 **`access`** is asked of each file the script names, before the
 platform's call, with `ub_access`: an op, flags, and the path.

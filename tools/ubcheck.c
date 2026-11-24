@@ -306,6 +306,8 @@ static void onexit(void *user, ub_exit const *x)
         }
     }
     exitenv[n] = 0;
+    if (!x->delta) logf_("delta unknown\n");
+    for (char const *const *e = x->delta; e && *e; e++) logf_("delta %s\n", *e);
 }
 
 // The cases' directory, $T in their environment, and the run's TMPDIR,
@@ -345,6 +347,9 @@ typedef struct Case {
     char const *reason;     // with this reason (%d: the refusal's count)
     int         wrap;       // the spawn hook wraps each program in
                             // "ubhost --wrap" (2: by a relative path)
+    int         baseenv;    // run with only PATH, UBX_KEEP=k, UBX_CHG=c,
+                            // UBX_GONE=g, UBX_UNX=u, BASH_ENV=$T/benv
+    char const *envx;       // and this entry too, or null
 } Case;
 
 // An access as a log line, "OP flags path", T and TMPDIR shown as $T and
@@ -491,6 +496,16 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
     cmd.std[1] = fd;
     cmd.std[2] = fd;
     cmd.pid    = c->pid ? c->pid : c->hooks & H_TRACE ? TRACEPID : 0;
+    static char envpath[4200], envbash[300];
+    static char const *baseenv[8];
+    if (c->baseenv) {
+        snprintf(envpath, sizeof(envpath), "PATH=%s", getenv("PATH") ? getenv("PATH") : "");
+        snprintf(envbash, sizeof(envbash), "BASH_ENV=%s/benv", tdir);
+        char const *v[] = {envpath, "UBX_KEEP=k", "UBX_CHG=c", "UBX_GONE=g", "UBX_UNX=u",
+                           envbash, c->envx, 0};
+        memcpy(baseenv, v, sizeof(v));
+        cmd.env = baseenv;
+    }
     int p[2] = {-1, -1};
     if (c->hostfd && !hostpipe(p)) {
         close(p[0]);
@@ -759,8 +774,10 @@ static int check(char *argv0, int quick)
     static char const *const tfiles[][2] = {
         {"f", "data\n"}, {"s", "echo sourced\n"}, {"ns", "echo ns\n"},
         {"sh1", "#!/bin/sh\necho sh1\n"}, {"bi", "#!/nonexistent/interp\n"},
+        // the startup file of baseenv's cases
+        {"benv", "export UBX_PROF=p; UBX_CHG=prof; [ -z \"$UBX_QUIT\" ] || exit 7\n"},
     };
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < (int)(sizeof(tfiles)/sizeof(*tfiles)); i++) {
         snprintf(tpath, sizeof(tpath), "%s/%s", tdir, tfiles[i][0]);
         int fd = open(tpath, O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0755);
         if (fd<0 || write(fd, tfiles[i][1], strlen(tfiles[i][1]))<0) return 1;
@@ -887,7 +904,18 @@ static int check(char *argv0, int quick)
          .hooks = H_EXIT},
         {"exit hook: out of memory", "x=a; while :; do x=$x$x; done", -UB_ENOMEM,
          "out of memory", 0, 0, 0, 32<<20, .hooks = H_EXIT},
-        {"exit hook: next run", "cd /usr; export UBX_RT=rt; UBX_LOCAL=x", 0,
+        // The delta: what the run changed of the exports after its
+        // startup files, so not what the profile set (UBX_PROF)
+        {"exit hook: delta",
+         "UBX_CHG=new; unset UBX_GONE; export -n UBX_UNX; export UBX_NEW=n;"
+         " f() { :; }; export -f f; echo $UBX_PROF", 0, "p\n", .hooks = H_EXIT, .baseenv = 1,
+         .log = "delta BASH_FUNC_f%%=() {  :\n}\ndelta UBX_CHG=new\ndelta UBX_NEW=n\n"
+                "delta UBX_GONE\ndelta UBX_UNX\n", .nolog = "delta UBX_PROF"},
+        {"exit hook: no delta", ":", 0, .hooks = H_EXIT, .baseenv = 1, .nolog = "delta"},
+        {"exit hook: exit in startup", ":", 7, .hooks = H_EXIT, .baseenv = 1,
+         .envx = "UBX_QUIT=1", .log = "delta unknown\n"},
+        {"exit hook: next run",
+ "cd /usr; export UBX_RT=rt; UBX_LOCAL=x", 0,
          "/usr\nrt\nunset\n", .hooks = H_EXIT,
          .rerun = "pwd; echo $UBX_RT; echo ${UBX_LOCAL-unset}"},
 

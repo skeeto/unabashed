@@ -22,30 +22,7 @@ static char const **hoststrs(Arena *a, Slice<Str> v)
 }
 
 
-// Exit
-
-static b32 lib_exitwanted(Os *os)
-{
-    return ((Lib *)os)->cfg.exit != 0;
-}
-
-// The run's output is all written out first, for a host that reads it
-// from the hook. Nothing allocates after the call, so the run ends as
-// the hook was told.
-static void lib_exit(Os *os, Arena a, i32 status, Str pwd, Str cwd, Slice<Str> env)
-{
-    Lib *l = (Lib *)os;
-    ub_exit x = {};
-    x.status = hoststatus(status);
-    x.pwd    = pwd.len ? hoststr(&a, pwd) : 0;
-    x.cwd    = cwd.len ? hoststr(&a, cwd) : 0;
-    x.env    = hoststrs(&a, env);
-    flushw(os);
-    l->cfg.exit(l->cfg.user, &x);
-}
-
-
-// Access
+// State
 
 enum : i32 { REASONMAX = 255 };
 
@@ -64,12 +41,104 @@ struct LibHooks {
     TraceRec *opentrace;  // the fibers' open commands, innermost first
     TraceRec *freetrace;
     i64       lasttrace;  // the last id given
+    char const **envbase; // the exports the exit hook's delta is against
 };
 
 static void hooksetup(Lib *l)
 {
     l->hooks = alloc<LibHooks>(&l->arena, 1);
 }
+
+
+// Exit
+
+static b32 lib_exitwanted(Os *os)
+{
+    return ((Lib *)os)->cfg.exit != 0;
+}
+
+static void lib_exitbase(Os *os, Arena *a, Slice<Str> env, b32 ok)
+{
+    ((Lib *)os)->hooks->envbase = ok ? hoststrs(a, env) : 0;
+}
+
+// An entry's name: up to its first "=" (a function's, "BASH_FUNC_f%%",
+// has none)
+static iz envname(char const *e)
+{
+    iz n = 0;
+    for (; e[n] && e[n]!='='; n++) {}
+    return n;
+}
+
+static b32 sameprefix(char const *a, char const *b, iz len)
+{
+    for (iz i = 0; i < len; i++) {
+        if (a[i] != b[i]) return 0;
+    }
+    return 1;
+}
+
+static b32 samestr(char const *a, char const *b)
+{
+    for (; *a && *a==*b; a++, b++) {}
+    return *a == *b;
+}
+
+static b32 hasname(char const *const *env, char const *name, iz len)
+{
+    for (; *env; env++) {
+        if (envname(*env)==len && sameprefix(*env, name, len)) return 1;
+    }
+    return 0;
+}
+
+// What the run changed of the exports since base: entries that are new
+// or differ, then bare names of those gone. Null if either is unknown.
+static char const **envdelta(Arena *a, char const *const *base, char const *const *env)
+{
+    if (!base || !env) return 0;
+    iz nbase = 0, nenv = 0;
+    for (; base[nbase]; nbase++) {}
+    for (; env[nenv]; nenv++) {}
+    char const **r = alloc<char const *>(a, nbase+nenv+1);
+    iz n = 0;
+    for (iz i = 0; i < nenv; i++) {
+        b32 same = 0;
+        for (iz j = 0; !same && j<nbase; j++) same = samestr(env[i], base[j]);
+        if (!same) r[n++] = env[i];
+    }
+    for (iz j = 0; j < nbase; j++) {
+        iz len = envname(base[j]);
+        if (!hasname(env, base[j], len)) {
+            char *name = (char *)allocbytes(a, len+1);
+            copybytes(name, (void *)base[j], len);
+            name[len] = 0;
+            r[n++] = name;
+        }
+    }
+    r[n] = 0;
+    return r;
+}
+
+// The run's output is all written out first, for a host that reads it
+// from the hook. Nothing allocates after the call, so the run ends as
+// the hook was told.
+static void lib_exit(Os *os, Arena a, i32 status, Str pwd, Str cwd, Slice<Str> env, b32 envok)
+{
+    Lib *l = (Lib *)os;
+    ub_exit x = {};
+    x.status = hoststatus(status);
+    x.pwd    = pwd.len ? hoststr(&a, pwd) : 0;
+    x.cwd    = cwd.len ? hoststr(&a, cwd) : 0;
+    x.env    = hoststrs(&a, env);
+    x.delta  = envdelta(&a, l->hooks->envbase, envok ? x.env : 0);
+    flushw(os);
+    l->cfg.exit(l->cfg.user, &x);
+}
+
+
+// Access
 
 // The core's open flags are the hook's
 static_assert((i32)OF_READ==UB_READ && (i32)OF_WRITE==UB_WRITE &&

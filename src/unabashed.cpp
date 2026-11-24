@@ -1742,17 +1742,20 @@ static void readstdin(Shell *sh, Arena scratch)
 // A library's run ends: the environment for the host's exit hook, which
 // the next run may start from, so as a native program gets it, as the
 // host passes it back. An escape point of its own, as sh_main's top one
-// is still armed: an escape in makeenv (checkstack) leaves it empty.
-static Slice<Str> exitenv(Shell *sh, Arena *a)
+// is still armed: an escape in makeenv (checkstack) leaves it empty,
+// and *ok false.
+static Slice<Str> exitenv(Shell *sh, Arena *a, b32 *ok)
 {
     Escape e;
     escenter(sh, &e);
     if (!jmpset(e.jmp)) {
         Slice<Str> env = nativechildenv(sh, a, makeenv(sh, a));
         escleave(sh, &e);
+        *ok = 1;
         return env;
     }
     escleave(sh, &e);
+    *ok = 0;
     return {};
 }
 
@@ -2097,6 +2100,16 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             sh->rshell |= st.restricted;
             sh->shopt[S_RESTRICTED_SHELL] = sh->rshell;
             if (sh->rshell || sh->restricted) makerestricted(sh);
+            if constexpr (LIBMODE) {
+                if (lib_exitwanted(os)) {
+                    // What the exit hook's delta is against: the exports
+                    // as the command starts, after the startup files
+                    Arena      a  = scratch;
+                    b32        ok = 0;
+                    Slice<Str> env = exitenv(sh, &a, &ok);
+                    lib_exitbase(os, &perm, env, ok);
+                }
+            }
         }
         if (sh->interactive && sh->opt[O_HISTORY] && !sh->hist.session) {
             histload(sh);  // unless the startup files added lines
@@ -2250,9 +2263,10 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         if (lib_exitwanted(os)) {
             // The state the next run may start from
             Arena      a   = scratch;
-            Slice<Str> env = exitenv(sh, &a);
+            b32        ok  = 0;
+            Slice<Str> env = exitenv(sh, &a, &ok);
             Str        pwd = !sh->wdlost && isabsolute(sh, sh->wd) ? sh->wd : Str{};
-            lib_exit(os, a, status, pwd, sh->cwd, env);
+            lib_exit(os, a, status, pwd, sh->cwd, env, ok);
         }
         return status;
     }
