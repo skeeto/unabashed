@@ -127,6 +127,11 @@ static iz mainstack(byte *here, iz limit)
 #    define SPAWN_CLOSEFROM 1
 #  endif
 #endif
+// Library builds never give a program the terminal, and leave the
+// symbol out: a host may link against an older glibc than its headers
+#if defined(POSIX_SPAWN_TCSETPGROUP) && !UB_LIBRARY
+#  define SPAWN_TCSETPGRP 1
+#endif
 
 // Whether posix_spawn can carry out the plan (trispawn)
 static b32 spawnable(SpawnPlan *p)
@@ -134,7 +139,7 @@ static b32 spawnable(SpawnPlan *p)
     #if !SPAWN_CHDIR
     (void)p;
     return 0;
-    #elif !defined(POSIX_SPAWN_TCSETPGROUP)
+    #elif !SPAWN_TCSETPGRP
     return !(p->pgid && p->fg);
     #else
     (void)p;
@@ -149,7 +154,7 @@ static short spawnpre(posix_spawnattr_t *at, posix_spawn_file_actions_t *fa,
                       SpawnPlan *p, i32 *src, i32 base)
 {
     short flags = 0;
-    #ifdef POSIX_SPAWN_TCSETPGROUP
+    #if SPAWN_TCSETPGRP
     if (p->pgid && p->fg) {
         flags |= POSIX_SPAWN_TCSETPGROUP;
         posix_spawnattr_tcsetpgrp_np(at, p->tty);
