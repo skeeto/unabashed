@@ -821,7 +821,7 @@ static void detachcaptures(Shell *sh, Shell *c)
 
 static File *devnull(Shell *sh, Arena scratch)
 {
-    Opened o = os_open(sh->os, scratch, "/dev/null", OF_READ, 0);
+    Opened o = os_open(sh->os, scratch, "/dev/null", OF_READ|OF_OWN, 0);
     if (o.err) return 0;
     File *f = newfile(sh, F_OS, OF_READ);
     f->h = o.h;

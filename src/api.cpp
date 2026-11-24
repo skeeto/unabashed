@@ -82,7 +82,15 @@ enum : i32 {  // os_open flags
     OF_TRUNC  = 1<<3,
     OF_APPEND = 1<<4,
     OF_EXCL   = 1<<5,
+
+    // The library's mark on an access the shell makes for itself, not one
+    // the script names (a sniff, /dev/null, the password file): OR'd into
+    // os_open's flags or os_stat's follow as it is called, never stored,
+    // so that the library can leave it out of what a host is shown. The
+    // platforms ignore the bit. In the executables it is zero.
+    OF_OWN    = LIBMODE ? 1<<30 : 0,
 };
+enum : i32 { ST_OWN = OF_OWN };  // the same, for os_stat
 
 enum : i32 {  // file types
     FT_NONE, FT_FILE, FT_DIR, FT_LINK, FT_FIFO, FT_CHAR, FT_BLOCK,
@@ -551,7 +559,7 @@ static void    os_tasktag(Os *, u64 tag, iz ntasks, u64 group);
 // chaos seeds need not agree.
 static void    os_racy(Os *);
 
-// The library's own (libposix.cpp, libwin32.cpp), named only in
+    // The library's own (libposix.cpp, libwin32.cpp), named only in
 // "if constexpr (LIBMODE)" branches, so that no other layer need
 // define them.
 // lib_abort ends the run with -err, from any of its fibers; lib_step

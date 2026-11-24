@@ -1981,7 +1981,7 @@ static i32 fcrun(Shell *sh, Str src, Arena scratch)
 static Opened fctemp(Shell *sh, Arena *a, Str *name)
 {
     Str dir = getplain(sh, a, "TMPDIR").value;
-    if (!dir.len || pathstat(sh, *a, dir, 1).type!=FT_DIR) dir = "/tmp";
+    if (!dir.len || pathstat(sh, *a, dir, 1|ST_OWN).type!=FT_DIR) dir = "/tmp";
     Opened o = {};
     for (i32 try_ = 0; try_ < 100; try_++) {
         u64 r = (u64)dynnow(sh) ^ (u64)sh->bashpid*0x9e3779b97f4a7c15u ^
@@ -2179,7 +2179,7 @@ static i32 b_fc(Shell *sh, Str *args, iz nargs, Arena scratch)
     Str full   = absolute(sh, &scratch, file);
     if (!status) {
         i32 err = 0;
-        Str src = readwholefile(sh, &scratch, file, &err);
+        Str src = readwholefile<OF_OWN>(sh, &scratch, file, &err);
         if (!err) {
             b32 hist    = sh->opt[O_HISTORY];
             b32 verbose = sh->opt[O_VERBOSE];

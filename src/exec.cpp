@@ -877,6 +877,7 @@ static Str capresult(Shell *sh, Arena scratch, Str s)
     return trimnewlines(s, sh->pathmode!=PM_POSIX);
 }
 
+template<i32 own>
 static Str readwholefile(Shell *, Arena *, Str, i32 *);
 
 static Str redirtarget(Shell *, Arena *, Word *, b32 *);
@@ -934,7 +935,7 @@ static void endcapture(Shell *sh, Capture *c, Arena scratch)
     for (i32 fd = 0; fd < fds->top; fd++) {
         File *f = fds->fd[fd];
         if (!f || f->kind!=F_CAPTURE || f->cap!=&c->b) continue;
-        Opened o = os_open(sh->os, scratch, "/dev/null", OF_WRITE, 0);
+        Opened o = os_open(sh->os, scratch, "/dev/null", OF_WRITE|OF_OWN, 0);
         f->kind = F_OS;  // in place: descriptors sharing it follow
         f->cap  = 0;
         f->h    = o.err ? BADHANDLE : o.h;
@@ -1961,7 +1962,7 @@ static b32 materialize(Shell *sh, Arena a, File *f, i32 *err = 0)
         Str rest = cuthead(f->mem, f->pos<f->mem.len ? f->pos : f->mem.len);
         switch (memfiletype(sh, f)) {
         case FT_CHAR: {
-            Opened o = os_open(sh->os, a, "/dev/null", OF_READ, 0);
+            Opened o = os_open(sh->os, a, "/dev/null", OF_READ|OF_OWN, 0);
             *err = o.err;
             if (o.err) return 0;
             h = o.h;
@@ -2644,7 +2645,7 @@ static void shebangoptions(Shell *sh, Str src)
 static b32 isshellscript(Shell *sh, Arena a, Str path)
 {
     Str full = absolute(sh, &a, path);
-    Opened o = os_open(sh->os, a, full, OF_READ, 0);
+    Opened o = os_open(sh->os, a, full, OF_READ|OF_OWN, 0);
     if (o.err) return 1;
     u8 buf[80];
     iz n = os_read(sh->os, o.h, buf, countof(buf));
@@ -2661,7 +2662,7 @@ static b32 isshellscript(Shell *sh, Arena a, Str path)
 static Str scriptinterp(Shell *sh, Arena *a, Str path)
 {
     Str full = absolute(sh, a, path);
-    Opened o = os_open(sh->os, *a, full, OF_READ, 0);
+    Opened o = os_open(sh->os, *a, full, OF_READ|OF_OWN, 0);
     if (o.err) return {};
     u8 buf[128];
     iz n = os_read(sh->os, o.h, buf, countof(buf));
@@ -2688,6 +2689,9 @@ static b32 binaryfile(Str s)
     return 0;
 }
 
+// A file's whole content, or an error. own: OF_OWN for a file the shell
+// reads for itself (the password file), not one the script names.
+template<i32 own>
 static Str readwholefile(Shell *sh, Arena *a, Str path, i32 *err)
 {
     i32   fd = devfdnum(path);
@@ -2713,7 +2717,7 @@ static Str readwholefile(Shell *sh, Arena *a, Str path, i32 *err)
         return c.text;
     }
     Str full = absolute(sh, a, path);
-    Opened o = os_open(sh->os, *a, full, OF_READ, 0);
+    Opened o = os_open(sh->os, *a, full, OF_READ|own, 0);
     *err = o.err;
     if (o.err) return {};
     Buf b(a, 4096);
@@ -2760,11 +2764,11 @@ static PfZone *shellzone(Shell *sh, Arena *a)
             dir  = dir.len ? dir : Str("/usr/share/zoneinfo");
             path = concat3(a, dir, "/", name);
         }
-        Stat st = pathstat(sh, *a, path, 1);
+        Stat st = pathstat(sh, *a, path, 1|ST_OWN);
         if (!st.err && st.type==FT_FILE && st.size<=((iz)1<<20)) {
             Arena tmp = *a;
             i32   err = 0;
-            Str   s   = readwholefile(sh, &tmp, path, &err);
+            Str   s   = readwholefile<OF_OWN>(sh, &tmp, path, &err);
             PfZone f  = err ? PfZone{} : parsetzif(&tmp, s);
             if (f.ok) {
                 *a = tmp;  // keep the file's tables
@@ -2852,7 +2856,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
         // in where the platform could not hold it (os_cwd): refused,
         // never run elsewhere. bash's child would be in it still.
         Str  cwd = spawncwd(sh, &a);
-        Stat st  = os_stat(sh->os, a, cwd.len ? cwd : Str("."), 1);
+        Stat st  = os_stat(sh->os, a, cwd.len ? cwd : Str("."), 1|ST_OWN);
         if (st.err || st.type!=FT_DIR) {
             Buf b(&a, 128);
             print(&b, path);

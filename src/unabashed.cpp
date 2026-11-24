@@ -478,8 +478,8 @@ static b32 startupfile(Shell *sh, Arena scratch, Str name, Startup *s)
     Str file = s->busybox ? name : tildefilename(sh, &scratch, name);
     if (!file.len) return 0;
     i32  err;
-    Str  src = readwholefile(sh, &scratch, file, &err);
-    Stat st  = pathstat(sh, scratch, file, 1);
+    Str  src = readwholefile<OF_OWN>(sh, &scratch, file, &err);
+    Stat st  = pathstat(sh, scratch, file, 1|ST_OWN);
     if (err==E_NOENT && st.err) return 0;
     Str bad = err ? errtext(err) : Str{};
     if (!st.err && st.type==FT_DIR) bad = "is a directory";
@@ -701,7 +701,7 @@ static void pathsetup(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
     // fstab, read whole if it is there
     Str    fstab = {};
     Str path = concat(&scratch, root, "/etc/fstab");
-    Opened o     = !LIBMODE || !none ? os_open(sh->os, scratch, path, OF_READ, 0) : unopened();
+    Opened o     = !LIBMODE || !none ? os_open(sh->os, scratch, path, OF_READ|OF_OWN, 0) : unopened();
     if (!o.err) {
         Buf b(&scratch, 4096);
         for (;;) {
@@ -964,8 +964,8 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
         }
         if (g.set && isabsolute(sh, g.value) && sh->pathmode!=PM_NATIVE) {
             Str  abs = absolute(sh, a, g.value);  // as for the numbers
-            Stat x   = os_stat(sh->os, scratch, abs, 1);
-            Stat y = os_stat(sh->os, scratch, cwd, 1);
+            Stat x   = os_stat(sh->os, scratch, abs, 1|ST_OWN);
+            Stat y = os_stat(sh->os, scratch, cwd, 1|ST_OWN);
             if (!x.err && !y.err && x.ino==y.ino && x.dev==y.dev) {
                 pwd = clone(a, g.value);  // setvar frees PWD's old buffer
             }
@@ -1380,7 +1380,7 @@ static Slice<Str> cygexpand(Shell *sh, Arena *a, Slice<Str> out, Str pat)
 {
     Slice<Str> alts = cygbraces(a, {}, pat, (iz)1<<12);
     Str home = getplain(sh, a, "HOME").value;
-    Stat st  = home.len ? pathstat(sh, *a, home, 1) : Stat{};
+    Stat st  = home.len ? pathstat(sh, *a, home, 1|ST_OWN) : Stat{};
     b32 dir  = home.len && !st.err && st.type==FT_DIR;
     for (iz k = 0; k < alts.len; k++) {
         Str p = alts[k];
@@ -1443,9 +1443,9 @@ static b32 msysargv(Shell *sh, OsInfo *info, Arena *perm, Arena scratch)
                 continue;
             }
             if (r.flags & CYG_ATFILE) {
-                Stat st = pathstat(sh, scratch, r.file, 1);
+                Stat st = pathstat(sh, scratch, r.file, 1|ST_OWN);
                 i32  err = st.err ? st.err : st.type!=FT_FILE ? E_ISDIR : 0;
-                Str  text = err ? Str{} : readwholefile(sh, &scratch, r.file, &err);
+                Str  text = err ? Str{} : readwholefile<OF_OWN>(sh, &scratch, r.file, &err);
                 if (!err) {
                     if (++nfiles > 10) {
                         Buf b(&scratch);
@@ -1628,7 +1628,7 @@ static void badoption(Shell *sh, Arena scratch, Str opt, u8 c = 0)
 static void startdebugger(Shell *sh, Arena scratch)
 {
     Str  path = "/usr/local/share/bashdb/bashdb-main.inc";
-    Stat st   = pathstat(sh, scratch, path, 1);
+    Stat st   = pathstat(sh, scratch, path, 1|ST_OWN);
     if (st.err) {
         Buf b(&scratch, 256);
         print(&b, errname(sh));

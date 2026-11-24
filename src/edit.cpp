@@ -6284,7 +6284,7 @@ static b32 eddumb(Shell *sh, Arena a)
             print(&b, sub[j]);
             print(&b, "/");
             print(&b, name);
-            if (!pathstat(sh, t, finish(&b), 1).err) return 0;
+            if (!pathstat(sh, t, finish(&b), 1|ST_OWN).err) return 0;
         }
     }
     return 1;

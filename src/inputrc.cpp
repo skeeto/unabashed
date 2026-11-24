@@ -686,7 +686,7 @@ static b32 rlreadfile(Editor *ed, Shell *sh, Str name, i32 level, Arena a)
 {
     Str path = tildefilename(sh, &a, name);
     i32 err  = 0;
-    Str text = readwholefile(sh, &a, path, &err);
+    Str text = readwholefile<OF_OWN>(sh, &a, path, &err);
     if (err) return 0;
     RlRead r = {};
     r.file  = name;

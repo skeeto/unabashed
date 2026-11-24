@@ -86,7 +86,7 @@ static iz sniffread(void *ctx, i64 off, u8 *buf, iz len)
 // if all are there (a DLL's own import was missing).
 static Str missingdll(Shell *sh, Arena *a, Str native, Slice<Str> env)
 {
-    Opened o = os_open(sh->os, *a, native, OF_READ, 0);
+    Opened o = os_open(sh->os, *a, native, OF_READ|OF_OWN, 0);
     if (o.err) return {};
     SniffFile f = {sh->os, o.h};
     PeInfo pe = pesniff(sniffread, &f, *a, a);
@@ -115,7 +115,7 @@ static Str missingdll(Shell *sh, Arena *a, Str native, Slice<Str> env)
         for (iz d = 0; !found && d < dirs.len; d++) {
             Arena t = *a;
             Str path = concat(&t, dirs[d], dll);
-            Stat  s = os_stat(sh->os, t, path, 1);
+            Stat  s = os_stat(sh->os, t, path, 1|ST_OWN);
             found = !s.err && s.type==FT_FILE;
         }
         if (!found) return dll;
@@ -168,7 +168,7 @@ static Sniff sniff(Shell *sh, Arena *a, Str native, Stat st)
     }
 
     Sniff  s = {};
-    Opened o = os_open(sh->os, scratch, native, OF_READ, 0);
+    Opened o = os_open(sh->os, scratch, native, OF_READ|OF_OWN, 0);
     if (o.err) return s;  // not remembered: perhaps locked for now
     u8 head[SNIFFHEAD];
     SniffFile f = {sh->os, o.h};
@@ -443,9 +443,9 @@ static Slice<Str> envexes(Shell *sh, Arena *a, Slice<Str> env)
             if (n.head != paths[k]) continue;
             Arena t = *a;
             Str   p = slashify(&t, n.tail, '/');
-            if (!hasdrive(p) || os_stat(sh->os, t, p, 1).err!=E_NOENT) break;
+            if (!hasdrive(p) || os_stat(sh->os, t, p, 1|ST_OWN).err!=E_NOENT) break;
             Str path = concat(&t, p, ".exe");
-            Stat x = os_stat(sh->os, t, path, 1);
+            Stat x = os_stat(sh->os, t, path, 1|ST_OWN);
             if (!x.err && x.type==FT_FILE) env[i] = concat(a, env[i], ".exe");
             break;
         }
@@ -630,7 +630,7 @@ static Target selftarget(Shell *sh, Arena *a, Str image, i32 width,
 {
     Target t = {};
     Str path2 = concat(a, installroot(image), "/etc/fstab");
-    Stat   f = os_stat(sh->os, *a, path2, 1);
+    Stat   f = os_stat(sh->os, *a, path2, 1|ST_OWN);
     b32    msys = personaof(argv[0], !f.err) == PM_MSYS;
     t.path    = image;
     t.cmdline = cmdline(a, argv, msys ? SPLIT_CYGWIN : SPLIT_MSVCRT);
@@ -646,7 +646,7 @@ static Str stubbusybox(Shell *sh, Arena *a, Str native, Stat st, Sniff s)
 {
     if (!s.stub) return {};
     Str  bb = concat(a, takehead(native, native.len-lastpart(native).len), "busybox.exe");
-    Stat b  = os_stat(sh->os, *a, bb, 1);
+    Stat b  = os_stat(sh->os, *a, bb, 1|ST_OWN);
     return !b.err && b.type==FT_FILE ? bb : Str{};
 }
 

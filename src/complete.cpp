@@ -349,7 +349,7 @@ static Slice<Str> compusers(Shell *sh, Comp *c, Str w)
     Slice<Str> m = {};
     if (sh->win32) return m;  // no password file
     i32 err = 0;
-    Str pw  = readwholefile(sh, a, "/etc/passwd", &err);
+    Str pw  = readwholefile<OF_OWN>(sh, a, "/etc/passwd", &err);
     for (Cut l = {{}, pw, 1}; l.ok;) {
         l = cut(l.tail, '\n');
         Str name = cut(l.head, ':').head;
@@ -603,7 +603,7 @@ static b32 hostblank(u8 c)
 static void hostfile(Shell *sh, Arena *a, Buf *names, Str file, i32 depth)
 {
     i32    err  = 0;
-    Str    text = readwholefile(sh, a, file, &err);
+    Str    text = readwholefile<OF_OWN>(sh, a, file, &err);
     for (Str rest = text; rest.len;) {
         Cut l = cut(rest, '\n');
         Str s = l.head;

@@ -2376,8 +2376,8 @@ static b32 wdleads(Shell *sh, Arena scratch)
     i32  err = 0;
     Str  now = os_getcwd(sh->os, &scratch, sh->cwd, &err);
     if (!now.data) return 0;
-    Stat a   = os_stat(sh->os, scratch, sh->wd, 1);
-    Stat b   = os_stat(sh->os, scratch, now, 1);
+    Stat a   = os_stat(sh->os, scratch, sh->wd, 1|ST_OWN);
+    Stat b   = os_stat(sh->os, scratch, now, 1|ST_OWN);
     return !a.err && !b.err && a.dev==b.dev && a.ino==b.ino;
 }
 

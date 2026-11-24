@@ -461,7 +461,7 @@ static Slice<Str> pcdbnames(Shell *sh, Arena *a, Str file)
     Slice<Str> m = {};
     if (sh->win32) return m;
     i32 err = 0;
-    Str db  = readwholefile(sh, a, file, &err);
+    Str db  = readwholefile<OF_OWN>(sh, a, file, &err);
     for (Cut l = {{}, db, 1}; l.ok;) {
         l = cut(l.tail, '\n');
         Str name = cut(l.head, ':').head;
@@ -477,7 +477,7 @@ static Slice<Str> pcservices(Shell *sh, Arena *a, Str w)
     Slice<Str> m = {};
     if (sh->win32) return m;
     i32 err = 0;
-    Str db  = readwholefile(sh, a, "/etc/services", &err);
+    Str db  = readwholefile<OF_OWN>(sh, a, "/etc/services", &err);
     for (Cut l = {{}, db, 1}; l.ok;) {
         l = cut(l.tail, '\n');
         Str line = cut(l.head, '#').head;

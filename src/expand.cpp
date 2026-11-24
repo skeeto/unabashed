@@ -2137,6 +2137,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
 // A user's home directory from the password file, as getpwnam does, or
 // with a null name the shell's own user's (getpwuid): null if none.
 // Windows has no such file, and so no other users' homes.
+template<i32 own = 0>
 static Str readwholefile(Shell *, Arena *, Str, i32 *);
 static b32 parsei64(Str, i64 *);
 
@@ -2146,7 +2147,7 @@ static Str pwfield(Shell *sh, Arena *a, Str user, i32 field)
 {
     if (sh->win32) return {};
     i32 err = 0;
-    Str pw  = readwholefile(sh, a, "/etc/passwd", &err);
+    Str pw  = readwholefile<OF_OWN>(sh, a, "/etc/passwd", &err);
     for (Cut c = {{}, pw, 1}; c.ok;) {
         c = cut(c.tail, '\n');
         Str f[6] = {};
