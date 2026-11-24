@@ -1156,6 +1156,40 @@ static void runmain(Os *os, void *arg)
     __builtin_trap();  // never resumed
 }
 
+// With ub_config.linger, the programs still running get a SIGTERM (and
+// a SIGCONT, should one be stopped), as do the groups still held, and
+// up to linger ms to exit before teardown's kill. Exits are read with
+// WNOWAIT, so the zombies keep the groups' ids for that kill.
+static void lingerkids(Lib *l)
+{
+    if (l->cfg.linger <= 0) return;
+    b32 any = 0;
+    for (i32 i = 0; i < l->nkids; i++) any |= !l->kids[i].reaped;
+    if (!any) return;
+    for (i32 i = 0; i < l->nkids; i++) {
+        LibKid *k = l->kids + i;
+        if (!ours(k)) continue;
+        i32 sigs[] = {SIGTERM, SIGCONT};
+        for (i32 s = 0; s < countof(sigs); s++) {
+            kill(-(pid_t)k->pid, sigs[s]);
+            if (!k->reaped) kill((pid_t)k->pid, sigs[s]);
+        }
+    }
+    i64 until = monons() + (i64)l->cfg.linger*1000000;
+    for (;;) {
+        b32 left = 0;
+        for (i32 i = 0; i<l->nkids && !left; i++) {
+            LibKid *k = l->kids + i;
+            if (k->reaped) continue;
+            siginfo_t si = {};
+            i32 r = waitid(P_PID, (id_t)k->pid, &si, WEXITED|WNOHANG|WNOWAIT);
+            left = !r && si.si_pid!=(pid_t)k->pid;
+        }
+        if (!left || monons()>=until) break;
+        poll(0, 0, 1);
+    }
+}
+
 // Everything the run took, back: from any state setup or an abort left.
 static void teardown(Lib *l)
 {
@@ -1175,6 +1209,7 @@ static void teardown(Lib *l)
         }
     }
 
+    lingerkids(l);
     traceleave(l);  // what is open now ends only with its program
 
     // Every program, with whatever it started in its session, while

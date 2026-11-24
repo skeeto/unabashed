@@ -350,6 +350,7 @@ typedef struct Case {
     int         baseenv;    // run with only PATH, UBX_KEEP=k, UBX_CHG=c,
                             // UBX_GONE=g, UBX_UNX=u, BASH_ENV=$T/benv
     char const *envx;       // and this entry too, or null
+    int         linger;     // ub_config.linger
 } Case;
 
 // An access as a log line, "OP flags path", T and TMPDIR shown as $T and
@@ -470,6 +471,7 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
     cfg.child    = onchild;
     cfg.memlimit = c->memlimit;
     cfg.fds      = c->fds;
+    cfg.linger   = c->linger;
     if (c->hooks & H_EXIT) cfg.exit = onexit;
     if (c->hooks & H_ACCESS) cfg.access = onaccess;
     if (c->hooks & H_SPAWN) cfg.spawn = onspawn;
@@ -914,7 +916,16 @@ static int check(char *argv0, int quick)
         {"exit hook: no delta", ":", 0, .hooks = H_EXIT, .baseenv = 1, .nolog = "delta"},
         {"exit hook: exit in startup", ":", 7, .hooks = H_EXIT, .baseenv = 1,
          .envx = "UBX_QUIT=1", .log = "delta unknown\n"},
+        // linger: a SIGTERM, and time to act on it, before the kill;
+        // the wait ends once the programs have
+        {"linger: SIGTERM first",
+         "sh -c 'trap \"echo term >$T/lg; exit 0\" TERM; while :; do sleep 0.01; done' &"
+         " sleep 0.2", 0, "term\n", 2, .hooks = H_EXIT, .linger = 5000,
+         .rerun = "cat $T/lg; rm $T/lg"},
+        {"linger: ends at most then", "sh -c 'trap \"\" TERM; sleep 100' & sleep 0.2", 0,
+         0, 1.5, .linger = 300},
         {"exit hook: next run",
+
  "cd /usr; export UBX_RT=rt; UBX_LOCAL=x", 0,
          "/usr\nrt\nunset\n", .hooks = H_EXIT,
          .rerun = "pwd; echo $UBX_RT; echo ${UBX_LOCAL-unset}"},

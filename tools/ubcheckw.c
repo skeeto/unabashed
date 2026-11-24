@@ -56,6 +56,7 @@ W32(int,       Thread32First(uintptr_t, ThreadEntry *));
 W32(int,       Thread32Next(uintptr_t, ThreadEntry *));
 W32(int,       CloseHandle(uintptr_t));
 W32(uintptr_t, OpenProcess(int, int, int));
+W32(int,       TerminateProcess(uintptr_t, unsigned));
 W32(uintptr_t, OpenThread(int, int, int));
 W32(int,       GetProcessTimes(uintptr_t, uint64_t *, uint64_t *, uint64_t *, uint64_t *));
 W32(int,       GetConsoleMode(uintptr_t, unsigned *));
@@ -753,7 +754,24 @@ typedef struct Case {
     char const *reason;     // with this reason (%d: the refusal's count)
     int         wrap;       // the spawn hook wraps each program in
                             // "ubhost --wrap" (2: by a relative path)
+    int         linger;     // ub_config.linger, with softsig logging
+                            // "SIG pid sig" and ending the program
 } Case;
+
+// A signal to a program, as a host would deliver it: logged, and the
+// program ended with the signal's status
+static int onsoftsig(void *user, int64_t pid, int sig)
+{
+    (void)user;
+    sput(&hooklog, "SIG ");
+    sputd(&hooklog, sig);
+    sput(&hooklog, "\n");
+    uintptr_t h = OpenProcess(1, 0, (int)pid);  // PROCESS_TERMINATE
+    if (!h) return -1;
+    TerminateProcess(h, 128u + (unsigned)sig);
+    CloseHandle(h);
+    return 0;
+}
 
 // An access as a log line, "OP flags path", T and the temporary
 // directory shown as $T and $TMP; refused if the case's rule says so
@@ -896,6 +914,8 @@ static int runcase(Case const *c, char *out, int outlen, double *secs, Snap *lef
     cfg.spawnlock = hostlock;
     cfg.memlimit  = c->memlimit;
     cfg.fds       = c->fds;
+    cfg.linger    = c->linger;
+    if (c->linger) cfg.softsig = onsoftsig;
     if (c->hooks & H_EXIT) cfg.exit = onexit;
     if (c->hooks & H_ACCESS) cfg.access = onaccess;
     if (c->hooks & H_SPAWN) cfg.spawn = onspawn;
@@ -1426,7 +1446,12 @@ static int check(int quick)
         {"exit hook: delta", "export UBX_N=n; f() { :; }; export -f f; unset T", 0,
          .hooks = H_EXIT, .log = "delta BASH_FUNC_f%%=() {  :\n}\ndelta UBX_N=n\ndelta T\n"},
         {"exit hook: no delta", ":", 0, .hooks = H_EXIT, .nolog = "delta ", .rerun = ":"},
+        // linger: SIGTERM through softsig, then time until the kill;
+        // the wait ends once the programs have
+        {"linger: softsig first", "sleep 100 & sleep 0.2", 0, 0, 2, .linger = 5000,
+         .log = "SIG 15\n"},
         {"exit hook: next run",
+
  "cd /Windows; export UBX_RT=rt; UBX_LOCAL=x", 0,
          "/Windows\nrt\nunset\n", .hooks = H_EXIT,
          .rerun = "pwd; echo $UBX_RT; echo ${UBX_LOCAL-unset}"},

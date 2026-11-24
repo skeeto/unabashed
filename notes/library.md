@@ -104,14 +104,17 @@ the records list, without calling the core.
 
 **Teardown order.**
 1. Flush output.
-2. Kill the run's programs: their sessions on POSIX, the job on
+2. With `linger`, ask the programs still running to end (SIGTERM, with
+   SIGCONT, to their groups on POSIX; through `softsig` on Windows,
+   else not at all) and wait up to that many ms for them.
+3. Kill the run's programs: their sessions on POSIX, the job on
    Windows. Then wait up to 1 s for them.
-3. Windows: unregister the pool waits.
-4. Close the recorded descriptors and handles.
-5. End or orphan the helpers.
-6. Free the fibers.
-7. Release the reservations.
-8. Restore the thread's signal mask (POSIX).
+4. Windows: unregister the pool waits.
+5. Close the recorded descriptors and handles.
+6. End or orphan the helpers.
+7. Free the fibers.
+8. Release the reservations.
+9. Restore the thread's signal mask (POSIX).
 
 
 ## Decisions
@@ -119,6 +122,9 @@ the records list, without calling the core.
 - **Leftovers are killed when a run ends.** Top-level procsubs first get
   up to 1 s to finish, so that `cmd > >(sort > out)` and
   `exec > >(tee log)` complete.
+  A host that sets `linger` gives the programs left a SIGTERM and that
+  long to act on it first, however the run ends (a cancel too). It
+  waits for the programs the run started, not for what they started.
   - POSIX: a program that calls `setsid` itself escapes.
   - Windows: the run's kill-on-close job holds every program.
 - **`$$` is a virtual pid**, unique across runs and hosts, and never a

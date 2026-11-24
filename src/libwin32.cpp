@@ -1097,6 +1097,31 @@ static void endhelpers(Lib *l)
     os->idle     = 0;
 }
 
+// With ub_config.linger and softsig, the programs still running are
+// sent SIGTERM through softsig and get up to linger ms to exit before
+// teardown's kill. Without softsig there is no way to ask, so none.
+static void lingerkids(Lib *l)
+{
+    if (l->cfg.linger<=0 || !l->cfg.softsig) return;
+    b32 any = 0;
+    for (i32 i = 0; i < l->nkids; i++) {
+        LibKid *k = l->kids + i;
+        if (!k->reaped && WaitForSingleObject(k->proc, 0)) {
+            any = 1;
+            l->cfg.softsig(l->cfg.user, k->pid, 15);
+        }
+    }
+    if (!any) return;
+    for (u32 start = GetTickCount(); GetTickCount()-start < (u32)l->cfg.linger; Sleep(1)) {
+        b32 left = 0;
+        for (i32 i = 0; i<l->nkids && !left; i++) {
+            LibKid *k = l->kids + i;
+            left = !k->reaped && WaitForSingleObject(k->proc, 0);
+        }
+        if (!left) break;
+    }
+}
+
 // Everything the run took, back: from any state setup or an abort left.
 static void teardown(Lib *l)
 {
@@ -1115,6 +1140,8 @@ static void teardown(Lib *l)
             WriteFile(l->errh, msg.data, (i32)msg.len, &n, 0);
         }
     }
+
+    lingerkids(l);
 
     // What is open now ends only with its program. One that has exited
     // ends with its own code: once killed, XP reads any as 0.

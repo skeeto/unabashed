@@ -169,6 +169,12 @@ typedef struct {
     // redirections alone; a pipeline stage that turns out to be shell
     // code starts once, as that.
     void      (*trace)(void *user, ub_trace const *);
+    // Milliseconds the programs still running as a run ends (however it
+    // ends) get to exit before they are killed: first sent SIGTERM, and
+    // SIGCONT, with their groups (POSIX), or SIGTERM through softsig
+    // (Windows; without softsig, none). It waits for the programs the
+    // run started, not for what they started. 0: killed at once.
+    int         linger;
 } ub_config;
 
 typedef struct { int fd; intptr_t h; } ub_fd;
