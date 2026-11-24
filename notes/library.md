@@ -497,7 +497,7 @@ The cases cover:
   with every hook set;
 - the descriptor budget;
 - SIGPIPE;
-- on Windows, helper queues, fibers and `ub_system`.
+- on Windows, helper queues and fibers (`ub_system` is ubtiny's, below).
 
 On Windows, a watcher thread samples descendants while each case runs,
 so leftovers are caught before `ub_free` closes the job.
