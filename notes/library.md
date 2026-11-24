@@ -285,6 +285,18 @@ platform's call, with `ub_access`: an op, flags, and the path.
   `//./NUL`; virtual paths (/proc, /dev/clipboard) are never asked;
   nothing reads a link; and the file msys mode makes for a program to
   read a procsub by name is asked as `UB_TEMPFILE`, in its directory.
+- **A refusal** fails the access as its error would, so a script sees
+  what bash shows for that error: `f: Permission denied` and status 1
+  for a redirection, no match for a glob, false for `test`, `command not
+  found` for a PATH search, 126 for a script read (127 for
+  `-UB_ENOENT`), "cannot create temp file for here-document" for
+  `UB_TEMPFILE`.
+- **A reason** replaces the error's text: its first line, at most 255
+  bytes, cut before a character it would split. The run keeps the last
+  16 reasons, each with its error, as error codes of their own above
+  any the system reports (`E_HOST`, src/libhooks.cpp); `errtext` shows
+  the reason. Without a reason the plain error stands, so `-UB_ENOENT`
+  still looks absent: the msys `.exe` retry and a PATH search move on.
 
 **`spawn`** is asked of each program the run starts, after the checks
 that could refuse it anyway and before the platform's spawn, with
@@ -332,18 +344,38 @@ and a wait here) are all asked.
 
   In msys mode the program's line is as the shell built it, arguments
   converted (`/c` is `C:/`, as in Git Bash).
-- **A refusal** fails the access as its error would, so a script sees
-  what bash shows for that error: `f: Permission denied` and status 1
-  for a redirection, no match for a glob, false for `test`, `command not
-  found` for a PATH search, 126 for a script read (127 for
-  `-UB_ENOENT`), "cannot create temp file for here-document" for
-  `UB_TEMPFILE`.
-- **A reason** replaces the error's text: its first line, at most 255
-  bytes, cut before a character it would split. The run keeps the last
-  16 reasons, each with its error, as error codes of their own above
-  any the system reports (`E_HOST`, src/libhooks.cpp); `errtext` shows
-  the reason. Without a reason the plain error stands, so `-UB_ENOENT`
-  still looks absent: the msys `.exe` retry and a PATH search move on.
+
+**`trace`** is told of each simple command, with `ub_trace`: a START
+once its words expand (as `set -x` shows them: its argv, its kind, its
+id, and the shell level, `$BASHPID`, it runs in), and an END with its
+status, before ERR and set -e. Ids count STARTs from 1, and an END
+repeats its START's id; `ub_spawn.trace` is the id of the command
+starting the program.
+- **No START** for assignments or redirections alone, nor a command
+  the DEBUG trap skips.
+- **A command that started a program** ends once both it and the
+  program have, with the program's status (`UB_SIGNALED|(128+n)` for a
+  signal's death) and pid. A pipeline's stages end as they are reaped,
+  so in join order, and an `&` job when it is reaped, perhaps long
+  after. `exec prog` ends at the program's reap.
+- **A command an escape abandons** (`exit`, set -e unwinding its
+  callers, a fatal error, a cancel) has no END, unless it started a
+  program.
+- **A pipeline stage, `&` job or coproc** starting a program holds its
+  START until the spawn: one that turns out to be shell code (a script
+  without `#!`) is retracted unseen and starts again as what it runs.
+- **At the run's end** the programs it kills end after the exit hook,
+  from teardown, on the host's fiber; any that cannot be reaped then
+  never end.
+- **Records** are the library's (src/libhooks.cpp), from the run's
+  arena with a free list: each fiber's open commands, innermost first,
+  keyed by the core's `Simple` and the frame it started in. A START
+  pops the fiber's records at its depth or deeper, which an escape
+  left; an END pops those above its own; a fiber's end and teardown
+  abandon what remains. One that started a program waits off the
+  stack, its LibKid holding it, for the reap and its status
+  (`lib_reaped`). The core makes one guarded call at START and at each
+  END; no core struct grows.
 
 
 ## Known deviations and limits
@@ -454,8 +486,9 @@ The cases cover:
 - syntax checks (`bash -n -c`);
 - the hooks, through a log each case checks, a second run started
   from the state the exit hook was given, refusals by rule, and
-  programs wrapped in `ubhost --wrap`, in a directory of files made for
-  the cases ($T);
+  programs wrapped in `ubhost --wrap`, and each command traced (with
+  `$$` fixed, so that a subshell's shows), in a directory of files
+  made for the cases ($T);
 - leftovers and shutdown;
 - children's signal state;
 - concurrency (8 threads, 4 on 32-bit Windows);

@@ -4084,6 +4084,14 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
         special  = 0;
     }
 
+    if constexpr (LIBMODE) {
+        if (lib_tracing(sh->os)) {
+            i32 kind = fn ? 2 : bi ? 1 : 3;
+            lib_tracestart(sh->os, *a, c, __builtin_frame_address(0), argv,
+                           sh->bashpid, kind, direct && kind==3);
+        }
+    }
+
     // exec without a command makes its redirections permanent
     // (outside a subshell only once all of them succeed: a failure
     // undoes the rest, as in bash), also run through command
@@ -4112,6 +4120,9 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
         sh->line = sh->ctlline;
         poptemps(sh, tb);
         sh->line = line;
+        if constexpr (LIBMODE) {
+            if (lib_tracing(sh->os)) lib_traceend(sh->os, *a, c, sh->status, 0);
+        }
         Builtin *sb = findbuiltin(sh, name);
         if (sb && (sb->flags & B_SPECIAL) && posixfatal(sh)) {
             sh->exiting = 1;  // as bash: a special builtin's, fatal
@@ -4269,6 +4280,12 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
         sh->line = sh->ctlline;
         poptemps(sh, tb);
         sh->line = line;
+    }
+    if constexpr (LIBMODE) {
+        if (lib_tracing(sh->os)) {
+            b32 retracted = c->direct && c->direct->retry;
+            lib_traceend(sh->os, scratch, c, sh->status, retracted);
+        }
     }
     if (sh->flow!=FLOW_RETURN && !c->forked) {
         checkerrexit(sh);

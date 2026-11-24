@@ -594,7 +594,8 @@ enum { ANY = 1<<30 };
 
 // The hooks a case installs (Case.hooks), each logging its calls to
 // static storage, since snapshots compare the process's memory
-enum { H_EXIT = 1<<0, H_ACCESS = 1<<1, H_SPAWN = 1<<2, H_ALL = H_EXIT|H_ACCESS|H_SPAWN };
+enum { H_EXIT = 1<<0, H_ACCESS = 1<<1, H_SPAWN = 1<<2, H_TRACE = 1<<3,
+       H_ALL = H_EXIT|H_ACCESS|H_SPAWN|H_TRACE };
 
 static char hooklogbuf[1<<16];
 static Snap hooklog = {hooklogbuf, 0, sizeof(hooklogbuf)};
@@ -754,6 +755,43 @@ static int onaccess(void *user, ub_access const *a, char const **reason)
     return c->denyret ? c->denyret : -UB_EACCES;
 }
 
+// A simple command as log lines: "S<id> b|f|p argv" as it starts, with
+// "+" after the id if in a subshell (a level other than $$, TRACEPID),
+// T shown as $T; "E<id> status" as it ends, with " p" if a program's
+enum { TRACEPID = 4242 };
+
+static void ontrace(void *user, ub_trace const *t)
+{
+    (void)user;
+    static char linebuf[8192];  // not on the run's stack
+    Snap line = {linebuf, 0, sizeof(linebuf)};
+    if (t->phase == UB_TRACE_END) {
+        sput(&line, "E");
+        sputd(&line, t->id);
+        sput(&line, " ");
+        sputd(&line, t->status);
+        sput(&line, t->pid ? " p\n" : "\n");
+        sput(&hooklog, linebuf);
+        return;
+    }
+    static char const *const kinds[] = {" ?", " b", " f", " p"};
+    sput(&line, "S");
+    sputd(&line, t->id);
+    sput(&line, t->level==TRACEPID ? "" : "+");
+    sput(&line, kinds[t->kind>0 && t->kind<4 ? t->kind : 0]);
+    for (int i = 0; i < t->argc; i++) {
+        char const *a = t->argv[i];
+        sput(&line, " ");
+        if (tdir[0] && hasprefix(a, tdir)) {
+            sput(&line, "$T");
+            for (char const *p = tdir; *p; p++) a++;
+        }
+        sput(&line, a);
+    }
+    sput(&line, "\n");
+    sput(&hooklog, linebuf);
+}
+
 static char selfutf8[3*32768];  // this program (check)
 
 // A program as a log line, "P<trace> name"; refused or wrapped if the
@@ -815,6 +853,7 @@ static int runcase(Case const *c, char *out, int outlen, double *secs, Snap *lef
     if (c->hooks & H_EXIT) cfg.exit = onexit;
     if (c->hooks & H_ACCESS) cfg.access = onaccess;
     if (c->hooks & H_SPAWN) cfg.spawn = onspawn;
+    if (c->hooks & H_TRACE) cfg.trace = ontrace;
     curcase = c;
     ndenied = 0;
     hooklog.len    = 0;
@@ -838,7 +877,7 @@ static int runcase(Case const *c, char *out, int outlen, double *secs, Snap *lef
     cmd.std[0] = c->hostpipe ? (intptr_t)pr : -1;
     cmd.std[1] = (intptr_t)f;
     cmd.std[2] = (intptr_t)f;
-    cmd.pid    = c->pid;
+    cmd.pid    = c->pid ? c->pid : c->hooks & H_TRACE ? TRACEPID : 0;
     Stopper s = {os, c->stopms, c->stopsig, 0};
     uintptr_t t = 0;
     if (c->stopms) s.done = CreateEventW(0, 1, 0, 0);
@@ -1382,6 +1421,23 @@ static int check(int quick)
          "126 0", .hooks = H_SPAWN, .deny = "P0 cmd", .reason = "no"},
         {"spawn refused: exec", "exec cmd //c echo hi; echo after", 126, ": no",
          .notout = "after", .hooks = H_SPAWN, .deny = "P0 cmd", .reason = "no"},
+        {"trace: builtin", "echo hi", 0, "hi", .hooks = H_TRACE, .log = "S1 b echo hi\nE1 0\n"},
+        {"trace: function", "f() { true; false; }; f", 1, .hooks = H_TRACE,
+         .log = "S1 f f\nS2 b true\nE2 0\nS3 b false\nE3 1\nE1 1\n"},
+        {"trace: program", "cmd //c exit 3", 3, .hooks = H_TRACE,
+         .log = "S1 p cmd //c exit 3\nE1 3 p\n"},
+        {"trace: pipeline", "echo a | tr a b | cat", 0, "b", .hooks = H_TRACE,
+         .log = "+ p tr a b\n", .log2 = "+ p cat\n"},
+        {"trace: exit in a function", "f() { exit 3; }; f", 3, .hooks = H_TRACE,
+         .log = "S1 f f\nS2 b exit 3\n", .nolog = "E"},
+        {"trace: killed at the end", "sleep 100 & exit 4", 4, .hooks = H_TRACE|H_EXIT,
+         .log = "S1+ p sleep 100\n", .log2 = "E1 393 p\n"},
+        {"trace: spawn's id", "cmd //c echo hi", 0, "hi", .hooks = H_TRACE|H_SPAWN,
+         .log = "S1 p cmd //c echo hi\nP1 cmd"},
+        {"trace: refused stage", "cmd //c echo hi | cat", 0, .hooks = H_TRACE|H_SPAWN,
+         .deny = "P1 cmd", .reason = "no", .log = "S1+ p cmd //c echo hi\nP1 cmd", .log2 = "E1 126\n"},
+        {"trace: #! script in-process", "$T/sh1", 0, "sh1", .hooks = H_TRACE,
+         .log = "S1 p $T/sh1\n", .log2 = " b echo sh1\n"},
     };
     int fails = 0;
     for (int i = 0; i < (int)(sizeof(cases)/sizeof(*cases)); i++) {

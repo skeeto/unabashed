@@ -83,6 +83,20 @@ typedef struct {                // a program about to start, for ub_config.spawn
     char const        *reason;  // with a refusal: what the script sees, or 0
 } ub_spawn;
 
+typedef struct {                // a simple command, for ub_config.trace
+    int                phase;   // UB_TRACE_START, UB_TRACE_END
+    int                kind;    // UB_TRACE_BUILTIN ... UB_TRACE_PROGRAM
+    int64_t            id;      // 1, 2, ... in START order; END repeats it
+    int64_t            level;   // $BASHPID where it runs
+    int                argc;    // START: its words, expanded, as set -x
+    char const *const *argv;    // shows them; END: 0
+    int64_t            pid;     // END: the program it started, or 0
+    int                status;  // END: as $? (the program's, if one),
+                                // UB_SIGNALED|(128+n) for a signal death
+} ub_trace;
+enum { UB_TRACE_START = 1, UB_TRACE_END };
+enum { UB_TRACE_BUILTIN = 1, UB_TRACE_FUNCTION, UB_TRACE_PROGRAM };
+
 // Hooks run on ub_run's thread, inside the run, and must be brief: one
 // that blocks stalls the run, and a cancel takes effect only once it
 // returns. Deep in a recursion a hook has only part of the 64 KiB of
@@ -136,6 +150,16 @@ typedef struct {
     // or 127 for -UB_ENOENT. A script without #!, which the shell runs
     // itself, is not asked (the access hook sees it read).
     int       (*spawn)(void *user, ub_spawn *);
+    // Optional: each simple command that runs, START once its words
+    // expand and END with its status, before ERR and set -e. A command
+    // that started a program ends when both it and the program have,
+    // with the program's status: a pipeline's stages end as they are
+    // reaped, and a program killed as the run ends after the exit hook.
+    // A command an escape abandons (exit, set -e, a fatal error) has no
+    // END unless it started a program. No START for assignments or
+    // redirections alone; a pipeline stage that turns out to be shell
+    // code starts once, as that.
+    void      (*trace)(void *user, ub_trace const *);
 } ub_config;
 
 typedef struct { int fd; intptr_t h; } ub_fd;

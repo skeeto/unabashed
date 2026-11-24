@@ -32,15 +32,18 @@ struct LibRes {
 };
 enum : iz { RESHEAD = (iz)1<<16 };  // the allocation granularity
 
+struct TraceRec;
+
 struct LibKid {
-    i64 pid;
-    uz  proc;       // the core's handle, until reaped
-    u64 sigign;     // signals it started with ignored
-    b32 shared;     // shares the host's console (UB_SHARECONSOLE)
-    b32 injob;      // in the run's job
-    b32 announced;  // given to the child hook
-    b32 reaped;
-    i32 status;     // once reaped by the core: as os_waitproc returns it
+    i64       pid;
+    uz        proc;       // the core's handle, until reaped
+    u64       sigign;     // signals it started with ignored
+    b32       shared;     // shares the host's console (UB_SHARECONSOLE)
+    b32       injob;      // in the run's job
+    b32       announced;  // given to the child hook
+    b32       reaped;
+    i32       status;     // once reaped by the core: as os_waitproc returns it
+    TraceRec *trace;      // the command that started it, while it waits
 };
 
 enum : i32 { MAXKIDS = 1024, HSET = 1<<12, MAXFIBS = 4096 };
@@ -129,6 +132,18 @@ static Lib *runlib()
 // The hooks (libhooks.cpp, included after this module): hooksetup makes
 // a run's state.
 static void hooksetup(Lib *);
+// The trace hook's records of each fiber's commands (TraceRec): its
+// innermost open one (tracetop), whose START may be held (traceheld)
+// until it spawns (tracespawning), linked to its program (tracelink)
+// until the reap (tracereaped); a fiber's end (traceunfiber), and the
+// run's (traceleave).
+static TraceRec *tracetop(Lib *);
+static b32  traceheld(TraceRec *);
+static i64  tracespawning(Lib *, Arena, TraceRec *);
+static void tracelink(Lib *, TraceRec *, LibKid *);
+static void tracereaped(Lib *, LibKid *, i32 status);
+static void traceunfiber(Lib *, uz fiber);
+static void traceleave(Lib *);
 
 
 // Hooks
@@ -288,6 +303,7 @@ static void lib_fiber(Os *os, void *handle)
 static void lib_unfiber(Os *os, void *handle)
 {
     Lib *l = (Lib *)os;
+    traceunfiber(l, (uz)handle);
     for (i32 i = 0; i < l->nfibs; i++) {
         if (l->fibs[i] == handle) {
             l->fibs[i] = l->fibs[--l->nfibs];
@@ -370,7 +386,7 @@ static b32 owned(Lib *l, uz h)
 // before the platform's call, but not of the shell's own (OF_OWN,
 // ST_OWN). Never inside the spawn window: the host's lock is held.
 static i32 askhost(Lib *, Arena, i32 op, i32 flags, Str path);
-static i32 askspawn(Lib *, Arena *, Spawn *, Slice<Str> *wrap);
+static i32 askspawn(Lib *, Arena *, Spawn *, i64 trace, Slice<Str> *wrap);
 
 static i32 askwin(Os *os, Arena scratch, i32 op, i32 flags, Str path)
 {
@@ -492,6 +508,7 @@ static void lib_spawned(Os *os, uz proc, i64 pid, u64 sigign, b32 shared, b32 in
     k->announced = 0;
     k->reaped    = 0;
     k->status    = 0;
+    k->trace     = 0;
 }
 
 static void lib_reaped(Os *os, uz proc, i32 status)
@@ -503,6 +520,7 @@ static void lib_reaped(Os *os, uz proc, i32 status)
     k->status = status;
     k->proc   = 0;
     if (k->announced && l->cfg.child) l->cfg.child(l->cfg.user, k->pid, 0);
+    tracereaped(l, k, status);
 }
 
 // Room for one more: reaped programs are forgotten when the table fills.
@@ -517,14 +535,15 @@ static b32 kidroom(Lib *l)
     return n < MAXKIDS;
 }
 
-// The spawn hook's: the program it asked of, or a wrapper that starts
+// The spawn hook's, and a held START's: the program it asked of, or a wrapper that starts
 // it, wrap[0] with a line of wrap[1...], the path (backslashes) and the
 // program's own line as one argument, which the wrapper, splitting its
 // line as any program does, gets back whole
-static Spawn *asked(Lib *l, Arena *a, Spawn *s, i32 *err)
+static Spawn *asked(Lib *l, Arena *a, Spawn *s, TraceRec *t, i32 *err)
 {
+    i64 id = tracespawning(l, *a, t);
     Slice<Str> wrap = {};
-    *err = askspawn(l, a, s, &wrap);
+    *err = askspawn(l, a, s, id, &wrap);
     if (*err || !wrap.len) return s;
     Str line = s->cmdline;
     if (!line.len) {
@@ -571,9 +590,10 @@ static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
         r.err  = E_AGAIN;
         return r;
     }
-    if (l->cfg.spawn) {
+    TraceRec *t = tracetop(l);
+    if (l->cfg.spawn || traceheld(t)) {
         i32 err = 0;
-        s = asked(l, &scratch, s, &err);
+        s = asked(l, &scratch, s, t, &err);
         if (err) {
             flushw(os);
             Spawned r = {};
@@ -587,6 +607,7 @@ static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
     if (l->nkids > before) {
         LibKid *k = l->kids + before;
         k->announced = 1;
+        tracelink(l, t, k);
         if (l->cfg.child) l->cfg.child(l->cfg.user, k->pid, 1);
     }
     return r;
@@ -1095,6 +1116,8 @@ static void teardown(Lib *l)
         }
     }
 
+    traceleave(l);  // what is open now ends only with its program
+
     // Every program, with whatever it started (the job holds both)
     u32 code = SIGEXIT | (128+9);
     TerminateJobObject(os->runjob, code);
@@ -1137,6 +1160,10 @@ static void teardown(Lib *l)
     for (i32 i = 0; i < l->nkids; i++) {
         LibKid *k = l->kids + i;
         if (k->reaped) continue;
+        i32 code = 0;
+        if (k->trace && GetExitCodeProcess(k->proc, &code) && code!=259) {  // STILL_ACTIVE
+            tracereaped(l, k, exitstatus((u32)code));
+        }
         CloseHandle(k->proc);
         if (k->announced && l->cfg.child) l->cfg.child(l->cfg.user, k->pid, 0);
     }

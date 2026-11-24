@@ -27,11 +27,14 @@ struct LibRes {
 };
 enum : iz { RESHEAD = (iz)1<<16 };  // a page on every system
 
+struct TraceRec;
+
 struct LibKid {
-    i64 pid;
-    i32 watch;   // Linux: its pidfd, or -1; macOS: in the kqueue
-    b32 reaped;
-    i32 status;  // once reaped by the core: as os_waitproc returns it
+    i64       pid;
+    i32       watch;   // Linux: its pidfd, or -1; macOS: in the kqueue
+    b32       reaped;
+    i32       status;  // once reaped by the core: as os_waitproc returns it
+    TraceRec *trace;   // the command that started it, while it waits
 };
 
 enum : i32 { MAXKIDS = 1024, FDBITS = 1<<16 };
@@ -107,7 +110,19 @@ static __thread Lib *curlib;  // the run on this thread
 // ST_OWN).
 static void hooksetup(Lib *);
 static i32  askhost(Lib *, Arena, i32 op, i32 flags, Str path);
-static i32  askspawn(Lib *, Arena *, Spawn *, Slice<Str> *wrap);
+static i32  askspawn(Lib *, Arena *, Spawn *, i64 trace, Slice<Str> *wrap);
+// The trace hook's records of each fiber's commands (TraceRec): its
+// innermost open one (tracetop), whose START may be held (traceheld)
+// until it spawns (tracespawning), linked to its program (tracelink)
+// until the reap (tracereaped); a fiber's end (traceunfiber), and the
+// run's (traceleave).
+static TraceRec *tracetop(Lib *);
+static b32  traceheld(TraceRec *);
+static i64  tracespawning(Lib *, Arena, TraceRec *);
+static void tracelink(Lib *, TraceRec *, LibKid *);
+static void tracereaped(Lib *, LibKid *, i32 status);
+static void traceunfiber(Lib *, uz fiber);
+static void traceleave(Lib *);
 
 static Lib *runlib()
 {
@@ -241,6 +256,7 @@ static byte *lib_fiberstack(Os *os, iz size)
 
 static void lib_fiberunstack(Os *os, byte *p, iz)
 {
+    traceunfiber((Lib *)os, (uz)p);
     libunreserve((Lib *)os, p);
 }
 
@@ -470,6 +486,7 @@ static void lib_reaped(i64 pid, i32 status, struct rusage const *ru)
     if (k) {
         k->status = status;
         reapedkid(l, k);
+        tracereaped(l, k, status);
     }
     if (ru) {
         l->cpu.cuser += tvns(ru->ru_utime);
@@ -517,14 +534,16 @@ static i32 kernelsniff(Arena scratch, Str path)
     return E_NOEXEC;
 }
 
-// The spawn hook's: the program it asked of, or a wrapper that starts
-// it, wrap[0] with wrap[1...], the path, and its argv
-static Spawn *asked(Lib *l, Arena *a, Spawn *s, i32 *err)
+// The spawn hook's, and a held START's (the sniff decides whether it
+// is shell code after all): the program it asked of, or a wrapper that
+// starts it, wrap[0] with wrap[1...], the path, and its argv
+static Spawn *asked(Lib *l, Arena *a, Spawn *s, TraceRec *t, i32 *err)
 {
     *err = kernelsniff(*a, s->path);
     if (*err) return s;
+    i64 id = tracespawning(l, *a, t);
     Slice<Str> wrap = {};
-    *err = askspawn(l, a, s, &wrap);
+    *err = askspawn(l, a, s, id, &wrap);
     if (*err || !wrap.len) return s;
     Spawn *w = alloc<Spawn>(a);
     *w = *s;
@@ -548,9 +567,10 @@ static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
         r.err  = E_AGAIN;
         return r;
     }
-    if (l->cfg.spawn) {
+    TraceRec *t = tracetop(l);
+    if (l->cfg.spawn || traceheld(t)) {
         i32 err = 0;
-        s = asked(l, &scratch, s, &err);
+        s = asked(l, &scratch, s, t, &err);
         if (err) {
             Spawned r = {};
             r.proc = BADHANDLE;
@@ -564,6 +584,8 @@ static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
         k->pid    = r.pid;
         k->reaped = 0;
         k->status = 0;
+        k->trace  = 0;
+        tracelink(l, t, k);
         watchkid(l, k);
         if (l->cfg.child) l->cfg.child(l->cfg.user, r.pid, 1);
     }
@@ -1025,6 +1047,8 @@ static void teardown(Lib *l)
         }
     }
 
+    traceleave(l);  // what is open now ends only with its program
+
     // Every program, with whatever it started in its session
     for (i32 i = 0; i < l->nkids; i++) {
         LibKid *k = l->kids + i;
@@ -1040,7 +1064,10 @@ static void teardown(Lib *l)
             i32   status;
             pid_t r = waitpid((pid_t)k->pid, &status, WNOHANG);
             if (r || errno!=EINTR) {
-                if (r) reapedkid(l, k);
+                if (r) {
+                    reapedkid(l, k);
+                    tracereaped(l, k, r<0 ? 127 : waitstatus(status));
+                }
             }
             left |= !k->reaped;
         }
@@ -1049,7 +1076,10 @@ static void teardown(Lib *l)
     }
     i32 n = 0;
     for (i32 i = 0; i < l->nkids; i++) {
-        if (!l->kids[i].reaped) l->kids[n++] = l->kids[i];  // later
+        if (!l->kids[i].reaped) {
+            l->kids[i].trace = 0;  // no END after the run
+            l->kids[n++] = l->kids[i];  // later
+        }
     }
     l->nkids = n;
 

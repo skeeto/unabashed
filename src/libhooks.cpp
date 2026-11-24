@@ -56,9 +56,14 @@ struct HostErr {
     u8  text[REASONMAX];  // the host's reason, its first line
 };
 
+struct TraceRec;
+
 struct LibHooks {
-    HostErr errs[NHOSTERR];  // a ring
-    i32     nexterr;
+    HostErr   errs[NHOSTERR];  // a ring
+    i32       nexterr;
+    TraceRec *opentrace;  // the fibers' open commands, innermost first
+    TraceRec *freetrace;
+    i64       lasttrace;  // the last id given
 };
 
 static void hooksetup(Lib *l)
@@ -168,11 +173,12 @@ static b32 hostabsolute(Str path)
     return 0;
 }
 
-// Ask the spawn hook, if any, of a program about to start: 0 to start
-// it, with *wrap the wrapper to start instead, if any, or the error. A
-// refusal is always a host's error (E_HOST), which the core reports in
-// the hook's words, not guessing at the system's reasons.
-static i32 askspawn(Lib *l, Arena *a, Spawn *s, Slice<Str> *wrap)
+// Ask the spawn hook, if any, of a program about to start (trace: its
+// command's id): 0 to start it, with *wrap the wrapper to start
+// instead, if any, or the error. A refusal is always a host's error
+// (E_HOST), which the core reports in the hook's words, not guessing
+// at the system's reasons.
+static i32 askspawn(Lib *l, Arena *a, Spawn *s, i64 trace, Slice<Str> *wrap)
 {
     if (!l->cfg.spawn) return 0;
     ub_spawn q = {};
@@ -182,6 +188,7 @@ static i32 askspawn(Lib *l, Arena *a, Spawn *s, Slice<Str> *wrap)
     q.env     = hoststrs(a, {s->env, s->nenv});
     q.cwd     = s->cwd.len ? hoststr(a, s->cwd) : 0;
     q.cmdline = s->cmdline.len ? hoststr(a, s->cmdline) : 0;
+    q.trace   = trace;
     i32 v = l->cfg.spawn(l->cfg.user, &q);
     if (v) return hosterr(l, hookerr(v), q.reason, 1);
     for (iz i = 0; q.wrap && q.wrap[i]; i++) {
@@ -192,4 +199,235 @@ static i32 askspawn(Lib *l, Arena *a, Spawn *s, Slice<Str> *wrap)
         return hosterr(l, E_INVAL, 0, 1);
     }
     return 0;
+}
+
+
+// Trace
+
+// A simple command the trace hook was told of, or will be (held), on
+// its fiber's stack of open commands until it ends. One that started a
+// program and ended first waits off the stack, its program's LibKid
+// holding it, for the reap.
+struct TraceRec {
+    TraceRec  *next;
+    uz         fiber;   // fiberkey
+    void      *key;     // the core's: its Simple
+    void      *frame;   // where it started: deeper is lower
+    Slice<Str> argv;    // while held
+    i64        id;      // 0 while held
+    i64        level;
+    i32        kind;
+    i64        pid;     // its program, if it started one
+    i32        status;  // the program's, once reaped
+    b32        reaped;
+    b32        left;    // done, waiting for its program
+};
+
+// The running fiber, as the module's fiber records name it
+static uz fiberkey(Os *os)
+{
+    #if _WIN32
+    return (uz)os_self(os)->handle;
+    #else
+    return (uz)os_self(os)->stack;
+    #endif
+}
+
+static b32 lib_tracing(Os *os)
+{
+    return ((Lib *)os)->cfg.trace != 0;
+}
+
+static void tracefree(Lib *l, TraceRec *t)
+{
+    t->next = l->hooks->freetrace;
+    l->hooks->freetrace = t;
+}
+
+static void tracestart(Lib *l, Arena a, TraceRec *t, Slice<Str> argv)
+{
+    t->id = ++l->hooks->lasttrace;
+    ub_trace x = {};
+    x.phase = UB_TRACE_START;
+    x.kind  = t->kind;
+    x.id    = t->id;
+    x.level = t->level;
+    x.argc  = (int)argv.len;
+    x.argv  = hoststrs(&a, argv);
+    l->cfg.trace(l->cfg.user, &x);
+}
+
+// Allocates nothing: teardown's too
+static void traceend(Lib *l, TraceRec *t, i32 status, i64 pid)
+{
+    ub_trace x = {};
+    x.phase  = UB_TRACE_END;
+    x.kind   = t->kind;
+    x.id     = t->id;
+    x.level  = t->level;
+    x.pid    = pid;
+    x.status = hoststatus(status);
+    l->cfg.trace(l->cfg.user, &x);
+}
+
+// t, off its stack, done: its END now, or once its program is reaped
+// (the kid holds it). An abandoned command (no status) ends only by
+// its program.
+static void tracedone(Lib *l, TraceRec *t, b32 abandoned, i32 status)
+{
+    if (t->pid && !t->reaped) {
+        t->left = 1;
+        return;
+    }
+    if (t->pid) {
+        traceend(l, t, t->status, t->pid);
+    } else if (!abandoned && t->id) {
+        traceend(l, t, status, 0);
+    }
+    tracefree(l, t);
+}
+
+static void lib_tracestart(Os *os, Arena a, void *key, void *frame, Slice<Str> argv,
+                           i64 level, i32 kind, b32 held)
+{
+    Lib      *l = (Lib *)os;
+    LibHooks *h = l->hooks;
+    uz        f = fiberkey(os);
+    // Its fiber's commands at its depth or deeper were abandoned by an
+    // escape. Those above, still open, are its callers: done there.
+    for (TraceRec **p = &h->opentrace; *p;) {
+        TraceRec *t = *p;
+        if (t->fiber != f) {
+            p = &t->next;
+        } else if ((uz)t->frame <= (uz)frame) {
+            *p = t->next;
+            tracedone(l, t, 1, 0);
+        } else {
+            break;
+        }
+    }
+    TraceRec *t = h->freetrace;
+    if (t) {
+        h->freetrace = t->next;
+    } else {
+        t = alloc<TraceRec>(&l->arena);
+    }
+    *t = {};
+    t->fiber = f;
+    t->key   = key;
+    t->frame = frame;
+    t->level = level;
+    t->kind  = kind;
+    t->next  = h->opentrace;
+    h->opentrace = t;
+    if (held) {
+        t->argv = argv;  // the core's, until the command ends
+    } else {
+        tracestart(l, a, t, argv);
+    }
+}
+
+static void lib_traceend(Os *os, Arena a, void *key, i32 status, b32 retracted)
+{
+    Lib      *l = (Lib *)os;
+    LibHooks *h = l->hooks;
+    uz        f = fiberkey(os);
+    TraceRec *t = h->opentrace;
+    for (; t && !(t->fiber==f && t->key==key); t = t->next) {}
+    if (!t) return;
+    // Its fiber's commands above it were abandoned
+    for (TraceRec **p = &h->opentrace;;) {
+        TraceRec *o = *p;
+        if (o->fiber != f) {
+            p = &o->next;
+            continue;
+        }
+        *p = o->next;
+        if (o == t) break;
+        tracedone(l, o, 1, 0);
+    }
+    if (!t->id && !retracted) tracestart(l, a, t, t->argv);  // never spawned
+    t->argv = {};
+    tracedone(l, t, retracted, status);
+}
+
+// The running fiber's command, about to start a program: a held START
+// is told now. Its id, or 0.
+static i64 tracespawning(Lib *l, Arena a, TraceRec *t)
+{
+    if (!t) return 0;
+    if (!t->id) tracestart(l, a, t, t->argv);
+    return t->id;
+}
+
+// A START not yet told, as the command may turn out to be shell code
+static b32 traceheld(TraceRec *t)
+{
+    return t && !t->id;
+}
+
+// The running fiber's innermost open command, or null
+static TraceRec *tracetop(Lib *l)
+{
+    if (!l->cfg.trace) return 0;
+    uz f = fiberkey(&l->os);
+    for (TraceRec *t = l->hooks->opentrace; t; t = t->next) {
+        if (t->fiber == f) return t;
+    }
+    return 0;
+}
+
+// t started k's program. A command starts one at most, but should it
+// start another, it ends with the later.
+static void tracelink(Lib *l, TraceRec *t, LibKid *k)
+{
+    if (!t) return;
+    if (t->pid && !t->reaped) {
+        for (i32 i = 0; i < l->nkids; i++) {
+            if (l->kids[i].trace == t) l->kids[i].trace = 0;
+        }
+    }
+    k->trace  = t;
+    t->pid    = k->pid;
+    t->reaped = 0;
+}
+
+// k's program was reaped, its status as os_waitproc gives it
+static void tracereaped(Lib *l, LibKid *k, i32 status)
+{
+    TraceRec *t = k->trace;
+    if (!t) return;
+    k->trace  = 0;
+    t->reaped = 1;
+    t->status = status;
+    if (t->left) {
+        traceend(l, t, status, t->pid);
+        tracefree(l, t);
+    }
+}
+
+// A fiber's end: its open commands were abandoned
+static void traceunfiber(Lib *l, uz fiber)
+{
+    if (!l->cfg.trace) return;
+    for (TraceRec **p = &l->hooks->opentrace; *p;) {
+        TraceRec *t = *p;
+        if (t->fiber == fiber) {
+            *p = t->next;
+            tracedone(l, t, 1, 0);
+        } else {
+            p = &t->next;
+        }
+    }
+}
+
+// Teardown, before its kills: every command still open was abandoned.
+// Allocates nothing.
+static void traceleave(Lib *l)
+{
+    if (!l->cfg.trace) return;
+    while (TraceRec *t = l->hooks->opentrace) {
+        l->hooks->opentrace = t->next;
+        tracedone(l, t, 1, 0);
+    }
 }

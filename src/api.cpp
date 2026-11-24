@@ -582,6 +582,16 @@ enum : i32 { E_HOST = 1<<16, NHOSTERR = 16 };
 static Str     lib_hosttext(i32 err);
 static i32     lib_hosterrno(i32 err);
 
+// The trace hook's (libhooks.cpp): lib_tracing says whether the host
+// wants it. lib_tracestart is simple command key starting in frame (its
+// argv expanded, in shell level, kind 1 builtin, 2 function, 3 program),
+// held until it spawns if it may yet be retracted (a direct stage);
+// lib_traceend is its end, or its retraction (run as shell code).
+static b32     lib_tracing(Os *);
+static void    lib_tracestart(Os *, Arena, void *key, void *frame, Slice<Str> argv,
+                              i64 level, i32 kind, b32 held);
+static void    lib_traceend(Os *, Arena, void *key, i32 status, b32 retracted);
+
 // The platform as a table. The shell calls each entry above through its
 // Os's table (dispatch.cpp), which the platform layer's osvtable names.
 // src/posix.cpp and src/win32.cpp fill one with the real OS
