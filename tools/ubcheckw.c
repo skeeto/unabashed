@@ -56,6 +56,7 @@ W32(int,       Thread32First(uintptr_t, ThreadEntry *));
 W32(int,       Thread32Next(uintptr_t, ThreadEntry *));
 W32(int,       CloseHandle(uintptr_t));
 W32(uintptr_t, OpenProcess(int, int, int));
+W32(uintptr_t, OpenThread(int, int, int));
 W32(int,       GetProcessTimes(uintptr_t, uint64_t *, uint64_t *, uint64_t *, uint64_t *));
 W32(int,       GetConsoleMode(uintptr_t, unsigned *));
 W32(int,       GetConsoleTitleW(uint16_t *, int));
@@ -161,16 +162,21 @@ static char *strstr_(char const *h, char const *n)
 
 // Snapshots
 
-// Whether an address lies in ntdll's image
-static int inntdll(uintptr_t a)
+// Whether an address lies in a module's image (0: the executable's)
+static int inmodule(uint16_t const *name, uintptr_t a)
 {
-    unsigned char *base = (unsigned char *)GetModuleHandleW(u"ntdll.dll");
+    unsigned char *base = (unsigned char *)GetModuleHandleW(name);
     if (!base) return 0;
     int pe;
     unsigned size;
     memcpy(&pe, base+0x3c, 4);
     memcpy(&size, base+pe+24+56, 4);  // OptionalHeader.SizeOfImage
     return a-(uintptr_t)base < size;
+}
+
+static int inntdll(uintptr_t a)
+{
+    return inmodule(u"ntdll.dll", a);
 }
 
 // A handle's object type, by NtQueryObject (ObjectTypeInformation)
@@ -206,6 +212,7 @@ typedef struct {
     Snap     text;      // compared exactly
     uint64_t private_;  // private memory reserved, in all
     int      threads;
+    uintptr_t starts[32];  // the counted threads' start addresses
 } State;
 
 static int64_t freq;
@@ -304,8 +311,24 @@ static void snapshot(State *st)
     ThreadEntry te = {0};
     te.size = sizeof(te);
     int self = GetCurrentProcessId();
+    typedef int (__stdcall *Qt)(uintptr_t, int, void *, int, int *);
+    static Qt qt;
+    if (!qt) qt = (Qt)GetProcAddress(GetModuleHandleW(u"ntdll.dll"),
+                                     "NtQueryInformationThread");
     for (int ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
-        st->threads += (int)te.pid == self;
+        if ((int)te.pid != self) continue;
+        // The library's start in the executable. Others come and go
+        // with the load, sometimes seconds later: the thread pool's
+        // (ntdll) and, under emulation, the translator's (xtajit)
+        uintptr_t t = OpenThread(0x40, 0, (int)te.tid);  // QUERY_INFORMATION
+        uintptr_t start = 0;
+        if (t && qt && !qt(t, 9, &start, sizeof(start), 0) && !inmodule(0, start)) {
+            CloseHandle(t);
+            continue;
+        }
+        if (t) CloseHandle(t);
+        if (st->threads < 32) st->starts[st->threads] = start;
+        st->threads++;
     }
     CloseHandle(snap);
 
@@ -412,12 +435,29 @@ static int samestate(State *a, State *b, Snap *why)
         n = linesgone(&b->text, &a->text, "new ", why, n);
         if (n) return 0;  // else only reordered
     }
-    // Pool threads come and go by themselves; a run's would stay
+    // More threads started in the executable: a run left one
     if (b->threads > a->threads) {
         sput(why, "threads ");
         sputd(why, a->threads);
         sput(why, " -> ");
         sputd(why, b->threads);
+        // Where each new one started: its module and offset
+        for (int i = 0; i<b->threads && i<32; i++) {
+            int old = 0;
+            for (int j = 0; j<a->threads && j<32; j++) old |= a->starts[j]==b->starts[i];
+            if (old) continue;
+            MemInfo mi = {0};
+            VirtualQuery((void *)b->starts[i], &mi, sizeof(mi));
+            static uint16_t mod[512];
+            int len = mi.allocbase ? GetModuleFileNameW(mi.allocbase, mod, 512) : 0;
+            int k = len;
+            while (k>0 && mod[k-1]!='\\') k--;
+            sput(why, " (");
+            sputw(why, mod+k, len-k);
+            sput(why, "+");
+            sputx(why, b->starts[i]-mi.allocbase);
+            sput(why, ")");
+        }
         return 0;
     }
     if (b->private_ > a->private_ + (4<<20)) {
@@ -1012,15 +1052,31 @@ static int checkcase(Case const *c, int reps)
             if (ok) why.len = 0;
         }
     }
+    // The system's thread pool retires its workers and their events on
+    // its own schedule, late under load: a difference must last 2 s
+    double settled = 0;
     if (ok) {
-        snapshot(&after);
-        ok = samestate(&before, &after, &why);
+        double t0 = nowsec();
+        for (;;) {
+            snapshot(&after);
+            why.len    = 0;
+            why.buf[0] = 0;
+            ok = samestate(&before, &after, &why);
+            if (ok || nowsec()-t0>=2) break;
+            Sleep(10);
+        }
+        settled = ok ? nowsec() - t0 : 0;
     }
     sput(&report, ok ? "PASS " : "FAIL ");
     sput(&report, c->name);
     sput(&report, " ");
     sputd(&report, (int64_t)(secs*1000));
     sput(&report, " ms");
+    if (settled >= 0.05) {
+        sput(&report, " (settled in ");
+        sputd(&report, (int64_t)(settled*1000));
+        sput(&report, " ms)");
+    }
     if (!ok) {
         sput(&report, ": ");
         sput(&report, why.buf);
@@ -1178,9 +1234,17 @@ static int checkconcurrent(int threads, int reps)
     concround(threads, reps);
     double secs = nowsec() - t0;
     int ended = seenended(w, &why);
-    Sleep(100);
-    snapshot(&after);
-    int ok = !concfails && ended && kidsgone(&why) && samestate(&before, &after, &why);
+    int ok = !concfails && ended && kidsgone(&why);
+    for (double t1 = nowsec(); ok;) {  // settled, as in checkcase
+        snapshot(&after);
+        Snap diff = why;
+        if (samestate(&before, &after, &diff)) break;
+        if (nowsec()-t1 >= 2) {
+            why = diff;
+            ok  = 0;
+        }
+        Sleep(10);
+    }
     sput(&report, ok ? "PASS " : "FAIL ");
     sput(&report, "concurrent runs ");
     sputd(&report, (int64_t)(secs*1000));
@@ -1406,6 +1470,9 @@ static int check(int quick)
          .wrap = 1},
         {"spawn: wrapped stubs", "echo a | tr a b | cat", 0, "b", .hooks = H_SPAWN,
          .log = "P0 tr.exe\n", .wrap = 1},
+        // native mode runs a busybox alias stub as busybox.exe
+        {"spawn: wrapped stub, native", "shopt -u msyspath; echo a | tr a b", 0, "b",
+         .hooks = H_SPAWN, .log = "P0 busybox.exe\n", .wrap = 1},
         {"spawn: wrapped &", "sleep 0 & wait $!; echo s=$?", 0, "s=0", .hooks = H_SPAWN,
          .wrap = 1},
         {"spawn: wrapped batch file", "$T/b.bat", 0, "bat", .hooks = H_SPAWN,
