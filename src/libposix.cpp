@@ -106,6 +106,7 @@ static __thread Lib *curlib;  // the run on this thread
 // ST_OWN).
 static void hooksetup(Lib *);
 static i32  askhost(Lib *, Arena, i32 op, i32 flags, Str path);
+static i32  askspawn(Lib *, Arena *, Spawn *, Slice<Str> *wrap);
 
 static Lib *runlib()
 {
@@ -487,6 +488,52 @@ static b32 kidroom(Lib *l)
     return n < MAXKIDS;
 }
 
+// What the kernel would make of a program, for the spawn hook: E_ACCES
+// for no regular file, E_NOEXEC for text without #!, which the core then
+// runs as shell code itself; else 0, for the kernel to decide, as for a
+// file it cannot read. A raw open: no yield, no descriptor from the
+// run's budget, nothing asked of the access hook.
+static i32 kernelsniff(Arena scratch, Str path)
+{
+    char *p = cpath(&scratch, path);
+    if (access(p, X_OK)) return 0;
+    i32 fd = open(p, O_RDONLY|O_CLOEXEC|O_NOCTTY|O_NONBLOCK);
+    if (fd < 0) return 0;
+    struct stat st;
+    u8 head[80];
+    iz n   = 0;
+    b32 reg = !fstat(fd, &st) && S_ISREG(st.st_mode);
+    if (reg) n = read(fd, head, sizeof(head));
+    close(fd);
+    if (!reg) return E_ACCES;
+    if (n<0 || (n>=2 && head[0]=='#' && head[1]=='!')) return 0;
+    for (iz i = 0; i < n; i++) {
+        if (!head[i]) return 0;
+    }
+    return E_NOEXEC;
+}
+
+// The spawn hook's: the program it asked of, or a wrapper that starts
+// it, wrap[0] with wrap[1...], the path, and its argv
+static Spawn *asked(Lib *l, Arena *a, Spawn *s, i32 *err)
+{
+    *err = kernelsniff(*a, s->path);
+    if (*err) return s;
+    Slice<Str> wrap = {};
+    *err = askspawn(l, a, s, &wrap);
+    if (*err || !wrap.len) return s;
+    Spawn *w = alloc<Spawn>(a);
+    *w = *s;
+    iz n = wrap.len;
+    w->path = wrap[0];
+    w->argc = n + 1 + s->argc;
+    w->argv = alloc<Str>(a, w->argc);
+    for (iz i = 0; i < n; i++) w->argv[i] = wrap[i];
+    w->argv[n] = s->path;
+    for (iz i = 0; i < s->argc; i++) w->argv[n+1+i] = s->argv[i];
+    return w;
+}
+
 static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
 {
     Lib *l = (Lib *)os;
@@ -496,6 +543,16 @@ static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
         r.proc = BADHANDLE;
         r.err  = E_AGAIN;
         return r;
+    }
+    if (l->cfg.spawn) {
+        i32 err = 0;
+        s = asked(l, &scratch, s, &err);
+        if (err) {
+            Spawned r = {};
+            r.proc = BADHANDLE;
+            r.err  = err;
+            return r;
+        }
     }
     Spawned r = plt_spawn(os, scratch, s);
     if (!r.err) {

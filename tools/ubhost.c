@@ -7,6 +7,10 @@
 //
 // "ubhost --check [--quick]" checks the host contract (ubcheck.c).
 //
+// "ubhost --wrap PATH ARGV0 [ARG...]" is a spawn hook's wrapper, as the
+// contract has it (notes/library.md): it says "wrapped PATH" on stderr,
+// then becomes the program.
+//
 // $ cc -O2 -o ubhost tools/ubhost.c libunabashed.o -lpthread
 // On Windows, see ubhostw.c.
 // This is free and unencumbered software released into the public domain.
@@ -95,8 +99,24 @@ static void exitwith(int status)
     _exit(status & 255);
 }
 
+// The wrapper: everything inherited, the program exec'd in its place,
+// or exec's failure reported as bash does: 127 if it is not there, else
+// 126 (an interpreter not found too)
+static int wrap(int argc, char **argv)
+{
+    if (argc < 4) return 2;
+    fprintf(stderr, "wrapped %s\n", argv[2]);
+    execv(argv[2], argv+3);
+    int err = errno;
+    fprintf(stderr, "ubhost: %s: %s\n", argv[2], strerror(err));
+    return err==ENOENT && access(argv[2], F_OK) ? 127 : 126;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc>1 && !strcmp(argv[1], "--wrap")) {
+        return wrap(argc, argv);
+    }
     if (argc>1 && !strcmp(argv[1], "--check")) {
         #if __APPLE__
         signal(SIGPIPE, SIG_IGN);  // as every macOS host must

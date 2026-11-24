@@ -2851,6 +2851,13 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env, S
     if (err == E_INTERP) {
         return 126;  // reported
     }
+    if constexpr (LIBMODE) {
+        if (i32 e = lib_hosterrno(err)) {
+            // The host refused it: as the system's refusal, in its words
+            shellerror(sh, a, concat3(&a, path, Str(": "), errtext(err)));
+            return e==E_NOENT ? 127 : 126;
+        }
+    }
     if (err==E_NOENT || err==E_NOTDIR) {
         // A working directory that is gone, which no program can start
         // in where the platform could not hold it (os_cwd): refused,

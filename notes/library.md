@@ -285,6 +285,39 @@ platform's call, with `ub_access`: an op, flags, and the path.
   `//./NUL`; virtual paths (/proc, /dev/clipboard) are never asked;
   nothing reads a link; and the file msys mode makes for a program to
   read a procsub by name is asked as `UB_TEMPFILE`, in its directory.
+
+**`spawn`** is asked of each program the run starts, after the checks
+that could refuse it anyway and before the platform's spawn, with
+`ub_spawn`: the image, argv, environment and directory as the program
+will get them. Pipeline stages, `&` jobs, coprocs and `exec` (a spawn
+and a wait here) are all asked.
+- **A script without `#!`** is never asked. The kernel would refuse
+  it, and the shell runs it itself; the access hook sees it read. On
+  POSIX the library tells first with a raw look at its first 80 bytes
+  (no `#!`, no NUL), outside the run's descriptors and the access hook.
+  A file the kernel would run anyway as text (a Linux binfmt_misc
+  format) runs as shell code instead when the hook is set.
+- **A refusal** fails as the system's would: `path: REASON` (or the
+  error's text), status 126, or 127 for `-UB_ENOENT`. It is always a
+  host's error (`E_HOST`), so the shell reports it in the hook's words
+  rather than guessing at a cause ("bad interpreter", a lost working
+  directory). PIPESTATUS keeps it, an `&` job ends with it, and a
+  refused `exec` ends the run with it.
+- **A wrapper** (`wrap`) starts instead: `wrap[0]`, absolute or the
+  spawn is refused with `UB_EINVAL`. On POSIX its argv is `wrap[0]`,
+  `wrap[1...]`, the path, then the program's argv, from `argv[0]`;
+  everything else (descriptors, environment, directory, ignored
+  signals, limits, its own session, an empty mask) is as the program's
+  would be. A wrapper must:
+  - inherit all of that and exec the program, so that `$!`, `kill` and
+    the run's kill of its programs reach it;
+  - otherwise stay in its session and exit as the program did,
+    re-raising a signal it died of;
+  - report its own failure to exec as bash does: 127 if the program is
+    not there, else 126.
+
+  `env` cannot serve: it loses the split between the path and
+  `argv[0]`. `ubhost --wrap` is the test's wrapper.
 - **A refusal** fails the access as its error would, so a script sees
   what bash shows for that error: `f: Permission denied` and status 1
   for a redirection, no match for a glob, false for `test`, `command not
@@ -406,8 +439,9 @@ The cases cover:
 - statuses and refusals;
 - syntax checks (`bash -n -c`);
 - the hooks, through a log each case checks, a second run started
-  from the state the exit hook was given, and refusals by rule, in a
-  directory of files made for the cases ($T);
+  from the state the exit hook was given, refusals by rule, and
+  programs wrapped in `ubhost --wrap`, in a directory of files made for
+  the cases ($T);
 - leftovers and shutdown;
 - children's signal state;
 - concurrency (8 threads, 4 on 32-bit Windows);

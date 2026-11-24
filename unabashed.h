@@ -65,6 +65,24 @@ enum {                          // ub_access.flags
     UB_APPEND = 1<<4, UB_EXCL = 1<<5, UB_NOFOLLOW = 1<<6,
 };
 
+typedef struct {                // a program about to start, for ub_config.spawn
+    char const        *path;    // absolute: the image (Windows: busybox.exe
+                                // for one of its stubs, ComSpec for a batch
+                                // file)
+    int                argc;
+    char const *const *argv;    // argv[0] first, null-terminated
+    char const *const *env;     // "NAME=value", null-terminated
+    char const        *cwd;     // absolute; 0: the host's
+    char const        *cmdline; // Windows: the line it gets; POSIX: 0
+    int64_t            trace;   // its command's ub_trace id, or 0
+    // The hook's reply, copied as it returns:
+    char const *const *wrap;    // 0, or null-terminated: start wrap[0]
+                                // (absolute) instead, with wrap[1...], then
+                                // path, then argv (POSIX), or path, then
+                                // cmdline as one argument (Windows)
+    char const        *reason;  // with a refusal: what the script sees, or 0
+} ub_spawn;
+
 // Hooks run on ub_run's thread, inside the run, and must be brief: one
 // that blocks stalls the run, and a cancel takes effect only once it
 // returns. Deep in a recursion a hook has only part of the 64 KiB of
@@ -110,6 +128,14 @@ typedef struct {
     // message: its first line, up to 255 bytes. -UB_ENOENT without a
     // reason looks as if the file is not there.
     int       (*access)(void *user, ub_access const *, char const **reason);
+    // Optional: each program the run starts, as it starts. 0 starts it,
+    // or a wrapper if it sets wrap (see notes/library.md for what one
+    // must do); a negated UB_E* refuses it, and any other value refuses
+    // it as -UB_EACCES. A refused program fails as if the system had
+    // refused it, with the reason, if set, as the message: status 126,
+    // or 127 for -UB_ENOENT. A script without #!, which the shell runs
+    // itself, is not asked (the access hook sees it read).
+    int       (*spawn)(void *user, ub_spawn *);
 } ub_config;
 
 typedef struct { int fd; intptr_t h; } ub_fd;

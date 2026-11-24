@@ -246,7 +246,7 @@ enum { ANY = 1<<30 };
 
 // The hooks a case installs (Case.hooks), each logging its calls to
 // static storage, since snapshots compare the heap's mappings
-enum { H_EXIT = 1<<0, H_ACCESS = 1<<1, H_ALL = H_EXIT|H_ACCESS };
+enum { H_EXIT = 1<<0, H_ACCESS = 1<<1, H_SPAWN = 1<<2, H_ALL = H_EXIT|H_ACCESS|H_SPAWN };
 
 static char   hooklog[1<<16];
 static size_t hooklen;
@@ -323,10 +323,12 @@ typedef struct Case {
     char const *nolog;      // a substring the log must not hold, or null
     char const *rerun;      // then this script, from the state the exit
                             // hook was given: its status and output count
-    char const *deny;       // the access hook refuses an access whose log
-                            // line holds this ("OPEN wct $T/w"), or null
+    char const *deny;       // a hook refuses an access or a program whose
+                            // log line holds this ("OPEN wct $T/w"), or null
     int         denyret;    // returning this; 0: -UB_EACCES
     char const *reason;     // with this reason (%d: the refusal's count)
+    int         wrap;       // the spawn hook wraps each program in
+                            // "ubhost --wrap" (2: by a relative path)
 } Case;
 
 // An access as a log line, "OP flags path", T and TMPDIR shown as $T and
@@ -362,6 +364,32 @@ static int onaccess(void *user, ub_access const *a, char const **reason)
     return c->denyret ? c->denyret : -UB_EACCES;
 }
 
+static char self[4096];  // this program (check)
+
+// A program as a log line, "P<trace> name"; refused or wrapped if the
+// case's rule says so
+static int onspawn(void *user, ub_spawn *s)
+{
+    (void)user;
+    char const *name = strrchr(s->path, '/');
+    static char line[4200];  // not on the run's stack
+    snprintf(line, sizeof(line), "P%lld %s\n", (long long)s->trace, name ? name+1 : s->path);
+    logf_("%s", line);
+    Case const *c = curcase;
+    if (c->deny && strstr(line, c->deny)) {
+        ndenied++;
+        if (c->reason) {
+            snprintf(reasonbuf, sizeof(reasonbuf), c->reason, ndenied);
+            s->reason = reasonbuf;
+        }
+        return c->denyret ? c->denyret : -UB_EACCES;
+    }
+    static char const *wrapabs[] = {self, "--wrap", 0};
+    static char const *wraprel[] = {"ubhost", "--wrap", 0};
+    if (c->wrap) s->wrap = c->wrap==2 ? wraprel : wrapabs;
+    return 0;
+}
+
 typedef struct {
     ub_os *os;
     int    ms;
@@ -394,6 +422,7 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
     cfg.fds      = c->fds;
     if (c->hooks & H_EXIT) cfg.exit = onexit;
     if (c->hooks & H_ACCESS) cfg.access = onaccess;
+    if (c->hooks & H_SPAWN) cfg.spawn = onspawn;
     curcase = c;
     ndenied = 0;
     hooklen    = 0;
@@ -682,8 +711,9 @@ static int check(char *argv0, int quick)
     mkdir(tpath, 0700);
     static char const *const tfiles[][2] = {
         {"f", "data\n"}, {"s", "echo sourced\n"}, {"ns", "echo ns\n"},
+        {"sh1", "#!/bin/sh\necho sh1\n"}, {"bi", "#!/nonexistent/interp\n"},
     };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 5; i++) {
         snprintf(tpath, sizeof(tpath), "%s/%s", tdir, tfiles[i][0]);
         int fd = open(tpath, O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0755);
         if (fd<0 || write(fd, tfiles[i][1], strlen(tfiles[i][1]))<0) return 1;
@@ -874,6 +904,41 @@ static int check(char *argv0, int quick)
         {"deny: 40 reasons", "for i in {1..40}; do echo > $T/w$i; done", 1,
          "w40: denied 40\n", .hooks = H_ACCESS, .deny = "OPEN wct $T/w",
          .reason = "denied %d"},
+        {"spawn: wrapped", "/bin/echo hi", 0, "wrapped /bin/echo\nhi\n", .hooks = H_SPAWN,
+         .log = "P0 echo\n", .wrap = 1},
+        {"spawn: wrapped pipeline", "echo a | tr a b | cat", 0, "b\n", .hooks = H_SPAWN,
+         .log = "P0 tr\n", .log2 = "P0 cat\n", .wrap = 1},
+        {"spawn: wrapped &", "sleep 0 & wait $!; echo s=$?", 0, "s=0", .hooks = H_SPAWN,
+         .log = "P0 sleep\n", .wrap = 1},
+        {"spawn: wrapped exec", "exec /bin/echo hi; echo no", 0, "wrapped /bin/echo\nhi\n",
+         .notout = "no", .hooks = H_SPAWN, .wrap = 1},
+        {"spawn: script without #!", "$T/ns", 0, "ns\n", .notout = "wrapped",
+         .hooks = H_SPAWN, .nolog = "P0 ns", .wrap = 1},
+        {"spawn: stage without #!", "$T/ns | cat", 0, "ns\n", .hooks = H_SPAWN,
+         .log = "P0 cat\n", .nolog = "P0 ns", .wrap = 1},
+        {"spawn: #! script", "$T/sh1", 0, "sh1\n", .hooks = H_SPAWN, .log = "P0 sh1\n",
+         .wrap = 1},
+        {"spawn: bad interpreter", "$T/bi; echo s=$?", 0, "s=126", .hooks = H_SPAWN,
+         .wrap = 1},
+        {"spawn: relative wrapper", "/bin/echo hi; echo s=$?", 0,
+         "/bin/echo: Invalid argument\ns=126", .hooks = H_SPAWN, .wrap = 2},
+        {"spawn refused: reason", "/bin/echo hi; echo s=$?", 0,
+         "/bin/echo: not allowed\ns=126", .notout = "hi\n", .hooks = H_SPAWN,
+         .deny = "P0 echo", .reason = "not allowed"},
+        {"spawn refused: errno", "/bin/echo hi; echo s=$?", 0,
+         "/bin/echo: Operation not permitted\ns=126", .hooks = H_SPAWN, .deny = "P0 echo",
+         .denyret = -UB_EPERM},
+        {"spawn refused: ENOENT", "/bin/echo hi; echo s=$?", 0,
+         "/bin/echo: No such file or directory\ns=127", .hooks = H_SPAWN, .deny = "P0 echo",
+         .denyret = -UB_ENOENT},
+        {"spawn refused: PIPESTATUS", "/bin/echo hi | cat; echo ${PIPESTATUS[@]}", 0,
+         "/bin/echo: no\n126 0", .hooks = H_SPAWN, .deny = "P0 echo", .reason = "no"},
+        {"spawn refused: &", "/bin/echo hi & wait $!; echo s=$?", 0, "s=126",
+         .hooks = H_SPAWN, .deny = "P0 echo", .reason = "no"},
+        {"spawn refused: exec", "exec /bin/echo hi; echo after", 126, "/bin/echo: no",
+         .notout = "after", .hooks = H_SPAWN, .deny = "P0 echo", .reason = "no"},
+        {"spawn refused: #! script", "$T/sh1; echo s=$?", 0, "sh1: no\ns=126",
+         .notout = "interpreter", .hooks = H_SPAWN, .deny = "P0 sh1", .reason = "no"},
         {"descriptor budget", "for i in $(seq 40); do exec {fd}</dev/null || break; done; echo n=$i",
          0, "n=", 0, 0, 0, 0, 24},
     };

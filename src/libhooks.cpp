@@ -101,13 +101,14 @@ static Str reasonline(char const *reason)
     return r;
 }
 
-// The core's error for a refusal: with a reason, a code of its own that
-// errtext shows (E_HOST+k), reused while the ring holds the same; else
-// the plain error, so that ENOENT still means absent.
-static i32 hosterr(Lib *l, i32 err, char const *reason)
+// The core's error for a refusal: with a reason, or always if asked, a
+// code of its own (E_HOST+k), reused while the ring holds the same, that
+// errtext shows as the reason, if any; else the plain error, so that
+// ENOENT still means absent.
+static i32 hosterr(Lib *l, i32 err, char const *reason, b32 always)
 {
     Str r = reason ? reasonline(reason) : Str{};
-    if (!r.len) return err;
+    if (!r.len && !always) return err;
     LibHooks *h = l->hooks;
     for (i32 k = 0; k < NHOSTERR; k++) {
         HostErr *e = h->errs + k;
@@ -148,5 +149,47 @@ static i32 askhost(Lib *l, Arena scratch, i32 op, i32 flags, Str path)
     q.path  = hoststr(&scratch, path);
     char const *reason = 0;
     i32 r = l->cfg.access(l->cfg.user, &q, &reason);
-    return r ? hosterr(l, hookerr(r), reason) : 0;
+    return r ? hosterr(l, hookerr(r), reason, 0) : 0;
+}
+
+
+// Spawn
+
+static b32 hostabsolute(Str path)
+{
+    if (path.len && path.data[0]=='/') return 1;
+    #if _WIN32
+    if (path.len && path.data[0]=='\\') return 1;
+    u8 c = path.len>2 ? path.data[0]|0x20 : 0;
+    if (c>='a' && c<='z' && path.data[1]==':') {
+        return path.data[2]=='/' || path.data[2]=='\\';
+    }
+    #endif
+    return 0;
+}
+
+// Ask the spawn hook, if any, of a program about to start: 0 to start
+// it, with *wrap the wrapper to start instead, if any, or the error. A
+// refusal is always a host's error (E_HOST), which the core reports in
+// the hook's words, not guessing at the system's reasons.
+static i32 askspawn(Lib *l, Arena *a, Spawn *s, Slice<Str> *wrap)
+{
+    if (!l->cfg.spawn) return 0;
+    ub_spawn q = {};
+    q.path    = hoststr(a, s->path);
+    q.argc    = (int)s->argc;
+    q.argv    = hoststrs(a, {s->argv, s->argc});
+    q.env     = hoststrs(a, {s->env, s->nenv});
+    q.cwd     = s->cwd.len ? hoststr(a, s->cwd) : 0;
+    q.cmdline = s->cmdline.len ? hoststr(a, s->cmdline) : 0;
+    i32 v = l->cfg.spawn(l->cfg.user, &q);
+    if (v) return hosterr(l, hookerr(v), q.reason, 1);
+    for (iz i = 0; q.wrap && q.wrap[i]; i++) {
+        *wrap = push(a, *wrap, libclone(a, q.wrap[i]));
+    }
+    if (wrap->len && !hostabsolute((*wrap)[0])) {
+        *wrap = {};
+        return hosterr(l, E_INVAL, 0, 1);
+    }
+    return 0;
 }
