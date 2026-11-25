@@ -1888,6 +1888,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     sh->bashpid = info->pid;
     sh->sched->pid = info->pid;
     sh->ppid    = info->ppid;
+    sh->parentpid = info->ppid;
     sh->startpgid = info->pgid;
     sh->jctty   = BADHANDLE;
     sh->uid     = info->uid;
@@ -2232,6 +2233,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             sh->hist.noexpand = 1;
             // Its lines go in the history once on, as bash's, but never
             // in native mode, as busybox's
+            sh->oneshot = !thenstdin;
             runsource(sh, cmd, "-c", scratch, 0, 1, 0, 0, 0, !st.busybox);
             sh->hist.noexpand = 0;
             if (thenstdin && !sh->exiting) {

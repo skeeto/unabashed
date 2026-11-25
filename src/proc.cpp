@@ -481,6 +481,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image, u32 skip = 0)
     c->flow     = FLOW_NONE;
     c->exiting  = 0;
     c->subshell++;
+    c->parentpid = sh->bashpid;
     c->bashpid  = newvpid(sh);
     c->killsig  = 0;
     c->childsig = 0;
@@ -613,6 +614,7 @@ static void vprocmain(Task *t)
         // A procsub: as a command substitution, parsed only now
         sh->tracedepth++;
         sh->opt[O_VERBOSE] = 0;
+        sh->oneshot = 3;
         runsource(sh, m->src, "process substitution", *scratchat(sh, 0), 0, sh->line);
     }
     if (!sh->execed && !sh->killsig) {
@@ -696,6 +698,18 @@ static b32 forkedstdin(Shell *sh, Node *n, b32 piped)
     return old;
 }
 
+// What bash's child for a pipeline stage knows (Inplace), as level:
+// run is the stage as it runs, a ( )'s list in a group
+static Inplace stageinplace(Node *stage, Node *run, i32 level)
+{
+    if (stage->kind == N_SUBSHELL) return subinplace(stage, run->a, level);
+    Inplace p = {};
+    p.node  = stage->kind==N_SIMPLE ? run : 0;
+    p.level = level;
+    p.pipe  = 1;
+    return p;
+}
+
 static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops,
                         i32 uncounted, Arena scratch)
 {
@@ -722,6 +736,7 @@ static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops
         c->ctlline  = node->endline;
     }
     c->taillevel = c->subshell + 1;
+    c->inplace   = stageinplace(node, m->node, c->subshell+1);
     return taskspawn(sh->sched, vprocmain, m, BIGSTACK);
 }
 
@@ -1029,8 +1044,14 @@ static Handle spawndirect(Shell *sh, Node *stage, File *in, File *out,
     Arena child = *scratchat(sh, depth);
     sh->spawnto = &sp;
     sh->simplestages += isstage;
+    Inplace inplace = sh->inplace;
+    sh->inplace = {};  // a job's or a stage's child
+    sh->inplace.node  = stage;
+    sh->inplace.level = sh->subshell + 2;
+    sh->inplace.pipe  = isstage;
     *status = subshell(sh, &j, child, 0);
     sh->simplestages -= isstage;
+    sh->inplace = inplace;
     sh->spawnto  = 0;
     sh->capdepth = depth - 1;
     unwind(sh, mark);
@@ -1377,6 +1398,8 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         sh->taillevel = sh->subshell + 2;
         sh->childsig  = 0;
         takeossigs(sh);  // those from before are this level's own
+        Inplace inplace = sh->inplace;
+        sh->inplace = stageinplace(stage, j.node, sh->subshell+2);
         sh->sig->fgwait = 1;
         sh->debugdone = stage->kind == N_SIMPLE;
         sh->forked    = stage->kind == N_SIMPLE;
@@ -1422,6 +1445,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         sh->tailnode  = 0;
         sh->taillevel = 0;
         sh->simplestages -= uncounted;
+        sh->inplace = inplace;
     }
     closegate(sh);  // also when the last stage was skipped
     sh->capdepth = depth - 1;

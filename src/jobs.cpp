@@ -848,6 +848,8 @@ static Node *bgnode(Shell *c, Arena *a, Node *n, Stackguard *g, b32 keepjobs)
         if (n->endline) c->ctlline = n->endline;
     }
     c->taillevel  = c->subshell + 1;
+    c->inplace    = stageinplace(n, r, c->subshell+1);
+    c->inplace.pipe &= keepjobs;  // a job's child is not a stage's
     c->keepredirs = r;
     c->asyncign = (u64)1<<1 | (u64)1<<2;  // INT, QUIT
     return r;

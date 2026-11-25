@@ -399,6 +399,19 @@ struct Func;
 struct Value;
 struct PcCur;       // pcomplete.cpp
 
+// The simple command bash execs without forking first, as its -c,
+// comsub, subshell and job paths do, and what its child knows of
+// itself: an exec there lowers SHLVL, so that a shell it starts is at
+// the level of the one it replaces.
+struct Inplace {
+    Node *node;
+    i32   level;  // subshell level + 1 where node is that command
+    b32   traps;  // only while no trap keeps the shell (tailexecs)
+    b32   funcs;  // and if a function, its body's last (in a comsub)
+    b32   pipe;   // a pipeline stage's child (SUBSHELL_PIPE): SHLVL stays
+    b32   paren;  // a ( )'s child (SUBSHELL_PAREN): exec keeps SHLVL
+};
+
 struct Args {        // positional parameters
     Str *v;
     iz   n;
@@ -519,6 +532,7 @@ struct Escape {
     b32       inchld;
     b32       nolocwarn;
     b32       attail;
+    b32       inplacenow;
     b32       intrread;
     b32       ingetopts;
     b32       listing;
@@ -968,6 +982,13 @@ struct Shell {
     Node    *tailnode;     // command, which bash would exec: its death by a
                            // signal is the subshell's (reported by its parent)
     b32      attail;       // running tailnode as bash would exec it
+    Inplace  inplace;      // the program bash would exec in its place
+    b32      inplacenow;   // running it: a script without #! keeps the
+                           // level's pid, and SHLVL is lowered
+    i64      parentpid;    // BASHPID of the level that made this one
+    i32      oneshot;      // the next runsource is the text of -c (1), a
+                           // comsub (2) or a procsub (3), whose last
+                           // command bash execs (its startup_state 2)
     Node    *keepredirs;   // a background job's command: its redirections
                            // are not undone, as in bash's forked child, so
                            // a descriptor they replace closes at once
@@ -1659,6 +1680,7 @@ static void escenter(Shell *sh, Escape *e)
     e->inchld     = sh->inchld;
     e->nolocwarn  = sh->nolocwarn;
     e->attail     = sh->attail;
+    e->inplacenow = sh->inplacenow;
     e->intrread   = sh->intrread;
     e->ingetopts  = sh->ingetopts;
     e->listing    = sh->listing;
@@ -1710,6 +1732,7 @@ static void escrestore(Shell *sh, Escape *e)
     sh->inchld     = e->inchld;
     sh->nolocwarn  = e->nolocwarn;
     sh->attail     = e->attail;
+    sh->inplacenow = e->inplacenow;
     sh->intrread   = e->intrread;
     sh->ingetopts  = e->ingetopts;
     sh->listing    = e->listing;

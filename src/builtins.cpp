@@ -4346,7 +4346,10 @@ static i32 b_command(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
     }
     env = envlastarg(sh, &scratch, env, found.data ? found : args[i]);
+    sh->inplacenow = inplaceat(sh, sh->current);  // as bash, which execs it so too
+    if (sh->inplacenow && !sh->inplace.pipe) env = lowershlvl(sh, &scratch, env, 1);
     i32 status = runexternal(sh, scratch, args+i, nargs-i, env, found);
+    sh->inplacenow = 0;
     chldreaped(sh, 1);
     return status;
 }
@@ -4427,6 +4430,8 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
     } else {
         if (!found.data) found = name;
         tried = 1;
+        // As bash, but not in a ( )'s child, which counts as a level
+        if (!clear && !sh->inplace.paren) env = lowershlvl(sh, &scratch, env, 0);
         Str  full = absolute(sh, &scratch, found);
         Stat st   = pathstat(sh, scratch, found, 1);
         failed = !canexec(sh, st);
@@ -4442,11 +4447,23 @@ static i32 b_exec(Shell *sh, Str *args, iz nargs, Arena scratch)
             // As bash, its path in full (full_pathname), in messages and
             // a script's $0, allocated before scratch is passed on
             Str whole = fullpathname(sh, &scratch, found);
+            sh->inplacenow = 1;  // a script without #! takes the shell's place
             status = runexternal(sh, scratch, argv, nargs-i, env, whole, argv0.data!=0);
+            sh->inplacenow = 0;
             sh->execing = 0;
         }
     }
     if (failed && ((sh->shopt[S_EXECFAIL] && !sh->subshell) || sh->interactive)) {
+        if (tried && !clear && !sh->inplace.paren) {
+            // bash lowered SHLVL for it and raises it again, exported
+            Slice<Str> lowered = lowershlvl(sh, &scratch, {}, 0);
+            if (lowered.len) {
+                i64 lvl = 0;
+                parsei64(cuthead(lowered[0], 6), &lvl);
+                setvar(sh, scratch, "SHLVL", fmti64(&scratch, lvl+1));
+                setattrs(sh, "SHLVL", V_EXPORT, 0);
+            }
+        }
         return status;  // a failed exec leaves the shell (not a subshell) running
     }
     sh->status  = status;

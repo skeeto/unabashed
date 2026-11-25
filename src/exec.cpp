@@ -143,6 +143,39 @@ static Node *tailcommand(Node *n)
     return 0;
 }
 
+// The simple command bash execs without a fork as the last of n, a
+// command list of -c, a comsub, a procsub or a ( ): n itself, or the
+// second of its last ;, && or || (bash's lists lean left). Not one
+// with redirections, except in a procsub.
+static Node *inplacecmd(Node *n, b32 redirs)
+{
+    if (n && n->kind==N_CONNECT && (n->connector==';' || n->connector=='\n' ||
+            n->connector==T_ANDAND || n->connector==T_OROR)) {
+        n = n->b;
+    }
+    if (!n || n->kind!=N_SIMPLE || (n->flags & (CMD_INVERT|CMD_TIME))) return 0;
+    return redirs || !n->redirs ? n : 0;
+}
+
+// What a ( ) running list n execs in place: a whole simple command
+// whatever its redirections, else its list's last
+static Node *inplacesub(Node *sub, Node *n)
+{
+    if (n && n->kind==N_SIMPLE && !(n->flags & (CMD_INVERT|CMD_TIME))) return n;
+    return sub->flags & (CMD_INVERT|CMD_TIME) ? 0 : inplacecmd(n, 0);
+}
+
+// What bash's child for ( body ) knows (Inplace), as level
+static Inplace subinplace(Node *sub, Node *body, i32 level)
+{
+    Inplace p = {};
+    p.node  = inplacesub(sub, body);
+    p.level = level;
+    p.traps = p.node != body;  // only its list's last waits on them
+    p.paren = 1;
+    return p;
+}
+
 // Whether bash would still exec the tail command once a list reaches
 // it: not while an EXIT or ERR trap, a RETURN trap in a function, or a
 // caught signal's trap is set, as those must run in the subshell.
@@ -156,6 +189,47 @@ static b32 tailexecs(Shell *sh)
         if (t[i].len) return 0;
     }
     return 1;
+}
+
+// Whether bash execs program n in this level's place (Inplace)
+static b32 inplaceat(Shell *sh, Node *n)
+{
+    Inplace *p = &sh->inplace;
+    return n && n==p->node && p->level==sh->subshell+1 && (!p->traps || tailexecs(sh));
+}
+
+// A program's environment with SHLVL one lower, as bash's exec, and its
+// exec without a fork, leave it (adjust_shell_level): from the value
+// under the command's temporary bindings when skiptemp, which it
+// replaces, and exported again if it was not.
+static Slice<Str> lowershlvl(Shell *sh, Arena *a, Slice<Str> env, b32 skiptemp)
+{
+    Var   *var = findvar(sh, "SHLVL");
+    Value *v   = var ? var->top : 0;
+    while (skiptemp && v && (v->attrs & V_TEMP)) v = v->below;
+    if (v && (v->attrs & V_READONLY)) {
+        readonlyerror(sh, *a, "SHLVL");
+        return env;
+    }
+    Got g   = getvalue(sh, a, v);
+    i64 lvl = 0;
+    if (!g.set || !parsei64(g.value, &lvl)) lvl = 0;
+    lvl = lvl>0 ? lvl-1 : 0;
+    if (lvl >= 1000) {
+        Str num = fmti64(a, lvl);
+        shellerror(sh, *a, concat3(a, "warning: shell level (", num, ") too high, resetting to 1"));
+        lvl = 1;
+    }
+    Str entry = concat(a, "SHLVL=", fmti64(a, lvl));
+    for (iz i = 0; i < env.len; i++) {
+        if (startswith(env[i], "SHLVL=")) {
+            env[i] = entry;
+            return env;
+        }
+    }
+    env = push(a, env, entry);
+    sort(env.data, env.len, envless, *a);
+    return env;
 }
 
 // A list is about to run n: if it is the tail and bash would not exec
@@ -695,6 +769,7 @@ static void runjob(Shell *sh, SubJob *j, Arena scratch)
         sh->tracedepth++;  // restored with the subshell
         sh->lexfloor = sh->lexer;  // its aliases may expand here (runsource1)
         sh->staleredir = j->stale;
+        sh->oneshot    = 2;
         runsource(sh, j->src, "command substitution", scratch, 0, j->line,
                   0, 0, j->comsub);
         break;
@@ -753,6 +828,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     Sigproc *up = sh->sig;
     up->keepint = keepsint(sh);  // before the level's traps replace these
     sh->subshell++;
+    sh->parentpid = sh->bashpid;
     sh->bashpid = newvpid(sh);
     sh->psubs   = 0;
     sh->killsig   = 0;
@@ -3012,6 +3088,21 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env,
         Escape e;
         escenter(sh, &e);
         sh->sig->keepint = keepsint(sh);  // before the script's traps
+        // bash's child for it is a process of its own, with its own $$
+        // and its parent's as PPID, unless bash would exec it in the
+        // level's place; and it has no jobs
+        if (!sh->inplacenow) {
+            sh->parentpid = sh->bashpid;
+            sh->bashpid   = newvpid(sh);
+        }
+        sh->pid  = sh->bashpid;
+        sh->ppid = sh->parentpid;
+        sh->inplacenow   = 0;
+        sh->inplace.node = 0;
+        sh->jobs   = 0;
+        sh->curjob = sh->prevjob = 0;
+        sh->bgstats = 0;
+        if (sh->coprocs) hidecoproc(sh, &a);
         sh->args.v = argv + 1;
         sh->args.n = argc - 1;
         sh->argsown = {};
@@ -3064,7 +3155,6 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env,
         sh->subchild   = 1;
         subshelltraps(sh);
         sh->shown   = 0;
-        sh->bashpid = newvpid(sh);
         Sigproc sig;
         sigenter(sh, &sig, sh->bashpid, sh->sched->cur);
         if (!jmpset(e.jmp)) {
@@ -3083,6 +3173,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env,
         i32 killed = sh->killsig;
         i64 pid    = sh->bashpid;
         sigleave(sh, &sig);
+        if (sh->jobs) orphanjobs(sh);  // its jobs run on
         unwind(sh, saved->undo);
         restorefds(sh, fds);
         joinpsubs(sh);
@@ -4326,6 +4417,8 @@ static void runprogram1(Shell *sh, Node *n, Simple *c, Temps *tb, Arena scratch)
     sh->childsig = 0;
     sh->spawnto = direct;
     sh->attail  = n==sh->tailnode && sh->taillevel==sh->subshell+1;
+    sh->inplacenow = inplaceat(sh, n);
+    if (sh->inplacenow && !sh->inplace.pipe) env = lowershlvl(sh, a, env, 1);
     sh->undonames = names;
     sh->nundo     = npushed;
     sh->nundone   = 0;
@@ -4336,6 +4429,7 @@ static void runprogram1(Shell *sh, Node *n, Simple *c, Temps *tb, Arena scratch)
     }
     sh->status = runexternal(sh, scratch, argv.data, argv.len, env);
     sh->attail  = 0;
+    sh->inplacenow = 0;
     if (!direct) chldreaped(sh, 1);
     if (sh->nundo) {
         // Not spawned here: a stage that ends in the program, as
@@ -4380,7 +4474,14 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
             copybytes(sh->cmdname, name.data, len);
             sh->cmdnamelen = len;
             *who = {};  // its last simple command's, as bash's this_command_name
+            Inplace inplace = sh->inplace;
+            if (inplace.funcs && inplaceat(sh, n)) {
+                // a comsub's last command: bash execs its body's last
+                Node *body = c->fn->code->body;
+                sh->inplace.node = inplacecmd(body->kind==N_GROUP ? body->a : body, 0);
+            }
             callfunction(sh, c->fn, c->argv.data, c->argv.len, scratch);
+            sh->inplace = inplace;
             sh->line = fnline(sh, n->line);
         } else {
             callbuiltin(sh, c, scratch);
@@ -5070,9 +5171,12 @@ static void execsubshell(Shell *sh, Node *n, Arena scratch)
     sh->childsig  = 0;
     sh->tailnode  = tailcommand(n->a);
     sh->taillevel = sh->subshell + 2;
+    Inplace inplace = sh->inplace;
+    sh->inplace = subinplace(n, n->a, sh->subshell+2);
     sh->status = subshell(sh, &j, scratch, 0);
     sh->ctlline = ctlline;
     chldreaped(sh, 1);
+    sh->inplace = inplace;
     sh->tailnode  = 0;
     sh->taillevel = 0;
     if (!n->redirs) reportchild(sh, scratch, n);  // else once they are undone
@@ -6082,6 +6186,8 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     L->undo    = sh->undo;
     L->subshell = sh->subshell;
     // As bash's parse_and_execute, the line goes back when it ends
+    i32 oneshot = sh->oneshot;  // not for the parses it runs
+    sh->oneshot = 0;
     i32 entryline = sh->line;
     if (!reader && !sh->penest++) sh->peline = entryline;
     b32 prettynl = 0;
@@ -6221,6 +6327,13 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
             // Traps for signals that came while the line was read, as
             // before every command in bash
             if (fill && sh->interactive) checksigs(sh, *L->a);
+            if (oneshot && L->srcpos>=L->src.len && !fgjobctl(sh)) {
+                // The text's last command, which bash execs
+                sh->inplace.node  = inplacecmd(r.cmd, oneshot==3);
+                sh->inplace.level = sh->subshell + 1;
+                sh->inplace.traps = 1;
+                sh->inplace.funcs = oneshot > 1;
+            }
             i32 leaked = runcommand(sh, r.cmd, *L->a, reader);
             if (leaked) L->lineno = leaked - 1;
         }

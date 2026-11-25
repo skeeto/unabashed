@@ -133,12 +133,6 @@ container:
   Likewise `bash --posix` refuses an imported function whose name is
   not an identifier ("error importing function definition"); ours
   imports it.
-- A script without `#!` gets a new `$$` and `PPID` in bash (a forked
-  child); ours keeps the parent's. Its SHLVL is the environment's plus
-  one in both, but bash lowers SHLVL first for a program run as the
-  last command of `-c` or a subshell (exec'd without a fork), and
-  ours never does: `bash -c 'bash -c "echo \$SHLVL"'` is 1 in bash, 2
-  in ours.
 - A `#!` script started as `./f3` sees `$0` as `/home/oracle/./f3` in
   ours (Linux build), `./f3` in bash: ours passes the program an
   absolute path.
