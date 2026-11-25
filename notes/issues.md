@@ -285,11 +285,22 @@ Moved from M5a: limits of the test tiers, not of the shell.
   os_entropy and its BASHPID; SRANDOM cannot be seeded. Chosen for
   quality over bit-exact values (2026-11-08).
 - **Accepted: a here-document's nested $'...' message.** With extquote
-  off, a here-document's `${x#${$'x1'}}` is a bad substitution with our
-  usual message; bash reports "bad substitution: no closing `}' in"
-  followed by the whole body. (m7.md, step 6) Found by fuzzing; it needs
+  off, a here-document's `${x#${$'x1'}}` expands (to nothing, here) in
+  ours; bash reports "bad substitution: no closing `}' in" followed by
+  the whole body and stops (checked 2026-11-25; the unclosed ${ that
+  ours now reports as bash does is a different case, t/exec/1185). (m7.md, step 6) Found by fuzzing; it needs
   bash's brace scanner for here-documents with extquote off, for a
   message only. (M7 step 9)
+- **Accepted: bash's quoting slips in expanded arithmetic text.**
+  Arithmetic text with an expansion in it is expanded as a word, and
+  bash backslash-quotes the brackets of a subscript there
+  (expand_array_subscript), so a nested subscript fails in bash:
+  `a=(1 2); i=0; echo $(( a[a[$i]] ))` is an error naming `a\[0\]`,
+  and the message for `[[ [[:upper:]] -eq 2 ]]` shows `[\[:upper:\]]`;
+  ours evaluates the one and shows the other's text as written
+  (fuzzer seeds 501081, 504423, 504631, 510637, 512058, 524798,
+  530706). Likewise bash's message for `x=([1]=${x!})` names
+  `\[1\]=${x!}`, ours `${x!}`. Slips of bash's own, kept out. (Q58)
 - **Accepted: no stdio flush artifact.** glibc's 4 KiB stdio flush
   before a diagnostic is not emulated (bash prints an error mid-line
   after 4 KiB without a newline). (m4.md) An artifact of glibc's stdout
