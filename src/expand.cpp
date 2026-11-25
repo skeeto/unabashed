@@ -73,6 +73,7 @@ struct X {
 static Str  runcapture(Shell *, Arena *, Str src, b32 backquote);
 static Str  procsubst(Shell *, Arena *, Str body, b32 output);
 static void expansionerror(Shell *, Arena, Str msg, b32 internal = 0);
+static void reportederror(Shell *, Arena, Str msg);
 static void fatalerror(Shell *, Arena, Str msg);
 static Arith evalarith(Shell *, Arena *, Str);
 static Arith evalinteger(Shell *, Arena *, Str);
@@ -652,7 +653,8 @@ static void badsubst(X *x, Str whole, b32 fatal = 0)
     if (x->text.data && x->textdq) s = dqextract(x->sh, &a, s);
     Str msg = concat(&a, s, ": bad substitution");
     if (fatal) fatalerror(x->sh, a, msg);
-    expansionerror(x->sh, a, msg);
+    x->sh->status = 1;
+    reportederror(x->sh, a, msg);
 }
 
 // Index of the first unquoted c in s at the outer level, or -1. For
@@ -1266,7 +1268,7 @@ static void badelem(X *x, Str name, Str sub, b32 length)
     Arena a = *x->a;
     if (length) {
         Str msg = concat3(&a, "[", sub, "]: bad array subscript");
-        expansionerror(x->sh, a, msg);
+        reportederror(x->sh, a, msg);
     }
     Str msg = concat(&a, name, ": bad array subscript");
     shellerror(x->sh, a, msg);
@@ -1670,7 +1672,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
         if (ref.loop) {
             Arena a = *x->a;
             Str msg = concat(&a, uname, ": invalid indirect expansion");
-            expansionerror(sh, a, msg);
+            reportederror(sh, a, msg);
         }
         p.value = ref.last ? ref.last->str : Str{};
         p.set   = !!p.value.data;
@@ -1691,7 +1693,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
             if ((ident || hassub) && !lookup(sh, name)) {
                 Arena a = *x->a;
                 Str msg = concat(&a, uname, ": invalid indirect expansion");
-                expansionerror(sh, a, msg);
+                reportederror(sh, a, msg);
             }
             uname    = concat(x->a, "!", uname);
             got      = 1;
@@ -1706,7 +1708,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
             if (hassub && !lookup(sh, name)) {  // a missing array, as above
                 Arena a = *x->a;
                 Str msg = concat(&a, uname, ": invalid indirect expansion");
-                expansionerror(sh, a, msg);
+                reportederror(sh, a, msg);
             }
             return;  // nothing to name a variable
         }
@@ -1732,7 +1734,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
         if (!ok) {
             Arena a = *x->a;
             Str msg = concat(&a, v, ": invalid variable name");
-            expansionerror(sh, a, msg);
+            reportederror(sh, a, msg);
         }
         uname = concat(x->a, "!", uname);
         name  = v;
@@ -1746,7 +1748,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
         if (!valuevisible(v) || !(v->attrs & (V_ARRAY|V_ASSOC))) {
             if (allsub(sub)) {
                 Arena a = *x->a;
-                expansionerror(sh, a, concat(&a, name, ": unbound variable"));
+                reportederror(sh, a, concat(&a, name, ": unbound variable"));
             }
             unbound(x, uname);
         }
@@ -1783,7 +1785,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
             // not fatal, unlike other unbound variables
             Arena a = *x->a;
             Str msg = concat(&a, allsub(sub) || reflist ? target : uname, ": unbound variable");
-            expansionerror(sh, a, msg);
+            reportederror(sh, a, msg);
         }
         if (p.list) {
             n = p.ln;
@@ -1865,7 +1867,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
                     Arena a = *x->a;
                     Str   m = !r.value.len ? concat(&a, uname, ": invalid indirect expansion")
                             : concat(&a, r.value, ": invalid variable name");
-                    expansionerror(sh, a, m);
+                    reportederror(sh, a, m);
                 }
                 name   = r.value;
                 hassub = elem = 0;
@@ -1876,12 +1878,13 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
             if (hassub && !elem && !akey) {
                 // as bash's assign_array_element
                 Arena a = *x->a;
-                expansionerror(sh, a, concat(&a, uname, ": bad array subscript"));
+                reportederror(sh, a, concat(&a, uname, ": bad array subscript"));
             }
             if (!validvarname(name)) {
                 Arena a = *x->a;
                 Str   m = concat3(&a, "$", hassub ? uname : name, ": cannot assign in this way");
-                expansionerror(sh, a, m);
+                sh->status = 1;
+                reportederror(sh, a, m);
             }
             if (!indirect) v = expandword(x, word, wctx);
             Value *self = elem ? 0 : rawlookup(sh, name);
@@ -2631,7 +2634,8 @@ static void expandtext(X *x, Str s, i32 ctx, iz from = 0)
             } else if (e < 0) {
                 Arena scratch = *x->a;
                 Str   msg = concat(&scratch, "bad substitution: no closing \"`\" in ", cuthead(s, i));
-                expansionerror(sh, scratch, msg);
+                sh->status = 1;
+                reportederror(sh, scratch, msg);
             }
             Str body = span(s.data+i+1, s.data+e-1);
             Str out = runcapture(sh, x->a, backquotebody(x->a, body, dq), 1);
@@ -3517,7 +3521,8 @@ static Slice<Str> expandwords(Shell *sh, Arena *a, Word *words, i32 flags)
                     }
                     if (sh->shopt[S_FAILGLOB]) {
                         Str msg = concat(a, "no match: ", fieldstr(f));
-                        expansionerror(sh, *a, msg);
+                        sh->status = 1;
+                        reportederror(sh, *a, msg);
                     }
                     if (sh->shopt[S_NULLGLOB]) continue;
                 }
@@ -3714,6 +3719,7 @@ static void badarraysub(Shell *sh, Arena a, Str word)
     skipmsg(&a, word);  // callers build it as they call
     Str msg = concat(&a, word, ": bad array subscript");
     shellerror(sh, a, msg);
+    reportexit(sh);
 }
 
 // Evaluate the subscript of name[sub] for an assignment: a key if the

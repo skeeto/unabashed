@@ -450,6 +450,7 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
             // expression goes on
             Str msg = concat(a, ref->name, "[]: bad array subscript");
             shellerror(c->sh, *a, msg);
+            reportexit(c->sh);
             shellerror(c->sh, *a, msg);
             *isset = 0;
             return {};
@@ -463,6 +464,7 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
             // As bash: reported (twice) and read as unset
             Str msg = concat3(a, ref->name, "[", concat(a, ref->sub, "]: bad array subscript"));
             shellerror(c->sh, *a, msg);
+            reportexit(c->sh);
             shellerror(c->sh, *a, msg);
             *isset = 0;
             return {};
@@ -681,6 +683,18 @@ static void expansionerror(Shell *sh, Arena a, Str msg, b32 internal)
     sh->status = 1;
     if (!internal) reportexit(sh);
     escape(sh, posixfatal(sh) ? ESC_FATAL : ESC_DISCARD);  // as bash
+}
+
+// An expansion error bash reports with report_error (a bad
+// substitution, subscript or indirection, failglob's no match): as
+// above, but under set -e it ends the shell, in a condition too, with
+// $? or else 1 (reportexit; a caller sets $? first where bash does).
+static void reportederror(Shell *sh, Arena a, Str msg)
+{
+    shellerror(sh, a, msg);
+    reportexit(sh);
+    sh->status = 1;
+    escape(sh, posixfatal(sh) ? ESC_FATAL : ESC_DISCARD);
 }
 
 // A fatal expansion error, such as an unbound variable or ${x?}, ends
@@ -3638,6 +3652,7 @@ static b32 doassignments(Shell *sh, Arena *a, Word *w, iz n)
                 Arena t = *a;
                 Str msg = concat(&t, name, ": cannot assign list to array member");
                 shellerror(sh, t, msg);
+                reportexit(sh);
                 return 0;
             }
             if (!assigncompound(sh, *a, name, body, append ? SV_APPEND : 0)) {

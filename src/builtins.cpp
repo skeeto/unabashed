@@ -1651,6 +1651,7 @@ static Str declcompound(Shell *sh, Arena scratch, Word *cmd, Word *w)
     if (splitref(vname, &base, &sub)) {
         Str msg = concat(&scratch, vname, ": cannot assign list to array member");
         shellerror(sh, scratch, msg);
+        reportexit(sh);
         sh->status = 1;
         escape(sh, ESC_DISCARD);
     }
