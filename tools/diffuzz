@@ -1,0 +1,327 @@
+#!/bin/sh
+# Compare our shell with bash 5.3 on random scripts (tools/shgen.c)
+#
+#   tools/diffuzz [-b BATCH] [-j JOBS] [-m MINUTES] [-s SEED] DIR
+#   tools/diffuzz -r DIR SEED...
+#
+# Builds shgen and a Linux build of the working tree's shell (-O1 with
+# UBSan trapping, so a failed assertion shows as a death by signal) in
+# the compiler image, into DIR/bin, then runs batches of BATCH scripts
+# (default 400), seeds SEED (default 1) and up, for MINUTES (default
+# 10) in JOBS workers (default 2). Each batch runs in two fresh
+# containers of the oracle image, one with bash and one with our shell
+# mounted over it, as tools/record runs a spec. A script whose status,
+# stdout, stderr or files differ runs once more in each, and if each
+# shell agrees with itself both times, the script and both results are
+# kept in DIR/found/SEED:
+#
+#   script  bash.{status,out,err,fs}  ours.{status,out,err,fs}  diff
+#
+# DIR/index gains a line per finding: the seed, the script's size, what
+# differs, and the first line of the diff. Sorted by size it shows the
+# plainest scripts first, and sorted by its last part, findings that
+# are likely one fault. "lineno" marks messages differing only in their
+# line numbers, and "err-order" stderr's lines differing only in their
+# order, as when two processes report. DIR/flaky lists the
+# seeds a shell did not agree with itself on (races), DIR/killers the
+# scripts that ended their batch. -r runs the given seeds again, after
+# a fix say: it builds anew and prints "same" or "differs" for each,
+# rewriting DIR/found/SEED of those that differ.
+#
+# Nothing a script does leaves its container: no network, a read-only
+# root, tmpfs for /tmp and the home directory, uid 1000 without
+# capabilities, at most 256 processes and 1 GiB of memory. Between
+# scripts the driver kills what is left running and empties both
+# directories. Only DIR/bin is mounted, read-only, and results come
+# back on stdout.
+#
+# Environment:
+#   DIFFUZZ_IMAGE    oracle image (default unabashed/bash53)
+#   DIFFUZZ_BUILD    compiler image (default unabashed/fakes-build; it
+#                    is the oracle image's stage of that name:
+#                    docker build -f tools/Dockerfile.bash53 --target
+#                    fakes -t unabashed/fakes-build .)
+#   DIFFUZZ_TIMEOUT  seconds per script (default 3); one that takes
+#                    longer in either shell is not compared
+set -eu
+
+image=${DIFFUZZ_IMAGE:-unabashed/bash53}
+build=${DIFFUZZ_BUILD:-unabashed/fakes-build}
+limit=${DIFFUZZ_TIMEOUT:-3}
+batch=400
+jobs=2
+mins=10
+seed=1
+rerun=
+while getopts b:j:m:rs: opt; do
+    case $opt in
+    b) batch=$OPTARG;;
+    j) jobs=$OPTARG;;
+    m) mins=$OPTARG;;
+    r) rerun=1;;
+    s) seed=$OPTARG;;
+    *) echo "usage: tools/diffuzz [-b BATCH] [-j JOBS] [-m MINUTES] [-s SEED] DIR" >&2
+       exit 2;;
+    esac
+done
+shift $((OPTIND - 1))
+if [ $# -lt 1 ] || { [ -z "$rerun" ] && [ $# -ne 1 ]; }; then
+    echo "usage: tools/diffuzz [-b BATCH] [-j JOBS] [-m MINUTES] [-s SEED] DIR" >&2
+    exit 2
+fi
+for i in "$image" "$build"; do
+    if ! docker image inspect "$i" >/dev/null 2>&1; then
+        echo "diffuzz: image $i not found; see tools/README.md" >&2
+        exit 1
+    fi
+done
+src=$(cd "$(dirname "$0")/.." && pwd)
+mkdir -p "$1"
+dir=$(cd "$1" && pwd)
+shift
+mkdir -p "$dir/bin" "$dir/found" "$dir/tmp"
+
+# The driver, run by the image's /bin/sh as the container's main
+# process. For each seed: make the script, run it as tools/record does
+# (-c, stdin /dev/null, the recording environment) in an empty
+# directory under limits, then describe what it left.
+#   run FIRST COUNT   print "SEED STATUS OUT ERR FS" for each, the last
+#                     three being digests
+#   run -v            the same for the seeds on stdin, then a tar of
+#                     keep/SEED/{script,status,out,err,fs,digest}
+cat >"$dir/bin/run" <<'EOF'
+d=/tmp/.fz
+mkdir -p $d/keep
+one() {
+    /fz/shgen "$1" >$d/script || exit 9
+    /usr/bin/find /tmp /home/oracle -mindepth 1 -maxdepth 1 ! -name .fz \
+        -exec /bin/rm -rf {} + 2>/dev/null
+    mkdir /home/oracle/w && cd /home/oracle/w || exit 9
+    s=$(/bin/cat $d/script; echo .)
+    s=${s%.}
+    (
+        ulimit -f 2048  # 1 MiB a file, the outputs too
+        exec /usr/bin/timeout -s KILL "$LIMIT" /usr/bin/env -i LANG=C \
+            TZ=UTC HOME=/home/oracle PATH=/usr/local/bin:/opt/fakes/bin \
+            /usr/local/bin/bash --norc --noprofile -c "$s" bash \
+            </dev/null >$d/out 2>$d/err
+    )
+    st=$?
+    kill -9 -1 2>/dev/null  # all but this shell and init
+    cd /home/oracle
+    {
+        /usr/bin/find . -mindepth 1 -printf '%y %m %p %l\n'
+        /usr/bin/find . -type f -exec /usr/bin/md5sum {} +
+    } 2>&1 | LC_ALL=C /usr/bin/sort >$d/fs
+    cd /
+    sums=$(/usr/bin/md5sum $d/out $d/err $d/fs | /usr/bin/cut -c1-32 |
+           /usr/bin/tr '\n' ' ')
+    line="$1 $st ${sums% }"
+}
+if [ "$1" = -v ]; then
+    for seed in $(/bin/cat); do
+        one "$seed"
+        k=$d/keep/$seed
+        mkdir $k
+        /bin/cp $d/script $k/script
+        echo $st >$k/status
+        echo "$line" >$k/digest
+        for f in out err fs; do
+            /usr/bin/head -c 65536 $d/$f >$k/$f
+        done
+    done
+    /bin/tar -cf - -C $d keep
+else
+    i=$1
+    end=$(($1 + $2))
+    while [ $i -lt $end ]; do
+        one $i
+        echo "$line"
+        i=$((i + 1))
+    done
+fi
+EOF
+
+echo "diffuzz: building in $build" >&2
+docker run --rm --network none -w / -v "$src":/ub:ro -v "$dir/bin":/out \
+    "$build" /bin/sh -c '
+        cd /ub &&
+        gcc -std=c11 -O1 -o /out/shgen tools/shgen.c &&
+        g++ -std=c++20 -O1 -g -fsanitize=undefined -fsanitize-trap \
+            -fno-exceptions -fno-rtti -fno-threadsafe-statics -nostdlib++ \
+            -o /out/unabashed main_linux.cpp'
+
+# container WHICH NAME SECONDS ARGS...: run the driver in a fresh
+# container, with bash (WHICH b) or our shell (u), stdin and stdout
+# the caller's, killed after SECONDS
+container() {
+    which=$1 name=$2 secs=$3
+    shift 3
+    mount=
+    [ $which = b ] || mount="--volume=$dir/bin/unabashed:/usr/local/bin/bash:ro"
+    (sleep "$secs" && docker kill "$name" >/dev/null 2>&1) &
+    watchdog=$!
+    docker run --rm -i --name "$name" --init --network none --read-only \
+        --tmpfs /tmp:rw,exec,nosuid,nodev,mode=1777,size=64m \
+        --tmpfs /home/oracle:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=755,size=64m \
+        --workdir / --user oracle --hostname oracle \
+        --cap-drop ALL --security-opt no-new-privileges \
+        --pids-limit 256 --memory 1g --ulimit nofile=1024:1024 \
+        --volume="$dir/bin":/fz:ro ${mount:+"$mount"} -e LIMIT="$limit" \
+        "$image" /bin/sh /fz/run "$@" || true
+    kill $watchdog 2>/dev/null || true
+    wait $watchdog 2>/dev/null || true
+}
+
+# nolines FILE: its text with every "line N" alike
+nolines() {
+    LC_ALL=C sed 's/line [0-9][0-9]*/line N/g' "$1"
+}
+
+# verify TAG SEEDS-FILE FIRST-FILE: run the seeds again in both shells
+# and file them. FIRST-FILE has "SEED b|u DIGEST-LINE" from the first
+# runs, or is empty (-r).
+verify() {
+    vtag=$1 vseeds=$2 vfirst=$3
+    vt=$dir/tmp/$vtag
+    rm -rf "$vt.b" "$vt.u"
+    mkdir "$vt.b" "$vt.u"
+    vn=$(($(wc -l <"$vseeds")))
+    for vw in b u; do
+        container $vw "diffuzz-$$-$vtag-v$vw" $((vn*limit*2 + 60)) -v \
+            <"$vseeds" 2>/dev/null | tar -xf - -C "$vt.$vw" 2>/dev/null || true &
+    done
+    wait
+    while read -r s; do
+        b=$vt.b/keep/$s u=$vt.u/keep/$s
+        if [ ! -f "$b/digest" ] || [ ! -f "$u/digest" ]; then
+            echo "$s" >>"$dir/unverified"
+            continue
+        fi
+        db=$(cat "$b/digest") du=$(cat "$u/digest")
+        if [ -s "$vfirst" ]; then
+            if ! grep -qx "$s b $db" "$vfirst" || ! grep -qx "$s u $du" "$vfirst"; then
+                echo "$s" >>"$dir/flaky"
+                continue
+            fi
+        fi
+        if [ "$db" = "$du" ]; then
+            [ -z "$rerun" ] || echo "same $s"
+            [ -z "$rerun" ] || rm -rf "$dir/found/$s"
+            continue
+        fi
+        f=$dir/found/$s
+        rm -rf "$f"
+        mkdir "$f"
+        cp "$b/script" "$f/script"
+        what=
+        for part in status out err fs; do
+            cp "$b/$part" "$f/bash.$part"
+            cp "$u/$part" "$f/ours.$part"
+            cmp -s "$b/$part" "$u/$part" || what=$what${what:+,}$part
+        done
+        # The same lines in another order: often two processes' turns
+        if [ "$what" = err ] && LC_ALL=C sort "$b/err" >"$vt.x" &&
+           LC_ALL=C sort "$u/err" | cmp -s - "$vt.x"; then
+            what=err-order
+        fi
+        # The same but for the line numbers in messages
+        case $what in
+        out|err|out,err)
+            vsame=1
+            for part in out err; do
+                nolines "$b/$part" >"$vt.x"
+                nolines "$u/$part" | cmp -s - "$vt.x" || vsame=
+            done
+            [ -z "$vsame" ] || what=lineno
+        esac
+        (
+            cd "$f"
+            for part in status out err fs; do
+                diff -u bash.$part ours.$part || true
+            done
+        ) >"$f/diff"
+        line=$(LC_ALL=C grep -a '^[-+][^-+]' "$f/diff" | head -n 1 |
+               LC_ALL=C tr -c '[:print:]\n' '?' | LC_ALL=C cut -c1-120)
+        if [ -n "$rerun" ]; then
+            echo "differs $s $what"
+        else
+            printf '%s %s %s %s\n' "$s" $(($(wc -c <"$f/script"))) \
+                "$what" "$line" >>"$dir/index"
+        fi
+    done <"$vseeds"
+    rm -rf "$vt.b" "$vt.u" "$vt.x"
+}
+
+if [ -n "$rerun" ]; then
+    printf '%s\n' "$@" >"$dir/tmp/rerun"
+    : >"$dir/tmp/none"
+    verify r "$dir/tmp/rerun" "$dir/tmp/none"
+    exit 0
+fi
+
+# worker W: batches W, W+JOBS, W+2*JOBS, ... until time is up
+worker() {
+    w=$1
+    t=$dir/tmp/w$w
+    k=$w
+    ran=0 slow=0
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        first=$((seed + k*batch))
+        left=$batch
+        k=$((k + jobs))
+        while [ $left -gt 0 ]; do
+            for sh in b u; do
+                container $sh "diffuzz-$$-w$w-$sh" $((left*limit + 60)) \
+                    $first $left </dev/null >"$t.$sh" 2>/dev/null &
+            done
+            wait
+            # A batch cut short was ended by its next script
+            n=$(awk 'NF==5' "$t.b" | wc -l)
+            m=$(awk 'NF==5' "$t.u" | wc -l)
+            [ $n -le $m ] || n=$m
+            n=$((n))
+            head -n $n "$t.b" >"$t.b1"
+            head -n $n "$t.u" >"$t.u1"
+            paste -d' ' "$t.b1" "$t.u1" | awk -v first="$t.first" '
+                $2==137 || $7==137 { slow++; next }
+                $2!=$7 || $3!=$8 || $4!=$9 || $5!=$10 {
+                    print $1
+                    print $1, "b", $1, $2, $3, $4, $5 >first
+                    print $1, "u", $6, $7, $8, $9, $10 >first
+                }
+                END { print slow+0 >"/dev/stderr" }' >"$t.seeds" 2>"$t.slow"
+            [ -f "$t.first" ] || : >"$t.first"
+            ran=$((ran + n))
+            slow=$((slow + $(cat "$t.slow")))
+            if [ -s "$t.seeds" ]; then
+                verify "w$w" "$t.seeds" "$t.first"
+            fi
+            rm -f "$t.first"
+            if [ $n -lt $left ]; then
+                echo $((first + n)) >>"$dir/killers"
+                n=$((n + 1))
+            fi
+            first=$((first + n))
+            left=$((left - n))
+        done
+        echo "$ran $slow" >"$t.count"
+    done
+}
+
+deadline=$(($(date +%s) + mins*60))
+: >>"$dir/index"
+before=$(($(wc -l <"$dir/index")))
+w=0
+while [ $w -lt "$jobs" ]; do
+    worker $w &
+    w=$((w + 1))
+done
+trap 'docker ps -q --filter "name=diffuzz-$$-" | xargs docker kill >/dev/null 2>&1; exit 130' INT TERM
+wait
+count() { [ -f "$1" ] && echo $(($(wc -l <"$1"))) || echo 0; }
+cat "$dir"/tmp/w*.count 2>/dev/null | awk -v found=$(($(count "$dir/index") - before)) \
+    -v flaky=$(count "$dir/flaky") -v killers=$(count "$dir/killers") '
+    { ran += $1; slow += $2 }
+    END { printf "diffuzz: %d scripts, %d found, %d too slow; so far %d flaky, %d killers\n",
+                 ran, found, slow, flaky, killers }'

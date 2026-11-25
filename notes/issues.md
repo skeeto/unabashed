@@ -78,6 +78,56 @@ Found while writing unabashed.1 (2026-11-08), not yet fixed:
   only the low byte sees 58, not 130 (Git Bash maps the code to 130).
 
 
+## Found by tools/diffuzz
+
+From its first runs (2026-11-24, 44,000 scripts against bash 5.3), not
+yet fixed. Each was confirmed by hand in the oracle container unless
+it says otherwise.
+
+- **`umask` changes nothing.** The mask is only a number the builtin
+  prints back (shell.cpp, `Shell.umask`): files the shell makes and
+  programs it starts keep the mask the shell was started with, and the
+  shell starts at 022 whatever it inherited. After `umask 077`,
+  `echo hi >f`, `touch f` and `mkdir d` all give 644 and 755.
+- `echo ${x@x}` (a bad substitution) reports the error and goes on;
+  bash ends a `-c` script there with status 127.
+- `set -n; echo $?` in a `-c` script prints 0; bash runs nothing more.
+- `! cmd & wait $!` gives the inverted status; bash gives cmd's.
+- A program started with `{x}>f` leaves `x` set in the shell; bash
+  assigns it in the child only, so `declare -p x` finds nothing.
+- `{x}>f1 &>"$x"` expands `"$x"` before `x` is assigned (an empty
+  name, an error); bash expands it after, and writes a file named 10.
+- `( : ) 3</nope/f; echo ${PIPESTATUS[@]}` prints nothing new (the
+  array keeps its old value); bash sets it to 1.
+- `BASH_COMPAT=x` is silent; bash warns "BASH_COMPAT: x: compatibility
+  value out of range", once per assignment and expansion.
+- An exported function run by `bash -c f` reports its errors as
+  `bash: line N:`; bash names them `environment:`, with a line number
+  only for some.
+- A script without `#!` started as `./f2` sees a variable that was
+  exported while unset (`declare -x x`); in bash it is not there.
+- `[[ 3 -ge '"' ]]` is an arithmetic syntax error; bash takes the
+  quote as 0 without a word.
+- `bash <<<'echo hi' 0>&1` runs nothing in bash ("script file read
+  error: Bad file descriptor", status 128); ours gives 0.
+- Messages: `echo hi {fd}>$u` with `u` unset names `$u` as the
+  ambiguous redirect, where bash names `fd`; `"${map[@]:=x}"` says
+  "$map[@]: cannot assign in this way", where bash says "map[@]: bad
+  array subscript".
+- Line numbers in messages: a command after a here-document's
+  operator on the same line reports the line past the body, where
+  bash reports the command's. This is one case of many: a quarter of
+  all findings differ only so (`lineno` in the index).
+
+Seen in findings, not reduced to a case yet: the wording of a syntax
+error inside a command substitution; which name `set -u` reports for
+an unset subscript; the second line (the source text) of a syntax
+error from `eval` or `-c`, missing or extra; `arr[]=x {fd}>f` making
+the file though the assignment fails; how many times an ERR trap runs
+for `! { ...; } & wait $!`; an exported function with an extglob
+pattern, which bash fails to import when the child has extglob off.
+
+
 ## The library
 
 Its deviations by design are in library.md (Known deviations and

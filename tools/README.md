@@ -148,6 +148,57 @@ the crashes. Every mode runs scripts only on the vos. A plain build of
 the same mode replays files: `g++ -std=c++20 -g3 -DFUZZ_CHAOS -o replay
 main_fuzz.cpp; ./replay crash...`.
 
+## diffuzz (Docker): random scripts against bash 5.3
+
+    tools/diffuzz [-b BATCH] [-j JOBS] [-m MINUTES] [-s SEED] DIR
+    tools/diffuzz -r DIR SEED...
+
+The fuzz modes above check the shell against itself; this one checks
+it against bash. `tools/shgen.c` prints a small script for a seed (the
+same one anywhere): a few constructs crossed with the contexts bash
+treats apart (pipeline stages, command substitutions, subshells, jobs,
+eval, functions, nested bash with its options and inherited
+variables), with errors and with redirections of the standard
+descriptors, followed by statuses and `declare -p`. It names only
+builtins, the fakes and a few files of its own, and nothing that
+differs from run to run (pids, clocks, random numbers).
+
+`diffuzz` builds shgen and a Linux build of the working tree's shell
+(-O1, UBSan trapping) in the compiler image, then runs batches of
+scripts in pairs of fresh containers of the oracle image, bash in one
+and our shell mounted over it in the other, each script as
+`tools/record` runs a spec: `-c`, stdin `/dev/null`, the recording
+environment, in an empty directory. Status, stdout, stderr and the
+files left (names, modes, contents) are compared. A script that
+differs runs once more in each shell; if each agrees with itself, it
+is kept in `DIR/found/SEED` (`script`, `bash.*`, `ours.*`, `diff`) and
+listed in `DIR/index` as seed, script size, what differs and the
+diff's first line. `sort -k2n DIR/index` shows the plainest scripts
+first, and sorting by the last part groups findings that are likely
+one fault. Two kinds are marked apart, being many and seldom worth a
+look each: `lineno`, where messages differ only in their line numbers,
+and `err-order`, where stderr has the same lines in another order (two
+processes reporting). A shell disagreeing with itself is a race,
+listed in `DIR/flaky`. `-r` builds anew and runs seeds again, printing
+`same` or `differs` for each: the check after a fix.
+
+Nothing a script does leaves its container: no network, a read-only
+root, tmpfs for `/tmp` and the home directory, uid 1000 with no
+capabilities, 256 processes, 1 GiB, a file size limit, and 3 seconds
+a script (`DIFFUZZ_TIMEOUT`; slower ones are not compared). Between
+scripts the driver kills every process left and empties both
+directories. Only `DIR/bin` is mounted, read-only, and results come
+back on stdout. A script that ends its whole batch is listed in
+`DIR/killers` and the batch goes on after it.
+
+The compiler image is the oracle Dockerfile's `fakes` stage:
+
+    docker build -f tools/Dockerfile.bash53 --target fakes -t unabashed/fakes-build .
+
+Not every finding is a fault of ours: bash's own slips show up too.
+Those we choose not to follow go in notes/issues.md as accepted, so
+they are not taken for bugs again.
+
 ## sandbox (Windows)
 
 `sandbox.cpp` confines the curated Windows integration tests, which need
