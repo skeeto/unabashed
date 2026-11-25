@@ -5230,7 +5230,9 @@ static void executelist(Shell *, Node *, Arena);
 static void executenode(Shell *sh, Node *n, Arena scratch)
 {
     for (;;) {
-        if (!n || sh->exiting || sh->flow) {
+        // As bash's execute_command_internal, set -n stops each command
+        // at once, wherever it is, keeping the status
+        if (!n || sh->exiting || sh->flow || sh->opt[O_NOEXEC]) {
             return;
         }
         if (n->flags & CMD_TIME) {
@@ -5332,7 +5334,7 @@ static void executelist(Shell *sh, Node *n, Arena scratch)
 [[gnu::noinline]]
 static void executeone(Shell *sh, Node *n, Arena scratch)
 {
-    if (!n || sh->exiting || sh->flow) {
+    if (!n || sh->exiting || sh->flow || sh->opt[O_NOEXEC]) {
         return;
     }
     checkstack(sh);

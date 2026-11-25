@@ -91,7 +91,6 @@ it says otherwise.
   (arr unset) reports both "bad array subscript" and the bad
   substitution, bash only the first. A message for
   `"$((i))${x.y^^}\""` keeps the backslash bash drops.
-- `set -n; echo $?` in a `-c` script prints 0; bash runs nothing more.
 - `! cmd & wait $!` gives the inverted status; bash gives cmd's.
 - A program started with `{x}>f` leaves `x` set in the shell; bash
   assigns it in the child only, so `declare -p x` finds nothing.
