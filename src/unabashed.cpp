@@ -443,6 +443,7 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
     if (!exportablefunc(name) || (sh->opt[O_POSIX] && !validvarname(name))) return;
     if (sh->rshell) return;  // restricted: no functions from outside
     Lexer *L = newlexer(&scratch, concat3(&scratch, name, " ", value));
+    L->lineno = -1;  // its first line is 0, as bash's line_number then
     parselimit(sh, L);
     Parsed p = parseunit(L);
     Node  *n = p.cmd;

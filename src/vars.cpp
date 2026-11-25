@@ -1758,7 +1758,10 @@ static Code *newcode(Shell *sh, Arena, Node *body)
             : sh->defsrc.len  ? sh->defsrc
             : sh->interactive ? Str("main")
             :                   Str{};
-    size += sh->srcname.len + src.len;
+    // and its messages name a sourced file or the environment, as bash's
+    // get_name_for_error takes BASH_SOURCE[0]
+    Str file = sh->srcname.len ? sh->srcname : sh->defsrc;
+    size += file.len + src.len;
 
     Arena block = {};
     block.beg = salloc(sh->store, size);
@@ -1767,7 +1770,7 @@ static Code *newcode(Shell *sh, Arena, Node *body)
     c->store = sh->store;
     c->size  = size;
     c->body = copynode(&block, body, &g);
-    c->file = clone(&block, sh->srcname);
+    c->file = clone(&block, file);
     c->src  = clone(&block, src);
     c->line = sh->defsrc.len ? 0 : body->line;  // imports: 0, as bash
     return c;

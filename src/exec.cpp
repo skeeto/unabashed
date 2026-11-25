@@ -3874,9 +3874,10 @@ static iz bindtemps(Shell *sh, Arena *a, Word *assigns, iz nassign, Assign *as, 
         Assign t = splitassign(sh, a, w->text, 0);
         if (!validvarname(t.name)) {
             // An array element cannot be bound for one command: the
-            // command runs without it
+            // command runs without it. As bash's sh_invalidid, a
+            // builtin's message, with a line even if 0 (an import's)
             Str msg = concat3(&scratch, "`", t.name, "': not a valid identifier");
-            shellerror(sh, scratch, msg);
+            builtinerror(sh, scratch, {}, msg);
             continue;
         }
         Value *cur = lookup(sh, t.name);
