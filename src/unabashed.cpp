@@ -444,10 +444,21 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
     Str name = cuttail(cuthead(var, 10), 2);
     if (!name.len || !startswith(value, "() {")) return;
     if (sh->rshell) return;  // restricted: no functions from outside
-    b32 ok = exportablefunc(name) && (!sh->opt[O_POSIX] || validvarname(name));
+    if (sh->importing & IMPORT_NONE) {
+        addbadenv(sh, concat3(&scratch, var, "=", value));  // -n, -p: passed on only
+        return;
+    }
+    b32 posix = sh->opt[O_POSIX] || (sh->importing & IMPORT_POSIX);
+    b32 ok    = exportablefunc(name) && (!posix || validvarname(name));
     Node *n = 0;
     if (ok) {
-        Lexer *L = newlexer(&scratch, concat3(&scratch, name, " ", value));
+        Str text = concat3(&scratch, name, " ", value);
+        if (sh->importing & IMPORT_VERBOSE) {
+            // -v: the text as it is read, as bash's parse of it echoes
+            fdwrite(sh, 2, text);
+            if (!endswith(text, "\n")) fdwrite(sh, 2, "\n");
+        }
+        Lexer *L = newlexer(&scratch, text);
         L->lineno = -1;  // its first line is 0, as bash's line_number then
         parselimit(sh, L);
         Parsed p = parseunit(L);
@@ -1687,6 +1698,69 @@ static b32 startsrestricted(OsInfo *info)
     return 0;
 }
 
+// The options bash has parsed when it imports the environment's
+// functions, before this shell's own parse (IMPORT_*): -v echoes each
+// one's text, POSIX mode (also from POSIXLY_CORRECT or POSIX_PEDANTIC)
+// refuses a name that is not an identifier, and -n or -p imports none.
+// A bad option ends bash first: nothing is echoed then.
+static u32 startimport(Shell *sh, OsInfo *info)
+{
+    u32 flags = 0;
+    for (iz i = 0; i < info->nenv; i++) {
+        Str name = cut(info->env[i], '=').head;
+        if (name=="POSIXLY_CORRECT" || name=="POSIX_PEDANTIC") flags |= IMPORT_POSIX;
+    }
+    b32 verbose = 0, noexec = 0, priv = 0, bad = 0;
+    iz  i = 1;
+    for (; i<info->nargs && startswith(info->args[i], "-"); i++) {
+        Str a    = info->args[i];
+        b32 lng  = a.len>2 && a[1]=='-';
+        Str name = cuthead(a, lng ? 2 : 1);
+        b32 known = 0;
+        for (iz k = 0; k < countof(longopts); k++) known |= name==longopts[k];
+        if (!known) {
+            bad = lng;
+            break;
+        }
+        if (name == "posix")   flags |= IMPORT_POSIX;
+        if (name == "verbose") verbose = 1;
+        i += name=="rcfile" || name=="init-file";
+    }
+    for (; !bad && i<info->nargs; i++) {
+        Str a = info->args[i];
+        if (a.len<1 || (a[0]!='-' && a[0]!='+') || a=="-" || a=="--") break;
+        b32 on   = a[0] == '-';
+        iz  next = i + 1;
+        for (iz k = 1; !bad && k < a.len; k++) {
+            u8  c    = a[k];
+            Str name = {};
+            if (c == 'o') {
+                if (next >= info->nargs) continue;  // a listing
+                name = info->args[next++];
+                bad  = 1;
+                for (i32 o = 0; o < O_COUNT; o++) {
+                    if (setoptions[o].name==name && hasoption(sh, o)) bad = 0;
+                }
+            } else if (c == 'O') {
+                next++;
+            } else if (c!='c' && c!='s' && c!='i' && c!='l' && c!='r' && c!='D') {
+                bad = 1;
+                for (i32 o = 0; o < O_COUNT; o++) {
+                    if (setoptions[o].letter == c) bad = 0;
+                }
+            }
+            if (c=='v' || name=="verbose") verbose = on;
+            if (c=='n' || name=="noexec")     noexec = on;
+            if (c=='p' || name=="privileged") priv   = on;
+            if (name=="posix") flags = on ? flags|IMPORT_POSIX : flags & ~IMPORT_POSIX;
+        }
+        i = next - 1;
+    }
+    if (verbose && !bad) flags |= IMPORT_VERBOSE;
+    if (noexec || priv) flags |= IMPORT_NONE;
+    return flags;
+}
+
 // The options summary, as bash prints it for --help or a bad option
 static void shellusage(Shell *sh, Buf *b)
 {
@@ -1916,7 +1990,9 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         pathsetup(sh, info, &perm, scratch);
         nativeoptions(sh);
         sh->rshell = startsrestricted(info);
+        sh->importing = startimport(sh, info);
         initvars(sh, info, scratch);
+        sh->importing = 0;
         entrytraps(sh);
         if (sh->pathmode==PM_MSYS && !msysargv(sh, info, &perm, scratch)) {
             sh->status = 1;

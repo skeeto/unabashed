@@ -128,11 +128,6 @@ container:
   the body's line, and 0 for every import, where bash's is 0 unless
   such a nested definition moves it (its export writes every nested
   one with `function`).
-- `bash -v` echoes the text of each function it imports, as bash
-  parses them with -v already on; ours reads its options after.
-  Likewise `bash --posix` refuses an imported function whose name is
-  not an identifier ("error importing function definition"); ours
-  imports it.
 - `h() { trap 'echo t' ERR; false; }; h` runs the action twice in
   ours, once in bash (not again for the call).
 

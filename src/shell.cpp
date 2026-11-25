@@ -374,6 +374,8 @@ struct Capture {
 
 enum { FDMAX = 1024, FDUSER = 10 };
 
+enum { IMPORT_VERBOSE = 1, IMPORT_POSIX = 2, IMPORT_NONE = 4 };  // startimport
+
 struct Fdtab {
     File *fd[FDMAX];
     i32   top;       // one past the highest open descriptor
@@ -796,6 +798,8 @@ struct Shell {
                            // reads this (POSIX mode's fatal errors)
     b32      restricted;   // set -r, rbash: the restrictions apply now
     b32      rshell;       // started restricted (shopt restricted_shell)
+    u32      importing;    // IMPORT_*: options for the environment's
+                           // functions, while startup imports them
     i32      dumpstrings;  // 1: -D, --dump-strings; 2: in po form too
     b32      prettyprint;  // --pretty-print: print the script, not run it
     i32      redirfail;    // the status of the last failed redirection
