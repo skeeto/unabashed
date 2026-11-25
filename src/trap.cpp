@@ -760,18 +760,23 @@ static void runexittrap(Shell *sh, Arena)
     i32 line    = sh->line;
     b32 trapsig = pushtemp(sh, scratch, "BASH_TRAPSIG", "0", 1);
     b32 errexit = sh->opt[O_ERREXIT];
-    b32 escaped = jmpset(e.jmp);
+    b32 escaped  = jmpset(e.jmp);
+    b32 returned = 0;
     if (!escaped) {
         if (!trapsig && errexit) trapsigexit(sh, status);
         sh->staleredir = line + 1;  // as bash's reset_parser before it
         runsource(sh, cmd, "exit trap", scratch, 0, 1);  // as bash: line 1
+        // a return in a function's trap ends it with its status, as
+        // bash's return_catch there
+        returned = sh->flow==FLOW_RETURN && sh->funcdepth;
     }
     // However the action ended: the depth, intrap and the rest go back
     escresume(sh, &e);
     sh->line = line;
     i32 own  = sh->status;
-    if (!escaped || e.why==ESC_FATAL) {
-        // as bash, a fatal error there (FORCE_EOF) exits with the
+    if ((!escaped || e.why!=ESC_EXIT) && !returned) {
+        // as bash, anything but exit or set -e there (a fatal error's
+        // FORCE_EOF, an abandoned -c text's DISCARD) exits with the
         // status the trap began with
         sh->status = status;
     }

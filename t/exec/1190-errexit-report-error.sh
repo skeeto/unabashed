@@ -39,3 +39,22 @@ echo $((1/0))
 x=abc; echo ${x:1:-5}
 set +e; echo ${x!}
 EOF
+
+# Not set -e, but the status an error leaves at exit: an EXIT trap
+# ended by anything but exit or set -e (a text abandoned, as for a
+# subscript's arithmetic error or exit's too many arguments) leaves
+# the status the trap began with, and a return in a function's trap
+# the return's, as bash's run_exit_trap.
+while IFS= read -r c; do
+    bash -c "$c" 2>&1; echo "status $?"
+done <<'EOF'
+trap 'map[a b]=1; echo after' EXIT
+trap 'x[1/0]=1; echo after' EXIT; exit 3
+trap 'declare -i n; n=1/0; echo after' EXIT; exit 3
+trap 'exit 1 2; echo after' EXIT; exit 3
+trap 'eval "map[a b]=1"; echo after' EXIT
+trap 'set -e; false; echo after' EXIT; exit 3
+trap 'exit 5' EXIT; exit 3
+f() { trap 'return 6; echo after' EXIT; exit 3; }; f; echo no
+f() { trap 'return' EXIT; exit 3; }; f
+EOF

@@ -1,4 +1,4 @@
-== stdout 2102
+== stdout 2486
 -- echo ${x!}
 bash: line 1: ${x!}: bad substitution
 status 1
@@ -87,10 +87,24 @@ status 0
 bash: line 1: ${x!}: bad substitution
 after
 status 0
+bash: line 1: a b: arithmetic syntax error in expression (error token is "b")
+status 0
+bash: line 1: 1/0: division by 0 (error token is "0")
+status 3
+bash: line 1: 1/0: division by 0 (error token is "0")
+status 3
+bash: line 1: exit: too many arguments
+status 3
+bash: line 1: a b: arithmetic syntax error in expression (error token is "b")
+status 0
+status 1
+status 5
+status 6
+status 3
 
 == stderr 0
 
-== merged 2102
+== merged 2486
 -- echo ${x!}
 bash: line 1: ${x!}: bad substitution
 status 1
@@ -179,5 +193,19 @@ status 0
 bash: line 1: ${x!}: bad substitution
 after
 status 0
+bash: line 1: a b: arithmetic syntax error in expression (error token is "b")
+status 0
+bash: line 1: 1/0: division by 0 (error token is "0")
+status 3
+bash: line 1: 1/0: division by 0 (error token is "0")
+status 3
+bash: line 1: exit: too many arguments
+status 3
+bash: line 1: a b: arithmetic syntax error in expression (error token is "b")
+status 0
+status 1
+status 5
+status 6
+status 3
 
 == status 0
