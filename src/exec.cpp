@@ -4027,6 +4027,13 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
         // The status is the last command substitution's, or zero.
         b32  ok     = doassignments(sh, a, assigns, nassign);
         i32  laststatus = sh->nsubst==nsubst ? 0 : sh->status;
+        if (!ok) {
+            // As bash abandons the command in its expansion, before
+            // the redirections
+            unwind(sh, mark);
+            sh->status = 1;
+            escape(sh, posixfatal(sh) ? ESC_FATAL : ESC_DISCARD);
+        }
         // bash runs redirections of fd 0, or with a {var}, in a child
         // ("Safety"), whose status is theirs alone: the comsubs' is lost
         b32 child = 0;
@@ -4043,12 +4050,7 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
         }
         if (child) laststatus = 0;
         unwind(sh, mark);
-        sh->status = ok ? laststatus : 1;
-        if (!ok && posixfatal(sh)) {
-            escape(sh, ESC_FATAL);
-        } else if (!ok) {
-            escape(sh, ESC_DISCARD);  // as bash abandons the command
-        }
+        sh->status = laststatus;
         bindlastarg(sh, *a, *last);  // before ERR, as bash
         *last = {};
         if (!forked) checkerrexit(sh);
