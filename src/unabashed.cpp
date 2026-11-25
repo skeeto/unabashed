@@ -2409,6 +2409,10 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             checksigs(sh, scratch);
             sh->exiting = 1;
             if (top.why == ESC_FATAL) fatalunwind(sh, 0);
+            if (top.why == ESC_EXIT) exitunwind(sh, 0, sh->cflag);
+            if (top.why==ESC_EXIT && sh->cflag && exitpops(sh)) {
+                sh->errexitoff = 0;  // as runsource's, for -c's parse
+            }
             errexitundo(sh, 0);
             runexittrap(sh, scratch);
         }

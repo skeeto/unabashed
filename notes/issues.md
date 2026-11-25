@@ -113,6 +113,19 @@ matching `)'" (seed 131818); a quote left open inside `[[` in a
 nested `bash -c`, where bash adds "unexpected EOF while looking for
 `]]'" (seed 503173).
 
+Left from the trap findings (Q56), each checked against bash 5.3:
+
+- Under set -E, `( command cat <nx )` runs ERR twice in ours, once in
+  bash: its child execs the program for `command` too, as for a sole
+  simple command, and ours runs ERR in the child before exiting.
+- Left as bash's slips: `( ! false )` runs ERR in the child under
+  set -E (bash moves the `!` onto the subshell, so the child sees the
+  bare command fail), though its manual says a `!` pipeline never runs
+  ERR; and with an EXIT trap set, a job ended by an expansion error
+  after an earlier pipeline makes bash print "wait_for: No record of
+  process N", N that pipeline's long-reaped process
+  (`trap 'echo x' EXIT; : | :; echo $((1.5)) & wait`).
+
 
 ## The library
 

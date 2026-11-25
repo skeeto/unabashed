@@ -817,6 +817,27 @@ static void fatalunwind(Shell *sh, Undo *base)
     }
 }
 
+// The exit builtin (not report_error's exit) is ending the level: each
+// parse_and_execute it leaves (-c, eval, source, a command or process
+// substitution) undoes what it ran before the EXIT trap, unless it was
+// called with that trap set in a function or ${ cmd; }, where the trap
+// runs in place. A script's or subshell's reader undoes nothing. pe:
+// the level's own text is such a parse, begun at base.
+static b32 exitpops(Shell *sh)
+{
+    return sh->exitcalled && sh->exitpops && !sh->exitline;
+}
+
+static void exitunwind(Shell *sh, Undo *base, b32 pe)
+{
+    if (!exitpops(sh)) return;
+    if (pe) {
+        unwind(sh, base);
+    } else if (sh->fatalnest && undoheld(sh, sh->fatalundo)) {
+        unwind(sh, sh->fatalundo);
+    }
+}
+
 // As bash's -c, whose catch of a fatal error returns 127: a child
 // forked for a simple command (a stage, a job) has that same point of
 // return, while one that catches the error itself (catchfatal) keeps
@@ -898,6 +919,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     storerehold(sh->store, e.hold);  // the level's own: its EXIT trap frees
     if (!sh->execed && !sh->killsig && sh->traps) {
         if (e.why == ESC_FATAL) fatalunwind(sh, body);
+        if (e.why == ESC_EXIT) exitunwind(sh, body, j->kind==SUB_SOURCE);
         errexitundo(sh, body);
         runexittrap(sh, scratch);
     }
@@ -6175,11 +6197,17 @@ static i32 runsource(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, i
             escrestore(sh, e);
             errexitcall(sh);
         }
-        if (e->why == ESC_FATAL) {
+        if (e->why==ESC_FATAL || (e->why==ESC_EXIT && exitpops(sh))) {
             // the outermost such parse, the last to pass it on, decides
-            // what stays for the EXIT trap (fatalunwind)
+            // what stays for the EXIT trap (fatalunwind, exitunwind)
             sh->fatalnest = 1;
             sh->fatalundo = e->undo;
+        }
+        if (e->why==ESC_EXIT && exitpops(sh) && !reader) {
+            // its unwinding puts back what an eval, source or command
+            // it ran as a condition turned off (but a subshell's or
+            // script's reader, not a parse in bash, leaves it off)
+            sh->errexitoff = e->errexitoff;
         }
         escape(sh, e->why);
     }

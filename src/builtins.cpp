@@ -341,6 +341,7 @@ static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
     sh->status  = status;
     sh->exiting = 1;
     sh->exitcalled = 1;
+    sh->exitpops = !(sh->funcdepth && trapset(sh, TRAP_EXIT));
     escape(sh, ESC_EXIT);
 }
 
@@ -769,6 +770,7 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
         if (e->why==ESC_EXIT && sh->exitcalled && !popped) {
             // As bash, exit runs the EXIT trap still in the file: its
             // BASH_SOURCE and positional parameters
+            exitunwind(sh, 0, 0);
             sh->exitcalled = 0;
             if (!sh->execed && !sh->killsig) runexittrap(sh, scratch);
         }

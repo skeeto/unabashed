@@ -1014,11 +1014,12 @@ struct Shell {
     b32      exitran;      // the EXIT action ran (or runs): not again,
                            // though it stays listed, as bash
     b32      exitcalled;   // the exit builtin: EXIT trap in the function
+    b32      exitpops;     // and the parses it leaves undo theirs (exitunwind)
     b32      execing;      // exec's program may replace the process
     i32      errexited;    // set -e is ending this level: ERREXIT_*
     Undo    *errundo;      // the redirections that stay for the EXIT trap
-    b32      fatalnest;    // a fatal error left eval, source, a trap action
-    Undo    *fatalundo;    // or ${ cmd; } begun with these (fatalunwind)
+    b32      fatalnest;    // a fatal error (or exit) left eval, source, a trap
+    Undo    *fatalundo;    // action or ${ cmd; } begun with these (fatalunwind)
     i32      writeerr;     // why the last fdwrite failed
 };
 

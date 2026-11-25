@@ -332,6 +332,10 @@ static i32 runtrap(Shell *sh, i32 idx)
     sh->trapstatus = status;
     sh->trapfuncs  = sh->funcdepth;
     sh->intrap++;
+    // Its text is parsed anew, so a condition's set -e and ERR do not
+    // carry into it (escrestore puts them back), but eval, source or
+    // command run as a condition turn both off for all they run
+    if (!sh->errexitoff) sh->noerrexit = 0;
     if (idx >= TRAP_DEBUG) sh->trapbusy |= 1 << (idx-TRAP_DEBUG);
     // BASH_TRAPSIG: the trap's number, while it runs (not over a
     // readonly one, which stays as it is)
@@ -358,6 +362,10 @@ static i32 runtrap(Shell *sh, i32 idx)
     b32 ends = !escaped && trapsigdone(sh, a, trapsig);
     restorecmd(sh, cmdsave);
     if (escaped) {
+        // Ending the shell from DEBUG, ERR or RETURN leaves it running
+        // for the EXIT trap, as bash's in-progress flag
+        b32 ends = e.why==ESC_EXIT || (e.why==ESC_FATAL && !sh->interactive);
+        if (ends && idx>=TRAP_DEBUG) sh->trapbusy |= 1 << (idx-TRAP_DEBUG);
         escape(sh, e.why);
     } else if (ends) {
         trapsigexit(sh, own);
@@ -738,6 +746,9 @@ static void runexittrap(Shell *sh, Arena)
     sh->trapstatus = status;
     sh->trapfuncs  = sh->funcdepth;
     sh->intrap++;
+    // As runtrap's (exit's unwinding may have put errexitoff back, see
+    // runsource)
+    if (!sh->errexitoff) sh->noerrexit = 0;
     // Each parse_and_execute bash left on its way here (-c, eval,
     // source, a command substitution) put back the line it began at,
     // unless its exit_shell ran this at once (report_error, a signal)
