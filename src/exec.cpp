@@ -4458,7 +4458,7 @@ static TestEnv testenv(TestCtx *t)
 // expand once, as in arithmetic.
 static Str condword(Shell *sh, Arena *a, Word *w, b32 subq = 0)
 {
-    return expandstring(sh, a, w->text, wordctx(sh, w) | (subq ? XC_SUBQ : 0));
+    return expandstring(sh, a, w->text, wordctx(sh, w) | (subq ? XC_SUBQ|XC_CONDQ : 0));
 }
 
 // Trace one [[ ]] primary as it is evaluated, operands unquoted. The

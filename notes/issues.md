@@ -108,8 +108,15 @@ it says otherwise.
   only for some.
 - A script without `#!` started as `./f2` sees a variable that was
   exported while unset (`declare -x x`); in bash it is not there.
-- `[[ 3 -ge '"' ]]` is an arithmetic syntax error; bash takes the
-  quote as 0 without a word.
+- bash's Q_ARITH removes `\"` inside double quotes (the backslash
+  goes as the quoted text is extracted, the quote left is read as
+  quoting), which ours does for `[[ ]]` arithmetic and `-v` operands
+  only. bash also does it in `$((...))`, `((...))`, a subscript or a
+  substring offset whose text has a `$`, a backquote or a `~`
+  (expand_arith_string's full expansion; without one the text only
+  has its quotes removed, and `\"` stays): `y=3; echo $(( "\"$y" ))`
+  prints 3, where ours reports `"3`. A subscript within `-v`'s
+  operand keeps it too: `[[ -v "a[\"1]" ]]`.
 - `bash <<<'echo hi' 0>&1` runs nothing in bash ("script file read
   error: Bad file descriptor", status 128); ours gives 0.
 - Messages: `echo hi {fd}>$u` with `u` unset names `$u` as the

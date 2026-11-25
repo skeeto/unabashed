@@ -33,6 +33,8 @@ enum : i32 {  // expansion contexts
     XC_LITANSI = 1<<10, // a pattern within a quoted operator word: $'...'
                         // is literal, as bash in a here-document
     XC_KEEPDS  = 1<<11, // with XC_PROMPT: \$ stays \$, as busybox's PSSYNTAX
+    XC_CONDQ   = 1<<12, // a [[ ]] arithmetic or -v operand: in double
+                        // quotes \" is removed, as bash's Q_ARITH
 };
 
 enum : i32 {  // expandwords flags
@@ -2466,6 +2468,12 @@ static void expandtext(X *x, Str s, i32 ctx)
             if (n=='$' && (ctx & XC_KEEPDS) && dq && !inner) {
                 xputc(x, '\\', XF_QUOTED);
                 xputc(x, '$', XF_QUOTED);
+                i += 2;
+                continue;
+            }
+            if (n=='"' && dq && !hd && !inner && (ctx & XC_CONDQ)) {
+                // bash drops the backslash as it extracts the quoted
+                // text, then reads the " left as quoting it removes
                 i += 2;
                 continue;
             }
