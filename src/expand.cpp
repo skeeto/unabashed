@@ -609,12 +609,14 @@ static i32 patflags(Shell *sh)
 }
 
 // Like bash, report the whole text being expanded at this level: the
-// word, a double-quoted part, or an operator's word.
-static void badsubst(X *x, Str whole)
+// word, a double-quoted part, or an operator's word. An unknown
+// transform of a value is fatal, as an unset ${x?} is.
+static void badsubst(X *x, Str whole, b32 fatal = 0)
 {
     Arena a = *x->a;
     Str   s = x->text.data ? x->text : concat3(&a, "${", whole, "}");
     Str msg = concat(&a, s, ": bad substitution");
+    if (fatal) fatalerror(x->sh, a, msg);
     expansionerror(x->sh, a, msg);
 }
 
@@ -2128,7 +2130,7 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     if (op=='@' && !p.list && !p.set) {
         return;  // as bash, an unset value is not transformed, nor checked
     }
-    badsubst(x, whole);
+    badsubst(x, whole, op=='@');
 }
 
 

@@ -748,7 +748,9 @@ static void runexittrap(Shell *sh, Arena)
     escresume(sh, &e);
     sh->line = line;
     i32 own  = sh->status;
-    if (!escaped) {
+    if (!escaped || e.why==ESC_FATAL) {
+        // as bash, a fatal error there (FORCE_EOF) exits with the
+        // status the trap began with
         sh->status = status;
     }
     // Even after exit, as bash, unless it never ran

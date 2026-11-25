@@ -84,8 +84,13 @@ From its first runs (2026-11-24, 44,000 scripts against bash 5.3), not
 yet fixed. Each was confirmed by hand in the oracle container unless
 it says otherwise.
 
-- `echo ${x@x}` (a bad substitution) reports the error and goes on;
-  bash ends a `-c` script there with status 127.
+- A bad substitution is checked after its subscript or value where
+  bash checks it first: `${map[a b]&}` reports the subscript's
+  arithmetic error and `${x!}`, `${r&}` under set -u an unbound
+  variable, where bash reports the bad substitution; `${arr[-1]:}`
+  (arr unset) reports both "bad array subscript" and the bad
+  substitution, bash only the first. A message for
+  `"$((i))${x.y^^}\""` keeps the backslash bash drops.
 - `set -n; echo $?` in a `-c` script prints 0; bash runs nothing more.
 - `! cmd & wait $!` gives the inverted status; bash gives cmd's.
 - A program started with `{x}>f` leaves `x` set in the shell; bash
