@@ -1231,6 +1231,28 @@ static void promptcommand(Shell *sh)
     bindlastarg(sh, a, last);
 }
 
+// A script read from standard input that cannot be read (not open for
+// reading, a directory) ends the shell with 128, its partial line not
+// run, as bash's FATAL_READERROR. A closed descriptor is the end of
+// input, as bash, which drops its buffered stream then.
+[[noreturn]] static void readfailed(Shell *sh, Lexer *L, File *f)
+{
+    i32 err = E_IO;
+    if (!(f->flags & OF_READ)) {
+        err = E_BADF;
+    } else if (f->kind==F_OS && os_fstat(sh->os, f->h).type==FT_DIR) {
+        err = E_ISDIR;
+    }
+    Arena scratch = *scratchat(sh, sh->capdepth+1);
+    sh->line = L->lineno;
+    Str msg = concat(&scratch, "script file read error: ", errtext(err));
+    shellerror(sh, scratch, msg);
+    // As bash's exit_shell, whose EXIT trap returns $? instead
+    if (!trapset(sh, TRAP_EXIT)) sh->status = 128;
+    sh->exiting = 1;
+    escape(sh, ESC_EXIT);
+}
+
 static b32 fillline(void *ctx, Lexer *L)
 {
     StdinSource *in = (StdinSource *)ctx;
@@ -1323,6 +1345,7 @@ static b32 fillline(void *ctx, Lexer *L)
             putbyte(b, '\n');
             break;
         }
+        if (n<0 && f && !sh->interactive) readfailed(sh, L, f);
         if (!seekable || n<=0) break;  // end of input, or an error
         iz keep = n;
         for (iz i = 0; i < n; i++) {
