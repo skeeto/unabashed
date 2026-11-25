@@ -73,7 +73,7 @@ struct X {
 static Str  runcapture(Shell *, Arena *, Str src, b32 backquote);
 static Str  procsubst(Shell *, Arena *, Str body, b32 output);
 static void expansionerror(Shell *, Arena, Str msg, b32 internal = 0);
-static void reportederror(Shell *, Arena, Str msg);
+static void reportederror(Shell *, Arena, Str msg, b32 posixends = 0);
 static void fatalerror(Shell *, Arena, Str msg);
 static Arith evalarith(Shell *, Arena *, Str);
 static Slice<Str> expandwords(Shell *, Arena *, Word *, i32 flags);
@@ -663,7 +663,7 @@ static void badsubst(X *x, Str whole, b32 fatal = 0)
     Str msg = concat(&a, s, ": bad substitution");
     if (fatal) fatalerror(x->sh, a, msg);
     x->sh->status = 1;
-    reportederror(x->sh, a, msg);
+    reportederror(x->sh, a, msg, 1);
 }
 
 // Index of the first unquoted c in s at the outer level, or -1. For
@@ -1183,7 +1183,9 @@ static void substrnegative(X *x, Str len)
 {
     Arena a = *x->a;
     Str msg = concat(&a, len, ": substring expression < 0");
-    expansionerror(x->sh, a, msg, 1);
+    shellerror(x->sh, a, msg);
+    x->sh->status = 1;
+    escape(x->sh, ESC_DISCARD);  // bash's expand_wdesc_error, POSIX or not
 }
 
 // ${v:off:len} in a UTF-8 locale, counting characters, and the whole
@@ -1760,7 +1762,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
         if (!valuevisible(v) || !(v->attrs & (V_ARRAY|V_ASSOC))) {
             if (allsub(sub)) {
                 Arena a = *x->a;
-                reportederror(sh, a, concat(&a, name, ": unbound variable"));
+                reportederror(sh, a, concat(&a, name, ": unbound variable"), 1);
             }
             unbound(x, uname);
         }
@@ -1797,7 +1799,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
             // not fatal, unlike other unbound variables
             Arena a = *x->a;
             Str msg = concat(&a, allsub(sub) || reflist ? target : uname, ": unbound variable");
-            reportederror(sh, a, msg);
+            reportederror(sh, a, msg, 1);
         }
         if (p.list) {
             n = p.ln;
@@ -1895,7 +1897,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
             if (hassub && !elem && !akey) {
                 // as bash's assign_array_element
                 Arena a = *x->a;
-                reportederror(sh, a, concat(&a, uname, ": bad array subscript"));
+                reportederror(sh, a, concat(&a, uname, ": bad array subscript"), 1);
             }
             if (!validvarname(name)) {
                 Arena a = *x->a;

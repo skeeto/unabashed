@@ -104,6 +104,54 @@ it says otherwise.
   LINENO and has a command substitution in its own redirections,
   called in a pipeline from a BASH_ENV file (seed 919897): the
   substitution's lines count from one further on in bash.
+- A command substitution whose nested substitution fails to parse
+  again (a case with a here-document) ends the shell with a message;
+  bash ends it silently with 127 when the outer case word has a quoted
+  part inside `${...}`:
+  `echo $(: "$(case ${x%"y"} in *) : <<-E;; esac; f` (then a tab,
+  `b`, `E`, `)")`). And bash scans a whole double-quoted word for
+  substitutions to parse before it expands any, so in
+  `echo "${!u}$(case a in *) : <<E;; esac; echo no` (then `E`, `)"`)
+  the parse error is reported first, where ours reports `${!u}`.
+- With Q_ARITH (a `[[ ]]` arithmetic operand, `$(( ))`), bash's
+  expand_array_subscript expands each `[...]` once and backslash-quotes
+  brackets, `$`, quotes, `~` and `\` in it, and messages show that
+  text: `[[ 1 -ge [[:upper:]] ]]` names `[\[:upper:\]]`, and
+  `$(( [[ ( $y ) ]] ))` (fully expanded, as it has a `$`) names
+  `[\[ (  ) \]]`; ours shows the text as written. It goes with the
+  `\"` item above.
+- `declare -a y=( "$(declare -p y)" )` expands the list before the
+  internal declare in bash (expand_declaration_argument), so the
+  substitution finds no y, and a failed expansion (`${!u}`) leaves no
+  y; ours declares y first. A plain `y=(...)` makes the array first in
+  both.
+- `f() { trap 'return 6' EXIT; set -e; false; }; f` exits 6 in bash,
+  whose set -e runs the action in the function; ours says return can
+  only be used in a function and exits 2. A signal is the reverse:
+  `f() { trap 'return 6' EXIT; kill -TERM $$; }; f` reports the return
+  in bash, not in ours.
+
+Left as bash's slips or by design, each checked in the oracle
+container:
+
+- A null command that redirects fd 0 or assigns a `{var}` and runs in
+  a pipeline or as a job exits 0 even when a redirection fails:
+  `: | <&5; echo $?` prints 0 after the message (`: | >&5` gives 1).
+  execute_null_command forks again for its "safety" fork, and the
+  forked caller returns success without waiting for the grandchild
+  (execute_simple_command's `sh_exit (result)`).
+- A function calling itself with a redirection (`f() { f; } 3>&1`)
+  ends in bash when its saved descriptors exhaust `ulimit -n`
+  ("cannot duplicate fd: Too many open files"); ours saves them
+  without spending a descriptor each, so the recursion goes on until
+  the stack overflows, as bash's does without the redirection.
+- PIPESTATUS 141 or 0 for a writer whose reader has already exited
+  depends on which runs first; the scripts differ only by timing.
+- A `${ cmd; }` or `${| cmd; }` run before any command has set
+  PIPESTATUS leaves it empty for good: `echo ${ :; }; true | false;
+  echo "<${PIPESTATUS[@]}>"` prints `<>` in bash. function_substitute
+  saves the array that is not there yet and puts that back; set after
+  any other command first, it works in both.
 
 Left from the trap findings (Q56), each checked against bash 5.3:
 

@@ -692,12 +692,14 @@ static void expansionerror(Shell *sh, Arena a, Str msg, b32 internal)
 // substitution, subscript or indirection, failglob's no match): as
 // above, but under set -e it ends the shell, in a condition too, with
 // $? or else 1 (reportexit; a caller sets $? first where bash does).
-static void reportederror(Shell *sh, Arena a, Str msg)
+// Only with posixends does it end a POSIX shell: bash's
+// expand_wdesc_fatal there (a bad substitution), not its DISCARD.
+static void reportederror(Shell *sh, Arena a, Str msg, b32 posixends)
 {
     shellerror(sh, a, msg);
     reportexit(sh);
     sh->status = 1;
-    escape(sh, posixfatal(sh) ? ESC_FATAL : ESC_DISCARD);
+    escape(sh, posixends && posixfatal(sh) ? ESC_FATAL : ESC_DISCARD);
 }
 
 // A fatal expansion error, such as an unbound variable or ${x?}, ends
