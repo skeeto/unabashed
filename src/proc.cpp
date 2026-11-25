@@ -728,11 +728,13 @@ static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops
     // A simple command, or the last of a ( list ), is what bash would
     // exec in the forked stage: not a { list }'s
     c->tailnode  = node->kind==N_SIMPLE ? m->node : 0;
+    c->solenode  = 0;
     if (m->node && m->node->kind==N_SUBSHELL) {
         // ( list ) runs in the vproc's own subshell, not a nested one,
         // at its ) line (see execsubshell)
         m->node->kind = N_GROUP;
         c->tailnode = tailcommand(m->node->a);
+        c->solenode = solecommand(m->node->a);
         c->ctlline  = node->endline;
     }
     c->taillevel = c->subshell + 1;
@@ -1208,6 +1210,7 @@ static void pipestopped(Shell *sh, Arena scratch, Node *n, Task **tasks,
 
 static void runpipeline(Shell *sh, Node *n, Arena scratch)
 {
+    b32 armed = errarmed(sh);
     if (simplestage(n)) refreshenv(sh);  // as bash, before it forks one
     // Flatten the right-nested chain, left to right, the per-stage
     // tables in scratch (calls below take scratch by value, after them)
@@ -1395,6 +1398,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         // A program as the last stage is reported with the pipeline
         sh->tailnode  = stage->kind==N_SIMPLE ? stage
                       : stage->kind==N_SUBSHELL ? tailcommand(stage->a) : 0;
+        sh->solenode  = stage->kind==N_SUBSHELL ? solecommand(stage->a) : 0;
         sh->taillevel = sh->subshell + 2;
         sh->childsig  = 0;
         takeossigs(sh);  // those from before are this level's own
@@ -1443,6 +1447,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         sh->forked    = 0;
         sh->forkstage = 0;
         sh->tailnode  = 0;
+        sh->solenode  = 0;
         sh->taillevel = 0;
         sh->simplestages -= uncounted;
         sh->inplace = inplace;
@@ -1531,8 +1536,8 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     // bash waits for a ( list ) as the last stage as for one alone, and
     // gets the pipeline's status: ERR runs for it first, then again.
     if (n != sh->keepredirs) {
-        if (stage->kind==N_SUBSHELL && !inhere && ran[last]) checkerrexit(sh);
-        checkerrexit(sh);
+        if (stage->kind==N_SUBSHELL && !inhere && ran[last]) checkerrexit(sh, armed);
+        checkerrexit(sh, armed);
     }
     checksigs(sh, scratch);
 }

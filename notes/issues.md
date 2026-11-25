@@ -91,10 +91,6 @@ it says otherwise.
   (arr unset) reports both "bad array subscript" and the bad
   substitution, bash only the first. A message for
   `"$((i))${x.y^^}\""` keeps the backslash bash drops.
-- Under set -E, a compound command run as a job or a pipeline stage
-  whose own redirection fails runs ERR in its child and again in the
-  parent: `set -E; trap 'echo err' ERR; true | { true; } <&9` says
-  err twice, bash once, as its execute_in_subshell exits 1 at once.
 - bash's Q_ARITH removes `\"` inside double quotes (the backslash
   goes as the quoted text is extracted, the quote left is read as
   quoting), which ours does for `[[ ]]` arithmetic and `-v` operands
@@ -116,12 +112,6 @@ that bash reports as "near unexpected token `echo' while looking for
 matching `)'" (seed 131818); a quote left open inside `[[` in a
 nested `bash -c`, where bash adds "unexpected EOF while looking for
 `]]'" (seed 503173).
-
-Left from the environment's findings (Q54), each checked in the oracle
-container:
-
-- `h() { trap 'echo t' ERR; false; }; h` runs the action twice in
-  ours, once in bash (not again for the call).
 
 
 ## The library

@@ -841,9 +841,11 @@ static Node *bgnode(Shell *c, Arena *a, Node *n, Stackguard *g, b32 keepjobs)
     }
     Node *r = copynode(a, n, g);
     c->tailnode = n->kind==N_SIMPLE ? r : 0;
+    c->solenode = 0;
     if (r->kind == N_SUBSHELL) {
         r->kind = N_GROUP;
         c->tailnode = tailcommand(r->a);
+        c->solenode = solecommand(r->a);
         // see execsubshell; but a coprocess's keeps the shell's line
         if (n->endline) c->ctlline = n->endline;
     }
@@ -1064,6 +1066,7 @@ static Handle spawnstage(Shell *sh, Node *n, File *in, File *out, i64 grp,
 // stopped job. False where the platform cannot start one.
 static b32 runfgimage(Shell *sh, Node *n, Arena scratch)
 {
+    b32  armed = errarmed(sh);
     Node m = *n;
     m.redirs = 0;  // applied already, its descriptors inherited
     i64    pid  = 0;
@@ -1099,7 +1102,7 @@ static b32 runfgimage(Shell *sh, Node *n, Arena scratch)
     chldreaped(sh, 1);
     if (!n->redirs) reportchild(sh, scratch, n);  // else once they are undone
     setpstat1(sh);
-    checkerrexit(sh);
+    checkerrexit(sh, armed);
     checksigs(sh, scratch);
     return 1;
 }

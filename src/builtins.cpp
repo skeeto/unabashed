@@ -680,6 +680,7 @@ static i32 b_source(Shell *sh, Str *args, iz nargs, Arena scratch)
             sh->exiting = 1;
             escape(sh, ESC_EXIT);
         }
+        reportexit(sh);  // bash's file_error, before ERR could run
         return 1;
     }
     // As bash: many NUL bytes make a binary, and fewer are dropped

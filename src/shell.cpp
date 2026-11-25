@@ -986,6 +986,7 @@ struct Shell {
     i32      taillevel;    // subshell level + 1 where tailnode is the last
     Node    *tailnode;     // command, which bash would exec: its death by a
                            // signal is the subshell's (reported by its parent)
+    Node    *solenode;     // and its sole command, at taillevel (solecommand)
     b32      attail;       // running tailnode as bash would exec it
     Inplace  inplace;      // the program bash would exec in its place
     b32      inplacenow;   // running it: a script without #! keeps the

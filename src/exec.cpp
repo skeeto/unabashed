@@ -127,6 +127,21 @@ static void listnotify(Shell *sh, Arena scratch)
     }
 }
 
+// A ( list )'s sole command, which bash's child runs in its place,
+// traps or not (execute_in_subshell's CMD_NO_FORK): a program there is
+// exec'd and a ( list ) runs without another fork, so what fails there
+// runs no ERR of the child's own.
+static Node *solecommand(Node *n)
+{
+    b32 sole = n && (n->kind==N_SIMPLE || n->kind==N_SUBSHELL);
+    return sole && !(n->flags & (CMD_INVERT|CMD_TIME)) ? n : 0;
+}
+
+static b32 issole(Shell *sh, Node *n)
+{
+    return n==sh->solenode && sh->taillevel==sh->subshell+1;
+}
+
 // The command a subshell running n would exec as its last instead of
 // waiting for it, as bash does: the last of a list, a simple command.
 static Node *tailcommand(Node *n)
@@ -3229,9 +3244,17 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env,
 
 // Simple commands
 
-static void checkerrexit(Shell *sh)
+// Whether ERR is armed for a command starting now. As bash's
+// was_error_trap, an action the command itself sets (a function, eval,
+// source) does not run again for its own failure.
+static b32 errarmed(Shell *sh)
 {
-    if (sh->status && !sh->noerrexit && !sh->exiting && sh->traps) {
+    return trapset(sh, TRAP_ERR);
+}
+
+static void checkerrexit(Shell *sh, b32 armed)
+{
+    if (sh->status && !sh->noerrexit && !sh->exiting && armed) {
         i32 line = sh->line;
         sh->line = sh->errline;  // where bash's action goes on from
         runerrtrap(sh);
@@ -3888,6 +3911,7 @@ struct Simple {
     b32        stage;
     b32        special;
     b32        execonly;
+    b32        armed;    // errarmed before it began
 };
 
 // Run c's builtin as a simple command does, its output buffered. Out
@@ -4104,6 +4128,7 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
     sh->asyncpct = 0;
     b32 asyncnull = sh->asyncnull;  // see runasync1
     sh->asyncnull = 0;
+    b32 armed = errarmed(sh);  // before DEBUG, as bash
     safepoint(sh->sched);
     sh->line    = fnline(sh, n->line);
     sh->errline = n->line;
@@ -4238,7 +4263,7 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
         if (!redirected) {
             unwind(sh, mark);
             sh->status = sh->redirfail;
-            if (!forked) checkerrexit(sh);
+            if (!forked) checkerrexit(sh, armed);
             return 0;
         }
         if (child) laststatus = 0;
@@ -4246,7 +4271,7 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
         sh->status = laststatus;
         bindlastarg(sh, *a, *last);  // before ERR, as bash
         *last = {};
-        if (!forked) checkerrexit(sh);
+        if (!forked) checkerrexit(sh, armed);
         return 0;
     }
 
@@ -4351,7 +4376,8 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
             sh->exiting = 1;  // as bash: a special builtin's, fatal
             escape(sh, ESC_EXIT);
         }
-        if (!forked) checkerrexit(sh);
+        b32 execd = issole(sh, n) && !fn && !bi;  // redirected after the exec's fork
+        if (!forked && !execd) checkerrexit(sh, armed);
         return 0;
     }
     if (persist && tb) mergetemps(sh, *a, as, nassign, tb);
@@ -4378,6 +4404,7 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
     c->stage    = stage;
     c->special  = special;
     c->execonly = execonly;
+    c->armed    = armed;
     return 1;
 }
 
@@ -4521,8 +4548,9 @@ static void runsimple1(Shell *sh, Node *n, Arena scratch, Str *last, Str *who, T
             lib_traceend(sh->os, scratch, c, sh->status, retracted);
         }
     }
-    if (sh->flow!=FLOW_RETURN && !c->forked) {
-        checkerrexit(sh);
+    b32 execd = issole(sh, n) && !c->fn && !c->bi;  // bash's child became it
+    if (sh->flow!=FLOW_RETURN && !c->forked && !execd) {
+        checkerrexit(sh, c->armed);
     }
 }
 
@@ -5152,9 +5180,23 @@ static b32 stdinredirects(Redir *r)
     return 0;
 }
 
-[[gnu::noinline]]
-static void execsubshell(Shell *sh, Node *n, Arena scratch)
+// ERR and set -e for a ( list ) that failed, at its own line.
+static void subshellerr(Shell *sh, b32 armed)
 {
+    i32 line = sh->line;
+    sh->line = sh->errline;  // ERR's, as bash's: the list's own
+    checkerrexit(sh, armed);
+    sh->line = line;
+}
+
+// Returns errarmed for ERR, owed once the list's redirections, which
+// bash applies in the child only, are undone (executeone).
+[[gnu::noinline]]
+static b32 execsubshell(Shell *sh, Node *n, Arena scratch)
+{
+    // A ( list )'s sole ( list ) runs in its child, which then exits
+    // with its status, no ERR between
+    b32 armed = errarmed(sh) && !issole(sh, n);
     sh->stdinredir = stdinredirects(n->redirs);  // as bash's ( ) child
     // and its line, as only some commands set it, is the list's ) line
     // (cited by the hooks of temporary bindings, compound redirections)
@@ -5162,7 +5204,7 @@ static void execsubshell(Shell *sh, Node *n, Arena scratch)
     sh->ctlline = n->endline;
     if (fgjobctl(sh) && runfgimage(sh, n, scratch)) {
         sh->ctlline = ctlline;
-        return;
+        return 0;
     }
     SubJob j = {};
     j.kind = SUB_NODE;
@@ -5171,6 +5213,7 @@ static void execsubshell(Shell *sh, Node *n, Arena scratch)
     j.nojobs   = 1;
     sh->childsig  = 0;
     sh->tailnode  = tailcommand(n->a);
+    sh->solenode  = solecommand(n->a);
     sh->taillevel = sh->subshell + 2;
     Inplace inplace = sh->inplace;
     sh->inplace = subinplace(n, n->a, sh->subshell+2);
@@ -5179,14 +5222,13 @@ static void execsubshell(Shell *sh, Node *n, Arena scratch)
     chldreaped(sh, 1);
     sh->inplace = inplace;
     sh->tailnode  = 0;
+    sh->solenode  = 0;
     sh->taillevel = 0;
     if (!n->redirs) reportchild(sh, scratch, n);  // else once they are undone
     setpstat1(sh);
-    i32 line = sh->line;
-    sh->line = sh->errline;  // ERR's, as bash's: the list's own
-    checkerrexit(sh);
-    sh->line = line;
+    if (!n->redirs) subshellerr(sh, armed);
     checksigs(sh, scratch);
+    return armed;
 }
 
 [[gnu::noinline]]
@@ -5391,6 +5433,7 @@ static b32 debugcompound(Shell *sh, Node *n, Arena scratch)
 [[gnu::noinline]]
 static void execarith(Shell *sh, Node *n, Arena scratch)
 {
+    b32 armed = errarmed(sh);  // before DEBUG, as bash
     sh->line    = fnline(sh, n->line);
     sh->errline = n->line;
     if (sh->traps && debugcompound(sh, n, scratch)) return;
@@ -5402,18 +5445,19 @@ static void execarith(Shell *sh, Node *n, Arena scratch)
     Arith r = evalarithcmd(sh, &scratch, text, "((");
     sh->status = r.ok ? !r.value : 1;
     setpstat1(sh);
-    checkerrexit(sh);
+    checkerrexit(sh, armed);
 }
 
 [[gnu::noinline]]
 static void execcond(Shell *sh, Node *n, Arena scratch)
 {
+    b32 armed = errarmed(sh);  // before DEBUG, as bash
     sh->line    = fnline(sh, n->line);
     sh->errline = n->line;
     if (sh->traps && debugcompound(sh, n, scratch)) return;
     sh->status = condeval(sh, &scratch, n->cond);
     setpstat1(sh);
-    checkerrexit(sh);
+    checkerrexit(sh, armed);
 }
 
 // A list its enclosing list runs in its own loop (executelist): one of
@@ -5582,6 +5626,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     b32 forked     = sh->forkstdin;  // its own do not count (forkedstdin)
     sh->forkstdin  = 0;
     Fdvar *fdvars  = 0;  // its {var}s, which only its commands see
+    b32    suberr  = 0;  // a ( list )'s ERR, owed after its redirections
     // ERR's line, should a ( list ) fail, as bash sets it before forking
     if (n->kind == N_SUBSHELL) sh->errline = n->endline;
     if (n->kind!=N_SIMPLE && n->kind!=N_CONNECT && n->kind!=N_FUNCDEF && n->redirs) {
@@ -5601,6 +5646,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
             sh->rawline = sh->line;
             sh->line    = n->line;
         }
+        b32 armed = errarmed(sh);
         b32 ok = doredirs(sh, n->redirs, &scratch, n==sh->keepredirs, inner,
                           inner ? &fdvars : 0);
         sh->rawline = 0;
@@ -5621,9 +5667,10 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
             }
             if (ignore) {
                 sh->noerrexit--;
-            } else {
+            } else if (!forked && !(inner && issole(sh, n))) {
+                // (else bash's child for it exits at once, no ERR)
                 sh->line = sh->errline;  // ERR's, as bash's
-                checkerrexit(sh);
+                checkerrexit(sh, armed);
                 sh->line = sh->ctlline;
             }
             return;
@@ -5674,7 +5721,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         break;
 
     case N_SUBSHELL:
-        execsubshell(sh, n, scratch);
+        suberr = execsubshell(sh, n, scratch);
         break;
 
     case N_IF:
@@ -5762,6 +5809,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     if (inner) sh->stdinredir = stdinredir;
     if (n->kind==N_SUBSHELL && n->redirs) {
         reportchild(sh, scratch, n);
+        subshellerr(sh, suberr);
     }
     if (ignore) sh->noerrexit--;
     if (invert && sh->flow!=FLOW_RETURN) {  // return leaves before inverting
