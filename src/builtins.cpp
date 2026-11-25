@@ -970,6 +970,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
     u32 on = baseon, off = 0;
     b32 print = 0, funcs = 0, funcnames = 0, global = 0, inherit = 0;
     b32 chklocal = 0;  // -G, as bash: -g that finds a local first
+    b32 undo = 0;      // export -n, readonly -n
     iz  i = 1;
     for (; i < nargs; i++) {
         Str a = args[i];
@@ -984,7 +985,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 switch (a[k]) {
                 case 'f': funcs = 1; continue;
                 case 'p': print = 1; continue;
-                case 'n': off |= V_EXPORT; on &= ~V_EXPORT; continue;
+                case 'n': off |= V_EXPORT; on &= ~V_EXPORT; undo = 1; continue;
                 case 'a': on |= V_ARRAY; continue;
                 case 'A': on |= V_ASSOC; continue;
                 default:
@@ -996,7 +997,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 switch (a[k]) {
                 case 'f': funcs = 1; continue;
                 case 'p': print = 1; continue;
-                case 'n': on &= ~V_READONLY; continue;
+                case 'n': on &= ~V_READONLY; undo = 1; continue;
                 case 'a': on |= V_ARRAY; continue;
                 case 'A': on |= V_ASSOC; continue;
                 default:
@@ -1536,6 +1537,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             }
             if (on & (V_READONLY|V_NAMEREF)) setattrs(sh, vname, on & (V_READONLY|V_NAMEREF), 0);
             if ((on|aon) & V_EXPORT) exportread(sh, scratch, vname);
+        } else if (undo && !lookup(sh, vname)) {
+            // as bash's set_var_attribute, -n makes no variable
         } else if (on || off || local || hassub || !rawlookup(sh, vname)) {
             // Like bash, a new -i leaves the current value as it is:
             // only later assignments are evaluated
