@@ -375,6 +375,10 @@ struct Lexer {
                          // its parse_and_execute (eval, source, -c, ...)
     Undo    *undo;       // the shell's redirections when it began
     b32      staleline;  // a leading word gets line -1 (resumeaftereof)
+    i32      redirline;  // plus one: the line bash's reset_parser left in
+                         // its simplecmd_lineno, which a simple command
+                         // that starts with a redirection takes, until
+                         // one is parsed
 
     Redir   *heredocs[HEREDOCMAX];
     i32      nheredoc;
@@ -2991,6 +2995,7 @@ static Node *parsesimple(Parser *p, b32 started)
                 wtail = &n->words;
                 rtail = &n->redirs;
             }
+            if (first && L->redirline) n->line = L->redirline - 1;
             Redir *r = parseredir(p);
             *rtail = r;
             rtail = &r->next;
@@ -3001,6 +3006,7 @@ static Node *parsesimple(Parser *p, b32 started)
             break;
         }
     }
+    L->redirline = 0;  // a simple command parsed, or about to be
     return n;
 }
 
@@ -3153,6 +3159,7 @@ static Node *parsecommand(Parser *p)
             f->a = parseshell(p);
             Redir *r = parseredirlist(p);
             if (r) appendredirs(f->a, r);
+            L->redirline = 0;
             return f;
         }
         L->pst &= ~PST_REDIRLIST;
@@ -3646,6 +3653,7 @@ struct LexState {
     b32    expandaliases, extglob;
     i32    nheredoc;
     b32    staleline;
+    i32    redirline;
     Redir *heredocs[HEREDOCMAX];
 };
 
@@ -3668,6 +3676,7 @@ static LexState savelex(Lexer *L)
     s.extglob   = L->extglob;
     s.nheredoc  = L->nheredoc;
     s.staleline = L->staleline;
+    s.redirline = L->redirline;
     for (i32 i = 0; i < L->nheredoc; i++) {
         s.heredocs[i] = L->heredocs[i];
     }
@@ -3692,6 +3701,7 @@ static void restorelex(Lexer *L, LexState *s)
     L->extglob   = s->extglob;
     L->nheredoc  = s->nheredoc;
     L->staleline = s->staleline;
+    L->redirline = s->redirline;
     for (i32 i = 0; i < s->nheredoc; i++) {
         L->heredocs[i] = s->heredocs[i];
     }
@@ -3734,6 +3744,7 @@ static Matched parsecomsub(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
     L->eoftoken = close;
     L->nheredoc = 0;
     L->staleline = 0;
+    L->redirline = 0;
     L->esacs = L->expectin = L->expectcmd = 0;
     if (L->expandaliases) {
         L->expandaliases = L->posix;
@@ -3876,6 +3887,7 @@ static Parsed parseunit(Lexer *L)
         L->ungot    = 0;
         L->current  = L->last = '\n';
         L->staleline = 0;
+        L->redirline = L->lineno + 1;
         L->idx      = L->line.len;
         return r;
     }

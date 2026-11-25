@@ -1174,7 +1174,9 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     if (n->kind==N_SIMPLE && n->words && startswith(n->words->text, "%")) {
         // "%N &" is "bg %N", in this shell: bash does not fork for it
         sh->asyncpct = 1;
+        sh->linesaves++;  // (see runcommand)
         runsimple(sh, n, scratch);
+        sh->linesaves--;
         return;
     }
     Sched *s = sh->sched;

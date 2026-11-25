@@ -742,6 +742,7 @@ static void runexittrap(Shell *sh, Arena)
     b32 escaped = jmpset(e.jmp);
     if (!escaped) {
         if (!trapsig && errexit) trapsigexit(sh, status);
+        sh->staleredir = line + 1;  // as bash's reset_parser before it
         runsource(sh, cmd, "exit trap", scratch, 0, 1);  // as bash: line 1
     }
     // However the action ended: the depth, intrap and the rest go back

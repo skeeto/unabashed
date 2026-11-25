@@ -3044,6 +3044,9 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env,
         Sigproc sig;
         sigenter(sh, &sig, sh->bashpid, sh->sched->cur);
         if (!jmpset(e.jmp)) {
+            // As bash's reset_parser in the child: its first simple
+            // command, if a redirection starts it, takes this line
+            sh->staleredir = sh->line + 1;
             runsource(sh, src, name, *scratchat(sh, sh->capdepth), 1);
         }
         storerehold(sh->store, e.hold);  // as subshell's, for its EXIT trap
@@ -5091,6 +5094,7 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
     // $? carries into the body, perhaps from the list's expansion
     if (!list.len) sh->status = 0;
     sh->loopdepth++;
+    sh->linesaves++;  // once the list is expanded (see runcommand)
     for (iz i = 0; i < list.len; i++) {
         Arena it = scratch;
         if (loopsafepoint(sh, it)) break;
@@ -5130,6 +5134,7 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
         if (sh->flow && loopflow(sh)) break;
         if (sh->exiting) break;
     }
+    sh->linesaves--;
     sh->loopdepth--;
 }
 
@@ -5223,6 +5228,7 @@ static void execcase(Shell *sh, Node *n, Arena scratch)
     }
     Str word = expandstring(sh, &scratch, n->words->text, wordctx(sh, n->words));
     b32 ran  = 0;
+    sh->linesaves++;  // once the word is expanded (see runcommand)
     for (Case *c = n->cases; c; c = c->next) {
         if (!casematch(sh, &scratch, word, c->patterns)) continue;
         ran = 1;
@@ -5237,6 +5243,7 @@ static void execcase(Shell *sh, Node *n, Arena scratch)
         }
         if (c->term != CASE_TESTNEXT || sh->flow) break;
     }
+    sh->linesaves--;
     if (!ran) sh->status = 0;
 }
 
@@ -5326,7 +5333,9 @@ static void executenode(Shell *sh, Node *n, Arena scratch)
         switch (n->kind) {
         case N_SIMPLE:
             checkstack(sh);
+            sh->linesaves++;  // (see runcommand)
             runsimple(sh, n, scratch);
+            sh->linesaves--;
             setpstat1(sh);
             return;
         case N_GROUP:
@@ -5411,6 +5420,13 @@ static void executelist(Shell *sh, Node *n, Arena scratch)
     }
 }
 
+// Is a command of this kind one whose line bash's messages cite while
+// it runs, whatever line_number says?
+static b32 ownline(i32 kind)
+{
+    return kind==N_ARITH || kind==N_COND || kind==N_ARITHFOR;
+}
+
 // Not inlined: executenode's frame would take its size.
 [[gnu::noinline]]
 static void executeone(Shell *sh, Node *n, Arena scratch)
@@ -5444,8 +5460,14 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         // As bash, a compound command's redirections are at its line
         // as only some commands set it: that of the enclosing for,
         // case, select or call, else where the parser finished the
-        // top-level command; but a ( list )'s child sets its own first
+        // top-level command; but a ( list )'s child sets its own first,
+        // and bash's messages cite an (( )), [[ ]] or arithmetic for's
+        // own line while it is the command running, outside a function
+        // of an interactive shell (executing_line_number)
         sh->line = n->kind==N_SUBSHELL ? n->endline : sh->ctlline;
+        if (ownline(n->kind) && !(sh->funcdepth && sh->interactive)) {
+            sh->line = n->line;
+        }
         if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs, inner,
                       inner ? &fdvars : 0)) {
             if (inner) sh->stdinredir = stdinredir;
@@ -5475,7 +5497,9 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
 
     switch (n->kind) {
     case N_SIMPLE:
+        sh->linesaves++;  // (see runcommand)
         runsimple(sh, n, scratch);
+        sh->linesaves--;
         setpstat1(sh);
         break;
 
@@ -5702,6 +5726,7 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
     }
     sh->status = 0;
     sh->loopdepth++;
+    sh->linesaves++;  // once the list is expanded (see runcommand)
     b32 menu = 1;
     for (;;) {
         Arena it = scratch;
@@ -5733,6 +5758,7 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
         if (sh->flow && loopflow(sh)) break;
         if (sh->exiting) break;
     }
+    sh->linesaves--;
     sh->loopdepth--;
 }
 
@@ -5742,15 +5768,21 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
 // abandons it, and execution resumes with the next command unless this
 // is a subshell, which it ends. Reading a script file (reader) also
 // resumes after an error that abandons all -c, eval and source text.
-static void runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
+// Returns whether the parser's line goes on from LINENO, as bash's
+// does when an expansion error comes from the header of a case, for,
+// select, (( )), [[ ]] or arithmetic for that no running simple
+// command, nor case, for or select body, holds: their line is bash's
+// one line_number, which only those frames put back (linesaves).
+static b32 runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
 {
     Escape *e = alloc<Escape>(&scratch);  // eval and source recurse here
     escenter(sh, e);
     if (!jmpset(e->jmp)) {
         execute(sh, cmd, scratch);
         escleave(sh, e);
-        return;
+        return 0;
     }
+    b32 leak = e->why==ESC_DISCARD && sh->linesaves==e->linesaves;
     b32 resume = e->why==ESC_DISCARD || (e->why==ESC_ABORT && reader) ||
                  (e->why==ESC_INTR && reader);
     if (!resume || sh->subshell) {
@@ -5763,6 +5795,7 @@ static void runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
     sh->flow    = FLOW_NONE;
     sh->current = 0;
     sh->cmdnamelen = 0;  // as bash's unwind of this_command_name
+    return leak;
 }
 
 // A $"..." string the parser found under -D or --dump-po-strings,
@@ -5963,6 +5996,8 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     L->newunit       = 1;
     L->lineno        = line - 1;
     L->aliases       = &sh->aliases;
+    L->redirline     = sh->staleredir;
+    sh->staleredir   = 0;
     parselimit(sh, L);
     L->expandaliases = L->aliasopt = sh->shopt[S_EXPAND_ALIASES];
     L->extglob       = L->extglobopt = sh->shopt[S_EXTGLOB];
@@ -6123,7 +6158,7 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
             // Traps for signals that came while the line was read, as
             // before every command in bash
             if (fill && sh->interactive) checksigs(sh, *L->a);
-            runcommand(sh, r.cmd, *L->a, reader);
+            if (runcommand(sh, r.cmd, *L->a, reader)) L->lineno = sh->line;
         }
         // Syncing options the command may have changed
         if (!comsub || L->aliasopt!=sh->shopt[S_EXPAND_ALIASES]) {
@@ -6148,6 +6183,11 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     }
     if (reader || !outer) {
         keepcmdtext(sh, beg, end);  // else runsource puts back its own
+    }
+    if (!reader && outer) {
+        // bash's parsers share simplecmd_lineno: eval's syntax error
+        // leaves it for the next command read around it
+        outer->redirline = L->redirline;
     }
     sh->lexer  = outer;
     sh->iname  = oname;
