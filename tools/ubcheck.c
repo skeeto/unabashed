@@ -836,6 +836,13 @@ static int check(char *argv0, int quick)
         {"exec >&-", "exec >&-; echo x 2>/dev/null; true", 0},
         {"ulimit -n", "ulimit -n 64; ulimit -n; sh -c 'ulimit -n'", 0, "64\n64"},
         {"ulimit -f", fsize, 0, "s=153"},
+        // The mask is the run's alone (the snapshots have the host's):
+        // a file made anew gets it, one that exists keeps its mode
+        {"umask",
+         "umask 077; umask; echo a >$T/m1; touch $T/m2;"
+         " (umask 0; echo a >$T/m3; echo b >>$T/m1; touch $T/m4);"
+         " ls -l $T/m1 $T/m2 $T/m3 $T/m4 | cut -c1-10; rm $T/m[1-4]", 0,
+         "0077\n-rw-------\n-rw-------\n-rw-rw-rw-\n-rw-rw-rw-"},
         {"set -m", "set -m; sleep 0 & wait; echo ok", 0, "ok"},
         {"suspend", "suspend 2>/dev/null; echo s=$?", 0, "s=1"},
         {"title and stty", "printf '\\033]0;x\\007'; stty 2>/dev/null; echo ok", 0, "ok"},

@@ -324,7 +324,7 @@ static void fdgive(Lib *l, i32 fd)
 static Opened libopen(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
     if (!(flags & OF_OWN)) {
-        i32 err = askhost((Lib *)os, scratch, UB_OPEN, flags&~OF_OWN, path);
+        i32 err = askhost((Lib *)os, scratch, UB_OPEN, flags&~(OF_OWN|OF_EXACT), path);
         if (err) return {BADHANDLE, err};
     }
     Opened r = plt_open(os, scratch, path, flags&~OF_OWN, mode);

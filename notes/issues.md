@@ -84,11 +84,6 @@ From its first runs (2026-11-24, 44,000 scripts against bash 5.3), not
 yet fixed. Each was confirmed by hand in the oracle container unless
 it says otherwise.
 
-- **`umask` changes nothing.** The mask is only a number the builtin
-  prints back (shell.cpp, `Shell.umask`): files the shell makes and
-  programs it starts keep the mask the shell was started with, and the
-  shell starts at 022 whatever it inherited. After `umask 077`,
-  `echo hi >f`, `touch f` and `mkdir d` all give 644 and 755.
 - `echo ${x@x}` (a bad substitution) reports the error and goes on;
   bash ends a `-c` script there with status 127.
 - `set -n; echo $?` in a `-c` script prints 0; bash runs nothing more.
@@ -647,6 +642,12 @@ Moved from M5a: limits of the test tiers, not of the shell.
   `[-LP]` in native mode, which accepts -W and ignores it. (m5a.md,
   step 5) The shopt is hidden and for testing; the startup persona
   decides identity, as Git Bash and busybox-w32 each have one.
+- **Accepted: `umask` is only a number on Windows.** It starts at 022
+  and changes what `umask` prints and nothing else, in both modes
+  (unabashed.1, Files). Windows has no mask; Cygwin keeps one in its
+  own processes' shared state and builds ACLs from it, which a parent
+  that is not Cygwin cannot hand on. On POSIX the mask is the system's
+  (found by tools/diffuzz, 2026-11-24, where it was not).
 - **Accepted: cygpath gaps** (M7 step 9, from M5a): -W and -S come from
   SYSTEMROOT (or WINDIR), not GetWindowsDirectory, so their case is the
   variable's (Cygwin prints `C:\WINDOWS\system32` with -w and the

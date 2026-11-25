@@ -4414,6 +4414,12 @@ static Rlimit plt_getrlimit(Os *os, i32 res)
     return rltable(os)[res];
 }
 
+// Nothing here has a file mode mask: the builtin keeps a number
+static i32 plt_umask(Os *)
+{
+    return 022;
+}
+
 static i32 plt_setrlimit(Os *os, i32 res, Rlimit r)
 {
     flushw(os);
@@ -5170,6 +5176,7 @@ static constexpr OsVtable pltvtable = {
     .tcpgrp     = plt_tcpgrp,
     .getrlimit  = plt_getrlimit,
     .setrlimit  = plt_setrlimit,
+    .umask      = plt_umask,
     .siglevel   = plt_siglevel,
     .levelsig   = plt_levelsig,
     .sigpending = plt_sigpending,

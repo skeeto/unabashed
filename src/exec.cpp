@@ -1147,6 +1147,18 @@ static File *genfile(Shell *sh, i32 gen, i32 flags, i32 *err)
     return f;
 }
 
+// The mode of a file a redirection creates, and what os_open is to make
+// of it: a level that set its umask applies it itself
+static i32 createmode(Shell *sh)
+{
+    return sh->umaskmod ? 0666 & ~sh->umask : 0666;
+}
+
+static i32 createflags(Shell *sh)
+{
+    return sh->umaskmod ? OF_EXACT : 0;
+}
+
 // openfile in the Windows modes, where the shell resolves the virtual
 // files: /dev/fd/N and /proc/self/fd/N are its own descriptors, /dev/tty
 // the console, and the /proc files it knows are text.
@@ -1230,7 +1242,7 @@ static File *openwin(Shell *sh, Arena *a, Str name, i32 flags)
         shellerror(sh, *a, msg);
         return 0;
     }
-    Opened o = os_open(sh->os, *a, path, flags, 0666);
+    Opened o = os_open(sh->os, *a, path, flags|createflags(sh), createmode(sh));
     if (o.err) {
         Str msg = concat3(a, name, Str(": "), errtext(o.err));
         shellerror(sh, *a, msg);
@@ -1265,7 +1277,7 @@ static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
         f->refs++;
         return f;
     }
-    Opened o = os_open(sh->os, *a, path, flags, 0666);
+    Opened o = os_open(sh->os, *a, path, flags|createflags(sh), createmode(sh));
     if (o.err) {
         Str msg = concat3(a, name, Str(": "), errtext(o.err));
         shellerror(sh, *a, msg);
@@ -2386,6 +2398,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
 
     Spawn sp = {};
     sp.rlimits = sh->rlmod ? sh->rl : 0;
+    sp.umask   = sh->umaskmod ? &sh->umask : 0;
     sp.path  = absolute(sh, &a, path);
     sp.argv  = argv;
     sp.argc  = argc;

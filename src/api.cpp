@@ -83,6 +83,10 @@ enum : i32 {  // os_open flags
     OF_APPEND = 1<<4,
     OF_EXCL   = 1<<5,
 
+    // With OF_CREATE: a file this call creates gets exactly mode, the
+    // process's file mode mask aside (a level whose umask was set)
+    OF_EXACT  = 1<<29,
+
     // The library's mark on an access the shell makes for itself, not one
     // the script names (a sniff, /dev/null, the password file): OR'd into
     // os_open's flags or os_stat's follow as it is called, never stored,
@@ -207,6 +211,8 @@ struct Spawn {
                       // blob, or 0 to pass only 0-2
     Rlimit  *rlimits; // the child's limits, RL_COUNT of them, or null
                       // to inherit the shell's (POSIX and the vos only)
+    i32     *umask;   // the child's file mode mask, or null to inherit
+                      // the process's (POSIX and the vos only)
     ImageRef image;   // with a base: start this shell's own program
                       // (path and cmdline ignored) continuing from the
                       // image, every descriptor listed passed; once
@@ -367,7 +373,8 @@ static b32     os_write(Os *, Handle, u8 *, iz);
 static i32     os_writeerr(Os *);
 // Read up to len bytes. Returns 0 at end of file, -1 on error.
 static iz      os_read(Os *, Handle, u8 *, iz);
-// Open a file by absolute path. Mode applies when creating.
+// Open a file by absolute path. Mode applies when creating, less the
+// process's file mode mask unless OF_EXACT.
 static Opened  os_open(Os *, Arena scratch, Str path, i32 flags, i32 mode);
 // A new empty file, open for reading and writing, with no name: it is
 // deleted once its last handle closes (large here-documents).
@@ -483,6 +490,8 @@ static Rlimit  os_getrlimit(Os *, i32 res);
 // Set this process's limit: 0, or E_PERM (a hard limit raised past
 // what it was) or E_INVAL (soft above hard; a limit that cannot be set).
 static i32     os_setrlimit(Os *, i32 res, Rlimit);
+// The process's file mode mask (Windows: 022, as nothing there has one).
+static i32     os_umask(Os *);
 // Send signal sig to virtual process level (a subshell's BASHPID, not
 // a process of its own) of our own shell process pid, through the
 // signal channel: its os_levelsig returns it. Returns 0 or an E_*
@@ -685,6 +694,7 @@ struct OsVtable {
     decltype(os_tcpgrp)     *tcpgrp;
     decltype(os_getrlimit)  *getrlimit;
     decltype(os_setrlimit)  *setrlimit;
+    decltype(os_umask)      *umask;
     decltype(os_siglevel)   *siglevel;
     decltype(os_levelsig)   *levelsig;
     decltype(os_sigpending) *sigpending;

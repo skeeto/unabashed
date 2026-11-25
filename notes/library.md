@@ -188,7 +188,13 @@ the records list, without calling the core.
 **The library guarantees:**
 - **No process-wide state changes:** no signal handler or disposition,
   terminal or console mode, cwd, umask, rlimit or environment. Only
-  `ub_run`'s thread mask changes, and it is restored.
+  `ub_run`'s thread mask changes, and it is restored. A script's
+  `umask` is the run's own: files it creates get their mode by
+  `fchmod`, and its programs a fork that sets their mask. One
+  exception: where the mask cannot be read from `/proc/self/status`
+  (macOS, Linux before 4.7), a script that asks for the inherited mask
+  (`umask` printing it, or a symbolic mode) reads it the only way
+  POSIX has, setting it and setting it back at once.
 - **No process-level calls:** no `waitpid(-1)`, `exit` or `setsid` in
   the host.
 - **Host handles are left alone.** `ub_cmd`'s handles are duplicated at

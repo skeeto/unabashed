@@ -4977,6 +4977,16 @@ static i32 symbolicmode(Shell *sh, Arena scratch, Str s, i32 mode)
     }
 }
 
+// The level's file mode mask: the process's until the level sets one
+static i32 filemask(Shell *sh)
+{
+    if (!sh->umaskhave) {
+        sh->umask     = os_umask(sh->os) & 0777;
+        sh->umaskhave = 1;
+    }
+    return sh->umask;
+}
+
 static i32 b_umask(Shell *sh, Str *args, iz nargs, Arena scratch)
 {
     b32 symbolic = 0, reuse = 0;
@@ -4993,7 +5003,7 @@ static i32 b_umask(Shell *sh, Str *args, iz nargs, Arena scratch)
         }
     }
     if (i == nargs) {
-        i32 m = sh->umask;
+        i32 m = filemask(sh);
         if (symbolic) {
             if (reuse) bprint(sh, "umask -S ");
             Str who[3] = {"u=", "g=", "o="};
@@ -5026,11 +5036,13 @@ static i32 b_umask(Shell *sh, Str *args, iz nargs, Arena scratch)
             }
         }
     } else {
-        m = symbolicmode(sh, scratch, s, ~sh->umask & 0777);
+        m = symbolicmode(sh, scratch, s, ~filemask(sh) & 0777);
         if (m < 0) return 1;
         m = ~m;
     }
-    sh->umask = m & 0777;
+    sh->umask     = m & 0777;
+    sh->umaskhave = 1;
+    sh->umaskmod  = 1;
     if (symbolic) {
         Str who[3] = {"u=", "g=", "o="};
         for (i32 w = 0; w < 3; w++) {

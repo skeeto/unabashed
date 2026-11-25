@@ -860,7 +860,10 @@ struct Shell {
     b32      hostsread;    // kept from HOSTFILE once there are any
     Str     *dirs;         // the directory stack under the working
     iz       ndirs;        // directory, bottom first (vars.cpp)
-    i32      umask;
+    i32      umask;        // the file mode mask once read (umaskhave);
+    b32      umaskhave;    // once set (umaskmod), files this level makes
+    b32      umaskmod;     // and programs it starts get it, not the
+                           // process's, as bash's forked subshell's
     u64      disabled[2];  // enable -n: builtins by registry index
     Rlimit   rl[RL_COUNT]; // ulimit's table, read once (rlhave); in a
     b32      rlhave;       // subshell it changes alone and programs get

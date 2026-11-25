@@ -535,6 +535,38 @@ static Str cwdname(Arena *a, Str *env, iz nenv, i32 *err)
     return name;
 }
 
+// open for OF_EXACT: a file it creates gets mode whatever the process's
+// mask. The shell's own process lifts the mask for the call, having no
+// other thread to see it lifted. A host may have, so the library gives
+// the file its mode once made, which it can tell only by making it
+// alone: a file that turns up between its two opens, or is made
+// through a dangling link, keeps the process's mask.
+static i32 openexact(char *path, i32 oflags, i32 mode)
+{
+    i32 fd;
+    if constexpr (LIBMODE) {
+        do {
+            fd = open(path, oflags|O_EXCL, mode);
+        } while (fd<0 && errno==EINTR);
+        if (fd >= 0) {
+            fchmod(fd, (mode_t)mode);
+        } else if (errno==EEXIST && !(oflags&O_EXCL)) {
+            do {
+                fd = open(path, oflags, mode);
+            } while (fd<0 && errno==EINTR);
+        }
+    } else {
+        mode_t old = umask(0);
+        do {
+            fd = open(path, oflags, mode);
+        } while (fd<0 && errno==EINTR);
+        i32 err = errno;
+        umask(old);
+        errno = err;
+    }
+    return fd;
+}
+
 static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
 {
     flushw(os);
@@ -547,10 +579,15 @@ static Opened plt_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
     if (flags & OF_TRUNC)  oflags |= O_TRUNC;
     if (flags & OF_APPEND) oflags |= O_APPEND;
     if (flags & OF_EXCL)   oflags |= O_EXCL;
-    i32 fd;
-    do {
-        fd = open(cpath(&scratch, path), oflags, mode);
-    } while (fd<0 && errno==EINTR);
+    i32   fd;
+    char *cp = cpath(&scratch, path);
+    if ((flags&OF_CREATE) && (flags&OF_EXACT)) {
+        fd = openexact(cp, oflags, mode);
+    } else {
+        do {
+            fd = open(cp, oflags, mode);
+        } while (fd<0 && errno==EINTR);
+    }
     if (fd < 0) {
         r.h   = BADHANDLE;
         r.err = coreerr(errno);
@@ -1053,6 +1090,7 @@ struct SpawnPlan {
     u64      ign;      // signals it starts out ignoring
     u64      dfl;      // and with their default action
     Rlimit  *rlimits;  // or null to keep the shell's
+    i32      umask;    // or negative to keep the process's
     i64      pgid;
     b32      fg;
     i32      tty;
@@ -1133,6 +1171,7 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
             rlimit l = {torlim(p->rlimits[i].soft), torlim(p->rlimits[i].hard)};
             setrlimit(n, &l);  // as bash's forked subshell had them
         }
+        if (p->umask >= 0) umask((mode_t)p->umask);
         sigset_t *mask = &p->mask;
         sigset_t  none;
         if constexpr (LIBMODE) {
@@ -1169,6 +1208,9 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
 // the shell's memory. Returns -1, having done nothing, where
 // it cannot set up the plan:
 // - limits, which no attribute sets;
+// - a file mode mask, in the library: none sets that either, and the
+//   shell's way, its own mask changed for the call, would show in the
+//   host's other threads;
 // - a signal to ignore that the shell does not: the child may only
 //   reset signals to their default, and ignoring it in the shell for
 //   the while would throw away one pending;
@@ -1178,6 +1220,9 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
 static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
 {
     if (p->rlimits || !spawnable(p)) return -1;
+    if constexpr (LIBMODE) {
+        if (p->umask >= 0) return -1;
+    }
     for (i32 sig = 1; sig < NSIG; sig++) {
         if (!hostin(p->ign, sig) || sig==SIGKILL || sig==SIGSTOP) continue;
         struct sigaction sa = {};
@@ -1229,7 +1274,9 @@ static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
         spawnpost(&fa, p, base);
         posix_spawnattr_setflags(&at, flags);
 
+        mode_t old = p->umask<0 ? 0 : umask((mode_t)p->umask);
         err = posix_spawn(out, p->path, &fa, &at, p->argv, p->envp);
+        if (p->umask >= 0) umask(old);
         posix_spawn_file_actions_destroy(&fa);
         posix_spawnattr_destroy(&at);
     }
@@ -1284,6 +1331,7 @@ static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
     p.ign     = s->sigign | os->entryign;
     p.dfl     = changed & ~p.ign;
     p.rlimits = s->rlimits;
+    p.umask   = s->umask ? *s->umask : -1;
     p.pgid    = s->pgid;
     p.fg      = s->fg;
     p.tty     = (i32)s->tty;
@@ -1734,6 +1782,49 @@ static Rlimit plt_getrlimit(Os *, i32 res)
     r.soft = fromrlim(l.rlim_cur);
     r.hard = fromrlim(l.rlim_max);
     return r;
+}
+
+// The mask from /proc/self/status ("Umask:\t0022", Linux 4.7), or -1
+static i32 procumask()
+{
+    i32 r = -1;
+#if __linux__
+    i32 fd = open("/proc/self/status", O_RDONLY|O_CLOEXEC);
+    if (fd < 0) return r;
+    u8 buf[1024];
+    iz len = 0;
+    for (;;) {
+        iz n = read(fd, buf+len, (uz)(countof(buf)-len));
+        if (n<0 && errno==EINTR) continue;
+        if (n <= 0) break;
+        len += n;
+    }
+    close(fd);
+    Str key = "\nUmask:\t";
+    for (iz i = 0; i+key.len < len; i++) {
+        if (Str{buf+i, key.len} != key) continue;
+        r = 0;
+        for (i += key.len; i<len && buf[i]>='0' && buf[i]<='7'; i++) {
+            r = (r*8 + (buf[i] - '0')) & 07777;
+        }
+        break;
+    }
+#endif
+    return r;
+}
+
+// POSIX can only tell the mask by setting one. The library, whose host
+// may be making a file in another thread just then, reads it where
+// Linux shows it.
+static i32 plt_umask(Os *)
+{
+    if constexpr (LIBMODE) {
+        i32 m = procumask();
+        if (m >= 0) return m;
+    }
+    mode_t m = umask(0);
+    umask(m);
+    return (i32)m;
 }
 
 static i32 plt_setrlimit(Os *os, i32 res, Rlimit r)
@@ -2233,6 +2324,7 @@ static constexpr OsVtable pltvtable = {
     .tcpgrp     = plt_tcpgrp,
     .getrlimit  = plt_getrlimit,
     .setrlimit  = plt_setrlimit,
+    .umask      = plt_umask,
     .siglevel   = plt_siglevel,
     .levelsig   = plt_levelsig,
     .sigpending = plt_sigpending,

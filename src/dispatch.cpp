@@ -206,6 +206,11 @@ static Rlimit os_getrlimit(Os *os, i32 res)
     return osvtable(os)->getrlimit(os, res);
 }
 
+static i32 os_umask(Os *os)
+{
+    return osvtable(os)->umask(os);
+}
+
 static i32 os_setrlimit(Os *os, i32 res, Rlimit lim)
 {
     return osvtable(os)->setrlimit(os, res, lim);

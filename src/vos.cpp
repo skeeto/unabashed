@@ -150,6 +150,7 @@ struct VProc {
     FakeCtx ctx;
     Arena   mem;      // a fixed block: the program's memory
     Rlimit  rl[RL_COUNT];  // os_getrlimit: inherited, as a kernel's
+    i32     umask;         // os_umask: the same
 };
 
 // The terminal behind the outermost shell's descriptors 0-2 and
@@ -1621,7 +1622,8 @@ static Opened vos_open(Os *os, Arena scratch, Str path, i32 flags, i32 mode)
             r.err = E_ACCES;
             return r;
         }
-        n = vnew(v, res.dir, res.base, FT_FILE, mode & 0777 & ~022);
+        i32 mask = flags&OF_EXACT ? 0 : v->procs[v->cur].umask;
+        n = vnew(v, res.dir, res.base, FT_FILE, mode & 0777 & ~mask);
     } else if ((flags&OF_CREATE) && (flags&OF_EXCL)) {
         r.err = E_EXIST;
         return r;
@@ -2303,6 +2305,12 @@ static Rlimit vos_getrlimit(Os *os, i32 res)
 {
     Vos *v = osvos(os);
     return v->procs[v->cur].rl[res];
+}
+
+static i32 vos_umask(Os *os)
+{
+    Vos *v = osvos(os);
+    return v->procs[v->cur].umask;
 }
 
 // As Linux for an unprivileged user (or main_win32.cpp's model)
@@ -3238,6 +3246,7 @@ static Spawned vos_spawn(Os *os, Arena scratch, Spawn *s)
     for (i32 i = 0; i < RL_COUNT; i++) {
         p->rl[i] = s->rlimits ? s->rlimits[i] : v->procs[v->cur].rl[i];
     }
+    p->umask = s->umask ? *s->umask : v->procs[v->cur].umask;
     p->wait   = VW_NONE;
     if (s->image.base) {
         p->wait  = VW_SLEEP;
@@ -4199,6 +4208,7 @@ static void vreset(Vos *v, Arena a, Fake *fakes, iz nfakes, b32 win = 0)
     v->procs[0].ntasks  = 1;
     v->procs[0].ingroup = 1;  // tracing: vgroup is never 0
     vrldefault(v->procs[0].rl, win);
+    v->procs[0].umask = 022;
 
     v->root = vnew(v, 0, "", FT_DIR, 0755);
     if (win) {
@@ -4308,7 +4318,7 @@ static i32 os_mkdir(Os *os, Arena scratch, Str path, i32 mode)
     i32       err;
     VNode    *dir = vcreatable(v, &scratch, path, &r, &err);
     if (!dir) return err;
-    vnew(v, dir, r.base, FT_DIR, mode & 07777 & ~022)->nlink = 2;
+    vnew(v, dir, r.base, FT_DIR, mode & 07777 & ~v->procs[v->cur].umask)->nlink = 2;
     return 0;
 }
 
@@ -4320,7 +4330,7 @@ static i32 os_mkfifo(Os *os, Arena scratch, Str path, i32 mode)
     i32       err;
     VNode    *dir = vcreatable(v, &scratch, path, &r, &err);
     if (!dir) return err;
-    vnew(v, dir, r.base, FT_FIFO, mode & 07777 & ~022);
+    vnew(v, dir, r.base, FT_FIFO, mode & 07777 & ~v->procs[v->cur].umask);
     return 0;
 }
 
@@ -4505,6 +4515,7 @@ static OsVtable const vosvtable = {
     .tcpgrp     = vos_tcpgrp,
     .getrlimit  = vos_getrlimit,
     .setrlimit  = vos_setrlimit,
+    .umask      = vos_umask,
     .siglevel   = vos_siglevel,
     .levelsig   = vos_levelsig,
     .sigpending = vos_sigpending,
@@ -4523,11 +4534,6 @@ static OsVtable const vosvtable = {
     .ready      = vos_ready,
     .monotime   = vos_monotime,
 };
-
-static i32 os_umask(Os *)
-{
-    return 022;
-}
 
 static OsIds os_ids(Os *)
 {

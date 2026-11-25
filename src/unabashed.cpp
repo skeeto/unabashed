@@ -1800,7 +1800,6 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     sh->euid    = info->euid;
     sh->gid     = info->gid;
     sh->egid    = info->egid;
-    sh->umask   = 022;
     sh->start   = os_now(os);
 
     Escape top;
