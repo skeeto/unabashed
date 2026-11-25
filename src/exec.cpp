@@ -598,7 +598,7 @@ static Arith evalarith(Shell *sh, Arena *a, Str expr)
         sh->status = sh->catchfatal ? 1 : 127;
         escape(sh, ESC_FATAL);
     } else if (!r.ok) {
-        expansionerror(sh, *a, r.err);
+        expansionerror(sh, *a, r.err, 1);
     }
     return r;
 }
@@ -666,11 +666,14 @@ static void posixbadvar(Shell *sh)
 }
 
 // An expansion error abandons the current complete command, and so
-// ends a subshell.
-static void expansionerror(Shell *sh, Arena a, Str msg)
+// ends a subshell. Under set -e it ends the shell, as bash's
+// report_error does, unless bash reports it with internal_error (an
+// arithmetic error, a negative substring length).
+static void expansionerror(Shell *sh, Arena a, Str msg, b32 internal)
 {
     shellerror(sh, a, msg);
     sh->status = 1;
+    if (!internal) reportexit(sh);
     escape(sh, posixfatal(sh) ? ESC_FATAL : ESC_DISCARD);  // as bash
 }
 

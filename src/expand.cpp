@@ -65,12 +65,14 @@ struct X {
     b32           nullmark; // mark quoted nulls with XF_NULL bytes
     b32           splitspace;  // unquoted $* with IFS unset: see putlist
     Str           text;     // the text being expanded, for bad substitutions
+    b32           textdq;   // text is a double-quoted part
+    Str           dqword;   // and the text it is a part of
 };
 
 // The runner side: defined with the executor.
 static Str  runcapture(Shell *, Arena *, Str src, b32 backquote);
 static Str  procsubst(Shell *, Arena *, Str body, b32 output);
-static void expansionerror(Shell *, Arena, Str msg);
+static void expansionerror(Shell *, Arena, Str msg, b32 internal = 0);
 static void fatalerror(Shell *, Arena, Str msg);
 static Arith evalarith(Shell *, Arena *, Str);
 static Arith evalinteger(Shell *, Arena *, Str);
@@ -635,13 +637,17 @@ static i32 patflags(Shell *sh)
     return f;
 }
 
+static Str dqextract(Shell *, Arena *, Str);
+
 // Like bash, report the whole text being expanded at this level: the
-// word, a double-quoted part, or an operator's word. An unknown
-// transform of a value is fatal, as an unset ${x?} is.
+// word, a double-quoted part (as it was extracted, its \" unescaped), or
+// an operator's word. An unknown transform of a value is fatal, as an
+// unset ${x?} is.
 static void badsubst(X *x, Str whole, b32 fatal = 0)
 {
     Arena a = *x->a;
     Str   s = x->text.data ? x->text : concat3(&a, "${", whole, "}");
+    if (x->text.data && x->textdq) s = dqextract(x->sh, &a, s);
     Str msg = concat(&a, s, ": bad substitution");
     if (fatal) fatalerror(x->sh, a, msg);
     expansionerror(x->sh, a, msg);
@@ -1129,7 +1135,7 @@ static Arith substrarith(X *x, Str name, Str expr)
     if (!r.ok) {
         Arena a = *x->a;
         Str msg = concat3(&a, name, ": ", r.err);
-        expansionerror(x->sh, a, msg);
+        expansionerror(x->sh, a, msg, 1);
     }
     return r;
 }
@@ -1164,7 +1170,7 @@ static void substrnegative(X *x, Str len)
 {
     Arena a = *x->a;
     Str msg = concat(&a, len, ": substring expression < 0");
-    expansionerror(x->sh, a, msg);
+    expansionerror(x->sh, a, msg, 1);
 }
 
 // ${v:off:len} in a UTF-8 locale, counting characters, and the whole
@@ -1262,6 +1268,7 @@ static void badelem(X *x, Str name, Str sub, b32 length)
     }
     Str msg = concat(&a, name, ": bad array subscript");
     shellerror(x->sh, a, msg);
+    reportexit(x->sh);  // as bash's err_badarraysub, under set -e
 }
 
 static Param getelems(X *x, Str name, Str sub, b32 length)
@@ -1606,6 +1613,13 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     b32 hassub = 0;
     if (i<s.len && s[i]=='[' && identstart(name[0])) {
         iz e = skipsubscript(s, i);
+        if (e==s.len && !length && x->textdq && x->dqword.data) {
+            // bash extracts a double-quoted ${...} from the word with
+            // the subscript skipped, past the }, so finds no closing }
+            Arena a = *x->a;
+            Str msg = concat(&a, "bad substitution: no closing `}' in ", x->dqword);
+            expansionerror(sh, a, msg);
+        }
         if (e==s.len || e==i+1) badsubst(x, whole);  // nor ${a[]}
         sub    = span(s.data+i+1, s.data+e);
         hassub = 1;
@@ -1613,6 +1627,12 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     }
     Str rest  = cuthead(s, i);
     Str uname = hassub ? span(name.data, s.data+i) : name;  // for errors
+    if (rest.len && (length || find(":-=?+#%/^,~@", takehead(rest, 1))<0) &&
+            !(indirect && rest=="*")) {
+        // As bash, a name with no operator after it is checked before
+        // its subscript, value or indirection is read
+        badsubst(x, whole);
+    }
 
     Param p = {};
     Param q = {};  // the indirection's own value
@@ -1874,9 +1894,9 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         return;
     }
 
-    if (!p.set && !p.list && sh->opt[O_NOUNSET]) {
+    if (!p.set && !p.list && sh->opt[O_NOUNSET] && rest!=":") {
         // As bash: a non-empty array's @a and @A are not unbound for
-        // want of element 0
+        // want of element 0, and ${x:} is a bad substitution first
         Value *val  = op=='@' && identstart(name[0]) ? lookup(sh, name) : 0;
         Array *arr  = varray(sh, x->a, val);
         b32 exempt  = arr && acount(arr) && (rest=="@a" || rest=="@A");
@@ -2409,7 +2429,9 @@ static Str dqextract(Shell *sh, Arena *a, Str s)
     return finish(&b);
 }
 
-static void expandtext(X *x, Str s, i32 ctx)
+// Expand s from byte from on: an assignment word's value is expanded
+// as part of the word, which bash's messages name whole.
+static void expandtext(X *x, Str s, i32 ctx, iz from = 0)
 {
     Shell *sh = x->sh;
     if (ctx & XC_ASSIGNW) {
@@ -2417,7 +2439,7 @@ static void expandtext(X *x, Str s, i32 ctx)
         iz eq = assignment(s, 0);
         if (eq) {
             expandinto(x, takehead(s, eq+1), ctx);
-            expandinto(x, cuthead(s, eq+1), ctx|XC_ASSIGN);
+            expandtext(x, s, ctx|XC_ASSIGN, eq+1);
             return;
         }
     }
@@ -2431,13 +2453,15 @@ static void expandtext(X *x, Str s, i32 ctx)
     }
     b32 tildeok = !(ctx & (XC_DQUOTE|XC_HEREDOC|XC_ARITH));
     Str outer   = x->text;
-    x->text = s;
+    b32 outerdq = x->textdq;
+    x->text   = s;
+    x->textdq = dq && !hd && !(ctx & (XC_PARAM|XC_ARITH|XC_PROMPT));
     b32 inner   = 0;  // between toggling quotes inside ${...} in quotes
     // Arithmetic text bash expands as a word, where a quoted part is a
     // word of its own (Q_ARITH), as in a [[ ]] operand (XC_CONDQ)
     b32 aword   = (ctx & XC_ARITH) && ((ctx & XC_CONDQ) || arithexpands(s));
 
-    for (iz i = 0; i < s.len;) {
+    for (iz i = from; i < s.len;) {
         u8 c = s[i];
 
         if (tildeok && c=='~') {
@@ -2518,7 +2542,10 @@ static void expandtext(X *x, Str s, i32 ctx)
             x->atempty = 0;
             Str part = span(s.data+i+1, s.data+(e<s.len?e:s.len));
             if (word) part = dqextract(sh, x->a, part);  // its \" is quoting
+            Str dqword = x->dqword;
+            x->dqword = s;
             expandinto(x, part, (ctx & ~XC_PARAM) | XC_DQUOTE | (word ? XC_CONDQ : 0));
+            x->dqword = dqword;
             if (x->atempty && x->data.len==before && x->done.len==0) {
                 x->quoted = wasquoted;  // "$@" with no parameters vanishes
             } else if (x->data.len == before) {
@@ -2727,7 +2754,8 @@ static void expandtext(X *x, Str s, i32 ctx)
         xputc(x, c, lit);
         i++;
     }
-    x->text = outer;
+    x->text   = outer;
+    x->textdq = outerdq;
 }
 
 // Expand text into x. Views of store memory taken meanwhile stay valid

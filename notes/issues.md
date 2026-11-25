@@ -84,13 +84,6 @@ From its first runs (2026-11-24, 44,000 scripts against bash 5.3), not
 yet fixed. Each was confirmed by hand in the oracle container unless
 it says otherwise.
 
-- A bad substitution is checked after its subscript or value where
-  bash checks it first: `${map[a b]&}` reports the subscript's
-  arithmetic error and `${x!}`, `${r&}` under set -u an unbound
-  variable, where bash reports the bad substitution; `${arr[-1]:}`
-  (arr unset) reports both "bad array subscript" and the bad
-  substitution, bash only the first. A message for
-  `"$((i))${x.y^^}\""` keeps the backslash bash drops.
 - Line numbers in messages: what remains (1 in 899 findings of a
   fresh batch, from a quarter before) is a function that assigns
   LINENO and has a command substitution in its own redirections,
