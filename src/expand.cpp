@@ -1671,11 +1671,12 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         q = hassub ? getelems(x, name, sub) : getparam(x, name);
         if (q.bad) return;
         if (!q.set && !q.list) {
-            // As bash: only an unset variable, or an element of a
-            // missing array, is an error; an unset positional, special
-            // or element names nothing, and expands as unset
+            // As bash: only a missing variable (not one declared and
+            // unset), or an element of a missing array, is an error; an
+            // unset positional, special or element names nothing, and
+            // expands as unset
             b32 ident = identstart(name[0]);
-            if ((ident && !hassub) || (hassub && !lookup(sh, name))) {
+            if ((ident || hassub) && !lookup(sh, name)) {
                 Arena a = *x->a;
                 Str msg = concat(&a, uname, ": invalid indirect expansion");
                 expansionerror(sh, a, msg);
@@ -1737,6 +1738,9 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             }
             unbound(x, uname);
         }
+    }
+    if (length && hassub && !got && !valuevisible(lookup(sh, name))) {
+        got = 1;  // as bash's array_length_reference: 0, its subscript unread
     }
     if (!got) {
         p = hassub ? getelems(x, name, sub, length) : getparam(x, name);

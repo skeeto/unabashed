@@ -1526,7 +1526,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
                 sh->intwho = intwho;
             } else if (hassub) {
                 i32 raw = sh->shopt[S_ARRAY_EXPAND_ONCE] ? SV_RAWKEY : 0;
-                ok = assignelem(sh, scratch, vname, sub, takehead(a, eq), val, sflags|raw);
+                ok = assignelem(sh, scratch, vname, sub, takehead(a, eq-append), val, sflags|raw);
             } else {
                 ok = setvar(sh, scratch, vname, val, sflags);
             }
