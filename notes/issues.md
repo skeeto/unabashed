@@ -120,9 +120,7 @@ it says otherwise.
 - `bash <<<'echo hi' 0>&1` runs nothing in bash ("script file read
   error: Bad file descriptor", status 128); ours gives 0.
 - Messages: `echo hi {fd}>$u` with `u` unset names `$u` as the
-  ambiguous redirect, where bash names `fd`; `"${map[@]:=x}"` says
-  "$map[@]: cannot assign in this way", where bash says "map[@]: bad
-  array subscript".
+  ambiguous redirect, where bash names `fd`.
 - Line numbers in messages: a command after a here-document's
   operator on the same line reports the line past the body, where
   bash reports the command's. This is one case of many: a quarter of

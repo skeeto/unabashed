@@ -1790,7 +1790,12 @@ static void expandbraced(X *x, Str whole, i32 ctx)
             // an associative array takes @ and * as keys
             Value *av   = hassub && !elem ? lookup(sh, name) : 0;
             b32    akey = av && av->arr && av->arr->bucket;
-            if (!validvarname(name) || (hassub && !elem && !akey)) {
+            if (hassub && !elem && !akey) {
+                // as bash's assign_array_element
+                Arena a = *x->a;
+                expansionerror(sh, a, concat(&a, uname, ": bad array subscript"));
+            }
+            if (!validvarname(name)) {
                 Arena a = *x->a;
                 Str   m = concat3(&a, "$", hassub ? uname : name, ": cannot assign in this way");
                 expansionerror(sh, a, m);
