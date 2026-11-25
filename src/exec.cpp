@@ -3033,6 +3033,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env,
         if constexpr (LIBMODE) shebangoptions(sh, src);
         // Its variables and functions are the environment's alone, as
         // bash's, whose messages meanwhile name the old $0, with no line
+        i32 runline = sh->line;
         sh->line = 0;
         reinitvars(sh, a, env);
         sh->name  = named ? name : path;
@@ -3068,8 +3069,9 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env,
         sigenter(sh, &sig, sh->bashpid, sh->sched->cur);
         if (!jmpset(e.jmp)) {
             // As bash's reset_parser in the child: its first simple
-            // command, if a redirection starts it, takes this line
-            sh->staleredir = sh->line + 1;
+            // command, if a redirection starts it, takes the line it
+            // was run from
+            sh->staleredir = runline + 1;
             runsource(sh, src, name, *scratchat(sh, sh->capdepth), 1);
         }
         storerehold(sh->store, e.hold);  // as subshell's, for its EXIT trap
