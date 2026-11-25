@@ -76,6 +76,7 @@ static void expansionerror(Shell *, Arena, Str msg, b32 internal = 0);
 static void reportederror(Shell *, Arena, Str msg);
 static void fatalerror(Shell *, Arena, Str msg);
 static Arith evalarith(Shell *, Arena *, Str);
+static Slice<Str> expandwords(Shell *, Arena *, Word *, i32 flags);
 static Arith evalinteger(Shell *, Arena *, Str);
 static Arith arithraw(Shell *, Arena *, Str);
 static void checkstack(Shell *);
@@ -1928,9 +1929,21 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
                 }
             }
         } else {
-            Str msg = word.len ? expandword(x, word, wctx)
-                    : colon    ? Str("parameter null or not set")
-                    :            Str("parameter not set");
+            // As bash, the word expands as an unquoted string even
+            // in double quotes: split, unglobbed, joined by spaces
+            Str msg = colon ? Str("parameter null or not set")
+                    :         Str("parameter not set");
+            if (word.len) {
+                Word one = {};
+                one.text = word;
+                Slice<Str> f = expandwords(sh, x->a, &one, XW_NOGLOB|XW_NOBRACE);
+                Buf b(x->a, 16);
+                for (iz i = 0; i < f.len; i++) {
+                    if (i) putbyte(&b, ' ');
+                    print(&b, f[i]);
+                }
+                msg = finish(&b);
+            }
             Arena a = *x->a;
             Str msg2 = concat3(&a, uname, ": ", msg);
             fatalerror(sh, a, msg2);
