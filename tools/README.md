@@ -152,6 +152,7 @@ main_fuzz.cpp; ./replay crash...`.
 
     tools/diffuzz [-b BATCH] [-j JOBS] [-m MINUTES] [-s SEED] DIR
     tools/diffuzz -r DIR SEED...
+    tools/diffuzz -z [-j JOBS] DIR SEED...
 
 The fuzz modes above check the shell against itself; this one checks
 it against bash. `tools/shgen.c` prints a small script for a seed (the
@@ -181,6 +182,23 @@ and `err-order`, where stderr has the same lines in another order (two
 processes reporting). A shell disagreeing with itself is a race,
 listed in `DIR/flaky`. `-r` builds anew and runs seeds again, printing
 `same` or `differs` for each: the check after a fix.
+
+`-z` shrinks found scripts, the way C compiler fuzzing reduces its
+programs (issue #20 describes the same thing for a grammar-built
+tree). It deletes chunks of lines, then of words, halving the chunks
+when none can go (delta debugging), and repeats both until neither
+removes anything. Each candidate runs twice in each shell, a batch of
+them per pair of containers. It is kept if it differs in the same
+parts as the original (status, out, err, fs), or the same way
+(`lineno`, `err-order`), alike both times, in time, and without a
+syntax error or over 64 KiB of output the original lacked: a deleted
+word can turn an argument into a command, `yes` say. The result goes
+in `DIR/found/SEED/small` with `small.diff`, and the printed line for
+each seed gives what differs and the sizes. Scripts commonly shrink
+to a third or less, in a minute or so each. A reduction can still
+slide to another fault that differs in the same parts, or to a race
+(printed as "alike when kept"), so read `small.diff` before taking
+it for the original fault.
 
 Nothing a script does leaves its container: no network, a read-only
 root, tmpfs for `/tmp` and the home directory, uid 1000 with no

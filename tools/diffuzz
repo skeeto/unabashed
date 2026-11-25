@@ -3,6 +3,7 @@
 #
 #   tools/diffuzz [-b BATCH] [-j JOBS] [-m MINUTES] [-s SEED] DIR
 #   tools/diffuzz -r DIR SEED...
+#   tools/diffuzz -z [-j JOBS] DIR SEED...
 #
 # Builds shgen and a Linux build of the working tree's shell (-O1 with
 # UBSan trapping, so a failed assertion shows as a death by signal) in
@@ -27,6 +28,18 @@
 # scripts that ended their batch. -r runs the given seeds again, after
 # a fix say: it builds anew and prints "same" or "differs" for each,
 # rewriting DIR/found/SEED of those that differ.
+#
+# -z shrinks found scripts, JOBS at a time: it builds anew, then removes
+# chunks of lines, then of words, halving the chunks when none can go
+# (delta debugging), and again until neither removes anything. What
+# remains must still differ in the same parts, or the same way (lineno,
+# err-order), alike in two runs, with no timeout, and no syntax error
+# or runaway output the original lacked. It is kept in
+# DIR/found/SEED/small with small.diff, and the line printed for each
+# seed says what differs (bits for status, out, err, fs) and how much
+# was removed. A reduction can still slide to another fault that
+# differs in the same parts, or to a race (reported as "alike when
+# kept"), so read small.diff before taking it as the original fault.
 #
 # Nothing a script does leaves its container: no network, a read-only
 # root, tmpfs for /tmp and the home directory, uid 1000 without
@@ -53,19 +66,21 @@ jobs=2
 mins=10
 seed=1
 rerun=
-while getopts b:j:m:rs: opt; do
+shrinks=
+while getopts b:j:m:rs:z opt; do
     case $opt in
     b) batch=$OPTARG;;
     j) jobs=$OPTARG;;
     m) mins=$OPTARG;;
     r) rerun=1;;
     s) seed=$OPTARG;;
+    z) shrinks=1;;
     *) echo "usage: tools/diffuzz [-b BATCH] [-j JOBS] [-m MINUTES] [-s SEED] DIR" >&2
        exit 2;;
     esac
 done
 shift $((OPTIND - 1))
-if [ $# -lt 1 ] || { [ -z "$rerun" ] && [ $# -ne 1 ]; }; then
+if [ $# -lt 1 ] || { [ -z "$rerun$shrinks" ] && [ $# -ne 1 ]; }; then
     echo "usage: tools/diffuzz [-b BATCH] [-j JOBS] [-m MINUTES] [-s SEED] DIR" >&2
     exit 2
 fi
@@ -89,11 +104,22 @@ mkdir -p "$dir/bin" "$dir/found" "$dir/tmp"
 #                     three being digests
 #   run -v            the same for the seeds on stdin, then a tar of
 #                     keep/SEED/{script,status,out,err,fs,digest}
+#   run -c            for the names on stdin, "NAME STATUS OUT ERR FS
+#                     ODD SORTED NLOUT NLERR": ODD is 1 for a syntax
+#                     error or over 64 KiB in stdout or stderr, and
+#                     the rest are digests of stderr sorted, and of
+#                     stdout and stderr with line numbers alike
+#                     (nolines)
+# With CAND set, names stand for scripts in /fzc rather than seeds.
 cat >"$dir/bin/run" <<'EOF'
 d=/tmp/.fz
 mkdir -p $d/keep
 one() {
-    /fz/shgen "$1" >$d/script || exit 9
+    if [ -n "$CAND" ]; then
+        /bin/cp "/fzc/$1" $d/script || exit 9
+    else
+        /fz/shgen "$1" >$d/script || exit 9
+    fi
     /usr/bin/find /tmp /home/oracle -mindepth 1 -maxdepth 1 ! -name .fz \
         -exec /bin/rm -rf {} + 2>/dev/null
     mkdir /home/oracle/w && cd /home/oracle/w || exit 9
@@ -118,7 +144,21 @@ one() {
            /usr/bin/tr '\n' ' ')
     line="$1 $st ${sums% }"
 }
-if [ "$1" = -v ]; then
+if [ "$1" = -c ]; then
+    for name in $(/bin/cat); do
+        one "$name"
+        odd=0
+        /bin/grep -qa -e 'syntax error' -e 'unexpected end of file' $d/err &&
+            odd=1
+        [ $(/usr/bin/wc -c <$d/out) -le 65536 ] || odd=1
+        [ $(/usr/bin/wc -c <$d/err) -le 65536 ] || odd=1
+        sorted=$(LC_ALL=C /usr/bin/sort $d/err | /usr/bin/md5sum)
+        nl='s/line [0-9][0-9]*/line N/g'
+        nlout=$(LC_ALL=C /bin/sed "$nl" $d/out | /usr/bin/md5sum)
+        nlerr=$(LC_ALL=C /bin/sed "$nl" $d/err | /usr/bin/md5sum)
+        echo "$line $odd ${sorted%% *} ${nlout%% *} ${nlerr%% *}"
+    done
+elif [ "$1" = -v ]; then
     for seed in $(/bin/cat); do
         one "$seed"
         k=$d/keep/$seed
@@ -153,12 +193,15 @@ docker run --rm --network none -w / -v "$src":/ub:ro -v "$dir/bin":/out \
 
 # container WHICH NAME SECONDS ARGS...: run the driver in a fresh
 # container, with bash (WHICH b) or our shell (u), stdin and stdout
-# the caller's, killed after SECONDS
+# the caller's, killed after SECONDS. With $cands set, that directory's
+# scripts are the driver's names.
 container() {
     which=$1 name=$2 secs=$3
     shift 3
     mount=
     [ $which = b ] || mount="--volume=$dir/bin/unabashed:/usr/local/bin/bash:ro"
+    cmount=
+    [ -z "${cands-}" ] || cmount="--volume=$cands:/fzc:ro"
     (sleep "$secs" && docker kill "$name" >/dev/null 2>&1) &
     watchdog=$!
     docker run --rm -i --name "$name" --init --network none --read-only \
@@ -167,8 +210,8 @@ container() {
         --workdir / --user oracle --hostname oracle \
         --cap-drop ALL --security-opt no-new-privileges \
         --pids-limit 256 --memory 1g --ulimit nofile=1024:1024 \
-        --volume="$dir/bin":/fz:ro ${mount:+"$mount"} -e LIMIT="$limit" \
-        "$image" /bin/sh /fz/run "$@" || true
+        --volume="$dir/bin":/fz:ro ${mount:+"$mount"} ${cmount:+"$cmount"} \
+        -e LIMIT="$limit" -e CAND="${cands:+1}" "$image" /bin/sh /fz/run "$@" || true
     kill $watchdog 2>/dev/null || true
     wait $watchdog 2>/dev/null || true
 }
@@ -252,6 +295,213 @@ verify() {
     done <"$vseeds"
     rm -rf "$vt.b" "$vt.u" "$vt.x"
 }
+
+# zrun: run the scripts in $cands named in $zt/names in both shells,
+# leaving the driver's -c lines side by side in $zt/r. Names come in
+# pairs, so that each script runs twice.
+zrun() {
+    zn=$(($(wc -l <"$zt/names")))
+    zruns=$((zruns + zn/2))
+    for zw in b u; do
+        container $zw "diffuzz-$$-z$s-$zw" $((zn*limit + 60)) -c \
+            <"$zt/names" >"$zt/r.$zw" 2>/dev/null &
+    done
+    wait
+    paste -d' ' "$zt/r.b" "$zt/r.u" >"$zt/r"
+}
+
+# zunits MODE: split $zt/cur into $zt/units, a line "GROUP<tab>tTEXT"
+# for a piece of text or "GROUP<tab>n" for a newline, a group being a
+# line with its newline (MODE lines), or else a word with the blanks
+# after it, or a newline
+zunits() {
+    LC_ALL=C awk -v mode=$1 '
+        mode == "lines" {
+            print NR "\tt" $0
+            print NR "\tn"
+            next
+        }
+        {
+            s = $0
+            while (s != "") {
+                match(s, /^[ \t]*[^ \t]*[ \t]*/)
+                print ++g "\tt" substr(s, 1, RLENGTH)
+                s = substr(s, RLENGTH + 1)
+            }
+            print ++g "\tn"
+        }' "$zt/cur" >"$zt/units"
+}
+
+# zsplit G: cut $zt/units's groups into G chunks (fewer if there are
+# fewer groups), and for each chunk I write the units without it to
+# $zt/u/I and their script to $cands/I, naming I in $zt/names. Prints
+# the number of groups.
+zsplit() {
+    rm -rf "$zt/u" "$cands"
+    mkdir "$zt/u" "$cands"
+    LC_ALL=C awk -v g=$1 -v dir="$zt" '
+        {
+            grp = substr($0, 1, index($0, "\t") - 1)
+            if (grp != last) { k++; last = grp }
+            rec[NR] = $0
+            idx[NR] = k - 1
+        }
+        END {
+            if (g > k) g = k
+            for (i = 0; i < g; i++) {
+                lo = int(i*k/g)
+                hi = int((i+1)*k/g)
+                u = dir "/u/" i
+                c = dir "/c/" i
+                printf "" >u
+                printf "" >c
+                for (r = 1; r <= NR; r++) {
+                    if (idx[r]>=lo && idx[r]<hi) continue
+                    print rec[r] >u
+                    x = substr(rec[r], index(rec[r], "\t") + 1)
+                    if (x == "n") printf "\n" >c
+                    else          printf "%s", substr(x, 2) >c
+                }
+                close(u)
+                close(c)
+                print i >(dir "/names.new")
+                print i >(dir "/names.new")
+            }
+            print k+0
+        }' "$zt/units"
+    mv "$zt/names.new" "$zt/names" 2>/dev/null || : >"$zt/names"
+}
+
+# zawk: awk for $zt/r, where on a script's second line "both" is true
+# if it ran in time and alike both times, and "cls()" says what differs
+# as verify would: order (err-order), lineno, or else a bit each for
+# status, stdout, stderr and files
+zawk='
+function cls(  w) {
+    w = ($2!=$11) "" ($3!=$12) "" ($4!=$13) "" ($5!=$14)
+    if (w == "0010" && $7 == $16) return "order"
+    if (w!="0000" && $2==$11 && $5==$14 && $8==$17 && $9==$18) return "lineno"
+    return w
+}
+NR % 2 { prev = $0; next }
+{ both = $0==prev && $1==$10 && $2!=137 && $11!=137 }
+'
+
+# zpick: the first script in $zt/r that both times differs from bash as
+# the original did ($want), and not ODD (run -c) unless it was
+zpick() {
+    awk -v want=$want -v sb=$oddb -v su=$oddu "$zawk"'
+        both && $6<=sb && $15<=su && cls()==want { print $1; exit }
+    ' "$zt/r"
+}
+
+# zpass MODE: delta debugging over $zt/cur's groups (zunits): remove
+# a chunk while what remains still differs, halving the chunks when
+# none can go, until single groups cannot
+zpass() {
+    zunits $1
+    g=2
+    while :; do
+        k=$(zsplit $g)
+        [ "$k" -gt 0 ] || break
+        [ $g -le "$k" ] || g=$k
+        zrun
+        pick=$(zpick)
+        if [ -n "$pick" ]; then
+            mv "$zt/u/$pick" "$zt/units"
+            cp "$cands/$pick" "$zt/cur"
+            [ $g -le 2 ] || g=$((g - 1))
+        elif [ $g -ge "$k" ]; then
+            break
+        else
+            g=$((g * 2))
+        fi
+    done
+}
+
+# shrink SEED: reduce DIR/found/SEED/script to DIR/found/SEED/small, a
+# script that, run twice, still differs from bash in the same parts
+# (status, out, err, fs) or the same way (err-order, lineno), with no
+# syntax error or runaway output the original lacked, and what each
+# shell made of it in small.diff
+shrink() {
+    s=$1
+    f=$dir/found/$s
+    zt=$dir/tmp/z$s
+    cands=$zt/c
+    zruns=0
+    if [ ! -f "$f/script" ]; then
+        echo "$s: no script in $f"
+        return
+    fi
+    rm -rf "$zt" "$f/small" "$f/small.diff"
+    mkdir -p "$cands"
+    cp "$f/script" "$zt/cur"
+    cp "$f/script" "$cands/o"
+    printf 'o\no\n' >"$zt/names"
+    zrun
+    set -- $(awk "$zawk"'{ print both, cls(), $6, $15 }' "$zt/r") - - - -
+    if [ "$1" != 1 ]; then
+        echo "$s: too slow, or unlike itself"
+        return
+    fi
+    want=$2 oddb=$3 oddu=$4
+    if [ "$want" = 0000 ]; then
+        echo "$s: same"
+        return
+    fi
+
+    # Lines, then words, again until neither removes anything
+    size=$(($(wc -c <"$zt/cur")))
+    while :; do
+        zpass lines
+        zpass words
+        new=$(($(wc -c <"$zt/cur")))
+        [ $new -lt $size ] || break
+        size=$new
+    done
+
+    # Keep it, ending in a newline, with what each shell made of it
+    [ -z "$(tail -c 1 "$zt/cur")" ] || echo >>"$zt/cur"
+    rm -rf "$cands" "$zt/b" "$zt/u"
+    mkdir "$cands" "$zt/b" "$zt/u"
+    cp "$zt/cur" "$cands/small"
+    for zw in b u; do
+        echo small | container $zw "diffuzz-$$-z$s-v$zw" $((limit + 60)) \
+            -v 2>/dev/null | tar -xf - -C "$zt/$zw" 2>/dev/null || true &
+    done
+    wait
+    cp "$zt/cur" "$f/small"
+    (
+        cd "$zt"
+        for part in status out err fs; do
+            diff -u --label bash.$part --label ours.$part \
+                b/keep/small/$part u/keep/small/$part || true
+        done
+    ) >"$f/small.diff"
+    note=
+    [ -s "$f/small.diff" ] || note=", but alike when kept"
+    printf '%s: %s, %d to %d bytes in %d runs%s\n' "$s" "$want" \
+        $(($(wc -c <"$f/script"))) $(($(wc -c <"$f/small"))) "$zruns" "$note"
+    rm -rf "$zt"
+}
+
+if [ -n "$shrinks" ]; then
+    w=0
+    while [ $w -lt "$jobs" ]; do
+        (
+            i=0
+            for s; do
+                [ $((i % jobs)) -ne $w ] || shrink "$s"
+                i=$((i + 1))
+            done
+        ) &
+        w=$((w + 1))
+    done
+    trap 'docker ps -q --filter "name=diffuzz-$$-" | xargs docker kill >/dev/null 2>&1; exit 130' INT TERM
+    wait
+    exit 0
+fi
 
 if [ -n "$rerun" ]; then
     printf '%s\n' "$@" >"$dir/tmp/rerun"
