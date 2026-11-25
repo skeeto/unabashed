@@ -1634,6 +1634,15 @@ static iz fdread(Shell *sh, i32 fd, u8 *buf, iz len)
     return fd<0 || fd>=FDMAX ? -1 : fileread(sh, sh->fds->fd[fd], buf, len);
 }
 
+// Why a read of f failed, as errno would tell: not open for reading,
+// a directory, or else other (E_IO, say).
+static i32 readerror(Shell *sh, File *f, i32 other)
+{
+    if (!f || !(f->flags & OF_READ)) return E_BADF;
+    if (f->kind==F_OS && os_fstat(sh->os, f->h).type==FT_DIR) return E_ISDIR;
+    return other;
+}
+
 // Unwind to the innermost escape point.
 [[noreturn]] static void escape(Shell *sh, i32 why)
 {

@@ -1320,12 +1320,7 @@ static void promptcommand(Shell *sh)
 // input, as bash, which drops its buffered stream then.
 [[noreturn]] static void readfailed(Shell *sh, Lexer *L, File *f)
 {
-    i32 err = E_IO;
-    if (!(f->flags & OF_READ)) {
-        err = E_BADF;
-    } else if (f->kind==F_OS && os_fstat(sh->os, f->h).type==FT_DIR) {
-        err = E_ISDIR;
-    }
+    i32 err = readerror(sh, f, E_IO);
     Arena scratch = *scratchat(sh, sh->capdepth+1);
     sh->line = L->lineno;
     Str msg = concat(&scratch, "script file read error: ", errtext(err));

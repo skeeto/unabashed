@@ -3259,7 +3259,8 @@ static b32 inputready(Shell *sh, File *f)
     if (!f || !(f->flags & OF_READ)) return 0;
     switch (f->kind) {
     case F_OS:
-        return taskreadable(sh->sched, f->h);
+        // a directory, whose read fails at once, is ready to bash's select
+        return taskreadable(sh->sched, f->h) || os_fstat(sh->os, f->h).type==FT_DIR;
     case F_MEM:
         return 1;
     case F_PIPE:
@@ -3603,7 +3604,10 @@ static i32 b_read(Shell *sh, Str *args, iz nargs, Arena scratch)
                 escleave(sh, &te);
                 os_tty(sh->os, in->h, ttyout, TTY_RESTORE);
             }
-            Str msg = concat(&scratch, fmti64(&scratch, fd), ": read error: Bad file descriptor");
+            // as bash's strerror: a directory's read gives EISDIR
+            File *f   = fd>=0 && fd<FDMAX ? sh->fds->fd[fd] : 0;
+            Str   why = errtext(readerror(sh, f, E_BADF));
+            Str   msg = concat3(&scratch, fmti64(&scratch, fd), ": read error: ", why);
             builtinerror(sh, scratch, "read", msg);
             return 1;
         } else if (c < 0) {
