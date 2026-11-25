@@ -234,7 +234,7 @@ static iz skipplainbrace(Str s, iz i)
 }
 
 static iz skipdollar(Shell *sh, Arena *a, Str s, iz i, b32 dquote = 0, b32 *ended = 0,
-                     Lexer **failed = 0)
+                     Lexer **failed = 0, b32 *deep = 0)
 {
     iz plain = skipplainbrace(s, i);
     if (plain >= 0) {
@@ -260,6 +260,7 @@ static iz skipdollar(Shell *sh, Arena *a, Str s, iz i, b32 dquote = 0, b32 *ende
                 if (!--depth) return j + 1;
             }
         }
+        if (ended) *ended = 0;
         return s.len;
     }
     Lexer *L = newlexer(a, {});
@@ -269,11 +270,12 @@ static iz skipdollar(Shell *sh, Arena *a, Str s, iz i, b32 dquote = 0, b32 *ende
     // The scan parses nested substitutions by recursion, within the
     // shell's own stack limit. Nested deeper, the substitution counts
     // as unterminated (where bash crashes on $( and reports ${ as a
-    // bad substitution).
+    // bad substitution). *deep tells it from text that is unclosed.
     L->stacktop = sh->stacktop;
     L->stackmax = sh->stackmax;
     if (jmpset(L->jmp)) {  // only an overflow fails the scan's parse
         if (ended) *ended = 0;
+        if (deep)  *deep  = 1;
         return s.len;
     }
     return skipexpansion(L, s, i, dquote, ended, failed);
@@ -1557,7 +1559,9 @@ static Str translateansi(X *x, Str s)
     return finish(&b);
 }
 
-static void expandbraced(X *x, Str whole, i32 ctx)
+// The expansion ${whole}. An unclosed one, which only a here-document
+// can hold, has all the rest of the text in whole.
+static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
 {
     Shell *sh = x->sh;
     Str    s  = whole;
@@ -1744,6 +1748,13 @@ static void expandbraced(X *x, Str whole, i32 ctx)
     }
     if (!got) {
         p = hassub ? getelems(x, name, sub, length) : getparam(x, name);
+    }
+    if (unclosed && rest.len) {
+        // An unclosed ${ (a here-document's) whose operator bash's
+        // extract_dollar_brace_string reads a word for, to the end
+        Arena a = *x->a;
+        Str msg = concat(&a, "bad substitution: no closing `}' in ", x->text);
+        expansionerror(sh, a, msg);
     }
     // Only a length counts a nameref's elements (see joinedref)
     b32 reflist = p.list && p.array && !hassub;
@@ -2649,7 +2660,14 @@ static void expandtext(X *x, Str s, i32 ctx, iz from = 0)
                 b32    ended  = 1;
                 Lexer *failed = 0;
                 iz  e = skipdollar(sh, x->a, s, i, dq||hd, &ended, &failed);
-                if (!ended && !(i+2<s.len && s[i+2]=='(')) {
+                if (!ended && s[i+2]=='(') {
+                    // an unclosed $(( (a here-document's): bash's
+                    // extract_delimited_string reports it
+                    Arena a = *x->a;
+                    Str msg = concat(&a, "bad substitution: no closing `)' in ", s);
+                    expansionerror(sh, a, msg);
+                }
+                if (!ended) {
                     // Parsed only now, as in bash
                     b32 fatal = !(ctx & XC_PROMPT);
                     if (failed && failed->msgs) {
@@ -2676,21 +2694,26 @@ static void expandtext(X *x, Str s, i32 ctx, iz from = 0)
             }
             if (n == '{') {
                 b32    ended  = 1;
+                b32    deep   = 0;
                 Lexer *failed = 0;
-                iz e = skipdollar(sh, x->a, s, i, dq||hd, &ended, &failed);
+                iz e = skipdollar(sh, x->a, s, i, dq||hd, &ended, &failed, &deep);
                 if (!ended && failed && failed->comsubfail && failed->msgs) {
                     // A command substitution in it that does not parse,
                     // as bash's scan for the end finds it, with all the
                     // text that follows
                     comsuberror(sh, failed, !(ctx & XC_PROMPT));
                 }
-                Str inner = span(s.data+i+2, s.data+(e>i+2 ? e-1 : e));
+                // Unclosed (in a here-document), all the rest is in it.
+                // Too deep to scan is not unclosed: it goes on as
+                // before, to the stack limit.
+                b32 unclosed = !ended && !deep;
+                Str inner = span(s.data+i+2, s.data+(!unclosed && e>i+2 ? e-1 : e));
                 if (inner.len && funsubchar(inner[0])) {
                     // ${ cmd; } and ${| cmd; }: run in the current shell
                     Str out = runcapture(sh, x->a, inner, 2);
                     putvalue(x, out, ctx);
                 } else {
-                    expandbraced(x, inner, ctx);
+                    expandbraced(x, inner, ctx, unclosed);
                 }
                 i = e;
                 continue;
