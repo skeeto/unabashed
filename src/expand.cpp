@@ -1367,6 +1367,13 @@ static b32 valuevisible(Value *v)
     return v && (v->str.data || v->dyn || (v->arr && v->arr->isset));
 }
 
+// Is the variable associative: an array with keys, one declared -A
+// without any, or BASH_ALIASES and BASH_CMDS, built only when read?
+static b32 isassoc(Value *v)
+{
+    return v && ((v->arr && v->arr->bucket) || (v->attrs & V_ASSOC));
+}
+
 static b32 varvisible(Shell *sh, Str name)
 {
     return valuevisible(lookup(sh, name));
@@ -3731,7 +3738,7 @@ static Sub evalsub(Shell *sh, Arena *a, Str name, Str sub, Str word, b32 raw = 0
     Sub    r = {};
     Value *v = lookup(sh, name);
     X     *x = newx(sh, a);
-    if (v && ((v->arr && v->arr->bucket) || (v->attrs & V_ASSOC))) {
+    if (isassoc(v)) {
         r.key = raw ? sub : subkey(x, sub);
         if (!r.key.len) {
             if (word.data) badarraysub(sh, *a, word);

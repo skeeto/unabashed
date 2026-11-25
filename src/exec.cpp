@@ -444,7 +444,7 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
         }
         X     *x = newx(c->sh, a);
         Value *v = lookup(c->sh, ref->name);
-        b32    assoc = v && v->arr && v->arr->bucket;
+        b32    assoc = isassoc(v);
         if (!assoc && !ref->sub.len) {
             // As bash: reported (twice) and read as unset, but the
             // expression goes on
@@ -469,7 +469,8 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
         }
         if (assoc && c->rawsub && !allsub(ref->sub)) {
             // let under array_expand_once: the key as it is
-            HItem *t = hfind(v->arr, ref->sub);
+            Array *arr = varray(c->sh, a, v);
+            HItem *t   = arr ? hfind(arr, ref->sub) : 0;
             *isset = !!t;
             return t ? t->val : Str{};
         }
@@ -481,6 +482,12 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
         return p.value;
     }
     Got g = getvar(c->sh, a, ref->name);
+    if (!g.set && c->sh->opt[O_NOUNSET]) {
+        // As bash's expr_streval, under set -u an array that is set but
+        // has no element 0 is no unbound variable: it reads as 0
+        Array *arr = varray(c->sh, a, lookup(c->sh, ref->name));
+        g.set = arr && arr->isset;
+    }
     *isset = g.set;
     return g.value;
 }
@@ -491,7 +498,7 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
     Str v = fmti64(a, value);
     if (ref->hassub) {
         Value *var = lookup(c->sh, ref->name);
-        b32    assoc = var && var->arr && var->arr->bucket;
+        b32    assoc = isassoc(var);
         if ((!assoc && !ref->sub.len) || (assoc && !c->rawsub && openquote(ref->sub))) {
             // As bash: reported, and the expression goes on without it
             Str msg = concat3(a, "`", ref->name, concat3(a, "[", ref->sub, "]': not a valid identifier"));
@@ -531,8 +538,7 @@ static b32 arithliteralsub(void *ctx, Str name)
 {
     ShellArith *c = (ShellArith *)ctx;
     if (compatlevel(c->sh, *c->a)<=51 && !c->sh->shopt[S_ARRAY_EXPAND_ONCE]) return 0;
-    Value *v = lookup(c->sh, name);
-    return v && v->arr && v->arr->bucket;
+    return isassoc(lookup(c->sh, name));
 }
 
 static void checkstack(Shell *);
@@ -4654,10 +4660,11 @@ static b32 envvarset(void *ctx, Str name)
         X    *x = newx(sh, &a);
         if (!((TestCtx *)ctx)->cond) {
             Value *v = lookup(sh, rn);
-            if (v && v->arr && v->arr->bucket && (allsub(rs) || sh->shopt[S_ARRAY_EXPAND_ONCE])) {
-                return !!hfind(v->arr, rs);  // a key as it is (array_expand_once)
+            if (isassoc(v) && (allsub(rs) || sh->shopt[S_ARRAY_EXPAND_ONCE])) {
+                Array *arr = varray(sh, &a, v);  // a key as it is (array_expand_once)
+                return arr && hfind(arr, rs);
             }
-            if (sh->shopt[S_ARRAY_EXPAND_ONCE] && !allsub(rs) && !(v && v->arr && v->arr->bucket)) {
+            if (sh->shopt[S_ARRAY_EXPAND_ONCE] && !allsub(rs) && !isassoc(v)) {
                 rs = fmti64(&a, evalarith(sh, &a, rs).value);  // an index as it is
             }
             return getelems(x, rn, rs).set;
@@ -4669,8 +4676,9 @@ static b32 envvarset(void *ctx, Str name)
         }
         Str    key = finish(&b);
         Value *v   = lookup(sh, rn);
-        if (v && v->arr && v->arr->bucket) {
-            return !!hfind(v->arr, key);
+        if (isassoc(v)) {
+            Array *arr = varray(sh, &a, v);
+            return arr && hfind(arr, key);
         }
         if (!allsub(rs)) {
             // an index is arithmetic text, expanded as such: a subscript

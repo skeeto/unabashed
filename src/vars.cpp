@@ -600,9 +600,15 @@ static Str dyncompute(Shell *sh, Arena *a, Value *v)
     case DYN_UNDERSCORE:    return sh->lastarg.data ? sh->lastarg : Str("");
     case DYN_COMP_WORDBREAKS:  // as assigned, or else readline's
         return v->str.data ? v->str : wordbreaks(sh, 1);
+    case DYN_DIRSTACK:
     case DYN_GROUPS: {
         Array *r = dynarray(sh, a, v);
         return r->len ? r->e[0].val : Str{};
+    }
+    case DYN_BASH_ALIASES:
+    case DYN_BASH_CMDS: {  // as any associative array, the key "0"
+        HItem *t = hfind(dynarray(sh, a, v), "0");
+        return t ? t->val : Str{};
     }
     case DYN_SHELLOPTS:
     case DYN_BASHOPTS: {
@@ -663,7 +669,8 @@ static Got getvalue(Shell *sh, Arena *a, Value *v)
         r.value = dynvalue(sh, a, v);
         r.set   = 1;
         if (v->dyn==DYN_FUNCNAME || v->dyn==DYN_BASH_LINENO ||
-                v->dyn==DYN_BASH_SOURCE || v->dyn==DYN_BASH_ARGV) {
+                v->dyn==DYN_BASH_SOURCE || v->dyn==DYN_BASH_ARGV ||
+                v->dyn==DYN_BASH_ALIASES || v->dyn==DYN_BASH_CMDS) {
             r.set = !!r.value.data;
         }
         return r;
@@ -1409,7 +1416,8 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
     Value *val = assignvar(sh, scratch, var, flags);
     if (!val) return 0;
     if (val->attrs & V_NOASSIGN) return 1;
-    if (val->arr) {
+    if (val->arr || val->dyn==DYN_BASH_ALIASES || val->dyn==DYN_BASH_CMDS) {
+        // BASH_ALIASES=v defines the alias 0, as bash's assign_aliasvar
         return setelem(sh, scratch, name, 0, "0", value, flags|SV_FORCE);
     }
     Str old = val->dyn && (flags & SV_APPEND) ? dynvalue(sh, &scratch, val) : val->str;
