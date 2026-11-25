@@ -1610,9 +1610,11 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep, b32 child,
         escape(sh, e.why);
     }
     escresume(sh, &e);  // undoing those done so far, as the caller would
-    // A fatal error ends a program's child with 127, unless in a
-    // subshell that catches it; a null command's child exits with 1
-    sh->redirfail = e.why!=ESC_FATAL || nullchild || sh->catchfatal ? 1 : 127;
+    // A fatal error ends a program's child with 127 from -c, as its
+    // other fatal errors, unless in a subshell that catches it; a null
+    // command's child exits with 1, as does any in a script
+    b32 c127 = e.why==ESC_FATAL && !nullchild && !sh->catchfatal && sh->cflag;
+    sh->redirfail = c127 ? 127 : 1;
     return 0;
 }
 
@@ -5730,8 +5732,13 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
             sh->line    = n->line;
         }
         b32 armed = errarmed(sh);
+        // A forked stage's or job's own come before its child's catch of
+        // a fatal error (bash's execute_in_subshell), as a program's do
+        i32 catchfatal = sh->catchfatal;
+        if (forked) sh->catchfatal = CATCH_NONE;
         b32 ok = doredirs(sh, n->redirs, &scratch, n==sh->keepredirs, inner,
                           inner ? &fdvars : 0);
+        sh->catchfatal = catchfatal;
         sh->rawline = 0;
         if (!ok) {
             if (inner) sh->stdinredir = stdinredir;
