@@ -91,15 +91,6 @@ it says otherwise.
   (arr unset) reports both "bad array subscript" and the bad
   substitution, bash only the first. A message for
   `"$((i))${x.y^^}\""` keeps the backslash bash drops.
-- bash's Q_ARITH removes `\"` inside double quotes (the backslash
-  goes as the quoted text is extracted, the quote left is read as
-  quoting), which ours does for `[[ ]]` arithmetic and `-v` operands
-  only. bash also does it in `$((...))`, `((...))`, a subscript or a
-  substring offset whose text has a `$`, a backquote or a `~`
-  (expand_arith_string's full expansion; without one the text only
-  has its quotes removed, and `\"` stays): `y=3; echo $(( "\"$y" ))`
-  prints 3, where ours reports `"3`. A subscript within `-v`'s
-  operand keeps it too: `[[ -v "a[\"1]" ]]`.
 - Line numbers in messages: what remains (1 in 899 findings of a
   fresh batch, from a quarter before) is a function that assigns
   LINENO and has a command substitution in its own redirections,

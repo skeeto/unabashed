@@ -33,8 +33,10 @@ enum : i32 {  // expansion contexts
     XC_LITANSI = 1<<10, // a pattern within a quoted operator word: $'...'
                         // is literal, as bash in a here-document
     XC_KEEPDS  = 1<<11, // with XC_PROMPT: \$ stays \$, as busybox's PSSYNTAX
-    XC_CONDQ   = 1<<12, // a [[ ]] arithmetic or -v operand: in double
-                        // quotes \" is removed, as bash's Q_ARITH
+    XC_CONDQ   = 1<<12, // a [[ ]] arithmetic or -v operand, or a quoted
+                        // part of arithmetic text bash expands: a double
+                        // quoted part is a word of its own, its \" left
+                        // as quoting, as bash's Q_ARITH
 };
 
 enum : i32 {  // expandwords flags
@@ -1123,7 +1125,7 @@ static Str patreplace(X *x, Str v, Str pat, Str rep, b32 amp, i32 mode, b32 all,
 // the parameter.
 static Arith substrarith(X *x, Str name, Str expr)
 {
-    Arith r = arithraw(x->sh, x->a, expandword(x, expr, XC_ARITH));
+    Arith r = arithraw(x->sh, x->a, expandword(x, expr, XC_ARITH|XC_DQUOTE));
     if (!r.ok) {
         Arena a = *x->a;
         Str msg = concat3(&a, name, ": ", r.err);
@@ -2376,6 +2378,37 @@ static Str arithtext(Shell *sh, Arena *a, Str body)
     return finish(&b);
 }
 
+// Whether bash expands arithmetic text as a word (expand_arith_string):
+// only text with a $, ` or ~ in it. Other text only loses its quotes.
+static b32 arithexpands(Str s)
+{
+    for (iz i = 0; i < s.len; i++) {
+        if (s[i]=='$' || s[i]=='`' || s[i]=='~') return 1;
+    }
+    return 0;
+}
+
+// A double-quoted part as bash's string_extract_double_quoted takes it:
+// \" loses its backslash, even in backquotes, while other escapes and
+// the $(...) and ${...} in it stay as they are.
+static Str dqextract(Shell *sh, Arena *a, Str s)
+{
+    if (find(s, "\\\"") < 0) return s;
+    Buf b(a, s.len);
+    for (iz i = 0; i < s.len;) {
+        iz e = i + 1;
+        if (s[i]=='\\' && i+1<s.len) {
+            e = i + 2;
+            i += s[i+1]=='"';
+        } else if (s[i]=='$' && i+1<s.len && (s[i+1]=='(' || s[i+1]=='{')) {
+            e = skipdollar(sh, a, s, i, 1);
+        }
+        print(&b, span(s.data+i, s.data+e));
+        i = e;
+    }
+    return finish(&b);
+}
+
 static void expandtext(X *x, Str s, i32 ctx)
 {
     Shell *sh = x->sh;
@@ -2400,6 +2433,9 @@ static void expandtext(X *x, Str s, i32 ctx)
     Str outer   = x->text;
     x->text = s;
     b32 inner   = 0;  // between toggling quotes inside ${...} in quotes
+    // Arithmetic text bash expands as a word, where a quoted part is a
+    // word of its own (Q_ARITH), as in a [[ ]] operand (XC_CONDQ)
+    b32 aword   = (ctx & XC_ARITH) && ((ctx & XC_CONDQ) || arithexpands(s));
 
     for (iz i = 0; i < s.len;) {
         u8 c = s[i];
@@ -2431,7 +2467,7 @@ static void expandtext(X *x, Str s, i32 ctx)
         }
         tildeok = 0;
 
-        if (c=='[' && (ctx & (XC_ARITH|XC_SUBQ))) {
+        if (c=='[' && ((ctx & XC_SUBQ) || aword)) {
             iz e = arithsubscript(x, s, i);
             if (e) {
                 i = e;
@@ -2451,14 +2487,15 @@ static void expandtext(X *x, Str s, i32 ctx)
 
         b32 litdq = (ctx & XC_PROMPT) && !(ctx & XC_PARAM);
         if (c=='"' && (!hd || (ctx & XC_PARAM)) && !litdq) {
-            if (dq || hd) {
+            b32 word = !inner && !(ctx & XC_PARAM) && (aword || (ctx & XC_CONDQ));
+            if ((dq || hd) && !word) {
                 // Inside ${...} in double quotes: quotes toggle, and
                 // between them a backslash quotes any character
                 inner = !inner;
                 i++;
                 continue;
             }
-            if (ctx & XC_ARITH) {
+            if ((ctx & XC_ARITH) && !word) {
                 i++;
                 continue;
             }
@@ -2479,7 +2516,9 @@ static void expandtext(X *x, Str s, i32 ctx)
             b32  wasquoted = x->quoted;
             b32  wasempty  = x->atempty;
             x->atempty = 0;
-            expandinto(x, span(s.data+i+1, s.data+(e<s.len?e:s.len)), (ctx & ~XC_PARAM) | XC_DQUOTE);
+            Str part = span(s.data+i+1, s.data+(e<s.len?e:s.len));
+            if (word) part = dqextract(sh, x->a, part);  // its \" is quoting
+            expandinto(x, part, (ctx & ~XC_PARAM) | XC_DQUOTE | (word ? XC_CONDQ : 0));
             if (x->atempty && x->data.len==before && x->done.len==0) {
                 x->quoted = wasquoted;  // "$@" with no parameters vanishes
             } else if (x->data.len == before) {
@@ -2512,13 +2551,8 @@ static void expandtext(X *x, Str s, i32 ctx)
                 i += 2;
                 continue;
             }
-            if (n=='"' && dq && !hd && !inner && (ctx & XC_CONDQ)) {
-                // bash drops the backslash as it extracts the quoted
-                // text, then reads the " left as quoting it removes
-                i += 2;
-                continue;
-            }
-            if ((hd || dq) && !inner) {
+            if ((hd || dq) && (!inner || (ctx & XC_ARITH))) {
+                // (arithmetic's quotes only go: bash's string_quote_removal)
                 b32 special = n=='$' || n=='`' || n=='\\' || n=='\n' ||
                               (n=='"' && (!hd || (ctx & XC_PARAM))) || ((ctx & XC_PARAM) && n=='}');
                 if (!special) {

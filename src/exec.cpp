@@ -408,21 +408,6 @@ struct ShellArith {
     b32    readonly;  // an assignment hit a readonly variable
 };
 
-// An indexed subscript as arithmetic expanded it (arithsubscript): its
-// double quotes are backslash-quoted, but as in bash they are still
-// removed when it is evaluated.
-static Str arithindex(Shell *sh, Arena *a, Str name, Str sub)
-{
-    Value *v = lookup(sh, name);
-    if ((v && v->arr && v->arr->bucket) || find(sub, "\\\"")<0) return sub;
-    Buf b(a, sub.len);
-    for (iz i = 0; i < sub.len; i++) {
-        i += sub[i]==0x5c && i+1<sub.len && sub[i+1]==0x22;
-        putbyte(&b, sub[i]);
-    }
-    return finish(&b);
-}
-
 // Whether a subscript's shell quoting is left open (let "a[$b]" with
 // b="80's"): bash cannot expand such a key.
 static b32 openquote(Str s)
@@ -460,7 +445,6 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
         X     *x = newx(c->sh, a);
         Value *v = lookup(c->sh, ref->name);
         b32    assoc = v && v->arr && v->arr->bucket;
-        ref->sub = arithindex(c->sh, a, ref->name, ref->sub);
         if (!assoc && !ref->sub.len) {
             // As bash: reported (twice) and read as unset, but the
             // expression goes on
@@ -508,7 +492,6 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
     if (ref->hassub) {
         Value *var = lookup(c->sh, ref->name);
         b32    assoc = var && var->arr && var->arr->bucket;
-        ref->sub = arithindex(c->sh, a, ref->name, ref->sub);
         if ((!assoc && !ref->sub.len) || (assoc && !c->rawsub && openquote(ref->sub))) {
             // As bash: reported, and the expression goes on without it
             Str msg = concat3(a, "`", ref->name, concat3(a, "[", ref->sub, "]': not a valid identifier"));
@@ -4687,7 +4670,11 @@ static b32 envvarset(void *ctx, Str name)
             return !!hfind(v->arr, key);
         }
         if (!allsub(rs)) {
-            rs = fmti64(&a, evalarith(sh, &a, key).value);
+            // an index is arithmetic text, expanded as such: a subscript
+            // whose [ was not one to the first expansion ("b[\"\$y]")
+            // has its expansions still to make
+            Str t = expandword(x, rs, XC_ARITH|XC_DQUOTE);
+            rs = fmti64(&a, evalarith(sh, &a, t).value);
         }
         return getelems(x, rn, rs).set;
     }
