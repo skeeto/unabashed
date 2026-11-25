@@ -514,6 +514,7 @@ struct Escape {
     i32       hold;     // the store's hold count (storerehold)
     i32       ctlline;
     i32       linesaves;
+    i32       rawline;
     Redirs    redirs;
     b32       inchld;
     b32       nolocwarn;
@@ -735,6 +736,8 @@ struct Shell {
     i32      linesaves;    // bash's frames that put its line back should
                            // an expansion error abandon the command
     i32      staleredir;   // plus one: the next parse's Lexer.redirline
+    i32      rawline;      // bash's own line_number while messages cite
+                           // another (executeone), else 0
     i32      status;       // $?
     i32      npstat;       // PIPESTATUS: the last pipeline's statuses,
     u8       pstat[32];    // here, or past this many in a store buffer
@@ -1651,6 +1654,7 @@ static void escenter(Shell *sh, Escape *e)
     e->hold       = sh->store->hold;
     e->ctlline    = sh->ctlline;
     e->linesaves  = sh->linesaves;
+    e->rawline    = sh->rawline;
     e->redirs     = sh->redirs;
     e->inchld     = sh->inchld;
     e->nolocwarn  = sh->nolocwarn;
@@ -1701,6 +1705,7 @@ static void escrestore(Shell *sh, Escape *e)
     storerehold(sh->store, e->hold);  // the abandoned holders are gone
     sh->ctlline    = e->ctlline;
     sh->linesaves  = e->linesaves;
+    sh->rawline    = e->rawline;
     sh->redirs     = e->redirs;
     sh->inchld     = e->inchld;
     sh->nolocwarn  = e->nolocwarn;

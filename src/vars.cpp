@@ -1454,7 +1454,9 @@ static b32 setvar(Shell *sh, Arena scratch, Str name, Str value, i32 flags = 0)
         val->base = n - (dynnow(sh) - sh->start)/1000000000;
         setdyncell(sh, dyn, fmti64(&scratch, n));
     } else if (dyn == DYN_LINENO) {
-        setdyncell(sh, dyn, fmti64(&scratch, num));  // the line goes on
+        // As bash, its line_number, until the simple command ends
+        sh->line = (i32)num;
+        setdyncell(sh, dyn, fmti64(&scratch, num));
     } else if (dyn == DYN_BASH_SUBSHELL) {
         sh->subshelladj = num - (sh->subshell - sh->simplestages);
     } else if (dyn == DYN_BASH_ARGV0) {

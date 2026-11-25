@@ -374,11 +374,16 @@ struct Lexer {
     b32      reader;     // bash's reader loop (a script, the prompt), not
                          // its parse_and_execute (eval, source, -c, ...)
     Undo    *undo;       // the shell's redirections when it began
+    i32      subshell;   // and its subshell level
     b32      staleline;  // a leading word gets line -1 (resumeaftereof)
-    i32      redirline;  // plus one: the line bash's reset_parser left in
-                         // its simplecmd_lineno, which a simple command
+    i32      redirline;  // plus one: bash's simplecmd_lineno, the line of
+                         // the last word read in command position or
+                         // one reset_parser left, which a simple command
                          // that starts with a redirection takes, until
                          // one is parsed
+    i32      arithforline;  // bash's arith_for_lineno: the line of the
+                            // last for (( read, which an arithmetic for
+                            // takes once its body is parsed
 
     Redir   *heredocs[HEREDOCMAX];
     i32      nheredoc;
@@ -2096,6 +2101,11 @@ gottoken:
 
     i32 result = (w->flags & (W_ASSIGNMENT|W_NOSPLIT)) == (W_ASSIGNMENT|W_NOSPLIT)
                ? T_ASSIGN : T_WORD;
+    if (cmdposition(L, L->last)) {
+        // Potentially starting a simple command: if it does not (a case
+        // pattern), one that starts with a redirection takes its line
+        L->redirline = L->lineno + 1;
+    }
 
     switch (L->last) {
     case T_FUNCTION:
@@ -2995,11 +3005,13 @@ static Node *parsesimple(Parser *p, b32 started)
                 wtail = &n->words;
                 rtail = &n->redirs;
             }
-            if (first && L->redirline) n->line = L->redirline - 1;
             Redir *r = parseredir(p);
             *rtail = r;
             rtail = &r->next;
             if (first) {
+                // As bash's, its line is where the first redirection's
+                // word ended, or one reset_parser left (redirline)
+                n->line = L->redirline ? L->redirline-1 : L->lineno;
                 L->pst |= PST_REDIRLIST;
             }
         } else {
@@ -3463,6 +3475,7 @@ static Node *parsefor(Parser *p, i32 kind)
         n->kind = N_ARITHFOR;
         Word *exprs = L->val.word;
         i32   line  = L->lineno;
+        L->arithforline = n->line;
         advance(p);
         i32 t = peek(p);
         if (t==';' || t=='\n' || t==T_EOF) {
@@ -3471,6 +3484,7 @@ static Node *parsefor(Parser *p, i32 kind)
         }
         n->b = parseloopbody(p);
         n->arith = splitarithfor(L, exprs, line);
+        n->line  = L->arithforline;  // a nested one's, as bash's
         popnest(L);
         return n;
     }

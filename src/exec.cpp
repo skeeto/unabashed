@@ -630,6 +630,7 @@ struct SubJob {
     b32   comsub;    // SUB_SOURCE from $(...): see runsource
     b32   nojobs;    // a ( list ): it starts with no jobs or coprocesses
     i32   line;      // SUB_SOURCE: its first line
+    i32   stale;     // SUB_SOURCE: its parse's Shell.staleredir
     Func *fn;        // SUB_CALL: a function and its arguments
     Str  *argv;
     iz    argc;
@@ -645,7 +646,7 @@ static i32 callfunction(Shell *, Func *, Str *, iz, Arena);
 static i32 comsubline(Shell *sh, i32 first)
 {
     b32 reset = sh->interactive && !sh->sourcedepth && !sh->subchild;
-    return reset ? first : sh->line;
+    return reset ? first : sh->rawline ? sh->rawline : sh->line;
 }
 
 // A command's line for LINENO and the like. As bash, an interactive
@@ -693,6 +694,7 @@ static void runjob(Shell *sh, SubJob *j, Arena scratch)
         // Parsed again at run time, so its syntax errors are its own
         sh->tracedepth++;  // restored with the subshell
         sh->lexfloor = sh->lexer;  // its aliases may expand here (runsource1)
+        sh->staleredir = j->stale;
         runsource(sh, j->src, "command substitution", scratch, 0, j->line,
                   0, 0, j->comsub);
         break;
@@ -900,6 +902,16 @@ static void parselimit(Shell *sh, Lexer *L)
 }
 
 // The file word of $(< file), or null if src is not that form.
+// Does bash's command_substitute parse this text to look for $(< file)?
+// Its reset_parser then leaves the line in simplecmd_lineno.
+static b32 catparsed(Str src)
+{
+    iz i = 0;
+    for (; i<src.len && (src[i]==' ' || src[i]=='\t' || src[i]=='\n'); i++) {}
+    if (i>=src.len || src[i]!='<') return 0;
+    return i+1>=src.len || (src[i+1]!='<' && src[i+1]!='>' && src[i+1]!='&');
+}
+
 static Word *fileread(Shell *sh, Arena *a, Str src)
 {
     Str t = trim(src);
@@ -974,6 +986,13 @@ static void endcapture(Shell *sh, Capture *c, Arena scratch)
 static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
 {
     sh->nsubst++;
+    i32 stale = 0;
+    if (kind!=2 && catparsed(src)) {
+        // The next simple command that starts with a redirection, here
+        // and in the child, takes the line (Lexer.redirline)
+        stale = (sh->rawline ? sh->rawline : sh->line) + 1;
+        if (sh->lexer) sh->lexer->redirline = stale;
+    }
     if (kind != 2) {
         Word *word = fileread(sh, a, src);
         if (word) {
@@ -1009,6 +1028,7 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
     j.comsub = kind == 0;
     if (j.comsub) refreshenv(sh);  // as bash, before it forks
     j.line   = comsubline(sh, 1);
+    j.stale  = stale;
     if (kind==2 && src.len && src[0]=='|') {
         // ${| cmd; }: the current shell, expanding to a local REPLY
         Str val = runfunsub(sh, a, cuthead(src, 1), 0, child);
@@ -5463,13 +5483,17 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         // top-level command; but a ( list )'s child sets its own first,
         // and bash's messages cite an (( )), [[ ]] or arithmetic for's
         // own line while it is the command running, outside a function
-        // of an interactive shell (executing_line_number)
+        // of an interactive shell (executing_line_number), though a
+        // command substitution there goes on from bash's line_number
         sh->line = n->kind==N_SUBSHELL ? n->endline : sh->ctlline;
         if (ownline(n->kind) && !(sh->funcdepth && sh->interactive)) {
-            sh->line = n->line;
+            sh->rawline = sh->line;
+            sh->line    = n->line;
         }
-        if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs, inner,
-                      inner ? &fdvars : 0)) {
+        b32 ok = doredirs(sh, n->redirs, &scratch, n==sh->keepredirs, inner,
+                          inner ? &fdvars : 0);
+        sh->rawline = 0;
+        if (!ok) {
             if (inner) sh->stdinredir = stdinredir;
             fdvarsundo(sh, fdvars);
             unwind(sh, mark);
@@ -5768,12 +5792,12 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
 // abandons it, and execution resumes with the next command unless this
 // is a subshell, which it ends. Reading a script file (reader) also
 // resumes after an error that abandons all -c, eval and source text.
-// Returns whether the parser's line goes on from LINENO, as bash's
-// does when an expansion error comes from the header of a case, for,
+// Returns, plus one, the line the parser goes on from, as bash's does
+// when an expansion error comes from the header of a case, for,
 // select, (( )), [[ ]] or arithmetic for that no running simple
 // command, nor case, for or select body, holds: their line is bash's
 // one line_number, which only those frames put back (linesaves).
-static b32 runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
+static i32 runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
 {
     Escape *e = alloc<Escape>(&scratch);  // eval and source recurse here
     escenter(sh, e);
@@ -5783,6 +5807,7 @@ static b32 runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
         return 0;
     }
     b32 leak = e->why==ESC_DISCARD && sh->linesaves==e->linesaves;
+    i32 line = (sh->rawline ? sh->rawline : sh->line) + 1;
     b32 resume = e->why==ESC_DISCARD || (e->why==ESC_ABORT && reader) ||
                  (e->why==ESC_INTR && reader);
     if (!resume || sh->subshell) {
@@ -5795,7 +5820,7 @@ static b32 runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
     sh->flow    = FLOW_NONE;
     sh->current = 0;
     sh->cmdnamelen = 0;  // as bash's unwind of this_command_name
-    return leak;
+    return leak ? line : 0;
 }
 
 // A $"..." string the parser found under -D or --dump-po-strings,
@@ -6025,6 +6050,7 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     L->prompt  = reader && fill && sh->interactive;
     L->reader  = reader;
     L->undo    = sh->undo;
+    L->subshell = sh->subshell;
     // As bash's parse_and_execute, the line goes back when it ends
     i32 entryline = sh->line;
     if (!reader && !sh->penest++) sh->peline = entryline;
@@ -6158,7 +6184,8 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
             // Traps for signals that came while the line was read, as
             // before every command in bash
             if (fill && sh->interactive) checksigs(sh, *L->a);
-            if (runcommand(sh, r.cmd, *L->a, reader)) L->lineno = sh->line;
+            i32 leaked = runcommand(sh, r.cmd, *L->a, reader);
+            if (leaked) L->lineno = leaked - 1;
         }
         // Syncing options the command may have changed
         if (!comsub || L->aliasopt!=sh->shopt[S_EXPAND_ALIASES]) {
@@ -6184,7 +6211,7 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     if (reader || !outer) {
         keepcmdtext(sh, beg, end);  // else runsource puts back its own
     }
-    if (!reader && outer) {
+    if (!reader && outer && outer->subshell==sh->subshell) {
         // bash's parsers share simplecmd_lineno: eval's syntax error
         // leaves it for the next command read around it
         outer->redirline = L->redirline;
