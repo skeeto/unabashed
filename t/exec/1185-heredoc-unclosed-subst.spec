@@ -1,4 +1,4 @@
-== stdout 2038
+== stdout 2334
 -- cat <<X;;a ${x;;X;;echo after $?
 bash: line 1: a ${x
 : bad substitution
@@ -97,10 +97,25 @@ status 1
 bash: line 1: bad substitution: no closing `}' in a ${u%b
 
 status 1
+-- x='${a'; echo "<${x@P}>"; echo $?
+bash: line 1: ${a: bad substitution
+<${a>
+0
+status 0
+-- a=1; x='a ${a:-b'; echo "<${x@P}>"; echo $?
+bash: line 1: a ${a:-b: bad substitution
+<a ${a:-b>
+0
+status 0
+-- x='${a b'; echo "<${x@P}>"; echo $?
+bash: line 1: ${a b: bad substitution
+<${a b>
+0
+status 0
 
 == stderr 0
 
-== merged 2038
+== merged 2334
 -- cat <<X;;a ${x;;X;;echo after $?
 bash: line 1: a ${x
 : bad substitution
@@ -199,5 +214,20 @@ status 1
 bash: line 1: bad substitution: no closing `}' in a ${u%b
 
 status 1
+-- x='${a'; echo "<${x@P}>"; echo $?
+bash: line 1: ${a: bad substitution
+<${a>
+0
+status 0
+-- a=1; x='a ${a:-b'; echo "<${x@P}>"; echo $?
+bash: line 1: a ${a:-b: bad substitution
+<a ${a:-b>
+0
+status 0
+-- x='${a b'; echo "<${x@P}>"; echo $?
+bash: line 1: ${a b: bad substitution
+<${a b>
+0
+status 0
 
 == status 0

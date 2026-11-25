@@ -1644,6 +1644,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
         // its subscript, value or indirection is read
         badsubst(x, whole);
     }
+    if (unclosed && !rest.len) badsubst(x, whole);  // ${a ending the text
 
     Param p = {};
     Param q = {};  // the indirection's own value
@@ -1758,7 +1759,9 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
     }
     if (unclosed && rest.len) {
         // An unclosed ${ (a here-document's) whose operator bash's
-        // extract_dollar_brace_string reads a word for, to the end
+        // extract_dollar_brace_string reads a word for, to the end;
+        // elsewhere (${x@P}) only a bad substitution
+        if (!(ctx & XC_HEREDOC)) badsubst(x, whole);
         Arena a = *x->a;
         Str msg = concat(&a, "bad substitution: no closing `}' in ", x->text);
         expansionerror(sh, a, msg);
@@ -2667,14 +2670,15 @@ static void expandtext(X *x, Str s, i32 ctx, iz from = 0)
                 b32    ended  = 1;
                 Lexer *failed = 0;
                 iz  e = skipdollar(sh, x->a, s, i, dq||hd, &ended, &failed);
-                if (!ended && s[i+2]=='(') {
-                    // an unclosed $(( (a here-document's): bash's
-                    // extract_delimited_string reports it
+                if (!ended && s[i+2]=='(' && hd) {
+                    // an unclosed $(( in a here-document: bash's
+                    // extract_delimited_string reports it (elsewhere,
+                    // as in ${x@P}, it is nothing)
                     Arena a = *x->a;
                     Str msg = concat(&a, "bad substitution: no closing `)' in ", s);
                     expansionerror(sh, a, msg);
                 }
-                if (!ended) {
+                if (!ended && s[i+2]!='(') {
                     // Parsed only now, as in bash
                     b32 fatal = !(ctx & XC_PROMPT);
                     if (failed && failed->msgs) {
