@@ -125,6 +125,11 @@ it says otherwise.
   substitution finds no y, and a failed expansion (`${!u}`) leaves no
   y; ours declares y first. A plain `y=(...)` makes the array first in
   both.
+- bash expands a program's redirections in the child it forks for it
+  (execute_disk_command), so what they assign stays there:
+  `cat <<<"$((m=5))" >/dev/null; echo "m=$m"` prints `m=` in bash,
+  `m=5` in ours, which expands them in the shell. Its words expand in
+  the shell in both.
 - `f() { trap 'return 6' EXIT; set -e; false; }; f` exits 6 in bash,
   whose set -e runs the action in the function; ours says return can
   only be used in a function and exits 2. A signal is the reverse:
