@@ -704,6 +704,8 @@ static void fatalerror(Shell *sh, Arena a, Str msg)
 
 enum : i32 { SUB_NODE, SUB_SOURCE, SUB_FUNSUB, SUB_CALL };
 
+struct Fdvar;
+
 struct SubJob {
     i32   kind;
     Node *node;
@@ -716,8 +718,10 @@ struct SubJob {
     Func *fn;        // SUB_CALL: a function and its arguments
     Str  *argv;
     iz    argc;
+    Fdvar *fdvars;   // a ( list )'s {var}s, its dynamic ones to assign
 };
 
+static void fdvarsdefer(Shell *, Fdvar *, Arena);
 static i32 callfunction(Shell *, Func *, Str *, iz, Arena);
 
 // The line a command substitution's text, parsed again to run it,
@@ -899,6 +903,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     }
     Undo *body = sh->undo;  // set -e undoes what lies past the capture
     if (!jmpset(e.jmp)) {
+        fdvarsdefer(sh, j->fdvars, scratch);  // as in bash's child
         runjob(sh, j, scratch);
         // bash's line, put back after each command, as only some set it
         if (j->kind == SUB_NODE) sh->line = sh->ctlline;
@@ -1464,6 +1469,7 @@ struct Fdvar {       // a {var} a child's redirection assigned
     Fdvar *next;     // the one assigned before, if any
     Var   *v;
     Value *saved;    // its binding before, now beneath a copy
+    b32    hooked;   // a dynamic variable, for a subshell to assign
 };
 
 static b32 applyredirs(Shell *, Redir *, Arena *, b32, Fdvar **);
@@ -1471,7 +1477,9 @@ static b32 applyredirs(Shell *, Redir *, Arena *, b32, Fdvar **);
 // Assigned in bash's child, a {var} is gone with it: the variable gets
 // a copy of its binding on top, for the assignment to change, which is
 // visible to the redirections after it (and to a subshell's commands)
-// until fdvarsundo drops it. A dynamic variable is assigned as usual.
+// until fdvarsundo drops it. A dynamic variable whose assignment
+// changes the shell (RANDOM's seed, $0, the alias table) gets a plain
+// copy, so that it changes only that; the rest are assigned as usual.
 static Fdvar *fdvarsave(Shell *sh, Arena *a, Str var, Fdvar *next)
 {
     Store *st   = sh->store;
@@ -1483,20 +1491,51 @@ static Fdvar *fdvarsave(Shell *sh, Arena *a, Str var, Fdvar *next)
     }
     Var   *v   = upsertvar(sh, name);
     Value *top = v->top;
-    if (top && top->dyn) return next;
+    i32    d   = top ? top->dyn : 0;
+    b32    hooked = d==DYN_RANDOM || d==DYN_SECONDS || d==DYN_BASH_SUBSHELL ||
+                    d==DYN_BASH_ARGV0 || d==DYN_BASH_ALIASES || d==DYN_BASH_CMDS ||
+                    d==DYN_COMP_WORDBREAKS;
+    if (d && !hooked) return next;
     if (top) {
         Value *c = (Value *)salloc(st, sizeof(Value));
         *c = *top;
-        c->str   = sclone(st, top->str);
+        c->str   = d ? Str{} : sclone(st, top->str);
         c->arr   = top->arr ? acopy(st, top->arr, 0) : 0;
+        c->dyn   = 0;
         c->below = top;
         jset(st, &v->top, c);
+        if (d && (c->attrs & V_ASSOC)) toassoc(sh, c, 1);  // BASH_ALIASES's keys
     }
     Fdvar *f = alloc<Fdvar>(a);
     f->next  = next;
     f->v     = v;
     f->saved = top;
+    f->hooked = !!d;
     return f;
+}
+
+// In a subshell, which journals its changes: assign its dynamic {var}s
+// for real (BASH_ARGV0 sets $0, BASH_ALIASES[x] defines x), what the
+// newest copy holds, the copies dropped.
+static void fdvarsdefer(Shell *sh, Fdvar *f, Arena scratch)
+{
+    for (; f; f = f->next) {
+        if (!f->hooked) continue;
+        Var   *v = f->v;
+        Value *c = v->top;
+        b32 found = 0;
+        for (Value *t = c; t && !found; t = t->below) found = t == f->saved;
+        if (!found || c==f->saved) continue;
+        while (v->top != f->saved) jset(sh->store, &v->top, v->top->below);
+        if (c->arr) {
+            AList l = alist(&scratch, c->arr, 1);
+            for (iz i = 0; i < l.n; i++) {
+                setelem(sh, scratch, v->name, l.idx[i], l.keys[i], l.vals[i], SV_NOREF);
+            }
+        } else if (c->str.data) {
+            setvar(sh, scratch, v->name, c->str, SV_NOREF);
+        }
+    }
 }
 
 // Put back the bindings fdvarsave covered, the newest first. Only one
@@ -1776,10 +1815,13 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep, Fdvar **vars)
         }
         if (setfdvar) {
             Str var = r->srcvar->text;
-            if (vars) *vars = fdvarsave(sh, a, var, *vars);
+            // GROUPS, FUNCNAME and the like take no assignment: bash's
+            // check for one fails it
+            b32 ok  = !tempignored(lookup(sh, cut(var, '[').head));
             Str num = fmti64(a, fd);
-            b32 ok  = find(var, "[")>=0 ? assignto(sh, *a, var, num)
-                                        : setvar(sh, *a, var, num);
+            if (ok && vars) *vars = fdvarsave(sh, a, var, *vars);
+            ok = ok && (find(var, "[")>=0 ? assignto(sh, *a, var, num)
+                                          : setvar(sh, *a, var, num));
             if (!ok) {
                 Str msg = concat(a, var, ": cannot assign fd to variable");
                 shellerror(sh, *a, msg);
@@ -5215,7 +5257,7 @@ static void subshellerr(Shell *sh, b32 armed)
 // Returns errarmed for ERR, owed once the list's redirections, which
 // bash applies in the child only, are undone (executeone).
 [[gnu::noinline]]
-static b32 execsubshell(Shell *sh, Node *n, Arena scratch)
+static b32 execsubshell(Shell *sh, Node *n, Arena scratch, Fdvar *fdvars)
 {
     // A ( list )'s sole ( list ) runs in its child, which then exits
     // with its status, no ERR between
@@ -5234,6 +5276,7 @@ static b32 execsubshell(Shell *sh, Node *n, Arena scratch)
     j.node = n->a;
     j.newloops = 1;
     j.nojobs   = 1;
+    j.fdvars   = fdvars;
     sh->childsig  = 0;
     sh->tailnode  = tailcommand(n->a);
     sh->solenode  = solecommand(n->a);
@@ -5746,7 +5789,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         break;
 
     case N_SUBSHELL:
-        suberr = execsubshell(sh, n, scratch);
+        suberr = execsubshell(sh, n, scratch, fdvars);
         break;
 
     case N_IF:

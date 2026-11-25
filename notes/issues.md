@@ -84,6 +84,21 @@ From its first runs (2026-11-24, 44,000 scripts against bash 5.3), not
 yet fixed. Each was confirmed by hand in the oracle container unless
 it says otherwise.
 
+- The words of a redirection bash applies in its child (a program's,
+  a subshell's) have their side effects in the shell: an arithmetic
+  assignment, `${x:=v}`, a `${ cmd; }`, and a `{a[i++]}` subscript.
+  `i=0; sleep 0 >/dev/null$((i++)); echo $i` and `i=0; a=(); sleep 0
+  {a[i++]}>/dev/null; echo $i` say 1, bash 0; `sleep 0
+  >/dev/null${x:=}; echo ${x-unset}` is empty, bash says unset. The
+  {var} itself is undone (fdvarsave copies the binding, and restores
+  it by pointer, which a `${ unset a; }` meanwhile can only make
+  moot), but the shell has no journal around the redirections short
+  of a subshell's whole state: their Files live in the store, so
+  rolling it back would free them before the spawn.
+- A dynamic variable that a program's {var} assigns is a plain copy
+  for the redirections after it (see fdvarsave; a subshell assigns it
+  for real at its start): `sleep 0 {RANDOM}>f >$RANDOM` writes a file
+  named 10, where bash's child reads a number from the new seed.
 - Line numbers in messages: what remains (1 in 899 findings of a
   fresh batch, from a quarter before) is a function that assigns
   LINENO and has a command substitution in its own redirections,
