@@ -1930,9 +1930,11 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
             }
         } else {
             // As bash, the word expands as an unquoted string even
-            // in double quotes: split, unglobbed, joined by spaces
+            // in double quotes: split, unglobbed, joined by spaces;
+            // and $? there is already 1
             Str msg = colon ? Str("parameter null or not set")
                     :         Str("parameter not set");
+            sh->status = 1;
             if (word.len) {
                 Word one = {};
                 one.text = word;

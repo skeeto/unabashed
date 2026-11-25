@@ -16,3 +16,7 @@ v=$v bash -c 'echo ${x:?"$v"}' 2>&1
 v=$v bash -c 'IFS=; echo ${x:?$v}' 2>&1
 bash -c 'echo ${x:?a{1,2}b}' 2>&1
 echo "end $?"
+# and $? there is 1 already, as bash's parameter_brace_expand_error
+# sets the status first
+bash -c 'echo ${z:?$?}' 2>&1
+bash -c '(exit 4); echo "${z?s=$?}"' 2>&1
