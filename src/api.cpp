@@ -193,6 +193,8 @@ struct SpawnFd {
 
 struct Spawn {
     Str      path;   // absolute path of the program
+    Str      named;  // POSIX: the path relative to cwd as found, if it
+                     // was, for execve to pass a #! interpreter as $0
     Str     *argv;
     iz       argc;
     Str     *env;    // "NAME=value"

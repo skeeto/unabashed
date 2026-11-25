@@ -133,9 +133,6 @@ container:
   Likewise `bash --posix` refuses an imported function whose name is
   not an identifier ("error importing function definition"); ours
   imports it.
-- A `#!` script started as `./f3` sees `$0` as `/home/oracle/./f3` in
-  ours (Linux build), `./f3` in bash: ours passes the program an
-  absolute path.
 - `h() { trap 'echo t' ERR; false; }; h` runs the action twice in
   ours, once in bash (not again for the call).
 

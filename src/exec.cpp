@@ -2567,6 +2567,7 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     sp.rlimits = sh->rlmod ? sh->rl : 0;
     sp.umask   = sh->umaskmod ? &sh->umask : 0;
     sp.path  = absolute(sh, &a, path);
+    if (!sh->win32 && !isabsolute(sh, path)) sp.named = path;  // as bash's execve
     sp.argv  = argv;
     sp.argc  = argc;
     sp.env   = env.data;

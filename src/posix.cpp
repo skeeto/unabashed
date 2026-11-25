@@ -1307,7 +1307,7 @@ static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
     Spawned r = {};
     r.proc = BADHANDLE;
     SpawnPlan p = {};
-    p.path  = cpath(&scratch, s->path);
+    p.path  = cpath(&scratch, s->named.len && s->cwd.len ? s->named : s->path);
     p.cwd   = cpath(&scratch, s->cwd);
     p.cwdfd = pinned(os, s->cwd);
     p.argv  = alloc<char *>(&scratch, s->argc+1);
@@ -1585,7 +1585,7 @@ static i32 plt_forkexec(Os *os, Arena scratch, Spawn *s)
 static i32 plt_exec(Os *os, Arena scratch, Spawn *s)
 {
     flushw(os);
-    char *path = cpath(&scratch, s->path);
+    char *path = cpath(&scratch, s->named.len && s->cwd.len ? s->named : s->path);
     char *cwd  = cpath(&scratch, s->cwd);
     char **argv = alloc<char *>(&scratch, s->argc+1);
     for (iz i = 0; i < s->argc; i++) argv[i] = cpath(&scratch, s->argv[i]);
