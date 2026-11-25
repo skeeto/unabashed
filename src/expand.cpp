@@ -1680,6 +1680,19 @@ static void expandbraced(X *x, Str whole, i32 ctx)
         name  = v;
     }
 
+    if (length && hassub && !got && sh->opt[O_NOUNSET]) {
+        // As bash's array_length_reference: a name that is no array
+        // (unset, or a scalar) is unbound before its subscript is read,
+        // fatally unless that is @ or *
+        Value *v = lookup(sh, name);
+        if (!valuevisible(v) || !(v->attrs & (V_ARRAY|V_ASSOC))) {
+            if (allsub(sub)) {
+                Arena a = *x->a;
+                expansionerror(sh, a, concat(&a, name, ": unbound variable"));
+            }
+            unbound(x, uname);
+        }
+    }
     if (!got) {
         p = hassub ? getelems(x, name, sub, length) : getparam(x, name);
     }

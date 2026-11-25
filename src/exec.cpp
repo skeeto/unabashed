@@ -361,6 +361,11 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
 {
     ShellArith *c = (ShellArith *)ctx;
     if (ref->hassub) {
+        if (c->sh->opt[O_NOUNSET] && !varvisible(c->sh, ref->name)) {
+            // as bash's expr_streval: unbound, its subscript unread
+            *isset = 0;
+            return {};
+        }
         X     *x = newx(c->sh, a);
         Value *v = lookup(c->sh, ref->name);
         b32    assoc = v && v->arr && v->arr->bucket;

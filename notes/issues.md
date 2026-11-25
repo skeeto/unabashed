@@ -127,8 +127,7 @@ it says otherwise.
   all findings differ only so (`lineno` in the index).
 
 Seen in findings, not reduced to a case yet: the wording of a syntax
-error inside a command substitution; which name `set -u` reports for
-an unset subscript; the second line (the source text) of a syntax
+error inside a command substitution; the second line (the source text) of a syntax
 error from `eval` or `-c`, missing or extra; `arr[]=x {fd}>f` making
 the file though the assignment fails; an exported function with an extglob
 pattern, which bash fails to import when the child has extglob off.
