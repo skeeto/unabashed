@@ -27,7 +27,7 @@ done <<'EOF'
 set -e; ! { false; echo in; } & wait $!
 set -m; ! true & wait $!
 f() { ! true & wait $!; }; f
-! true & jobs; wait
-! true | true & jobs; wait
-! { true; } & jobs; wait
+! sleep 1 & jobs; wait
+! sleep 1 | true & jobs; wait
+! { sleep 1; } & jobs; wait
 EOF

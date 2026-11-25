@@ -1,4 +1,4 @@
-== stdout 1114
+== stdout 1132
 -- ! true & wait $!
 status 0
 -- ! false & wait $!
@@ -48,19 +48,19 @@ status 0
 status 0
 -- f() { ! true & wait $!; }; f
 status 0
--- ! true & jobs; wait
-[1]+  Running                    true &
+-- ! sleep 1 & jobs; wait
+[1]+  Running                    sleep 1 &
 status 0
--- ! true | true & jobs; wait
-[1]+  Running                    true | true &
+-- ! sleep 1 | true & jobs; wait
+[1]+  Running                    sleep 1 | true &
 status 0
--- ! { true; } & jobs; wait
-[1]+  Running                    ! { true; } &
+-- ! { sleep 1; } & jobs; wait
+[1]+  Running                    ! { sleep 1; } &
 status 0
 
 == stderr 0
 
-== merged 1114
+== merged 1132
 -- ! true & wait $!
 status 0
 -- ! false & wait $!
@@ -110,14 +110,14 @@ status 0
 status 0
 -- f() { ! true & wait $!; }; f
 status 0
--- ! true & jobs; wait
-[1]+  Running                    true &
+-- ! sleep 1 & jobs; wait
+[1]+  Running                    sleep 1 &
 status 0
--- ! true | true & jobs; wait
-[1]+  Running                    true | true &
+-- ! sleep 1 | true & jobs; wait
+[1]+  Running                    sleep 1 | true &
 status 0
--- ! { true; } & jobs; wait
-[1]+  Running                    ! { true; } &
+-- ! { sleep 1; } & jobs; wait
+[1]+  Running                    ! { sleep 1; } &
 status 0
 
 == status 0
