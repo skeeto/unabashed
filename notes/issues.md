@@ -105,10 +105,6 @@ it says otherwise.
   called in a pipeline from a BASH_ENV file (seed 919897): the
   substitution's lines count from one further on in bash.
 
-Seen in findings, not reduced to a case yet: a quote left open inside
-`[[` in a nested `bash -c`, where bash adds "unexpected EOF while
-looking for `]]'" (seed 503173).
-
 Left from the trap findings (Q56), each checked against bash 5.3:
 
 - Under set -E, `( command cat <nx )` runs ERR twice in ours, once in

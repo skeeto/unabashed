@@ -147,6 +147,8 @@ struct Node {
 
 enum : i32 {
     T_ERROR     = -1,
+    T_CONDERROR = -3,  // a conditional expression's error, reported (bash's
+                       // COND_ERROR; -2 is readtoken's re-read)
     // single characters stand for themselves: \n ; ( ) | & < > - { }
     T_EOF       = 256,
     T_WORD,
@@ -2320,7 +2322,7 @@ static Cond *conderr(CondParser *p, i32 line, Str prefix, Str tokentext, Str suf
     print(&b, tokentext);
     print(&b, suffix);
     message(L, line, finish(&b));
-    p->token = T_ERROR;
+    p->token = T_CONDERROR;
     return 0;
 }
 
@@ -2365,7 +2367,7 @@ static Cond *condprimary(CondParser *p, i32 tok)
     Cond *term = 0;
 
     if (tok == T_CONDEND) {
-        p->token = T_ERROR;
+        p->token = T_CONDERROR;
         return 0;
     } else if (tok==T_WORD && testunop(L->val.word->text)) {
         Word *op = L->val.word;
@@ -2548,9 +2550,9 @@ static i32 condcommand(Lexer *L)
     L->pst  |= PST_CONDEXPR;
     Cond *c  = condexpr(&p);
     if (p.token != T_CONDEND) {
-        if (L->eofreached && p.token!=T_ERROR) {
+        if (L->eofreached && p.token!=T_CONDERROR) {
             message(L, p.lineno, "unexpected EOF while looking for `]]'");
-        } else if (p.token != T_ERROR) {
+        } else if (p.token != T_CONDERROR) {
             Str t = condtokentext(&p);
             if (t.data) {
                 conderr(&p, p.lineno, "syntax error in conditional expression: unexpected token `", t, "'");
