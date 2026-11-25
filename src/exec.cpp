@@ -5239,7 +5239,7 @@ static void executenode(Shell *sh, Node *n, Arena scratch)
             execute(sh, n, scratch);
             return;
         }
-        if (n->redirs || (n->flags & CMD_INVERT)) {
+        if (n->redirs || (n->flags & (CMD_INVERT|CMD_BGNOT))) {
             break;
         }
         switch (n->kind) {
@@ -5342,7 +5342,8 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     sh->cmdseq++;
     Undo *mark = sh->undo;
     b32   invert = n->flags & CMD_INVERT;
-    if (invert) sh->noerrexit++;
+    b32   ignore = n->flags & (CMD_INVERT|CMD_BGNOT);
+    if (ignore) sh->noerrexit++;
 
     // A control structure's redirections decide whether & reads the
     // shell's input from then on, as bash's stdin_redir: until the next
@@ -5366,8 +5367,9 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs, inner)) {
             if (inner) sh->stdinredir = stdinredir;
             unwind(sh, mark);
-            sh->status = sh->redirfail;
-            if (invert) {
+            // as bash's execute_in_subshell, "! cmd &" then exits 0
+            sh->status = n->flags & CMD_BGNOT ? 0 : sh->redirfail;
+            if (ignore) {
                 sh->noerrexit--;
             } else {
                 sh->line = sh->errline;  // ERR's, as bash's
@@ -5504,11 +5506,9 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     if (n->kind==N_SUBSHELL && n->redirs) {
         reportchild(sh, scratch, n);
     }
-    if (invert) {
-        sh->noerrexit--;
-        if (sh->flow != FLOW_RETURN) {  // return leaves before inverting
-            sh->status = !sh->status;
-        }
+    if (ignore) sh->noerrexit--;
+    if (invert && sh->flow!=FLOW_RETURN) {  // return leaves before inverting
+        sh->status = !sh->status;
     }
 }
 

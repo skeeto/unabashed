@@ -1201,6 +1201,18 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
         if (end) break;
         c = next;
     }
+    // As bash, "! cmd &" is not inverted: the job's status is cmd's,
+    // though set -e and ERR are still off in it, and its text lacks the
+    // ! for a simple command or a pipeline
+    Node *text = n;
+    Node  bare;
+    if (n->flags & CMD_INVERT) {
+        bare = *n;
+        bare.flags = (n->flags & ~CMD_INVERT) | CMD_BGNOT;
+        b32 plain = n->kind==N_SIMPLE || (n->kind==N_CONNECT && n->connector=='|');
+        text = plain ? &bare : n;
+        n    = &bare;
+    }
     // Without job control, or in a subshell, its input is /dev/null
     // unless redirected, here or around it; as bash, never a pipeline's
     b32   piped  = n->kind==N_CONNECT && n->connector=='|';
@@ -1250,7 +1262,7 @@ static void runasync1(Shell *sh, Node *n, Arena scratch)
     }
     sh->spawngrp = 0;
     fileunref(sh, in);
-    Job *j = newjob(sh, scratch, n, t, pid, 0);
+    Job *j = newjob(sh, scratch, text, t, pid, 0);
     if (grouped && t && iswaiter(t)) j->pgid = pid;
     announcejob(sh, scratch, j);
     if (!t) {

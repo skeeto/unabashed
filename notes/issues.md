@@ -91,7 +91,10 @@ it says otherwise.
   (arr unset) reports both "bad array subscript" and the bad
   substitution, bash only the first. A message for
   `"$((i))${x.y^^}\""` keeps the backslash bash drops.
-- `! cmd & wait $!` gives the inverted status; bash gives cmd's.
+- Under set -E, a compound command run as a job or a pipeline stage
+  whose own redirection fails runs ERR in its child and again in the
+  parent: `set -E; trap 'echo err' ERR; true | { true; } <&9` says
+  err twice, bash once, as its execute_in_subshell exits 1 at once.
 - A program started with `{x}>f` leaves `x` set in the shell; bash
   assigns it in the child only, so `declare -p x` finds nothing.
 - `{x}>f1 &>"$x"` expands `"$x"` before `x` is assigned (an empty
@@ -122,8 +125,7 @@ Seen in findings, not reduced to a case yet: the wording of a syntax
 error inside a command substitution; which name `set -u` reports for
 an unset subscript; the second line (the source text) of a syntax
 error from `eval` or `-c`, missing or extra; `arr[]=x {fd}>f` making
-the file though the assignment fails; how many times an ERR trap runs
-for `! { ...; } & wait $!`; an exported function with an extglob
+the file though the assignment fails; an exported function with an extglob
 pattern, which bash fails to import when the child has extglob off.
 
 

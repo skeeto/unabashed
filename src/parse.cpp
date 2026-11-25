@@ -87,6 +87,7 @@ enum : i32 {  // command flags
     CMD_INVERT    = 1<<0,
     CMD_TIME      = 1<<1,
     CMD_TIMEPOSIX = 1<<2,
+    CMD_BGNOT     = 1<<3,  // "! cmd &" in its job: ! but not inverted
 };
 
 enum : i32 {  // case clause terminators
