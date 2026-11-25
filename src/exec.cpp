@@ -885,7 +885,7 @@ static Str capresult(Shell *sh, Arena scratch, Str s)
 template<i32 own>
 static Str readwholefile(Shell *, Arena *, Str, i32 *);
 
-static Str redirtarget(Shell *, Arena *, Word *, b32 *);
+static Str redirtarget(Shell *, Arena *, Word *, b32 *, Str = {});
 
 // The stack a parse the shell starts may use: 1 MiB from its entry (as
 // frames scale), which bounds the depth of the tree for the code that
@@ -1080,15 +1080,16 @@ static Handle capturewriter(Shell *sh, File *f, i64 owner)
 // Redirections
 
 // A redirection's word: one field, not split in POSIX mode, nor globbed
-// there unless interactive.
-static Str redirtarget(Shell *sh, Arena *a, Word *w, b32 *ok)
+// there unless interactive. A {var} redirection's errors name who, the
+// variable, as bash's.
+static Str redirtarget(Shell *sh, Arena *a, Word *w, b32 *ok, Str who)
 {
     *ok = 0;
     b32 posix = sh->opt[O_POSIX];
     i32 flags = (posix ? XW_NOSPLIT : 0) | (posix && !sh->interactive ? XW_NOGLOB : 0);
     Slice<Str> r = expandwords(sh, a, w, flags);
     if (r.len != 1) {
-        Str msg = concat(a, w->text, ": ambiguous redirect");
+        Str msg = concat(a, who.len ? who : w->text, ": ambiguous redirect");
         shellerror(sh, *a, msg);
         return {};
     }
@@ -1258,11 +1259,11 @@ static File *openwin(Shell *sh, Arena *a, Str name, i32 flags)
     return f;
 }
 
-static b32 restrictedwrite(Shell *, Arena *, Str);
+static b32 restrictedwrite(Shell *, Arena *, Str, Str = {});
 
-static File *openfile(Shell *sh, Arena *a, Str name, i32 flags)
+static File *openfile(Shell *sh, Arena *a, Str name, i32 flags, Str who = {})
 {
-    if ((flags & OF_WRITE) && restrictedwrite(sh, a, name)) return 0;
+    if ((flags & OF_WRITE) && restrictedwrite(sh, a, name, who)) return 0;
     if (!name.len) {
         // absolute() would turn it into the working directory
         Str msg = concat(a, name, ": No such file or directory");
@@ -1305,23 +1306,24 @@ static i32 parsefd(Str s)
 }
 
 // A restricted shell writes no files by redirection, as bash: a write
-// redirection to a file is refused, reported, true.
-static b32 restrictedwrite(Shell *sh, Arena *a, Str name)
+// redirection to a file is refused, reported, true. A {var}
+// redirection's errors name who, the variable, as bash's.
+static b32 restrictedwrite(Shell *sh, Arena *a, Str name, Str who)
 {
     if (!sh->restricted) return 0;
-    Str msg = concat(a, name, ": restricted: cannot redirect output");
+    Str msg = concat(a, who.len ? who : name, ": restricted: cannot redirect output");
     shellerror(sh, *a, msg);
     return 1;
 }
 
 // Under set -C, refuse to truncate an existing regular file.
-static b32 clobbers(Shell *sh, Arena *a, Str name)
+static b32 clobbers(Shell *sh, Arena *a, Str name, Str who = {})
 {
-    if (restrictedwrite(sh, a, name)) return 1;
+    if (restrictedwrite(sh, a, name, who)) return 1;
     if (!sh->opt[O_NOCLOBBER]) return 0;
     Stat st = pathstat(sh, *a, name, 1);
     if (!st.err && st.type==FT_FILE) {
-        Str msg = concat(a, name, ": cannot overwrite existing file");
+        Str msg = concat(a, who.len ? who : name, ": cannot overwrite existing file");
         shellerror(sh, *a, msg);
         return 1;
     }
@@ -1378,6 +1380,7 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
         i32 fd   = r->src;
         b32 kept = keep;
         b32 setfdvar = 0;
+        Str who      = r->srcvar ? r->srcvar->text : Str{};  // for messages
         if (r->srcvar) {
             // {var}>: allocate a descriptor from 10 up
             fd = FDUSER;
@@ -1387,8 +1390,7 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                 return 0;
             }
             Rlimit nofile = nofilelimit(sh);
-            if (!nofile.err && (u64)fd>=(u64)nofile.soft
-                    && r->op!=R_CLOSE && r->op!=R_MOVEIN && r->op!=R_MOVEOUT) {
+            if (!nofile.err && (u64)fd>=(u64)nofile.soft && r->op!=R_CLOSE) {
                 // ulimit -n below 10: bash's move up to 10 fails, then
                 // the redirection with it
                 Buf b(a, 64);
@@ -1405,7 +1407,9 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
             }
             Str var = r->srcvar->text;
             b32 elem = find(var, "[") >= 0;  // {arr[i]}
-            if (r->op==R_CLOSE || r->op==R_MOVEIN || r->op==R_MOVEOUT) {
+            if (r->op == R_CLOSE) {
+                // {var}>&- closes the descriptor var names; a move
+                // makes a new one, as a dup does
                 Str val = elem ? expandstring(sh, a, concat3(a, "${", var, "}"))
                                : getvar(sh, a, var).value;
                 fd = parsefd(val);
@@ -1432,42 +1436,42 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
         switch (r->op) {
         case R_OUTPUT:
         case R_CLOBBER: {
-            Str name = redirtarget(sh, a, r->word, &ok);
+            Str name = redirtarget(sh, a, r->word, &ok, who);
             if (!ok) return 0;
-            if (r->op==R_OUTPUT && clobbers(sh, a, name)) return 0;
-            f = openfile(sh, a, name, OF_WRITE|OF_CREATE|OF_TRUNC);
+            if (r->op==R_OUTPUT && clobbers(sh, a, name, who)) return 0;
+            f = openfile(sh, a, name, OF_WRITE|OF_CREATE|OF_TRUNC, who);
             if (!f) return 0;
             fdset(sh, fd, f, kept, a);
         } break;
         case R_APPEND: {
-            Str name = redirtarget(sh, a, r->word, &ok);
+            Str name = redirtarget(sh, a, r->word, &ok, who);
             if (!ok) return 0;
-            f = openfile(sh, a, name, OF_WRITE|OF_CREATE|OF_APPEND);
+            f = openfile(sh, a, name, OF_WRITE|OF_CREATE|OF_APPEND, who);
             if (!f) return 0;
             fdset(sh, fd, f, kept, a);
         } break;
         case R_INPUT: {
-            Str name = redirtarget(sh, a, r->word, &ok);
+            Str name = redirtarget(sh, a, r->word, &ok, who);
             if (!ok) return 0;
-            f = openfile(sh, a, name, OF_READ);
+            f = openfile(sh, a, name, OF_READ, who);
             if (!f) return 0;
             fdset(sh, fd, f, kept, a);
         } break;
         case R_INOUT: {
-            Str name = redirtarget(sh, a, r->word, &ok);
+            Str name = redirtarget(sh, a, r->word, &ok, who);
             if (!ok) return 0;
-            f = openfile(sh, a, name, OF_READ|OF_WRITE|OF_CREATE);
+            f = openfile(sh, a, name, OF_READ|OF_WRITE|OF_CREATE, who);
             if (!f) return 0;
             fdset(sh, fd, f, kept, a);
         } break;
         case R_ERRANDOUT:
         case R_APPENDERRANDOUT: {
-            Str name = redirtarget(sh, a, r->word, &ok);
+            Str name = redirtarget(sh, a, r->word, &ok, who);
             if (!ok) return 0;
-            if (r->op==R_ERRANDOUT && clobbers(sh, a, name)) return 0;
+            if (r->op==R_ERRANDOUT && clobbers(sh, a, name, who)) return 0;
             i32 flags = OF_WRITE|OF_CREATE;
             flags |= r->op==R_ERRANDOUT ? OF_TRUNC : OF_APPEND;
-            f = openfile(sh, a, name, flags);
+            f = openfile(sh, a, name, flags, who);
             if (!f) return 0;
             fdset(sh, 1, f, kept, a);
             f->refs++;
@@ -1494,7 +1498,7 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                 // A move expands with its dash, as bash: <&$unset- closes
                 Word dashed = *r->word;
                 if (move) dashed.text = concat(a, r->word->text, "-");
-                Str w = redirtarget(sh, a, &dashed, &ok);
+                Str w = redirtarget(sh, a, &dashed, &ok, who);
                 if (!ok) return 0;
                 if (move && w.len>1) {
                     w = cuttail(w, 1);
@@ -1508,26 +1512,28 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                 if (src < 0) {
                     if (r->op == R_DUPOUTWORD && fd == 1) {
                         // >&file: both stdout and stderr
-                        if (clobbers(sh, a, w)) return 0;
-                        f = openfile(sh, a, w, OF_WRITE|OF_CREATE|OF_TRUNC);
+                        if (clobbers(sh, a, w, who)) return 0;
+                        f = openfile(sh, a, w, OF_WRITE|OF_CREATE|OF_TRUNC, who);
                         if (!f) return 0;
                         fdset(sh, 1, f, kept, a);
                         f->refs++;
                         fdset(sh, 2, f, kept, a);
                         break;
                     }
-                    Str msg = concat(a, w, ": ambiguous redirect");
+                    Str msg = concat(a, who.len ? who : w, ": ambiguous redirect");
                     shellerror(sh, *a, msg);
                     return 0;
                 }
                 b32 dflt = fd == (r->op==R_DUPOUTWORD || r->op==R_MOVEOUTWORD);
-                bad = dflt && !move ? r->word->text : fmti64(a, fd);
+                bad = r->srcvar     ? fmti64(a, src)
+                    : dflt && !move ? r->word->text
+                    :                 fmti64(a, fd);
             } else {
                 bad = fmti64(a, src);
             }
             if (src == fd) break;  // even when closed
             if (src<0 || src>=FDMAX || !t->fd[src]) {
-                if (word && move) {
+                if ((word && move) || r->srcvar) {
                     Buf b(a, 64);
                     print(&b, sh->name);
                     print(&b, ": redirection error: cannot duplicate fd: Bad file descriptor\n");
@@ -1542,7 +1548,9 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
             f = t->fd[src];
             f->refs++;
             fdset(sh, fd, f, kept, a);
-            if (move && (kept || wasopen)) {
+            if (move && r->srcvar) {
+                fdset(sh, src, 0, keep, a);  // back after the command, but exec
+            } else if (move && (kept || wasopen)) {
                 fdset(sh, src, 0, kept, a);
             } else if (move) {
                 // bash restores the source only when the target was open
