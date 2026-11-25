@@ -95,10 +95,6 @@ it says otherwise.
   whose own redirection fails runs ERR in its child and again in the
   parent: `set -E; trap 'echo err' ERR; true | { true; } <&9` says
   err twice, bash once, as its execute_in_subshell exits 1 at once.
-- A program started with `{x}>f` leaves `x` set in the shell; bash
-  assigns it in the child only, so `declare -p x` finds nothing.
-- `{x}>f1 &>"$x"` expands `"$x"` before `x` is assigned (an empty
-  name, an error); bash expands it after, and writes a file named 10.
 - `BASH_COMPAT=x` is silent; bash warns "BASH_COMPAT: x: compatibility
   value out of range", once per assignment and expansion.
 - An exported function run by `bash -c f` reports its errors as
@@ -115,20 +111,16 @@ it says otherwise.
   has its quotes removed, and `\"` stays): `y=3; echo $(( "\"$y" ))`
   prints 3, where ours reports `"3`. A subscript within `-v`'s
   operand keeps it too: `[[ -v "a[\"1]" ]]`.
-- `bash <<<'echo hi' 0>&1` runs nothing in bash ("script file read
-  error: Bad file descriptor", status 128); ours gives 0.
-- Messages: `echo hi {fd}>$u` with `u` unset names `$u` as the
-  ambiguous redirect, where bash names `fd`.
 - Line numbers in messages: a command after a here-document's
   operator on the same line reports the line past the body, where
   bash reports the command's. This is one case of many: a quarter of
   all findings differ only so (`lineno` in the index).
 
 Seen in findings, not reduced to a case yet: the wording of a syntax
-error inside a command substitution; the second line (the source text) of a syntax
-error from `eval` or `-c`, missing or extra; `arr[]=x {fd}>f` making
-the file though the assignment fails; an exported function with an extglob
-pattern, which bash fails to import when the child has extglob off.
+error inside a command substitution; the second line (the source
+text) of a syntax error from `eval` or `-c`, missing or extra; an
+exported function with an extglob pattern, which bash fails to import
+when the child has extglob off.
 
 
 ## The library

@@ -1330,7 +1330,63 @@ static b32 clobbers(Shell *sh, Arena *a, Str name, Str who = {})
     return 0;
 }
 
-static b32 applyredirs(Shell *, Redir *, Arena *, b32);
+struct Fdvar {       // a {var} a child's redirection assigned
+    Fdvar *next;     // the one assigned before, if any
+    Var   *v;
+    Value *saved;    // its binding before, now beneath a copy
+};
+
+static b32 applyredirs(Shell *, Redir *, Arena *, b32, Fdvar **);
+
+// Assigned in bash's child, a {var} is gone with it: the variable gets
+// a copy of its binding on top, for the assignment to change, which is
+// visible to the redirections after it (and to a subshell's commands)
+// until fdvarsundo drops it. A dynamic variable is assigned as usual.
+static Fdvar *fdvarsave(Shell *sh, Arena *a, Str var, Fdvar *next)
+{
+    Store *st   = sh->store;
+    Str    name = cut(var, '[').head;
+    Value *raw  = rawlookup(sh, name);
+    if (raw && (raw->attrs & V_NAMEREF)) {
+        Ref r = resolveref(sh, name, 0, 1);
+        if (r.name.data) name = r.name;
+    }
+    Var   *v   = upsertvar(sh, name);
+    Value *top = v->top;
+    if (top && top->dyn) return next;
+    if (top) {
+        Value *c = (Value *)salloc(st, sizeof(Value));
+        *c = *top;
+        c->str   = sclone(st, top->str);
+        c->arr   = top->arr ? acopy(st, top->arr, 0) : 0;
+        c->below = top;
+        jset(st, &v->top, c);
+    }
+    Fdvar *f = alloc<Fdvar>(a);
+    f->next  = next;
+    f->v     = v;
+    f->saved = top;
+    return f;
+}
+
+// Put back the bindings fdvarsave covered, the newest first. Only one
+// still in its chain: a ${ cmd; } in a later word may have unset it.
+static void fdvarsundo(Shell *sh, Fdvar *f)
+{
+    for (; f; f = f->next) {
+        Var *v = f->v;
+        b32 found = !f->saved;
+        for (Value *t = v->top; t && !found; t = t->below) found = t == f->saved;
+        if (!found) continue;
+        while (v->top != f->saved) {
+            Value *t = v->top;
+            jset(sh->store, &v->top, t->below);
+            freevalue(sh, t);
+        }
+        sh->exportgen++;
+        varchanged(sh, v->name);
+    }
+}
 
 // Apply a command's redirections. Returns false after reporting an
 // error (the redirections done so far are left for the caller to undo),
@@ -1340,25 +1396,32 @@ static b32 applyredirs(Shell *, Redir *, Arena *, b32);
 // expansion error in them, even a fatal one such as ${x?}, ends only
 // that child: here it fails the redirection, with the status the child
 // would exit with. Otherwise the error escapes as from any other word.
+// A child's {var} assignments are undone before it returns, or with
+// vars (a subshell's), left for the caller to undo by fdvarsundo.
 // Not inlined: its escape point would grow its callers' frames, which
 // recursion stacks up.
 [[gnu::noinline]]
-static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep, b32 child)
+static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep, b32 child,
+                    Fdvar **vars = 0)
 {
     if (!list) {
         sh->nullchild = 0;  // as applyredirs takes it
         return 1;
     }
     sh->redirfail = 1;
-    if (!child) return applyredirs(sh, list, a, keep);
-    b32 nullchild = sh->nullchild;
+    if (!child) return applyredirs(sh, list, a, keep, 0);
+    b32     nullchild = sh->nullchild;
+    Fdvar **fv = vars ? vars : alloc<Fdvar *>(a);  // the list outlives an escape
     Escape e;
     escenter(sh, &e);
     if (!jmpset(e.jmp)) {
-        b32 ok = applyredirs(sh, list, a, keep);
+        b32 ok = applyredirs(sh, list, a, keep, fv);
         escleave(sh, &e);
+        if (!vars) fdvarsundo(sh, *fv);
         return ok;
     }
+    fdvarsundo(sh, *fv);
+    *fv = 0;
     if (e.why!=ESC_DISCARD && e.why!=ESC_FATAL && e.why!=ESC_ABORT) {
         escleave(sh, &e);
         escape(sh, e.why);
@@ -1370,12 +1433,12 @@ static b32 doredirs(Shell *sh, Redir *list, Arena *a, b32 keep, b32 child)
     return 0;
 }
 
-static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
+// With vars, these are a child's (doredirs): its {var} assignments are
+// listed there to undo.
+static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep, Fdvar **vars)
 {
     Fdtab *t = sh->fds;
-    // Taken at once, before any expansion can run other redirections
-    b32 nullchild = sh->nullchild;
-    sh->nullchild = 0;
+    sh->nullchild = 0;  // taken: expansions may run other redirections
     for (Redir *r = list; r; r = r->next) {
         i32 fd   = r->src;
         b32 kept = keep;
@@ -1422,7 +1485,7 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
                 setfdvar = 1;  // once the descriptor is open, as bash
                 // The new descriptor outlives the command, except in
                 // bash's child, which exits
-                kept |= !sh->shopt[S_VARREDIR_CLOSE] && !nullchild;
+                kept |= !sh->shopt[S_VARREDIR_CLOSE] && !vars;
             }
         }
         if (fd<0 || fd>=FDMAX) {
@@ -1581,19 +1644,9 @@ static b32 applyredirs(Shell *sh, Redir *list, Arena *a, b32 keep)
             fdset(sh, fd, f, kept, a);
         } break;
         }
-        if (setfdvar && nullchild) {
-            // bash assigns it in its child, so only a refusal shows
-            Str    var = r->srcvar->text;
-            Value *v   = find(var, "[")<0 ? lookup(sh, var) : 0;
-            if (v && (v->attrs & V_READONLY)) {
-                shellerror(sh, *a, concat(a, var, ": readonly variable"));
-                Str msg = concat(a, var, ": cannot assign fd to variable");
-                shellerror(sh, *a, msg);
-                fdset(sh, fd, 0, kept, a);
-                return 0;
-            }
-        } else if (setfdvar) {
+        if (setfdvar) {
             Str var = r->srcvar->text;
+            if (vars) *vars = fdvarsave(sh, a, var, *vars);
             Str num = fmti64(a, fd);
             b32 ok  = find(var, "[")>=0 ? assignto(sh, *a, var, num)
                                         : setvar(sh, *a, var, num);
@@ -5368,6 +5421,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     b32 inner      = n->kind==N_SUBSHELL || n->kind==N_COPROC;
     b32 forked     = sh->forkstdin;  // its own do not count (forkedstdin)
     sh->forkstdin  = 0;
+    Fdvar *fdvars  = 0;  // its {var}s, which only its commands see
     // ERR's line, should a ( list ) fail, as bash sets it before forking
     if (n->kind == N_SUBSHELL) sh->errline = n->endline;
     if (n->kind!=N_SIMPLE && n->kind!=N_CONNECT && n->kind!=N_FUNCDEF && n->redirs) {
@@ -5379,8 +5433,10 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         // case, select or call, else where the parser finished the
         // top-level command; but a ( list )'s child sets its own first
         sh->line = n->kind==N_SUBSHELL ? n->endline : sh->ctlline;
-        if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs, inner)) {
+        if (!doredirs(sh, n->redirs, &scratch, n==sh->keepredirs, inner,
+                      inner ? &fdvars : 0)) {
             if (inner) sh->stdinredir = stdinredir;
+            fdvarsundo(sh, fdvars);
             unwind(sh, mark);
             // as bash's execute_in_subshell, "! cmd &" then exits 0
             sh->status = n->flags & CMD_BGNOT ? 0 : sh->redirfail;
@@ -5523,6 +5579,7 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
         break;
     }
 
+    fdvarsundo(sh, fdvars);
     if (n->kind!=N_SIMPLE && n->kind!=N_CONNECT && n->kind!=N_COPROC) {
         unwind(sh, mark);  // a coproc's descriptors stay open
     }
