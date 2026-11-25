@@ -5376,6 +5376,15 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
             unwind(sh, mark);
             // as bash's execute_in_subshell, "! cmd &" then exits 0
             sh->status = n->flags & CMD_BGNOT ? 0 : sh->redirfail;
+            if (n->kind == N_SUBSHELL) {
+                // bash's child fails, inverting its own status unless
+                // the error was fatal; the parent sets PIPESTATUS from
+                // it, then inverts that
+                i32 child  = invert && sh->redirfail==1 ? 0 : sh->status;
+                sh->status = child;
+                setpstat1(sh);
+                if (invert) sh->status = !child;
+            }
             if (ignore) {
                 sh->noerrexit--;
             } else {

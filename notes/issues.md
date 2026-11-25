@@ -99,8 +99,6 @@ it says otherwise.
   assigns it in the child only, so `declare -p x` finds nothing.
 - `{x}>f1 &>"$x"` expands `"$x"` before `x` is assigned (an empty
   name, an error); bash expands it after, and writes a file named 10.
-- `( : ) 3</nope/f; echo ${PIPESTATUS[@]}` prints nothing new (the
-  array keeps its old value); bash sets it to 1.
 - `BASH_COMPAT=x` is silent; bash warns "BASH_COMPAT: x: compatibility
   value out of range", once per assignment and expansion.
 - An exported function run by `bash -c f` reports its errors as
