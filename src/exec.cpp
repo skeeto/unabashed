@@ -83,6 +83,7 @@ static void     runreturntrap(Shell *, Arena);
 static Str      traphide(Shell *, i32 idx);
 static void     trapunhide(Shell *, i32 idx, Str saved);
 static void     subshelltraps(Shell *);
+static void     forkexpanded(Shell *);
 static void     chldreaped(Shell *, i32);
 static void     sigenter(Shell *, Sigproc *, i64 pid, Task *);
 static i64      newvpid(Shell *);
@@ -4252,6 +4253,7 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
             sh->status = 1;
             escape(sh, posixfatal(sh) ? ESC_FATAL : ESC_DISCARD);
         }
+        if (forked) forkexpanded(sh);
         // bash runs redirections of fd 0, or with a {var}, in a child
         // ("Safety"), whose status is theirs alone: the comsubs' is lost
         b32 child = 0;
@@ -4303,6 +4305,7 @@ static b32 simpleprep(Shell *sh, Node *n, Arena *a, Str *last, Str *who, Temps *
     nassign = bindtemps(sh, a, assigns, nassign, as, tb, hooks, persist,
                         special&&!fn ? ESC_FATAL : ESC_DISCARD, mark);
     if (tb && forked) tb->keep = keeptemp(bi, fn);
+    if (forked) forkexpanded(sh);
 
     if (sh->opt[O_XTRACE] && !xtracedone) {
         tracewords(sh, *a, argv.data, argv.len);

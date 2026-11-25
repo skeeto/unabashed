@@ -739,6 +739,9 @@ static Task *spawnvproc(Shell *sh, Node *node, File *in, File *out, b32 newloops
     }
     c->taillevel = c->subshell + 1;
     c->inplace   = stageinplace(node, m->node, c->subshell+1);
+    // As bash's forked child, it leaves the command's redirections in
+    // place (an EXIT action it sets writes there)
+    c->keepredirs = m->node;
     return taskspawn(sh->sched, vprocmain, m, BIGSTACK);
 }
 
@@ -1437,7 +1440,10 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
             }
             sh->childpid = lpid;
         } else {
+            Node *keep = sh->keepredirs;
+            sh->keepredirs = j.node;  // as a job's (see spawnvproc)
             status = subshell(sh, &j, child, 0);
+            sh->keepredirs = keep;
         }
         sh->ctlline   = ctlline;
         sh->spawngrp  = 0;

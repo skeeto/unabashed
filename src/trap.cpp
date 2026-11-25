@@ -233,8 +233,18 @@ static void subshelltraps(Shell *sh)
         t[TRAP_DEBUG]  = old[TRAP_DEBUG];
         t[TRAP_RETURN] = old[TRAP_RETURN];
     }
+    // bash's child for a stage's or job's simple command keeps EXIT
+    // while it expands the words: an error there ends it through
+    // exit_shell, which runs the action (see forkexpanded)
+    if (sh->forked) t[TRAP_EXIT] = old[TRAP_EXIT];
     if (!sh->shown) sh->shown = old;
     sh->traps = t;
+}
+
+// That child's words have expanded: from here it has no EXIT action.
+static void forkexpanded(Shell *sh)
+{
+    if (sh->traps) sh->traps[TRAP_EXIT] = {};
 }
 
 // The same for a fiber vproc, copying everything into its own store.
