@@ -5249,20 +5249,7 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
     if (n->words) {
         list = expandwords(sh, &scratch, n->words, 0);
     }
-    // As bash, the header is traced as source text, every iteration
     Str head = {};
-    b32 debug = n->kind==N_FOR && sh->traps && sh->traps[TRAP_DEBUG].len;
-    if ((sh->opt[O_XTRACE] || debug) && n->kind==N_FOR) {
-        Buf b(&scratch, 64);
-        print(&b, "for ");
-        print(&b, n->name->text);
-        print(&b, " in");
-        for (Word *w = n->words; w; w = w->next) {
-            putbyte(&b, ' ');
-            print(&b, w->text);
-        }
-        head = finish(&b);
-    }
     // $? carries into the body, perhaps from the list's expansion
     if (!list.len) sh->status = 0;
     sh->loopdepth++;
@@ -5270,6 +5257,21 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
     for (iz i = 0; i < list.len; i++) {
         Arena it = scratch;
         if (loopsafepoint(sh, it)) break;
+        // As bash, the header is traced as source text, every iteration,
+        // and either may be turned on in the body
+        b32 debug = n->kind==N_FOR && trapset(sh, TRAP_DEBUG);
+        if (!head.data && n->kind==N_FOR && (sh->opt[O_XTRACE] || debug)) {
+            Buf b(&scratch, 64);
+            print(&b, "for ");
+            print(&b, n->name->text);
+            print(&b, " in");
+            for (Word *w = n->words; w; w = w->next) {
+                putbyte(&b, ' ');
+                print(&b, w->text);
+            }
+            head = finish(&b);
+            it = scratch;
+        }
         sh->line = n->line;  // as bash's, each word's assignment
         if (head.data && sh->opt[O_XTRACE]) traceline(sh, it, head);
         if (debug) {
