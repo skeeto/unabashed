@@ -1651,6 +1651,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
     Param p = {};
     Param q = {};  // the indirection's own value
     b32 got = 0;
+    b32 noname = 0;  // an indirection whose value is unset
     if (indirect && rest.len==1 && (rest[0]=='*' || rest[0]=='@') &&
             !hassub && identstart(name[0])) {
         // ${!prefix*} and ${!prefix@}: variable names
@@ -1667,9 +1668,10 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
     } else if (indirect && !hassub && identstart(name[0]) &&
                (rawlookup(sh, name) ? rawlookup(sh, name)->attrs & V_NAMEREF : 0)) {
         // ${!ref} names the variable a nameref refers to; a chain that
-        // loops or is too deep names none, without a warning
+        // loops or is too deep, or ends unset, names none: an error,
+        // without resolveref's warning
         Ref ref = resolveref(sh, name, 0, 1);
-        if (ref.loop) {
+        if (ref.loop || !ref.last || !ref.last->str.data) {
             Arena a = *x->a;
             Str msg = concat(&a, uname, ": invalid indirect expansion");
             reportederror(sh, a, msg);
@@ -1699,6 +1701,7 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
             got      = 1;
             indirect = 0;
             hassub   = 0;
+            noname   = 1;
         }
     }
     Str iname = name, isub = sub;  // the indirection, for := to resolve
@@ -1857,6 +1860,11 @@ static void expandbraced(X *x, Str whole, i32 ctx, b32 unclosed = 0)
             expandinto(x, word, wctx);
         } else if (op == '=') {
             Str v = {};
+            if (noname) {
+                // as bash, nothing to assign through
+                Arena a = *x->a;
+                reportederror(sh, a, concat(&a, uname, ": invalid indirect expansion"));
+            }
             if (indirect) {
                 // As bash, the word first, then the indirection again,
                 // as the word may have changed it: it must name a variable
