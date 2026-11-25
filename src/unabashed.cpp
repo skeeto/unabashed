@@ -356,6 +356,16 @@ static void varchanged(Shell *sh, Str name)
                                   Str(": invalid value for trace file descriptor"));
             shellerror(sh, a, msg);
         }
+    } else if (name == "BASH_COMPAT") {
+        // A value it cannot take warns, as bash's sv_shcompat, which
+        // runs for a program's temporary binding no more than setlocale
+        Arena a = *scratchat(sh, sh->capdepth+1);
+        Got g = getplain(sh, &a, name);
+        if (!sh->nolocwarn && g.value.len && !compatvalue(g.value)) {
+            Str msg = concat3(&a, "BASH_COMPAT: ", g.value,
+                                  Str(": compatibility value out of range"));
+            shellerror(sh, a, msg);
+        }
     } else if (name == "IGNOREEOF") {
         Value *v = lookup(sh, name);  // set or not, as bash's var_isset
         sh->opt[O_IGNOREEOF] = v && (v->str.data || v->arr);
@@ -759,6 +769,13 @@ static b32 importmsys(Shell *sh, Arena *a, Str *name, Str *value)
 // ProgramData): names in uppercase, an invalid name also as a variable
 // with _ for its bad characters, and values with forward slashes except
 // COMSPEC and SYSTEMROOT. Returns whether it did.
+// An imported BASH_COMPAT is checked once $0 is final, as bash's
+// sv_shcompat comes after set_argv0 (initvars).
+static i32 importhook(Str name)
+{
+    return name=="BASH_COMPAT" ? SV_NOHOOK : 0;
+}
+
 static b32 importnative(Shell *sh, OsInfo *info, Arena scratch)
 {
     b32 winenv = 0;
@@ -789,7 +806,7 @@ static b32 importnative(Shell *sh, OsInfo *info, Arena scratch)
         for (iz k = 0; k < name.len; k++) name[k] = upcase(name[k]);
         Str value = c.tail;
         if (name!="COMSPEC" && name!="SYSTEMROOT") value = slashify(&scratch, value, '/');
-        setvar(sh, scratch, name, value, SV_FORCE);
+        setvar(sh, scratch, name, value, SV_FORCE|importhook(name));
         setattrs(sh, name, V_EXPORT, 0);
     }
     return 1;
@@ -864,7 +881,7 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
         }
         if (!c.ok) continue;
         if (msys && !importmsys(sh, &scratch, &c.head, &c.tail)) continue;
-        setvar(sh, scratch, c.head, c.tail, SV_FORCE);
+        setvar(sh, scratch, c.head, c.tail, SV_FORCE|importhook(c.head));
         setattrs(sh, c.head, V_EXPORT, 0);
     }
     Arena *a = &scratch;
@@ -1034,6 +1051,11 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
             setvar(sh, scratch, "BASH_ARGV0", c.tail);  // and so $0
         }
     }
+    // As bash's sv_shcompat, after set_argv0: a warning names that $0
+    Str name = sh->name;
+    if (sh->argv0.data) sh->name = sh->argv0;
+    varchanged(sh, "BASH_COMPAT");  // importhook
+    sh->name = name;
     dynamic(sh, "HISTCMD", DYN_HISTCMD, V_INTEGER);
     varchanged(sh, "LANG");
 }

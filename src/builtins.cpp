@@ -1306,6 +1306,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         }
         Str    refname = {};  // the nameref followed to vname, if any
         Str    hookname = vname;  // as bash's declare names it to the hooks
+        b32    propagated = 0;
         Value *raw = gonly ? globalvalue(sh, vname) : rawlookup(sh, vname);
         if (raw && (raw->attrs & V_NAMEREF) && hassub && eq<a.len) {
             // declare -n r; declare r[1]=x: r stops being a nameref
@@ -1397,6 +1398,7 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
             under->attrs |= (cur->attrs & ~(V_TEMP|V_LOCAL)) | (on & (V_EXPORT|V_READONLY));
             if ((byte *)old.data >= sh->store->mark) sfreestr(sh->store, old);
             sh->exportgen++;
+            propagated = 1;
         }
         b32 fresh = !cur || (mklocal && cur->depth!=sh->funcdepth);
         if (mklocal) {
@@ -1539,6 +1541,8 @@ static i32 declarelike(Shell *sh, Str *args, iz nargs, Arena scratch, Str name,
         }
         if ((eq==a.len && name!="export" && name!="readonly") || ownhook) {
             varchanged(sh, hookname);  // as bash's declare, even without a value
+        } else if (propagated) {
+            varchanged(sh, vname);  // as bash's set_var_attribute
         }
     }
     return status;
@@ -1668,17 +1672,23 @@ static Str declcompound(Shell *sh, Arena scratch, Word *cmd, Word *w)
 
 // unset 'name[sub]': one element, or for an indexed array's @ and *,
 // every element. Element 0 of a scalar is the scalar itself.
+// A BASH_COMPAT value as a level from 31 to 53, or 0 if it is none. As
+// bash's sv_shcompat, it is two digits, perhaps with a dot between.
+static i32 compatvalue(Str v)
+{
+    b32 dot = v.len==3 && v[1]=='.';
+    if (v.len != 2+dot) return 0;
+    u8 hi = v[0], lo = v[1+dot];
+    if (hi<'0' || hi>'9' || lo<'0' || lo>'9') return 0;
+    i32 n = (hi - '0')*10 + (lo - '0');
+    return n>=31 && n<=53 ? n : 0;
+}
+
 // BASH_COMPAT as a number like 51, or 53 when unset or not understood.
 static i32 compatlevel(Shell *sh, Arena scratch)
 {
-    Str v = getplain(sh, &scratch, "BASH_COMPAT").value;
-    i32 n = 0;
-    for (iz i = 0; i < v.len; i++) {
-        if (v[i] == '.') continue;
-        if (v[i]<'0' || v[i]>'9' || n>1000) return 53;
-        n = n*10 + (v[i] - '0');
-    }
-    return n>=31 && n<=53 ? n : 53;
+    i32 n = compatvalue(getplain(sh, &scratch, "BASH_COMPAT").value);
+    return n ? n : 53;
 }
 
 // With raw, an associative key is used as it is, not expanded
