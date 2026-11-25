@@ -20,3 +20,23 @@ x=abc; echo ${#x[-5]}
 x=(); echo ${#x[a b]}
 set -u; echo ${#map[1]}
 EOF2
+
+# In arithmetic, an element assigned out of range is reported (with no
+# builtin's name) and skipped, the expression going on with its value,
+# as bash's assign_array_element; an empty subscript, associative or
+# not, is not a valid identifier there, and when read is reported
+# twice as a bad subscript.
+while IFS= read -r c; do
+    echo "-- $c"
+    bash -c "$c
+echo \"after \$?\"" 2>&1
+done <<'EOF2'
+a=(1); (( a[-5]=2 )); declare -p a
+a=(1); echo $(( a[-5]=2, 7 ))
+a=(1); (( a[-5]++ ))
+a=(1); let 'a[-5]+=3'
+declare -i n; a=(1); n='a[-5]=4'; echo $n
+set -e; a=(1); (( a[-5]=2 )) || echo no
+declare -A m; (( m[]=1 ))
+declare -A m; echo $(( m[] ))
+EOF2

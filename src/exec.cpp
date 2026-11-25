@@ -445,7 +445,7 @@ static Str arithget(void *ctx, ArithRef *ref, b32 *isset, Arena *a)
         X     *x = newx(c->sh, a);
         Value *v = lookup(c->sh, ref->name);
         b32    assoc = isassoc(v);
-        if (!assoc && !ref->sub.len) {
+        if (!ref->sub.len) {
             // As bash: reported (twice) and read as unset, but the
             // expression goes on
             Str msg = concat(a, ref->name, "[]: bad array subscript");
@@ -501,7 +501,7 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
     if (ref->hassub) {
         Value *var = lookup(c->sh, ref->name);
         b32    assoc = isassoc(var);
-        if ((!assoc && !ref->sub.len) || (assoc && !c->rawsub && openquote(ref->sub))) {
+        if (!ref->sub.len || (assoc && !c->rawsub && openquote(ref->sub))) {
             // As bash: reported, and the expression goes on without it
             Str msg = concat3(a, "`", ref->name, concat3(a, "[", ref->sub, "]': not a valid identifier"));
             if (c->who.len) msg = concat3(a, c->who, ": ", msg);
@@ -513,7 +513,10 @@ static Str arithset(void *ctx, ArithRef *ref, i64 value, Arena *a)
         }
         Sub s = evalsub(c->sh, a, ref->name, ref->sub, {}, assoc && c->rawsub);
         if (!s.ok) {
-            return concat3(a, ref->name, "[", concat(a, ref->sub, "]: bad array subscript"));
+            // As bash's assign_array_element: reported, and the
+            // expression goes on without it
+            badarraysub(c->sh, *a, concat3(a, ref->name, "[", concat(a, ref->sub, "]")));
+            return {};
         }
         if (!setelem(c->sh, *a, ref->name, s.idx, s.key, v, SV_QUIET)) {
             if (reportexits(c->sh)) readonlyerror(c->sh, *a, ref->name);
