@@ -228,7 +228,7 @@ static Slice<Str> lowershlvl(Shell *sh, Arena *a, Slice<Str> env, b32 skiptemp)
         }
     }
     env = push(a, env, entry);
-    sort(env.data, env.len, envless, *a);
+    sort(env.data, env.len, exportless, *a);
     return env;
 }
 

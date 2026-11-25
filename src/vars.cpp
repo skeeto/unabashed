@@ -1941,6 +1941,6 @@ static Slice<Str> makeenv(Shell *sh, Arena *a)
     collectexports(sh, sh->vars, a, &env);
     for (iz i = 0; i < sh->nbadenv; i++) env = push(a, env, sh->badenv[i]);
     if (!sh->restricted) exportfuncs(sh->funcs, a, &env, shellguard(sh));  // as bash
-    sort(env.data, env.len, envless, *a);
+    sort(env.data, env.len, exportless, *a);
     return env;
 }

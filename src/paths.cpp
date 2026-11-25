@@ -1462,9 +1462,21 @@ static Slice<Str> msysargv(PathCtx *ctx, Arena *a, Slice<Str> argv, Slice<Str> e
     return r;
 }
 
-static b32 envless(Str *a, Str *b)  // also sorts the shell's exports
+static b32 envless(Str *a, Str *b)
 {
     return compare(*a, *b) < 0;
+}
+
+// The shell's exports: by name and its =, so that two of one name (an
+// import that failed, a function exported since) keep their order, as
+// bash lists them
+static b32 exportless(Str *a, Str *b)
+{
+    Cut x = cut(*a, '=');
+    Cut y = cut(*b, '=');
+    Str p = {a->data, x.head.len + x.ok};
+    Str q = {b->data, y.head.len + y.ok};
+    return compare(p, q) < 0;
 }
 
 // The environment block for a native child of an msys shell, from its
