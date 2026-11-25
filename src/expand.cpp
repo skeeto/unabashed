@@ -172,6 +172,14 @@ static void comsuberror(Shell *sh, Lexer *L, b32 fatal)
     flushbout(sh);
     reportmessages(sh, L, "command substitution");
     if (!fatal) return;
+    if (L->nestfail && !sh->interactive) {
+        // One nested in it failed in bash's parse_comsub, which ends a
+        // non-interactive shell, with the syntax error's status: 2, or
+        // 257 within eval or source (1 as an exit status); 127 from -c,
+        // as its other fatal errors
+        sh->status = sh->evaldepth || sh->sourcedepth ? 1 : 2;
+        escape(sh, ESC_FATAL);
+    }
     sh->status = 1;
     escape(sh, ESC_DISCARD);
 }

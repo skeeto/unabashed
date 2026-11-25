@@ -105,12 +105,9 @@ it says otherwise.
   called in a pipeline from a BASH_ENV file (seed 919897): the
   substitution's lines count from one further on in bash.
 
-Seen in findings, not reduced to a case yet: a syntax error in a
-command substitution's printed text (a `case` with a here-document)
-that bash reports as "near unexpected token `echo' while looking for
-matching `)'" (seed 131818); a quote left open inside `[[` in a
-nested `bash -c`, where bash adds "unexpected EOF while looking for
-`]]'" (seed 503173).
+Seen in findings, not reduced to a case yet: a quote left open inside
+`[[` in a nested `bash -c`, where bash adds "unexpected EOF while
+looking for `]]'" (seed 503173).
 
 Left from the trap findings (Q56), each checked against bash 5.3:
 

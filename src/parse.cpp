@@ -375,6 +375,8 @@ struct Lexer {
     b32      comsuberr;  // syntax error inside a command substitution
     b32      comsubfail; // a command substitution's parse failed, at the
                          // end of input or not
+    b32      nestfail;   // and one nested in another failed, not at the
+                         // end of input (bash's parse_comsub exits)
     b32      prompt;     // reading at an interactive shell's prompt
     b32      reader;     // bash's reader loop (a script, the prompt), not
                          // its parse_and_execute (eval, source, -c, ...)
@@ -3810,6 +3812,9 @@ static Matched parsecomsub(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
         if (!L->discard) {
             // As bash's, even unwinding, but not past a throw to the top
             L->eoftoken = saved.eoftoken;
+        }
+        if (!L->eofreached && (saved.pst & PST_CMDSUBST)) {
+            L->nestfail = 1;
         }
         if (!L->eofreached) {
             // At the prompt bash's reader goes on with the state each
