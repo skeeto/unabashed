@@ -785,6 +785,8 @@ struct Shell {
     i32      penest;       // its parses not a reader's (eval, source, -c,
     i32      peline;       // ...) running, and the line at the outermost's
                            // start, which bash's puts back as it exits
+    b32      pezero;       // the next such parse returns 0 if it runs
+                           // nothing (eval, source): $? stays until then
     i32      exitline;     // plus one: the line where bash's exit_shell
                            // ran the EXIT trap at once, unwinding nothing
     Redirs   redirs;       // the innermost such call

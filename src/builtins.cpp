@@ -336,8 +336,7 @@ static i32 b_exit(Shell *sh, Str *args, iz nargs, Arena scratch)
             status = (i32)(v & 255);
         }
     }
-    sh->status = status;
-    logoutfiles(sh, scratch);
+    logoutfiles(sh, scratch);  // $? there is the one before exit
     sh->status  = status;
     sh->exiting = 1;
     sh->exitcalled = 1;
@@ -513,7 +512,7 @@ static i32 b_eval(Shell *sh, Str *args, iz nargs, Arena scratch)
     }
     Str src = finish(&b);
     sh->evaldepth++;
-    sh->status = 0;
+    sh->pezero = 1;
     i32 line = sh->line;
     i32 status = runsource(sh, src, "eval", scratch, 0, line);
     sh->line = line;
@@ -735,7 +734,7 @@ static i32 sourcetext(Shell *sh, Str *args, iz nargs, Str src, Arena scratch, b3
     // As bash's _evalfile, which looks BASH_ARGV up
     if (!sh->funcdepth) initbashargv(sh);
     sh->sourcedepth++;
-    sh->status = 0;
+    sh->pezero = 1;
     i32 line = sh->line;
     Str srcname = sh->srcname;
     sh->srcname = file;

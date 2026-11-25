@@ -58,3 +58,20 @@ trap 'exit 5' EXIT; exit 3
 f() { trap 'return 6; echo after' EXIT; exit 3; }; f; echo no
 f() { trap 'return' EXIT; exit 3; }; f
 EOF
+
+# Nor this: eval and source leave $? as it was for their text, and
+# give 0 only if it runs nothing, as bash's parse_and_execute's
+# last_result.
+while IFS= read -r c; do
+    bash -c "$c" 2>&1; echo "status $?"
+done <<'EOF'
+false; eval 'echo $?'; echo $?
+false; eval '# c'; echo $?
+false; eval $'\n\necho $?'
+false; eval 'if'; echo $?
+false; . /dev/null; echo $?
+false; . /dev/stdin <<<'echo $?'; echo $?
+false; . /dev/stdin <<<'return'; echo $?
+f() { false; eval 'return'; }; f; echo $?
+(exit 3); eval 'eval "echo \$?"'
+EOF

@@ -1,4 +1,4 @@
-== stdout 2486
+== stdout 2674
 -- echo ${x!}
 bash: line 1: ${x!}: bad substitution
 status 1
@@ -101,10 +101,31 @@ status 1
 status 5
 status 6
 status 3
+1
+0
+status 0
+0
+status 0
+1
+status 0
+bash: eval: line 2: syntax error: unexpected end of file from `if' command on line 1
+2
+status 0
+0
+status 0
+1
+0
+status 0
+1
+status 0
+1
+status 0
+3
+status 0
 
 == stderr 0
 
-== merged 2486
+== merged 2674
 -- echo ${x!}
 bash: line 1: ${x!}: bad substitution
 status 1
@@ -207,5 +228,26 @@ status 1
 status 5
 status 6
 status 3
+1
+0
+status 0
+0
+status 0
+1
+status 0
+bash: eval: line 2: syntax error: unexpected end of file from `if' command on line 1
+2
+status 0
+0
+status 0
+1
+0
+status 0
+1
+status 0
+1
+status 0
+3
+status 0
 
 == status 0

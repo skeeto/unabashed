@@ -6339,6 +6339,11 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     sh->oneshot = 0;
     i32 entryline = sh->line;
     if (!reader && !sh->penest++) sh->peline = entryline;
+    // As bash's parse_and_execute's last_result, eval and source give
+    // 0 if nothing runs, though $? in their text is the one before
+    b32 zero = sh->pezero;
+    b32 ran  = 0;
+    sh->pezero = 0;
     b32 prettynl = 0;
     for (;;) {
         Arena unit = *L->a;  // reset after each complete line
@@ -6370,6 +6375,12 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
         if (r.status == PARSE_EOF) {
             if (reader) sh->line = L->lineno;  // past the end, as bash's
             break;
+        }
+        if (r.status != PARSE_OK) {
+            if (zero && !ran) sh->status = 0;
+            ran = 1;
+        } else if (r.cmd && !sh->opt[O_NOEXEC]) {
+            ran = 1;
         }
         if (r.status == PARSE_ERROR) {
             if (L->overflow) {
@@ -6523,5 +6534,6 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
         sh->penest--;
         sh->line = entryline;
     }
+    if (zero && !ran) sh->status = 0;
     return sh->status;
 }
