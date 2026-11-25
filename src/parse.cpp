@@ -139,6 +139,7 @@ struct Node {
     Word  *arith;      // arithmetic command or for expressions
     b32    inlist;     // for/select had an explicit "in"
     i32    endline;    // N_SUBSHELL: the line of its ), which bash gives it
+                       // N_FUNCDEF: the line declare -F gives it
 };
 
 
@@ -388,6 +389,10 @@ struct Lexer {
     i32      arithforline;  // bash's arith_for_lineno: the line of the
                             // last for (( read, which an arithmetic for
                             // takes once its body is parsed
+    i32     *dstart;     // bash's function_dstart and save_dstart, shared
+                         // by its parses (Shell.dstart): the line a
+                         // function definition is given, and one kept
+    i32      dlines[2];  // those of a parse of its own
 
     Redir   *heredocs[HEREDOCMAX];
     i32      nheredoc;
@@ -3072,6 +3077,23 @@ static b32 startsshell(i32 t)
     return 0;
 }
 
+// bash's lexer marks where a function definition starts, at the name
+// after "function" and at the ) of "name ( )", keeping the line it had
+// in one slot, not a stack
+static void markdstart(Lexer *L)
+{
+    L->dstart[1] = L->dstart[0];
+    L->dstart[0] = L->lineno;
+}
+
+// Its parser gives the definition that line, then puts back the one
+// kept: an enclosing definition may get a nested one's.
+static void enddstart(Lexer *L, Node *f)
+{
+    f->endline   = L->dstart[0];
+    L->dstart[0] = L->dstart[1];
+}
+
 static Node *parsecommand(Parser *p)
 {
     checkstack(p->L);
@@ -3089,6 +3111,7 @@ static Node *parsecommand(Parser *p)
         advance(p);
         Node *f = newnode(L, N_FUNCDEF);
         f->name = expectword(p);
+        markdstart(L);
         if (peek(p) == '(') {
             advance(p);
             if (peek(p) != ')') {
@@ -3101,9 +3124,11 @@ static Node *parsecommand(Parser *p)
                 f->a = sub;
                 Redir *r = parseredirlist(p);
                 if (r) appendredirs(f->a, r);
+                enddstart(L, f);
                 return f;
             }
             advance(p);
+            markdstart(L);  // its ) too, as bash's lexer sees "name ( )"
             newlines(p);
         } else if (peek(p) == '\n') {
             newlines(p);
@@ -3114,6 +3139,7 @@ static Node *parsecommand(Parser *p)
         f->a = parseshell(p);
         Redir *r = parseredirlist(p);
         if (r) appendredirs(f->a, r);
+        enddstart(L, f);
         return f;
     }
 
@@ -3167,6 +3193,7 @@ static Node *parsecommand(Parser *p)
         if (peek(p) == '(') {
             advance(p);
             expect(p, ')');
+            markdstart(L);
             newlines(p);
             if (!startsshell(peek(p))) {
                 syntaxerror(p);
@@ -3176,6 +3203,7 @@ static Node *parsecommand(Parser *p)
             f->a = parseshell(p);
             Redir *r = parseredirlist(p);
             if (r) appendredirs(f->a, r);
+            enddstart(L, f);
             L->redirline = 0;
             return f;
         }
@@ -3360,6 +3388,7 @@ static iz skipexpansion(Lexer *outer, Str s, iz i, b32 dquote, b32 *ended = 0,
     *ended = 0;
     Lexer *L = newlexer(outer->a, cuthead(s, i+2));
     if (failed) *failed = L;
+    L->dstart   = outer->dstart;
     L->extglob  = outer->extglob;
     L->posix    = outer->posix;
     L->extquote = outer->extquote;
@@ -3868,6 +3897,7 @@ static Lexer *newlexer(Arena *a, Str src)
     L->src     = src;
     L->ntop    = -1;
     L->extquote = 1;
+    L->dstart  = L->dlines;
     L->msgtail = &L->msgs;
     return L;
 }

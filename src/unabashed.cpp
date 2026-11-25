@@ -459,6 +459,7 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
             if (!endswith(text, "\n")) fdwrite(sh, 2, "\n");
         }
         Lexer *L = newlexer(&scratch, text);
+        L->dstart = sh->dstart;
         L->lineno = -1;  // its first line is 0, as bash's line_number then
         parselimit(sh, L);
         Parsed p = parseunit(L);
@@ -492,7 +493,7 @@ static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
         body = g;
     }
     sh->defsrc = "environment";
-    definefunc(sh, scratch, name, body);
+    definefunc(sh, scratch, name, body, n->endline);
     sh->defsrc = {};
     Func *f = findfunc(sh, name);
     if (f) f->attrs |= V_EXPORT;
@@ -1963,6 +1964,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
     sh->sched->pid = info->pid;
     sh->ppid    = info->ppid;
     sh->parentpid = info->ppid;
+    sh->dstart[1] = -1;  // as bash's save_dstart
     sh->startpgid = info->pgid;
     sh->jctty   = BADHANDLE;
     sh->uid     = info->uid;

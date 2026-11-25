@@ -120,14 +120,6 @@ nested `bash -c`, where bash adds "unexpected EOF while looking for
 Left from the environment's findings (Q54), each checked in the oracle
 container:
 
-- `declare -F` under extdebug gives a function the line its `)` (or
-  `function` keyword) was read on, and a nested `function NAME ()`
-  gives the enclosing function that one's line instead, as bash's
-  parser saves one line, not a stack (`f() {` on line 2 and
-  `function g() { :; }` on line 4: bash says 4, ours 2). Ours takes
-  the body's line, and 0 for every import, where bash's is 0 unless
-  such a nested definition moves it (its export writes every nested
-  one with `function`).
 - `h() { trap 'echo t' ERR; false; }; h` runs the action twice in
   ours, once in bash (not again for the call).
 

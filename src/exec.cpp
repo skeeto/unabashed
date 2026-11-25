@@ -5130,7 +5130,7 @@ static void execfuncdef(Shell *sh, Node *n, Arena scratch)
         sh->status = 1;
         return;
     }
-    definefunc(sh, scratch, name, body);
+    definefunc(sh, scratch, name, body, n->endline);
     sh->status = 0;
 }
 
@@ -6147,6 +6147,7 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     src = dropcr(&scratch, src, crmode(sh));
     Lexer *L = newlexer(&scratch, src);
     L->fill          = fill;
+    L->dstart        = sh->dstart;
     L->fillctx       = fillctx;
     L->newunit       = 1;
     L->lineno        = line - 1;

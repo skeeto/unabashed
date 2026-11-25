@@ -800,6 +800,7 @@ struct Shell {
     b32      rshell;       // started restricted (shopt restricted_shell)
     u32      importing;    // IMPORT_*: options for the environment's
                            // functions, while startup imports them
+    i32      dstart[2];    // the parser's function lines (Lexer.dstart)
     i32      dumpstrings;  // 1: -D, --dump-strings; 2: in po form too
     b32      prettyprint;  // --pretty-print: print the script, not run it
     i32      redirfail;    // the status of the last failed redirection

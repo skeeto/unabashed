@@ -1747,7 +1747,7 @@ static void releasecode(Shell *sh, Func *f)
 
 // Copy a body into a block of the size it needs, as nodebytes bounds it
 // (counting is cheaper than the trial copy this once made).
-static Code *newcode(Shell *sh, Arena, Node *body)
+static Code *newcode(Shell *sh, Arena, Node *body, i32 line)
 {
     // alloc refuses the final object of a full arena, so leave room for
     // one more of the largest type
@@ -1774,11 +1774,11 @@ static Code *newcode(Shell *sh, Arena, Node *body)
     c->body = copynode(&block, body, &g);
     c->file = clone(&block, file);
     c->src  = clone(&block, src);
-    c->line = sh->defsrc.len ? 0 : body->line;  // imports: 0, as bash
+    c->line = line;
     return c;
 }
 
-static void definefunc(Shell *sh, Arena scratch, Str name, Node *body)
+static void definefunc(Shell *sh, Arena scratch, Str name, Node *body, i32 line)
 {
     Store *st   = sh->store;
     Func **slot = &sh->funcs;
@@ -1786,7 +1786,7 @@ static void definefunc(Shell *sh, Arena scratch, Str name, Node *body)
         if ((*slot)->name == name) break;
         slot = &(*slot)->child[h>>62];
     }
-    Code *code = newcode(sh, scratch, body);
+    Code *code = newcode(sh, scratch, body, line);
     if (!*slot) {
         Func *f = (Func *)salloc(st, sizeof(Func));
         f->name = sclone(st, name);
