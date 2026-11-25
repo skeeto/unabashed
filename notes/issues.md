@@ -95,13 +95,6 @@ it says otherwise.
   whose own redirection fails runs ERR in its child and again in the
   parent: `set -E; trap 'echo err' ERR; true | { true; } <&9` says
   err twice, bash once, as its execute_in_subshell exits 1 at once.
-- `BASH_COMPAT=x` is silent; bash warns "BASH_COMPAT: x: compatibility
-  value out of range", once per assignment and expansion.
-- An exported function run by `bash -c f` reports its errors as
-  `bash: line N:`; bash names them `environment:`, with a line number
-  only for some.
-- A script without `#!` started as `./f2` sees a variable that was
-  exported while unset (`declare -x x`); in bash it is not there.
 - bash's Q_ARITH removes `\"` inside double quotes (the backslash
   goes as the quoted text is extracted, the quote left is read as
   quoting), which ours does for `[[ ]]` arithmetic and `-v` operands
@@ -118,9 +111,35 @@ it says otherwise.
 
 Seen in findings, not reduced to a case yet: the wording of a syntax
 error inside a command substitution; the second line (the source
-text) of a syntax error from `eval` or `-c`, missing or extra; an
-exported function with an extglob pattern, which bash fails to import
-when the child has extglob off.
+text) of a syntax error from `eval` or `-c`, missing or extra.
+
+Left from the environment's findings (Q54), each checked in the oracle
+container:
+
+- `declare -F` under extdebug gives a function the line its `)` (or
+  `function` keyword) was read on, and a nested `function NAME ()`
+  gives the enclosing function that one's line instead, as bash's
+  parser saves one line, not a stack (`f() {` on line 2 and
+  `function g() { :; }` on line 4: bash says 4, ours 2). Ours takes
+  the body's line, and 0 for every import, where bash's is 0 unless
+  such a nested definition moves it (its export writes every nested
+  one with `function`).
+- `bash -v` echoes the text of each function it imports, as bash
+  parses them with -v already on; ours reads its options after.
+  Likewise `bash --posix` refuses an imported function whose name is
+  not an identifier ("error importing function definition"); ours
+  imports it.
+- A script without `#!` gets a new `$$` and `PPID` in bash (a forked
+  child); ours keeps the parent's. Its SHLVL is the environment's plus
+  one in both, but bash lowers SHLVL first for a program run as the
+  last command of `-c` or a subshell (exec'd without a fork), and
+  ours never does: `bash -c 'bash -c "echo \$SHLVL"'` is 1 in bash, 2
+  in ours.
+- A `#!` script started as `./f3` sees `$0` as `/home/oracle/./f3` in
+  ours (Linux build), `./f3` in bash: ours passes the program an
+  absolute path.
+- `h() { trap 'echo t' ERR; false; }; h` runs the action twice in
+  ours, once in bash (not again for the call).
 
 
 ## The library

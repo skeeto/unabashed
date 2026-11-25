@@ -433,22 +433,44 @@ static void dynamic(Shell *sh, Str name, i32 dyn, u32 attrs = 0)
     sh->dynexported |= had && dyncellular(dyn) && (v->attrs & V_EXPORT);
 }
 
+static void addbadenv(Shell *, Str entry);
+
 // Define a function a parent exported as BASH_FUNC_name%%="() {...}".
 // As in bash since Shellshock, the value must be a function definition
-// and nothing more.
+// and nothing more. One that is not is reported, as bash's parse of it
+// named for the function, makes $? 1, and is passed on to programs.
 static void importfunc(Shell *sh, Arena scratch, Str var, Str value)
 {
     Str name = cuttail(cuthead(var, 10), 2);
     if (!name.len || !startswith(value, "() {")) return;
-    if (!exportablefunc(name) || (sh->opt[O_POSIX] && !validvarname(name))) return;
     if (sh->rshell) return;  // restricted: no functions from outside
-    Lexer *L = newlexer(&scratch, concat3(&scratch, name, " ", value));
-    L->lineno = -1;  // its first line is 0, as bash's line_number then
-    parselimit(sh, L);
-    Parsed p = parseunit(L);
-    Node  *n = p.cmd;
-    if (p.status!=PARSE_OK || !n || n->kind!=N_FUNCDEF || !(n->name->text == name) ||
-            parseunit(L).status!=PARSE_EOF) {
+    b32 ok = exportablefunc(name) && (!sh->opt[O_POSIX] || validvarname(name));
+    Node *n = 0;
+    if (ok) {
+        Lexer *L = newlexer(&scratch, concat3(&scratch, name, " ", value));
+        L->lineno = -1;  // its first line is 0, as bash's line_number then
+        parselimit(sh, L);
+        Parsed p = parseunit(L);
+        n = p.cmd;
+        if (L->msgs) {
+            Str iname = sh->iname;
+            sh->iname = name;
+            reportmessages(sh, L);
+            sh->iname = iname;
+        }
+        ok = p.status==PARSE_OK && n;
+        if (ok && (n->kind!=N_FUNCDEF || !(n->name->text == name) ||
+                   parseunit(L).status!=PARSE_EOF)) {
+            Str msg = concat3(&scratch, "warning: ", name, Str(": ignoring function definition attempt"));
+            shellerror(sh, scratch, msg);
+            ok = 0;
+        }
+    }
+    if (!ok) {
+        Str msg = concat3(&scratch, "error importing function definition for `", name, "'");
+        shellerror(sh, scratch, msg);
+        addbadenv(sh, concat3(&scratch, var, "=", value));
+        sh->status = 1;
         return;
     }
     Node *body = n->a;
