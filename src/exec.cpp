@@ -5897,6 +5897,9 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     if (ignore) sh->noerrexit--;
     if (invert && sh->flow!=FLOW_RETURN) {  // return leaves before inverting
         sh->status = !sh->status;
+        if (n->kind==N_ARITH || n->kind==N_COND) {
+            setpstat1(sh);  // as bash, which sets these from the inverted status
+        }
     }
 }
 
