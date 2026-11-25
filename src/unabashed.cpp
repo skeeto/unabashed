@@ -893,6 +893,7 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     // takes them from its configure triple.
     Str host = sizeof(void *)==4 ? Str("i686") : Str("x86_64");
     Str mach = info->machtype.len ? info->machtype : Str("x86_64-pc-linux-gnu");
+    sh->mach = sclone(sh->store, mach);  // for reinitvars
     Str bash = info->args && info->nargs ? Str("/usr/local/bin/bash") : Str("bash");
     Cut cpu  = cut(mach, '-');
     Str os   = cut(cpu.tail, '-').tail;
@@ -1058,6 +1059,31 @@ static void initvars(Shell *sh, OsInfo *info, Arena scratch)
     sh->name = name;
     dynamic(sh, "HISTCMD", DYN_HISTCMD, V_INTEGER);
     varchanged(sh, "LANG");
+}
+
+// A script without #! run in-process starts as bash's child does once
+// shell_reinitialize has deleted every variable and function: from the
+// environment it was given, as a new shell would.
+static void reinitvars(Shell *sh, Arena scratch, Slice<Str> env)
+{
+    OsInfo info = {};
+    info.args     = &sh->shellname;
+    info.nargs    = 1;
+    info.env      = env.data;
+    info.nenv     = env.len;
+    info.cwd      = sh->cwd;
+    info.cwderr   = sh->cwderr;
+    info.ppid     = sh->ppid;
+    info.uid      = sh->uid;
+    info.euid     = sh->euid;
+    info.host     = sh->host;
+    info.machtype = sh->mach;
+    sh->vars    = 0;
+    sh->ifs     = 0;
+    sh->funcs   = 0;
+    sh->badenv  = 0;
+    sh->nbadenv = 0;
+    initvars(sh, &info, scratch);
 }
 
 static File *stdfile(Shell *sh, Handle h, i32 flags)

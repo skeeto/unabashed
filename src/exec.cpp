@@ -39,6 +39,7 @@ static i32      runsource(Shell *, Str src, Str iname, Arena, b32 reader = 0, i3
                           b32 comsub = 0, b32 hist = 0);
 static Str      runfunsub(Shell *, Arena *, Str src, Capture *, Arena);
 static i32      compatlevel(Shell *, Arena);  // builtins.cpp
+static void     reinitvars(Shell *, Arena, Slice<Str>);  // unabashed.cpp
 static i32      b_read(Shell *, Str *, iz, Arena);  // builtins.cpp
 static i32      b_eval(Shell *, Str *, iz, Arena);
 static i32      b_source(Shell *, Str *, iz, Arena);
@@ -2290,7 +2291,8 @@ static void undotemps(Shell *sh, Str *argv)
 {
     if (sh->nundo && sh->undoargv==argv) {
         for (iz i = sh->nundo-1; i >= 0; i--) poptemp(sh, sh->undonames[i]);
-        sh->nundo = 0;
+        sh->nundone = sh->nundo;
+        sh->nundo   = 0;
         disposedtemps(sh);
     }
 }
@@ -2990,14 +2992,12 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env,
         sh->args.v = argv + 1;
         sh->args.n = argc - 1;
         sh->argsown = {};
-        sh->name   = named ? name : path;
         sh->argv0  = {};
         sh->frame  = 0;
         sh->srcframes = 0;  // nor sourcing: BASH_SOURCE is its own
         sh->argvinit  = 0;  // and BASH_ARGV, set up anew
         sh->argvbase  = {};
         sh->funcdepth = 0;
-        sh->funcs  = 0;
         sh->srcname     = {};
         sh->evaldepth   = 0;
         sh->sourcedepth = 0;
@@ -3006,14 +3006,25 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env,
         sh->cflag       = 0;
         sh->restricted  = 0;  // as bash, the script runs unrestricted
         sh->noerrexit   = 0;  // a new shell: no condition is pending
+        defaultoptions(sh, 1);
+        if constexpr (LIBMODE) shebangoptions(sh, src);
+        // Its variables and functions are the environment's alone, as
+        // bash's, whose messages meanwhile name the old $0, with no line
+        sh->line = 0;
+        reinitvars(sh, a, env);
+        sh->name  = named ? name : path;
+        sh->argv0 = {};
+        if (sh->undoargv == argv) {
+            // bash's child keeps its temporary environment through that
+            // and drops it now: their hooks run again (a warning twice)
+            for (iz i = 0; i < sh->nundone; i++) varchanged(sh, sh->undonames[i]);
+        }
         // and its $_ the path, exported, as bash's from the environment
         Str last = slash ? name : path;
         for (iz i = 0; i < env.len; i++) {
             if (startswith(env[i], "_=")) last = cuthead(env[i], 2);
         }
         startlastarg(sh, a, last, 1);
-        defaultoptions(sh, 1);
-        if constexpr (LIBMODE) shebangoptions(sh, src);
         sh->capdepth++;
         // As a new shell: what was ignored is ignored on entry, caught
         // signals are reset, and only its own traps are listed
@@ -4288,6 +4299,7 @@ static void runprogram1(Shell *sh, Node *n, Simple *c, Temps *tb, Arena scratch)
     sh->attail  = n==sh->tailnode && sh->taillevel==sh->subshell+1;
     sh->undonames = names;
     sh->nundo     = npushed;
+    sh->nundone   = 0;
     sh->undoargv  = argv.data;
     if (tb) {
         tb->n    = 0;  // runprogram's to undo now (undotemps)

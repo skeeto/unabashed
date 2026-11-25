@@ -853,6 +853,7 @@ struct Shell {
     i32      fdlost;       // a vproc's descriptors left closed, no handle
                            // to copy them to (low ulimit -n): it fails
     Str      host;         // the host's name, as the shell started
+    Str      mach;         // MACHTYPE as the shell started
     Str      user;         // USER (Windows: USERNAME) as the shell started
     Str      ownname;      // \u's name (ownuser), once looked up
     b32      ownnamed;
@@ -970,6 +971,8 @@ struct Shell {
     Str     *undonames;    // a program's temporary environment, undone
     iz       nundo;        // ... once it is spawned (runprogram)
     Str     *undoargv;     // ... for this argv only
+    iz       nundone;      // ... and how many it undid, for the hooks a
+                           // script run in-process runs again
     b32      intredit;     // in the editor's read: a signal ends it (-4)
     i32      chldtraps;    // CHLD trap actions owed, one per child reaped
     b32      inchld;       // running one of them

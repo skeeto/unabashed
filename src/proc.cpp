@@ -421,6 +421,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image, u32 skip = 0)
         copybytes(c->pstatbig, sh->pstatbig, sh->npstat);
     }
     c->host       = sclone(st, sh->host);
+    c->mach       = sclone(st, sh->mach);
     c->user       = sclone(st, sh->user);
     c->ownname    = sclone(st, sh->ownname);
     c->hosts      = sclone(st, sh->hosts);
@@ -496,6 +497,7 @@ static Shell *shellcopy(Shell *sh, Arena *a, Store *st, b32 image, u32 skip = 0)
     c->intredit = 0;
     c->nolocwarn = 0;
     c->nundo     = 0;
+    c->nundone   = 0;
     c->undonames = 0;
     c->undoargv  = 0;
     c->chldtraps = 0;
