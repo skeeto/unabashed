@@ -4107,6 +4107,15 @@ static b32 assigncompound(Shell *sh, Arena scratch, Str name, Str body, i32 flag
     b32 append = flags & SV_APPEND;
     i32 eflags = (flags & ~SV_APPEND) | SV_FORCE;
 
+    if (!decl && !(flags & SV_NEWLOCAL) && !(cur && cur->arr)) {
+        // As bash's find_or_make_array_variable, a plain name=(...)
+        // makes or converts the array before its words expand, and an
+        // expansion error leaves it so
+        Value *val = assignslot(sh, scratch, name, flags|SV_FORCE);
+        toarray(sh, val);
+        if (!cur) val->arr->isset = 1;
+        cur = val;
+    }
     if (!(cur && cur->arr && cur->arr->bucket)) {
         // Indexed: expand every word first
         Hidden hid = hidelocal(sh, name, flags);
