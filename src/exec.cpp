@@ -991,7 +991,10 @@ static Str runcapture(Shell *sh, Arena *a, Str src, b32 kind)
         // The next simple command that starts with a redirection, here
         // and in the child, takes the line (Lexer.redirline)
         stale = (sh->rawline ? sh->rawline : sh->line) + 1;
-        if (sh->lexer) sh->lexer->redirline = stale;
+        if (sh->lexer) {
+            sh->lexer->redirline = stale;
+            sh->lexer->pst &= ~PST_COMPASSIGN;
+        }
     }
     if (kind != 2) {
         Word *word = fileread(sh, a, src);
@@ -5118,6 +5121,7 @@ static void execfor(Shell *sh, Node *n, Arena scratch)
     for (iz i = 0; i < list.len; i++) {
         Arena it = scratch;
         if (loopsafepoint(sh, it)) break;
+        sh->line = n->line;  // as bash's, each word's assignment
         if (head.data && sh->opt[O_XTRACE]) traceline(sh, it, head);
         if (debug) {
             // DEBUG before each iteration, BASH_COMMAND the header
@@ -5628,11 +5632,15 @@ static void executeone(Shell *sh, Node *n, Arena scratch)
     } break;
 
     case N_ARITH:
+        sh->linesaves++;  // bash's misc_compound frame (see runcommand)
         execarith(sh, n, scratch);
+        sh->linesaves--;
         break;
 
     case N_COND:
+        sh->linesaves++;  // (see runcommand)
         execcond(sh, n, scratch);
+        sh->linesaves--;
         break;
 
     case N_COPROC:
@@ -5794,9 +5802,10 @@ static void runselect(Shell *sh, Node *n, Arena scratch)
 // resumes after an error that abandons all -c, eval and source text.
 // Returns, plus one, the line the parser goes on from, as bash's does
 // when an expansion error comes from the header of a case, for,
-// select, (( )), [[ ]] or arithmetic for that no running simple
-// command, nor case, for or select body, holds: their line is bash's
-// one line_number, which only those frames put back (linesaves).
+// select or arithmetic for, or the redirections of a compound command,
+// that no running simple command, (( )) or [[ ]], nor case, for or
+// select body, holds: their line is bash's one line_number, which only
+// those frames put back (linesaves).
 static i32 runcommand(Shell *sh, Node *cmd, Arena scratch, b32 reader)
 {
     Escape *e = alloc<Escape>(&scratch);  // eval and source recurse here
@@ -5861,11 +5870,14 @@ static void dumpstring(Shell *sh, Arena scratch, Str s, i32 line)
 // parser_error, a shell reading interactively (at the prompt or in
 // eval, not a sourced file or PROMPT_COMMAND) names no line, nor quotes
 // the line in error. Its warnings go on naming none in a child, which
-// is no longer interactive, while its errors do.
-static void reportmessages(Shell *sh, Lexer *L)
+// is no longer interactive, while its errors do. With iname, the parse
+// is one bash makes as not interactive (parse_string), of that name.
+static void reportmessages(Shell *sh, Lexer *L, Str iname)
 {
     Arena msgarena = *L->a;
     b32   prompt   = sh->interactive && !sh->sourcedepth && !(sh->iname=="PROMPT_COMMAND");
+    prompt = prompt && !iname.data;
+    iname  = iname.data ? iname : sh->iname;
     for (Message *m = L->msgs; m; m = m->next) {
         b32 noline = prompt && (m->kind==MSG_WARNING || !sh->subchild);
         if (noline && m->kind==MSG_LINE) continue;
@@ -5879,9 +5891,9 @@ static void reportmessages(Shell *sh, Lexer *L)
             print(&b, ": ");
             if (m->kind == MSG_WARNING) print(&b, "warning: ");
         } else if (m->kind != MSG_WARNING) {
-            if (!(errname(sh) == sh->iname)) {
+            if (!(errname(sh) == iname)) {
                 print(&b, ": ");
-                print(&b, sh->iname);
+                print(&b, iname);
             }
             print(&b, ": line ");
             print(&b, (i64)m->line);
@@ -5894,6 +5906,17 @@ static void reportmessages(Shell *sh, Lexer *L)
         print(&b, m->text);
         putbyte(&b, '\n');
         fdwrite(sh, 2, finish(&b));
+        if (m->kind!=MSG_WARNING && reportexits(sh)) {
+            // As bash's parser_error under set -e: the shell exits after
+            // the first line, with 2
+            L->msgs       = 0;
+            L->msgtail    = &L->msgs;
+            sh->status    = 2;
+            sh->exiting   = 1;
+            sh->exitcalled = 1;
+            sh->exitline  = L->lineno + 1;
+            escape(sh, ESC_EXIT);
+        }
     }
     L->msgs    = 0;
     L->msgtail = &L->msgs;
@@ -6022,6 +6045,11 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     L->lineno        = line - 1;
     L->aliases       = &sh->aliases;
     L->redirline     = sh->staleredir;
+    if (sh->lexer && !sh->staleredir) {
+        // bash's parser state is one: what an earlier parse left set
+        // holds here too, unless reset_parser ran meanwhile
+        L->pst |= sh->lexer->pst & PST_COMPASSIGN;
+    }
     sh->staleredir   = 0;
     parselimit(sh, L);
     L->expandaliases = L->aliasopt = sh->shopt[S_EXPAND_ALIASES];
@@ -6143,6 +6171,13 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
                 L->idx     = 0;
                 L->newunit = 1;
                 *L->a      = unit;
+            } else if (sh->subshell && !reader) {
+                // As bash's parse_and_execute, a subshell's parse that
+                // discards a command ends the subshell
+                sh->lexer  = outer;
+                sh->iname  = oname;
+                sh->status = 1;
+                escape(sh, ESC_DISCARD);
             } else {
                 sh->status = 1;
             }
@@ -6213,8 +6248,10 @@ static i32 runsource1(Shell *sh, Str src, Str iname, Arena scratch, b32 reader, 
     }
     if (!reader && outer && outer->subshell==sh->subshell) {
         // bash's parsers share simplecmd_lineno: eval's syntax error
-        // leaves it for the next command read around it
+        // leaves it for the next command read around it, and so the
+        // parser state an end of input in x=( leaves
         outer->redirline = L->redirline;
+        outer->pst = (outer->pst & ~PST_COMPASSIGN) | (L->pst & PST_COMPASSIGN);
     }
     sh->lexer  = outer;
     sh->iname  = oname;

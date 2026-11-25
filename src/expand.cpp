@@ -150,9 +150,31 @@ static XField xfinish(X *x)
 
 // Scanning helpers
 
+static void reportmessages(Shell *, Lexer *, Str iname = {});
+
+// A command substitution's text that does not parse, found as it is
+// expanded (one that does not end, or bash's printed text that does
+// not parse again): reported as bash's parse of it reports it, not
+// interactive, as the command substitution's, numbered on from the
+// current line; the command is then abandoned. In a prompt, the error
+// is only reported, and the substitution comes to nothing.
+static void comsuberror(Shell *sh, Lexer *L, b32 fatal)
+{
+    for (Message *m = L->msgs; m; m = m->next) {
+        m->line += sh->line;
+    }
+    L->lineno += sh->line;  // where set -e's exit leaves LINENO
+    flushbout(sh);
+    reportmessages(sh, L, "command substitution");
+    if (!fatal) return;
+    sh->status = 1;
+    escape(sh, ESC_DISCARD);
+}
+
 // Index just past a ${...} or $(...) starting at s[i] (the $).
-// An unterminated $( in a here-document, found as it is expanded: the
-// command is abandoned. The line counts on through the rest of the text.
+// An unterminated $( whose scan left no message (comsuberror): in a
+// here-document, the command is abandoned. The line counts on through
+// the rest of the text.
 // Elsewhere (a $( in a quoted ${...} word, for instance), the parse of
 // its text hits the end in a quote, or one line further on, at the
 // missing parenthesis. In a prompt, the error is only reported, and
@@ -207,7 +229,8 @@ static iz skipplainbrace(Str s, iz i)
     return -1;
 }
 
-static iz skipdollar(Shell *sh, Arena *a, Str s, iz i, b32 dquote = 0, b32 *ended = 0)
+static iz skipdollar(Shell *sh, Arena *a, Str s, iz i, b32 dquote = 0, b32 *ended = 0,
+                     Lexer **failed = 0)
 {
     iz plain = skipplainbrace(s, i);
     if (plain >= 0) {
@@ -249,7 +272,7 @@ static iz skipdollar(Shell *sh, Arena *a, Str s, iz i, b32 dquote = 0, b32 *ende
         if (ended) *ended = 0;
         return s.len;
     }
-    return skipexpansion(L, s, i, dquote, ended);
+    return skipexpansion(L, s, i, dquote, ended, failed);
 }
 
 // Is the $((...)) from s[i] to s[e] arithmetic? Otherwise it is a
@@ -2558,12 +2581,17 @@ static void expandtext(X *x, Str s, i32 ctx)
                 continue;
             }
             if (n == '(') {
-                b32 ended = 1;
-                iz  e = skipdollar(sh, x->a, s, i, dq||hd, &ended);
+                b32    ended  = 1;
+                Lexer *failed = 0;
+                iz  e = skipdollar(sh, x->a, s, i, dq||hd, &ended, &failed);
                 if (!ended && !(i+2<s.len && s[i+2]=='(')) {
                     // Parsed only now, as in bash
                     b32 fatal = !(ctx & XC_PROMPT);
-                    comsubeof(sh, *x->a, cuthead(s, i), hd, fatal);
+                    if (failed && failed->msgs) {
+                        comsuberror(sh, failed, fatal);
+                    } else {
+                        comsubeof(sh, *x->a, cuthead(s, i), hd, fatal);
+                    }
                     i = s.len;
                     continue;
                 }
@@ -2582,7 +2610,15 @@ static void expandtext(X *x, Str s, i32 ctx)
                 continue;
             }
             if (n == '{') {
-                iz e = skipdollar(sh, x->a, s, i, dq||hd);
+                b32    ended  = 1;
+                Lexer *failed = 0;
+                iz e = skipdollar(sh, x->a, s, i, dq||hd, &ended, &failed);
+                if (!ended && failed && failed->comsubfail && failed->msgs) {
+                    // A command substitution in it that does not parse,
+                    // as bash's scan for the end finds it, with all the
+                    // text that follows
+                    comsuberror(sh, failed, !(ctx & XC_PROMPT));
+                }
                 Str inner = span(s.data+i+2, s.data+(e>i+2 ? e-1 : e));
                 if (inner.len && funsubchar(inner[0])) {
                     // ${ cmd; } and ${| cmd; }: run in the current shell

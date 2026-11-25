@@ -366,10 +366,14 @@ struct Lexer {
     Token    val;        // value of the current token (yylval)
     b32      eofreached;
     b32      discard;    // error that only discards the rest of the line
+    b32      keptassign; // and leaves PST_COMPASSIGN set, as bash's end of
+                         // input in a compound assignment (no reset_parser)
     b32      reported;   // the last error went through the generic report
     b32      aliasopt;   // expand_aliases as set by shopt
     b32      extglobopt; // extglob as set by shopt
     b32      comsuberr;  // syntax error inside a command substitution
+    b32      comsubfail; // a command substitution's parse failed, at the
+                         // end of input or not
     b32      prompt;     // reading at an interactive shell's prompt
     b32      reader;     // bash's reader loop (a script, the prompt), not
                          // its parse_and_execute (eval, source, -c, ...)
@@ -2156,6 +2160,7 @@ static Str parsecompoundassign(Lexer *L)
             L->current = t;
             if (t == T_EOF) {
                 message(L, start, "unexpected EOF while looking for matching `)'");
+                L->keptassign = 1;
             } else {
                 synerror(L);
             }
@@ -3345,13 +3350,16 @@ static Node *parseloopbody(Parser *p)
 
 // Index just past the $(...) or ${...} at s[i], found by lexing it as
 // the parser would, or s.len if it does not end (and then ended, if
-// given, is cleared).
-static iz skipexpansion(Lexer *outer, Str s, iz i, b32 dquote, b32 *ended = 0)
+// given, is cleared, and failed, if given, holds the lexer and its
+// messages).
+static iz skipexpansion(Lexer *outer, Str s, iz i, b32 dquote, b32 *ended = 0,
+                        Lexer **failed = 0)
 {
     b32 dummy;
     ended  = ended ? ended : &dummy;
     *ended = 0;
     Lexer *L = newlexer(outer->a, cuthead(s, i+2));
+    if (failed) *failed = L;
     L->extglob  = outer->extglob;
     L->posix    = outer->posix;
     L->extquote = outer->extquote;
@@ -3769,6 +3777,7 @@ static Matched parsecomsub(Lexer *L, i32 qc, i32 open, i32 close, i32 flags)
     JmpBuf outer = L->jmp;
     if (jmpset(L->jmp)) {
         L->jmp = outer;
+        L->comsubfail = 1;
         if (!L->discard) {
             // As bash's, even unwinding, but not past a throw to the top
             L->eoftoken = saved.eoftoken;
@@ -3894,7 +3903,8 @@ static Parsed parseunit(Lexer *L)
         L->ddepth  = 0;
         L->heredocstring = 0;
         L->braces = L->esacs = L->expectin = L->expectcmd = 0;
-        L->pst      = 0;
+        L->pst      = L->keptassign ? PST_COMPASSIGN : 0;
+        L->keptassign = 0;
         L->nheredoc = 0;
         L->pushed   = 0;
         L->toread   = 0;

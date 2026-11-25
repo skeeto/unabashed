@@ -104,14 +104,18 @@ it says otherwise.
   has its quotes removed, and `\"` stays): `y=3; echo $(( "\"$y" ))`
   prints 3, where ours reports `"3`. A subscript within `-v`'s
   operand keeps it too: `[[ -v "a[\"1]" ]]`.
-- Line numbers in messages: a command after a here-document's
-  operator on the same line reports the line past the body, where
-  bash reports the command's. This is one case of many: a quarter of
-  all findings differ only so (`lineno` in the index).
+- Line numbers in messages: what remains (1 in 899 findings of a
+  fresh batch, from a quarter before) is a function that assigns
+  LINENO and has a command substitution in its own redirections,
+  called in a pipeline from a BASH_ENV file (seed 919897): the
+  substitution's lines count from one further on in bash.
 
-Seen in findings, not reduced to a case yet: the wording of a syntax
-error inside a command substitution; the second line (the source
-text) of a syntax error from `eval` or `-c`, missing or extra.
+Seen in findings, not reduced to a case yet: a syntax error in a
+command substitution's printed text (a `case` with a here-document)
+that bash reports as "near unexpected token `echo' while looking for
+matching `)'" (seed 131818); a quote left open inside `[[` in a
+nested `bash -c`, where bash adds "unexpected EOF while looking for
+`]]'" (seed 503173).
 
 Left from the environment's findings (Q54), each checked in the oracle
 container:

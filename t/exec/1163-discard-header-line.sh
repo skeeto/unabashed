@@ -1,5 +1,5 @@
-# An expansion error in the header of a case, for, select, (( )), [[ ]]
-# or arithmetic for that no simple command or case, for or select body
+# An expansion error in the header of a case, for, select or arithmetic
+# for that no simple command, (( )), [[ ]], or case, for or select body
 # holds leaves bash's line at that command's, and the parser counts on
 # from there
 case $((1.5)) in
@@ -31,3 +31,18 @@ echo "8: $LINENO"
 if select i in $((1.5)); do :
 done; then :; fi
 echo "9: $LINENO"
+# But a [[ ]] or (( )) puts the line back, as a simple command does
+{ [[ ${!nx} ]]
+}
+echo "10: $LINENO"
+if :; then (( $((1.5)) ))
+fi
+echo "11: $LINENO"
+# Each word a for loop assigns is at the loop's line, after its body ran
+declare -n ref=nx
+for ref in a 10; do
+    :
+done
+( for ro in a b; do
+      readonly ro
+  done )
