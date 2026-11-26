@@ -19,9 +19,10 @@
 #
 # One container from the oracle image (tools/Dockerfile.bash53) for the
 # whole run: --network none, read-only but for tmpfs /tmp and workdir,
-# uid 1000, no capabilities. The suite is unpacked afresh from the
-# repository's bash-5.3.tar.gz for each test, and /tmp emptied. PATH
-# holds bash's helpers and the image's real coreutils, never the fakes.
+# uid 1000, no capabilities, 2 GiB of memory. The suite is unpacked
+# afresh from the repository's bash-5.3.tar.gz for each test, and /tmp
+# emptied. PATH holds bash's helpers and the image's real coreutils,
+# never the fakes.
 #
 # Environment:
 #   ORACLE_IMAGE    oracle image (default unabashed/bash53)
@@ -124,7 +125,8 @@ docker run -i --rm --init --network none --read-only \
     --tmpfs /home/oracle:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=755 \
     --workdir /home/oracle --user oracle --hostname oracle \
     --cap-drop ALL --security-opt no-new-privileges \
-    --pids-limit 512 --ulimit nofile=1024:1024 \
+    --pids-limit 512 --memory 2g --memory-swap 2g \
+    --ulimit nofile=1024:1024 \
     --volume="$shell:/opt/under/bash:ro" \
     --volume="$tarball:/opt/src/bash-5.3.tar.gz:ro" \
     -e ORACLE_TIMEOUT="$limit" -e ORACLE_VERBOSE="$verbose" \

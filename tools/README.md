@@ -51,6 +51,8 @@ looks like this:
   so external commands are bash's helpers or the fakes, never coreutils
 - uid 1000, hostname `oracle`, umask 022, `ulimit -n` 1024
 - `--network none`, `--read-only`, all capabilities dropped
+- at most 256 processes and 1 GiB of memory, tmpfs included, so that
+  a runaway script cannot take the machine's memory
 - `/tmp` and the workdir `/home/oracle` (also `$HOME`) are empty tmpfs
 - under `--init`, so bash is not pid 1; its pid is stable (7)
 
@@ -109,7 +111,7 @@ bash 5.3: identical output means the environment fails it for both
 a diff against bash's. `-m` compares the results with the manifest,
 t/oracle-posix.txt, and fails on any test doing worse. One container from
 the oracle image, as for recording (`--network none`, read-only root,
-tmpfs `/tmp` and workdir, uid 1000, no capabilities); the suite is
+tmpfs `/tmp` and workdir, uid 1000, no capabilities, 2 GiB); the suite is
 unpacked from `bash-5.3.tar.gz` afresh for each test. PATH has bash's
 helpers and Debian's coreutils, not the fakes. `ORACLE_TIMEOUT` limits
 each test (300 seconds). Real bash fails a few here too (no terminal,
