@@ -5,7 +5,7 @@
 // This is free and unencumbered software released into the public domain.
 
 struct Fiber;
-[[gnu::used]] static void fiberentry(Fiber *) asm("fiberentry");  // fibers_posix.cpp
+static void fiberentry(Fiber *);  // fibers_posix.cpp
 
 struct FiberCtx {
     ucontext_t uc;
