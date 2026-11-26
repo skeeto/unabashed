@@ -7,71 +7,65 @@
 // This is free and unencumbered software released into the public domain.
 
 struct Fiber;
-[[gnu::used]] static void fiberentry(Fiber *) asm("fiberentry");  // fibers_posix.cpp
+static void fiberentry(Fiber *);  // fibers_posix.cpp
 
 struct FiberCtx {
     void *sp;  // saved stack pointer while suspended
 };
 
-// Labels pin the symbol names, which otherwise vary by platform. They
-// stay local to the object, so that two copies of these layers, such as
-// a library linked beside its host, never clash.
-extern "C" void fiberswap(void **save, void *sp) asm("fiberswap");
-extern "C" void fiberstart() asm("fiberstart");
-// AAPCS64: the frame holds x19-x30 then d8-d15, 160 bytes, so sp stays
-// 16-byte aligned. Control moves only by ret, never by br.
-asm (
-    "        .text\n"
-    "        .p2align 2\n"
-    "fiberswap:\n"
-    "        sub   sp, sp, #160\n"
-    "        stp   x19, x20, [sp, #0]\n"
-    "        stp   x21, x22, [sp, #16]\n"
-    "        stp   x23, x24, [sp, #32]\n"
-    "        stp   x25, x26, [sp, #48]\n"
-    "        stp   x27, x28, [sp, #64]\n"
-    "        stp   x29, x30, [sp, #80]\n"
-    "        stp   d8,  d9,  [sp, #96]\n"
-    "        stp   d10, d11, [sp, #112]\n"
-    "        stp   d12, d13, [sp, #128]\n"
-    "        stp   d14, d15, [sp, #144]\n"
-    "        mov   x16, sp\n"
-    "        str   x16, [x0]\n"
-    "        mov   sp, x1\n"
-    "        ldp   x19, x20, [sp, #0]\n"
-    "        ldp   x21, x22, [sp, #16]\n"
-    "        ldp   x23, x24, [sp, #32]\n"
-    "        ldp   x25, x26, [sp, #48]\n"
-    "        ldp   x27, x28, [sp, #64]\n"
-    "        ldp   x29, x30, [sp, #80]\n"
-    "        ldp   d8,  d9,  [sp, #96]\n"
-    "        ldp   d10, d11, [sp, #112]\n"
-    "        ldp   d12, d13, [sp, #128]\n"
-    "        ldp   d14, d15, [sp, #144]\n"
-    "        add   sp, sp, #160\n"
-    "        ret\n"
-    "        .p2align 2\n"
-    "fiberstart:\n"
-    "        mov   x0, x19\n"
-    "        bl    fiberentry\n"
-    "        brk   #1\n"
-);
+// A suspended fiber's stack ends in this frame, popped on resuming
+struct FiberFrame {
+    void *fp;  // x29
+    void *pc;  // where to resume
+    void *x0;  // a new fiber's argument
+    void *lr;  // x30, null for a new fiber
+};
 
-// Set a fiber to start at fiberentry(f), at the top of its stack.
+// Set a fiber to start at fiberentry(f), at the top of its stack, with
+// a null frame pointer and link register ending the frame chain.
 static void fiberctxinit(FiberCtx *c, byte *stack, iz size, Fiber *f)
 {
-    // Initial frame loaded by fiberswap: x19-x30, d8-d15. It "returns"
-    // via x30 into fiberstart with x19 = f, a zero frame pointer ending
-    // the frame chain, and sp back at the 16-byte aligned top.
-    uz  *top = (uz *)((uz)(stack + size) & -(uz)16);
-    uz  *sp  = top - 20;
-    for (i32 i = 0; i < 20; i++) sp[i] = 0;
-    sp[0]  = (uz)f;
-    sp[11] = (uz)fiberstart;
-    c->sp = sp;
+    uz         top = (uz)(stack + size) & -(uz)16;
+    FiberFrame *fr = (FiberFrame *)top - 1;
+    fr->fp = 0;
+    fr->pc = (void *)fiberentry;
+    fr->x0 = f;
+    fr->lr = 0;
+    c->sp  = fr;
 }
 
-static void fiberctxswap(FiberCtx *from, FiberCtx *to)
+// Extended asm in an ordinary function, rather than asm functions of
+// their own: GCC's LTO puts top-level asm in a single partition, out of
+// reach of calls from the others, and GCC has no naked functions here.
+// The clobbers have the compiler save the callee-saved registers
+// (AAPCS64: x19-x28, d8-d15) around the switch. x29 and sp it cannot
+// be told of, so the asm keeps them, in a FiberFrame; x18, Apple's
+// platform register, is left alone. Not inlined, so that only a switch
+// pays for the saves.
+[[gnu::noinline]] static void fiberctxswap(FiberCtx *from, FiberCtx *to)
 {
-    fiberswap(&from->sp, to->sp);
+    register void **save asm("x0") = &from->sp;
+    register void  *sp   asm("x1") = to->sp;
+    asm volatile (
+        "        sub   sp, sp, #32\n"
+        "        adr   x2, 1f\n"
+        "        stp   x29, x2, [sp]\n"
+        "        mov   x3, sp\n"
+        "        str   x3, [x0]\n"
+        "        mov   sp, x1\n"
+        "        ldp   x29, x2, [sp]\n"
+        "        ldp   x0, x30, [sp, #16]\n"
+        "        add   sp, sp, #32\n"
+        "        br    x2\n"
+        "1:\n"
+        : "+r"(save), "+r"(sp)
+        :
+        : "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
+          "x12", "x13", "x14", "x15", "x16", "x17", "x19", "x20", "x21",
+          "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x30",
+          "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9",
+          "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18",
+          "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27",
+          "v28", "v29", "v30", "v31", "cc", "memory"
+    );
 }
