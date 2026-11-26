@@ -647,11 +647,17 @@ static void taskcancel(Sched *s, Task *t)
     }
 }
 
-// Release the fibers of finished tasks, when the shell exits.
+// Release the fibers of every task but the main one, when the shell
+// exits: finished ones, and any left stranded, as a stopped job's
+// waiter, which a process's exit would discard. A nested shell of the
+// vos returns its memory for reuse, which ASan's list of fibers must
+// not then reach.
 static void freesched(Sched *s)
 {
-    for (Task *t = s->freebig; t; t = t->next) os_fiberfree(s->os, t->fiber);
-    for (Task *t = s->freesmall; t; t = t->next) os_fiberfree(s->os, t->fiber);
+    for (Task *t = s->all; t; t = t->all) {
+        if (t!=&s->main && t!=s->cur) os_fiberfree(s->os, t->fiber);
+    }
+    s->all     = &s->main;
     s->freebig = s->freesmall = 0;
 }
 
