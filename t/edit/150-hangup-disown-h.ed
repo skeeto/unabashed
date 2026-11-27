@@ -1,0 +1,9 @@
+# disown -h keeps a job from the HUP the shell sends its jobs as it
+# dies of one: under job control, in a group of its own, it survives
+# the hangup (pty only)
+size 24 60
+rc PS1='$ '
+keys { sleep 30 & } 2>/dev/null; disown -h; echo $! >~/pid; jobs\r
+hangup
+after i=0; while kill -0 $(cat ~/pid) 2>/dev/null && [ $i -lt 10 ]; do sleep 0.1; i=$((i+1)); done; kill -0 $(cat ~/pid) 2>/dev/null && echo alive || echo gone
+after kill $(cat ~/pid) 2>/dev/null; true

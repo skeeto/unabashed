@@ -1,0 +1,12 @@
+# A shell that is not the session's leader, sent HUP while a program
+# runs in the foreground, hangs up that program's job too, as bash's
+# hangup_all_jobs, before it dies of HUP (pty only: the outer shell
+# and sh -c only watch)
+size 24 60
+rc PS1='$ '
+keys /bin/sh -c '/usr/local/bin/bash --norc; echo st=$?'\r
+keys PS1='> '\r
+keys { sleep 1; kill -HUP $$; } 2>/dev/null & /bin/sh -c 'echo $$ >~/fpid; exec sleep 30'\r
+pause 2500
+keys sleep 0.3; kill -0 $(cat ~/fpid) 2>/dev/null && echo alive || echo gone\r
+after kill $(cat ~/fpid) 2>/dev/null; true

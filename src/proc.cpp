@@ -1372,6 +1372,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     i32   status;
     b32   escaped = 0;
     i32   why     = 0;
+    sh->sig->fgchild = -grp;  // its job's group, till every stage ends
     if (skip) {
         status = 0;
         sh->childsig = 0;
@@ -1472,6 +1473,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         os_tcpgrp(sh->os, sh->jctty, sh->shellpgid);
     }
     if (s->stopproc != BADHANDLE) {
+        sh->sig->fgchild = 0;
         pipestopped(sh, scratch, n, tasks, procs, last, grp);
         if (escaped) escape(sh, why);
         return;
@@ -1488,6 +1490,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
         if (tasks[k]) {
             st = taskjoin(s, tasks[k]);
         } else if (procs[k] != BADHANDLE) {
+            if (!grouped) hangupstage(sh, procs[k], pids[k]);
             st = taskwaitproc(s, procs[k]);
             if (st & WMISSED) died = ~(u64)0;  // see runprogram
             st &= ~(WMISSED|WNOLIB);
@@ -1504,6 +1507,7 @@ static void runpipeline(Shell *sh, Node *n, Arena scratch)
     // last program that led the group did so already (runprogram)
     b32 fgtail = ext[last] && stage->kind==N_SIMPLE && !grp;
     if (grouped && intr && !(fgtail && lastsig==2)) intrjob(sh);
+    sh->sig->fgchild = 0;
     waitdone(sh, died, extbad);
     i32 forked = 0;
     for (i32 k = 0; k < nstages; k++) forked += ran[k] && (k<last || !inhere);

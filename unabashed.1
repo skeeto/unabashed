@@ -3029,11 +3029,14 @@ to
 .BR HISTSIZE .
 The history file is read after the startup files, ignoring a carriage
 return at the end of each line.
-It is written when the shell exits, but not when the shell dies of a
-signal, so closing the console window loses the session's history
-unless a
-.B HUP
-trap exits.
+It is written when the shell exits, and, as in bash, when an
+interactive shell dies of
+.B SIGHUP
+(closing the console window), unless it runs
+.BR eval ,
+a sourced file, a trap action or
+.BR PROMPT_COMMAND ,
+but not when it dies of another signal.
 In native mode, as in busybox-w32, each command is also appended just
 before it runs, as
 .B history \-a
@@ -3154,13 +3157,16 @@ fails with the message
 There are no process groups:
 .BI "kill %" n
 signals the job's one process.
-When the shell exits, background programs keep running;
-.B huponexit
-and
-.B disown \-h
-are accepted, but nothing sends
+When the shell exits, background programs keep running, except that an
+interactive shell dying of
 .B SIGHUP
-at exit.
+(closing the console window), or an interactive login shell exiting with
+.B huponexit
+set, sends
+.B SIGHUP
+to each job not marked by
+.BR "disown \-h" ,
+as bash does.
 .PP
 Signal names and numbers are Linux's in both modes (for example
 .B USR1

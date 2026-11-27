@@ -1,0 +1,12 @@
+== snap 1
+$ echo 'read x' >~/s; { sleep 30 & } 2>/dev/null; echo $! >~
+/pid
+$ . ~/s
+
+@ 3,0
+== exited: signal 1
+== after cat ~/hist 2>&1
+cat: /home/oracle/hist: No such file or directory
+== after sleep 0.5; kill -0 $(cat ~/pid) 2>/dev/null && echo alive || echo gone
+alive
+== after kill $(cat ~/pid) 2>/dev/null; true

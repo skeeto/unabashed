@@ -1,0 +1,14 @@
+== snap 1
+$ /bin/sh -c '/usr/local/bin/bash --norc; echo st=$?'
+bash-5.3$ PS1='> '
+> { sleep 1; kill -HUP $$; } 2>/dev/null & /bin/sh -c 'echo
+$$ >~/fpid; exec sleep 30'
+[1] 11
+Hangup
+st=129
+$ sleep 0.3; kill -0 $(cat ~/fpid) 2>/dev/null && echo alive
+ || echo gone
+gone
+$
+@ 10,2
+== after kill $(cat ~/fpid) 2>/dev/null; true

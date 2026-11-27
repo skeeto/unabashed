@@ -1,0 +1,12 @@
+== snap 1
+$ /usr/local/bin/bash --login --noprofile --norc
+bash-5.3$ PS1='> '; shopt -s huponexit; { sleep 30 & } 2>/de
+v/null; echo $! >~/pid; exit
+logout
+$ i=0; while kill -0 $(cat ~/pid) 2>/dev/null && [ $i -lt 10
+ ]; do sleep 0.1; i=$((i+1)); done; kill -0 $(cat ~/pid) 2>/
+dev/null && echo alive || echo gone
+gone
+$
+@ 8,2
+== after kill $(cat ~/pid) 2>/dev/null; true

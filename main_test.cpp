@@ -1666,6 +1666,9 @@ static b32 test_edit(Test *t, char *path)
     if (pers < 0) ed.err = "unknown personality";
     if (ed.err.data) {
         fprintf(stderr, "SKIP: %s (%.*s)\n", path, (int)ed.err.len, (char *)ed.err.data);
+    } else if (ed.ptyonly) {
+        // A hangup, or a check after the shell exits: tools/ptyrun's
+        fprintf(stderr, "SKIP: %s (pty only)\n", path);
     } else {
         Str got = runedit(t, &ed, pers, 0);
         ok = edchecked(t, p);

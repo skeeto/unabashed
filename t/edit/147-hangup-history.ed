@@ -1,0 +1,9 @@
+# A hangup at the prompt: the interactive shell writes its history,
+# then dies of HUP, as bash's termsig_handler (pty only)
+size 24 60
+rc PS1='$ '
+rc HISTFILE=~/hist
+keys echo one\r
+keys echo two\r
+hangup
+after cat ~/hist

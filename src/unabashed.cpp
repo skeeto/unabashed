@@ -2186,13 +2186,16 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             histvarchanged(sh, "HISTCONTROL");
             histvarchanged(sh, "histchars");
             histvarchanged(sh, "HISTTIMEFORMAT");
-            // As bash, it takes SIGINT even if ignored on entry, and
-            // acts on INT, QUIT and TERM itself
-            sh->hardign &= ~sigbit(2);
+            // As bash, it takes HUP and INT even if ignored on entry
+            // (its programs still start with them ignored), and acts
+            // on HUP, INT, QUIT and TERM itself
+            sh->hardign &= ~(sigbit(1) | sigbit(2));
             if (sh->traps) {
+                sfreestr(sh->store, sh->traps[1]);
                 sfreestr(sh->store, sh->traps[2]);
-                sh->traps[2] = {};
+                sh->traps[1] = sh->traps[2] = {};
             }
+            updatesigmode(sh, 1);
             updatesigmode(sh, 2);
             updatesigmode(sh, 15);
             if (os_isatty(os, info->std[0]) || os_isatty(os, info->std[2])) {
@@ -2412,6 +2415,9 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             runexittrap(sh, scratch);
         }
         histexit(sh);
+        if (sh->interactive && sh->login && sh->shopt[S_HUPONEXIT]) {
+            hangupjobs(sh);  // as bash's exit_shell
+        }
     }
     jobctloff(sh);
     exitflush(sh);

@@ -157,6 +157,7 @@ static void updatesigmode(Shell *sh, i32 sig)
 {
     if (sh->subshell!=sh->procbase || sig<=0 || sig>=NSIGNAL) return;
     i32 mode = SIGM_DEFAULT;
+    b32 hup  = 0;  // dies of it even while it waits
     if (trapignored(sh, sig)) {
         mode = SIGM_IGNORE;
     } else if (trapset(sh, sig)) {
@@ -167,6 +168,9 @@ static void updatesigmode(Shell *sh, i32 sig)
         mode = SIGM_CATCH;
     } else if (interactivetop(sh) && sig==15) {
         mode = SIGM_CATCH;  // acted on here (signoop)
+    } else if (interactivetop(sh) && sig==1) {
+        mode = SIGM_CATCH;  // history and jobs first (sigdie)
+        hup  = 1;
     } else if (interactivetop(sh) && sh->shellpgid && sig>=20 && sig<=22) {
         mode = SIGM_IGNORE;  // TSTP TTIN TTOU: under job control
     } else if (trapset(sh, TRAP_EXIT)) {
@@ -182,6 +186,7 @@ static void updatesigmode(Shell *sh, i32 sig)
     Sched *s = sh->sched;
     s->caught = mode==SIGM_DEFAULT || mode==SIGM_IGNORE ? s->caught & ~sigbit(sig)
                                                         : s->caught | sigbit(sig);
+    s->fatal  = hup ? s->fatal | sigbit(sig) : s->fatal & ~sigbit(sig);
 }
 
 // Set (cmd.data), ignore (empty cmd) or reset (null cmd) a trap.
@@ -409,15 +414,47 @@ static b32 keepsint(Shell *sh)
     return trapignored(sh, 2) || trapset(sh, 2) || signoop(sh, 2);
 }
 
+// Whether the level dies of a HUP at once, untrapped: an interactive
+// shell's outermost level, which bash's handler takes inside a wait.
+static b32 hupdies(Shell *sh)
+{
+    return interactivetop(sh) && !trapignored(sh, 1) && !trapset(sh, 1);
+}
+
+static void histexit(Shell *);    // history.cpp
+static void hangupjobs(Shell *);  // jobs.cpp
+
+// Whether bash, dying of a HUP, would hang up its jobs: not while it
+// runs what it runs as not interactive (a sourced file, a trap action,
+// PROMPT_COMMAND).
+static b32 hangupnow(Shell *sh)
+{
+    return !sh->sourcedepth && !sh->intrap && !(sh->iname=="PROMPT_COMMAND");
+}
+
+// An interactive shell's outermost level dying of HUP, as bash's
+// termsig_handler: the history saved, unless it is off for the moment
+// (eval, or not interactive), then HUP to its jobs. Its foreground job
+// had its HUP as the signal came (hangupinner).
+static void hangupshell(Shell *sh)
+{
+    sh->sched->hangup = 0;
+    if (!hangupnow(sh)) return;
+    if (!sh->evaldepth) histexit(sh);
+    hangupjobs(sh);
+}
+
 // Die by a signal: the EXIT trap runs first, except for KILL and the
 // signals bash leaves at their defaults (STKFLT PROF IO PWR, real
 // time), then the level exits with 128+sig, reported as a death by
-// that signal.
+// that signal. An interactive shell hung up sees to its history and
+// jobs before that (hangupshell).
 [[noreturn]] static void sigdie(Shell *sh, i32 sig, Arena scratch)
 {
     switch (sig) {
     case 9: case 16: case 27: case 29: case 30: break;
     default:
+        if (sig==1 && interactivetop(sh)) hangupshell(sh);
         if (sig < 32) {
             sh->exitline = sh->line + 1;  // where it is: nothing unwound
             runexittrap(sh, scratch);
@@ -520,6 +557,39 @@ static i64 vpidowner(Shell *sh, i64 pid)
     return pid >= (i64)1<<22 ? pid & (((i64)1<<22) - 1) : 0;
 }
 
+// An untrapped HUP came for an interactive shell's outermost level
+// (top), which bash takes inside its wait, never waiting for a child.
+// Each level's foreground program or job (fgchild), and each program in
+// place of a level (execpid), gets the HUP bash sends as it dies, to
+// its jobs and so to what runs in its group, unless it would not hang
+// up its jobs (hangupnow). Every other level dies of it, trap or not:
+// those running in the outermost one's place (a comsub, a pipeline's
+// last stage) end, for it to die once they have, and so do vprocs it
+// may wait for, as bash's children would die of it or with bash. A
+// pipeline's programs not in a group of their own get it before they
+// are waited for (hangupstage).
+static void hangupinner(Sched *s, Sigproc *top, b32 jobs)
+{
+    s->hangup = 1;
+    for (Sigproc *q = s->sigprocs; q; q = q->next) {
+        i64 kid = q->fgchild ? q->fgchild : q->execpid;
+        if (kid && jobs) os_kill(s->os, kid, 1);
+        q->fgchild = 0;
+        if (q==top || q->execpid) continue;
+        q->pending   |= sigbit(1);
+        q->bydefault |= sigbit(1);
+        if (q->task) taskinterrupt(s, q->task, 1);
+    }
+}
+
+// A pipeline's program, not in a group of its own, about to be waited
+// for while the outermost level dies of a HUP (hangupinner): it gets
+// the HUP, as bash's job would in bash's group.
+static void hangupstage(Shell *sh, Handle proc, i64 pid)
+{
+    if (sh->sched->hangup && proc!=BADHANDLE && pid>0) os_kill(sh->os, pid, 1);
+}
+
 // Take the signals that arrived from outside the process. Those sent
 // to the process belong to its outermost level. Those sent to its
 // group go to every level, as to every process of bash's foreground
@@ -531,8 +601,9 @@ static i64 vpidowner(Shell *sh, i64 pid)
 // the program, which the group signal reached already. An INT sent
 // to the process while its outermost level waits for a foreground
 // child, other than a comsub, is noted likewise, as bash waits for the
-// child and acts on it only if the child died of INT too. True if any
-// arrived.
+// child and acts on it only if the child died of INT too. A HUP that
+// an interactive shell's outermost level dies of ends it at once even
+// while levels run in its place (hangupinner). True if any arrived.
 static b32 ossignals(Sched *s)
 {
     u64 own = os_sigpending(s->os);
@@ -562,6 +633,10 @@ static b32 ossignals(Sched *s)
         for (u64 m = own; m && sh->sig==p; m &= m-1) {
             i32 sig = __builtin_ctzll(m) + 1;
             dies |= !trapignored(sh, sig) && !trapset(sh, sig) && !signoop(sh, sig);
+        }
+        if ((own & sigbit(1)) && (sh->sig!=p ? p->hupdie : hupdies(sh))) {
+            hangupinner(s, p, hangupnow(sh));
+            dies = 1;
         }
         p->pending |= own;
         if (p->task) taskinterrupt(s, p->task, dies);
@@ -708,6 +783,8 @@ static void sigenter(Shell *sh, Sigproc *p, i64 pid, Task *task)
     p->fgwait  = 0;
     p->execpid = 0;
     p->bydefault = 0;
+    p->hupdie  = 0;
+    p->fgchild = 0;
     p->next    = s->sigprocs;
     s->sigprocs = p;
     sh->sig    = p;

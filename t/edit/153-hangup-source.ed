@@ -1,0 +1,12 @@
+# A hangup in a sourced file, which bash runs as not interactive: the
+# shell dies of HUP with no history written and its jobs left alone
+# (pty only)
+size 24 60
+rc PS1='$ '
+rc HISTFILE=~/hist
+keys echo 'read x' >~/s; { sleep 30 & } 2>/dev/null; echo $! >~/pid\r
+keys . ~/s\r
+hangup
+after cat ~/hist 2>&1
+after sleep 0.5; kill -0 $(cat ~/pid) 2>/dev/null && echo alive || echo gone
+after kill $(cat ~/pid) 2>/dev/null; true

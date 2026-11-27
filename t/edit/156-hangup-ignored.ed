@@ -1,0 +1,11 @@
+# An interactive shell takes HUP even if it was ignored on entry, as
+# bash: no trap is listed for it, and it dies of one; its programs still
+# start with it ignored, so its job's sleep survives the HUP (pty only)
+size 24 60
+rc PS1='$ '
+keys trap '' HUP; /bin/sh -c '/usr/local/bin/bash --norc; echo st=$?'\r
+keys PS1='> '; { sleep 30 & } 2>/dev/null; echo $! >~/pid\r
+pause 300
+keys trap -p HUP; kill -HUP $$\r
+keys kill -0 $(cat ~/pid) 2>/dev/null && echo alive || echo gone\r
+after kill $(cat ~/pid) 2>/dev/null; true

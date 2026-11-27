@@ -1,0 +1,10 @@
+# A hangup while a command substitution runs: the shell dies of HUP at
+# once, history written, never running the command it was expanding
+# (pty only)
+size 24 60
+rc PS1='$ '
+rc HISTFILE=~/hist
+keys true\r
+keys echo $(sleep 30) >~/f\r
+hangup
+after cat ~/hist; ls ~/f 2>&1

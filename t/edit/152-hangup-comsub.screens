@@ -1,0 +1,10 @@
+== snap 1
+$ true
+$ echo $(sleep 30) >~/f
+
+@ 2,0
+== exited: signal 1
+== after cat ~/hist; ls ~/f 2>&1
+true
+echo $(sleep 30) >~/f
+ls: cannot access '/home/oracle/f': No such file or directory

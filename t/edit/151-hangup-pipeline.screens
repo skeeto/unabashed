@@ -1,0 +1,9 @@
+== snap 1
+$ true
+$ sleep 30 | cat
+
+@ 2,0
+== exited: signal 1
+== after cat ~/hist
+true
+sleep 30 | cat

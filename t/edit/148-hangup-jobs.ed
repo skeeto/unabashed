@@ -1,0 +1,9 @@
+# A hangup hangs up the shell's jobs: a background sleep, in a group
+# of its own under job control, dies of the HUP the shell sends it
+# (pty only; the check polls, since the HUP lands as the shell exits)
+size 24 60
+rc PS1='$ '
+keys { sleep 30 & } 2>/dev/null; echo $! >~/pid; jobs\r
+hangup
+after i=0; while kill -0 $(cat ~/pid) 2>/dev/null && [ $i -lt 10 ]; do sleep 0.1; i=$((i+1)); done; kill -0 $(cat ~/pid) 2>/dev/null && echo alive || echo gone
+after kill $(cat ~/pid) 2>/dev/null; true

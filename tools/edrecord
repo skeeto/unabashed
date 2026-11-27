@@ -7,7 +7,10 @@
 # Each script runs in a fresh container from the oracle image, under
 # tools/ptyrun (build it first, static, as its header says, to
 # tools/ptyrun): bash on a pty, the keys typed, the screens rendered.
-# Scripts with "nowrap" are vos only and skipped.
+# Scripts with "nowrap" are vos only and skipped. Those with "hangup" or
+# "after" lines are pty only (the vos skips them): a hangup closes the
+# pty and records how the shell ended, and each after line's output,
+# from /bin/sh once the shell is gone, follows the screens.
 #
 # Environment:
 #   EDRECORD_IMAGE  oracle image (default unabashed/bash53)

@@ -138,6 +138,15 @@ EDRECORD_CHECK=1 tools/edrecord ...` runs our POSIX build instead of
 bash and compares. Only the screens are compared, never the bytes
 that drew them (notes/m6.md).
 
+Two directives are for ptyrun alone, and the vos skips a script with
+either ("pty only"). `hangup` takes a last snapshot, closes the pty's
+master (the kernel's HUP to the session), waits up to ten seconds for
+the shell and records `== exited: signal N` (or `status N`). Each
+`after CMD` line runs in `/bin/sh -c` once the shell is gone, its
+output recorded after `== after CMD`. A check for a program the
+hangup should have killed polls for about a second, since the
+kernel's HUP lands as the shell exits (t/edit/148 and on).
+
 ## fuzz (WSL or Linux, AFL++)
 
     tools/fuzz MODE [MINUTES [CORES]]

@@ -1,0 +1,10 @@
+# A hangup while a foreground pipeline runs: the shell takes it at once,
+# as bash's handler inside its wait, writing its history and dying of
+# HUP without waiting for the stages (pty only)
+size 24 60
+rc PS1='$ '
+rc HISTFILE=~/hist
+keys true\r
+keys sleep 30 | cat\r
+hangup
+after cat ~/hist

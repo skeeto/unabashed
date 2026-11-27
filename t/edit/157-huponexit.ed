@@ -1,0 +1,8 @@
+# huponexit: an interactive login shell's exit hangs up its jobs, as
+# bash's exit_shell (pty only: the outer shell only watches)
+size 24 60
+rc PS1='$ '
+keys /usr/local/bin/bash --login --noprofile --norc\r
+keys PS1='> '; shopt -s huponexit; { sleep 30 & } 2>/dev/null; echo $! >~/pid; exit\r
+keys i=0; while kill -0 $(cat ~/pid) 2>/dev/null && [ $i -lt 10 ]; do sleep 0.1; i=$((i+1)); done; kill -0 $(cat ~/pid) 2>/dev/null && echo alive || echo gone\r
+after kill $(cat ~/pid) 2>/dev/null; true

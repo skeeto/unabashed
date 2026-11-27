@@ -91,6 +91,8 @@ static void     sigleave(Shell *, Sigproc *);
 static void     reportsig(Shell *, Arena, i32 sig, i64 pid, Str text);
 static void     intrnewline(Shell *);
 static b32      keepsint(Shell *);
+static b32      hupdies(Shell *);
+static void     hangupstage(Shell *, Handle, i64 pid);
 
 // Under job control the terminal's INT reached only the foreground job,
 // which died of it. As bash, the shell acts as if it had it too in a
@@ -879,6 +881,7 @@ static i32 subshell(Shell *sh, SubJob *j, Arena scratch, Buf *cap)
     escenter(sh, &e);
     Sigproc *up = sh->sig;
     up->keepint = keepsint(sh);  // before the level's traps replace these
+    up->hupdie  = hupdies(sh);
     sh->subshell++;
     sh->parentpid = sh->bashpid;
     sh->bashpid = newvpid(sh);
@@ -2795,6 +2798,9 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
             print(capfile->cap, {buf, n});
         }
         os_close(sh->os, capread);
+        if (s->cur->intr && !ncappumps) {
+            sigtaken(sh);  // killed while reading: the program runs on
+        }
         for (i32 i = 0; i < ncappumps; i++) {
             joinpump(s, cappumps[i]);
         }
@@ -2802,7 +2808,10 @@ static i32 runprogram(Shell *sh, Arena a, Str path, Str *argv, iz argc,
     takeossigs(sh);  // those from before the wait are this level's own
     sh->sig->fgwait  = !r.err;
     sh->sig->execpid = sh->attail && !r.err ? r.pid : 0;
+    // the program, or the group it leads, unless it joins another's
+    sh->sig->fgchild = r.err || sp.pgid>0 ? 0 : sp.pgid ? -r.pid : r.pid;
     i32 status = docerr ? 1 : r.err ? -r.err : group||stops ? taskwaitstop(s, r.proc) : taskwaitproc(s, r.proc);
+    sh->sig->fgchild = 0;
     if (stops && !r.err && status>=0 && (status & WSTOP)) {
         s->stopproc = r.proc;
         s->stoppid  = r.pid;
@@ -3182,6 +3191,7 @@ static i32 runexternal(Shell *sh, Arena a, Str *argv, iz argc, Slice<Str> env,
         Escape e;
         escenter(sh, &e);
         sh->sig->keepint = keepsint(sh);  // before the script's traps
+        sh->sig->hupdie  = hupdies(sh);
         // bash's child for it is a process of its own, with its own $$
         // and its parent's as PPID, unless bash would exec it in the
         // level's place; and it has no jobs

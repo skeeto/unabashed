@@ -1075,7 +1075,9 @@ static b32 runfgimage(Shell *sh, Node *n, Arena scratch)
     Sched *s = sh->sched;
     takeossigs(sh);
     sh->sig->fgwait = 1;
+    sh->sig->fgchild = -pid;
     i32 st = taskwaitstop(s, proc);
+    sh->sig->fgchild = 0;
     if (sh->jctty != BADHANDLE) os_tcpgrp(sh->os, sh->jctty, sh->shellpgid);
     sh->childsig = 0;
     if (st>=0 && (st & WSTOP)) {
@@ -1320,9 +1322,30 @@ static void hidecoproc(Shell *sh, Arena *scratch)
     sh->coprocs = 0;
 }
 
-// kill %spec: to the job's process group if it has one, continuing a
-// stopped job to take TERM or HUP, as bash; else to its pid. Returns -1
-// after reporting no such job, else 0 or an E_* error.
+// A signal to a job: to its process group if it has one, continuing a
+// stopped job to take TERM or HUP, as bash; else to its pid. 0 or an
+// E_* error.
+static i32 jobsignal(Shell *sh, Job *j, i32 sig)
+{
+    if (!j->pgid) return killpid(sh, j->pid, sig);
+    i32 err = os_kill(sh->os, -j->pgid, sig);
+    if (!err && j->stopped && (sig==15 || sig==1)) os_kill(sh->os, -j->pgid, 18);
+    return err;
+}
+
+// An interactive shell dying of HUP, or a login shell exiting under
+// huponexit: HUP to each of its jobs that has not ended, but those
+// marked by disown -h, a stopped one continued to take it, as bash's
+// hangup_all_jobs.
+static void hangupjobs(Shell *sh)
+{
+    for (Job *j = sh->jobs; j && ownjob(sh, j); j = j->next) {
+        if (!j->done && !j->nohup) jobsignal(sh, j, 1);
+    }
+}
+
+// kill %spec, through jobsignal. Returns -1 after reporting no such
+// job, else 0 or an E_* error.
 static i32 jobkill(Shell *sh, Arena scratch, Str spec, i32 sig)
 {
     polljobs(sh);
@@ -1335,10 +1358,7 @@ static i32 jobkill(Shell *sh, Arena scratch, Str spec, i32 sig)
         }
         return -1;
     }
-    if (!j->pgid) return killpid(sh, j->pid, sig);
-    i32 err = os_kill(sh->os, -j->pgid, sig);
-    if (!err && j->stopped && (sig==15 || sig==1)) os_kill(sh->os, -j->pgid, 18);
-    return err;
+    return jobsignal(sh, j, sig);
 }
 
 static void setcoprocvars(Shell *sh, Arena scratch, Coproc *c)

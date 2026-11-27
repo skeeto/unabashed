@@ -1,0 +1,8 @@
+# A hangup leaves a job that ignores HUP running: nohup's sleep
+# survives the shell (pty only)
+size 24 60
+rc PS1='$ '
+keys { /usr/bin/nohup sleep 30 >/dev/null 2>&1 & } 2>/dev/null; echo $! >~/pid; jobs\r
+hangup
+after i=0; while kill -0 $(cat ~/pid) 2>/dev/null && [ $i -lt 10 ]; do sleep 0.1; i=$((i+1)); done; kill -0 $(cat ~/pid) 2>/dev/null && echo alive || echo gone
+after kill $(cat ~/pid) 2>/dev/null; true

@@ -1,0 +1,14 @@
+== snap 1
+$ trap '' HUP; /bin/sh -c '/usr/local/bin/bash --norc; echo
+st=$?'
+bash-5.3$ PS1='> '; { sleep 30 & } 2>/dev/null; echo $! >~/p
+id
+> trap -p HUP; kill -HUP $$
+Hangup
+st=129
+$ kill -0 $(cat ~/pid) 2>/dev/null && echo alive || echo gon
+e
+alive
+$
+@ 10,2
+== after kill $(cat ~/pid) 2>/dev/null; true

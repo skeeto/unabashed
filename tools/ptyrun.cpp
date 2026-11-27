@@ -11,8 +11,12 @@
 // says; output is drawn on a vterm (vterm.cpp), the same screen model
 // the vos uses, and a snapshot taken once the shell has been quiet for
 // a while. The last snapshot is at the end of the script or when the
-// shell exits, whichever comes first, as in the vos. Output on stdout
-// is a .screens file. Meant for the oracle container (tools/edrecord).
+// shell exits, whichever comes first, as in the vos. A hangup closes
+// the pty's master after a last snapshot, waits for the shell and
+// prints how it ended ("== exited: status N" or "== exited: signal
+// N"). Then each after line runs, in /bin/sh -c, its output following
+// "== after CMD". Output on stdout is a .screens file. Meant for the
+// oracle container (tools/edrecord).
 //
 // This is free and unencumbered software released into the public domain.
 #include <errno.h>
@@ -87,6 +91,31 @@ static void snap(Arena scratch)
 {
     Str s = vtdump(term, &scratch);
     printf("== snap %d\n%.*s", ++nsnaps, (int)s.len, (char *)s.data);
+}
+
+static void report(i32 status)
+{
+    if (WIFSIGNALED(status)) {
+        printf("== exited: signal %d\n", WTERMSIG(status));
+    } else {
+        printf("== exited: status %d\n", WEXITSTATUS(status));
+    }
+}
+
+static void after(Str cmd)
+{
+    printf("== after %.*s\n", (int)cmd.len, (char *)cmd.data);
+    fflush(stdout);
+    static char buf[4096];
+    if (cmd.len >= (iz)sizeof(buf)) return;
+    memcpy(buf, cmd.data, (uz)cmd.len);
+    buf[cmd.len] = 0;
+    FILE *p = popen(buf, "r");
+    if (!p) return;
+    for (iz n; (n = (iz)fread(buf, 1, sizeof(buf), p)) > 0;) {
+        fwrite(buf, 1, (uz)n, stdout);
+    }
+    pclose(p);
 }
 
 static void writeall(i32 fd, Str s)
@@ -182,7 +211,8 @@ int main(int argc, char **argv)
     }
 
     pump(QUIET_MS, 1);
-    for (iz i = 0; i<ed.nkeys && !exited; i++) {
+    b32 hungup = 0;
+    for (iz i = 0; i<ed.nkeys && !exited && !hungup; i++) {
         VKey *k = ed.keys + i;
         switch (k->kind) {
         case VKEY_TEXT:
@@ -203,11 +233,34 @@ int main(int argc, char **argv)
             vtresize(term, &a, k->rows, k->cols);
             ioctl(master, TIOCSWINSZ, &ws);  // SIGWINCH to the foreground
             break;
+        case VKEY_HANGUP:
+            pump(QUIET_MS, 1);
+            snap(a);
+            close(master);  // the kernel's HUP to the session
+            hungup = 1;
+            break;
         }
     }
-    pump(QUIET_MS, 1);
-    snap(a);
-    kill(pid, SIGKILL);
-    waitpid(pid, 0, 0);
+    i32 status = 0;
+    if (hungup) {
+        // Ten seconds for the shell to go, else it is killed
+        pid_t r = 0;
+        for (i64 end = nowms()+10000; !(r = waitpid(pid, &status, WNOHANG)) && nowms()<end;) {
+            usleep(10000);
+        }
+        if (r == pid) {
+            report(status);
+        } else {
+            printf("== exited: still running\n");
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+        }
+    } else {
+        pump(QUIET_MS, 1);
+        snap(a);
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+    }
+    for (iz i = 0; i < ed.nafter; i++) after(ed.after[i]);
     return 0;
 }

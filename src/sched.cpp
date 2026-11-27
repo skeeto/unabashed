@@ -116,6 +116,9 @@ struct Sigproc {
     b32      comsub;   // its synchronous subshell is a comsub
     b32      keepint;  // while that subshell runs in place, with traps
                        // of its own: this level's keepsint
+    b32      hupdie;   // and whether this level dies of a HUP (hupdies)
+    i64      fgchild;  // the foreground program it waits for, or -pgid
+                       // of its job's group, to hang up with the shell
     u64      bydefault;  // pending ones to act on by default, trap or
                          // not (an interactive loop's job died of INT)
     i64      execpid;  // the program in its place, which bash would have
@@ -147,10 +150,14 @@ struct Sched {
     iz      ntasks;      // live tasks, including the main task
     u64     caught;      // signals the process catches (os_sigmode's
                          // SIGM_CATCH or SIGM_CLAIM), as a mask
+    u64     fatal;       // those of them that end it even while it waits
+                         // (an interactive shell's HUP, see hupdies)
     iz      npending;    // tasks blocked on an Io
     i32     budget;      // safe points until the next yield check
     Sigproc *sigprocs;   // every live virtual process
     Sigproc *top;        // the outermost shell's, for the process's signals
+    b32      hangup;     // the outermost dies of a HUP once the levels
+                         // in its place have (hangupinner)
     i64      pid;        // this process's real pid
     i64      nvpid;      // virtual pids handed out (newvpid)
     Task   *orphans;     // jobs whose level ended, to join (jobs.cpp)
@@ -681,10 +688,12 @@ static iz taskread(Sched *s, Handle h, u8 *buf, iz len)
     // A library's run never blocks outside os_wait, so that it can be
     // signalled or cancelled while it waits; nor does a read builtin
     // while the process catches a signal, which interrupts it there,
-    // where a direct read would go on through it
+    // where a direct read would go on through it, nor any read while
+    // the process catches one that ends it at once
     Task *t = s->cur;
     if (!LIBMODE && s->ntasks==1 && !t->deadline && !t->anysig) {
-        if (!t->introk || !s->caught) return os_read(s->os, h, buf, len);
+        b32 intr = (t->introk && s->caught) || s->fatal;
+        if (!intr) return os_read(s->os, h, buf, len);
         // But a read that cannot block needs no wait: take the bytes
         // os_ready says are waiting directly (the read builtin reads a
         // pipe a byte at a time, and the platform remembers the count).

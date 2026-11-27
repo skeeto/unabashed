@@ -1,0 +1,11 @@
+== snap 1
+$ echo one
+one
+$ echo two
+two
+$
+@ 4,2
+== exited: signal 1
+== after cat ~/hist
+echo one
+echo two

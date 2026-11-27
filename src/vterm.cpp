@@ -459,6 +459,8 @@ static Str vtdump(VTerm *t, Arena *a)
 //   pause MS         nothing typed for MS milliseconds
 //   snap             a snapshot of the screen once the shell waits
 //   resize ROWS COLS a new size, and SIGWINCH
+//   hangup           the terminal hangs up (pty only: tools/ptyrun)
+//   after CMD        run by /bin/sh once the shell exits (pty only)
 // The snapshots (vtdump, each after "== snap N"), the last one at the
 // end of the script, are what a session's .screens file holds.
 
@@ -467,6 +469,7 @@ enum : i32 {
     VKEY_PAUSE,   // ms of time with nothing typed
     VKEY_SNAP,    // a snapshot once everything is waiting
     VKEY_RESIZE,  // rows by cols, then SIGWINCH
+    VKEY_HANGUP,  // the terminal goes away (pty only)
 };
 
 struct VKey {
@@ -487,6 +490,9 @@ struct EdScript {
     iz    nenv;
     VKey *keys;
     iz    nkeys;
+    Str  *after;  // commands run once the shell exits (pty only)
+    iz    nafter;
+    b32   ptyonly;
     Str   err;   // the first error, or null data
 };
 
@@ -563,8 +569,9 @@ static EdScript edparse(Arena *a, Str src)
     r.cols = 80;
     iz nlines = 1;
     for (iz i = 0; i < src.len; i++) nlines += src[i]=='\n';
-    r.keys = alloc<VKey>(a, nlines);
-    r.env  = alloc<Str>(a, nlines);
+    r.keys  = alloc<VKey>(a, nlines);
+    r.env   = alloc<Str>(a, nlines);
+    r.after = alloc<Str>(a, nlines);
     Buf rc(a, src.len+1);
     for (iz i = 0; i < src.len;) {
         iz end = i;
@@ -609,6 +616,12 @@ static EdScript edparse(Arena *a, Str src)
             r.keys[r.nkeys].kind = VKEY_RESIZE;
             r.keys[r.nkeys].rows = n1;
             r.keys[r.nkeys++].cols = n2;
+        } else if (word == "hangup") {
+            r.keys[r.nkeys++].kind = VKEY_HANGUP;
+            r.ptyonly = 1;
+        } else if (word == "after") {
+            r.after[r.nafter++] = rest;
+            r.ptyonly = 1;
         } else {
             r.err = "unknown directive";
             return r;
