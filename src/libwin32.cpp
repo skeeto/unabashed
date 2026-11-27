@@ -1266,6 +1266,7 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     for (i32 i = 0; i < cmd->nfds; i++) {
         if (cmd->fds[i].fd < 3) return -E_INVAL;
     }
+    if (l->cfg.flags & UB_TERMINAL) return -E_INVAL;  // its meaning is open here
 
     // The run's state, from scratch
     l->cmd    = cmd;

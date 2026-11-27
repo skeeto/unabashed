@@ -111,10 +111,12 @@ the records list, without calling the core.
    Windows. Then wait up to 1 s for them.
 4. Windows: unregister the pool waits.
 5. Close the recorded descriptors and handles.
-6. End or orphan the helpers.
-7. Free the fibers.
-8. Release the reservations.
-9. Restore the thread's signal mask (POSIX).
+6. Terminal mode (POSIX): give the terminal back (see Terminal mode).
+7. End or orphan the helpers.
+8. Free the fibers.
+9. Release the reservations.
+10. Restore the thread's signal mask (POSIX), then release the
+    terminal's claim.
 
 
 ## Decisions
@@ -138,7 +140,9 @@ the records list, without calling the core.
     unless it is handed a console handle.
   - `UB_SHARECONSOLE` shares the host's console and group, as the
     executable does.
-  - No terminal or console mode is ever changed.
+  - No terminal or console mode is ever changed, except under
+    `UB_TERMINAL` (POSIX), where runs use the host's terminal and give
+    it back (see Terminal mode).
 - **Soft stop is a signal; hard stop is a cancel.**
   - `ub_signal(os, TERM|UB_GROUP)` reaches every level and every
     program, as a terminal's signal would. For a non-terminal signal it
@@ -188,7 +192,9 @@ the records list, without calling the core.
 **The library guarantees:**
 - **No process-wide state changes:** no signal handler or disposition,
   terminal or console mode, cwd, umask, rlimit or environment. Only
-  `ub_run`'s thread mask changes, and it is restored. A script's
+  `ub_run`'s thread mask changes, and it is restored. Under
+  `UB_TERMINAL` the run changes the mode of its session's terminal, and
+  gives it back as it ends (see Terminal mode). A script's
   `umask` is the run's own: files it creates get their mode by
   `fchmod`, and its programs a fork that sets their mask. One
   exception: where the mask cannot be read from `/proc/self/status`
@@ -244,16 +250,77 @@ the records list, without calling the core.
   outlive a crashed host. On Windows the job ends them.
 - **Not call the library from a hook, nor unwind out of one.** A hook
   must be brief (see Hooks).
+- **Under `UB_TERMINAL`, lead the terminal's session** with its own
+  group in front, pass its own pid as `ub_cmd.pid`, and forward each
+  signal it gets but SIGCHLD, plainly (see Terminal mode).
 
 **Threading:**
 - **`ub_run`** blocks its thread until the run ends. Each handle runs
   one at a time, and separate handles may run concurrently on separate
-  threads.
+  threads, but only one run in the process may hold the terminal under
+  `UB_TERMINAL` (`-UB_EBUSY`).
 - **`ub_signal` and `ub_cancel`** may be called from any thread, even a
   signal handler or console control handler. They use only atomics and
   one wake. Sent while no run is active, they apply to the next run, so
   a host that reuses a handle should not signal it while idle.
 - **`ub_free`** must not race any other call on the handle.
+
+
+## Terminal mode
+
+`UB_TERMINAL` (POSIX, in `ub_config.flags`) lets runs use a terminal
+interactively, as a shell in a terminal tab: Prospero's "bash
+(builtin)". The terminal is std[2]'s, else std[0]'s. With neither a
+terminal the flag does nothing, and the run is isolated as without it.
+
+**The host:**
+- leads the terminal's session, with its own group in front:
+  `getsid(0)==getpid()==tcgetsid(fd)` and `tcgetpgrp(fd)==getpgrp()`;
+- passes its own pid as `ub_cmd.pid`;
+- forwards each signal it gets with `ub_signal`, plainly (without
+  `UB_GROUP`), from a signal thread, as ubcheck's terminal child does
+  (termforward, tools/ubcheck.c), but SIGCHLD: that one is about the
+  host's own children, and the run has no use for it.
+
+`ub_run` returns `-UB_EINVAL` if any of that fails, and `-UB_EBUSY`
+while another run in the process holds the terminal: one at a time, by
+a process-wide claim, and runs may follow one another. On Windows
+`UB_TERMINAL` is refused with `-UB_EINVAL`, its meaning left open.
+
+**Modes.** A run changes the mode of its session's terminal and of no
+other. A descriptor is that terminal when `tcgetsid(fd)==getsid(0)`,
+which `/dev/tty` is too. Any other terminal is none to the run
+(E_NOTTY), as in every run without the flag. So the line editor's raw
+mode (^C, ^Z and ^\ are keys), the mode `bind -x` code runs in, `read
+-s`, `-n` and `-e`, and checkwinsize work as in the executable. A resize
+comes as the host's forwarded SIGWINCH: the library installs no
+handler. The run blocks SIGTTIN and SIGTTOU in its thread until it
+returns, so that it may take the terminal back from a group that took
+it.
+
+**Handback.** As the run ends, however it ends, before its mask is
+restored and the claim released:
+- the host's group is put back in front, if another holds the terminal;
+- after a cancel, the mode is the one the run began with;
+- otherwise the run's own change, if still in effect (an abort inside a
+  `bind -x` key, out of memory), is undone, with bracketed paste off. A
+  program's change (`stty -echo; exit`) stays, as under bash.
+
+The calls are TCSANOW, and their errors ignored: a terminal hung up has
+nothing to give back.
+
+**Still as without the flag:** programs start sessions of their own, so
+they have no controlling terminal, and the run kills them as it ends.
+None of the terminal's signals reach them: the kernel sends ^C, ^\ and
+^Z to the host's group, and the host's plain forwarding gives them to
+the shell alone. Waiting for a program, the shell acts on such a signal
+only if the program died of it too, as bash does, so a foreground
+`sleep 100` runs on through ^C.
+
+**Deviations from bash on a terminal:**
+- `+m` only: there is no job control (Known deviations).
+- A background job that is shell code is a level of the run, and ends
+  with it.
 
 
 ## Hooks
@@ -421,15 +488,16 @@ starting the program.
 
 **From the executable and bash, by design.** tools/ubhost.expect lists
 the suite tests that fail through the drop-in, with reasons:
-- No job control or terminal. In a POSIX run monitor never turns on by
-  itself. At an interactive run's top, `set -m`, `set -o monitor` and
-  `shopt -o -s monitor` fail with status 1 ("no job control"), so `$-`
-  has no m and a background job reads /dev/null, as under `bash +m`.
-  `-m` in the arguments is refused at startup ("no job control in this
-  shell"), as bash finding no terminal. A script or a subshell can
-  still turn monitor on: nothing gets a group of its own, but fg and bg
-  act on running jobs, and `set -e; set -m` goes on, as in bash.
-  `suspend` is refused, and nothing stops.
+- No job control, and no terminal without `UB_TERMINAL`. In a POSIX run
+  monitor never turns on by itself. At an interactive run's top,
+  `set -m`, `set -o monitor` and `shopt -o -s monitor` fail with status
+  1 ("no job control"), so `$-` has no m and a background job reads
+  /dev/null, as under `bash +m`. `-m` in the arguments is refused at
+  startup ("no job control in this shell"), as bash finding no
+  terminal. A script or a subshell can still turn monitor on: nothing
+  gets a group of its own, but fg and bg act on running jobs, and
+  `set -e; set -m` goes on, as in bash. `suspend` is refused, and
+  nothing stops.
 - A background level is a fiber, not a process, so `$!` is a virtual
   pid, as under `tests --fibers`.
 - `exec` does not replace the host. The program runs while the run
@@ -543,7 +611,30 @@ The cases cover:
   with every hook set;
 - the descriptor budget;
 - SIGPIPE;
-- on Windows, helper queues and fibers (`ub_system` is ubtiny's, below).
+- on Windows, helper queues and fibers (`ub_system` is ubtiny's, below);
+- on POSIX, `UB_TERMINAL`: every case but the pty ones again with the
+  flag and no terminal (the "flag:" cases), the refusal of a host that
+  does not lead its terminal's session, and the terminal cases below.
+
+**The terminal cases** (POSIX) each run in a child of the check that
+leads a fresh pty's session, its group in front, the pty its
+descriptors 0-2, as a terminal tab's host: `ubhost --term-case N`,
+executed anew since the check has threads by then. It blocks every
+signal and forwards each plainly from a sigwait thread, runs the case
+with `UB_TERMINAL`, and reports over a pipe. Its snapshots add the
+terminal's mode (every flag and `c_cc`) and foreground group, and each
+run must leave the mode as it found it, but for what the case lets a
+program keep. Its dispositions and mask are also compared with those
+before the warm-up run, so that a handler the first run installs for
+good is caught. The check's side pumps the pty's master: it drains the
+output, and plays each run the case's steps (keys once some output
+shows, delays, a resize, a cancel), then checks the output. The cases
+cover the refusals (a wrong pid, a second run, another group in
+front), `read -s` and `-n` (on `/dev/tty` too), another terminal left
+alone (`read -n` there stays canonical), the line editor's keys in raw
+mode, a resize picked up by checkwinsize, and the handback after a
+cancel at the prompt, in `read -s` and after a program's `stty`, out of
+memory inside a `bind -x` key, and `stty -echo; exit`.
 
 On Windows, a watcher thread samples descendants while each case runs,
 so leftovers are caught before `ub_free` closes the job.
@@ -608,7 +699,7 @@ about 9x slower under ASan, since each fork copies its shadow mappings.
 - persistent shells and input fragments;
 - host-supplied tables;
 - a table version floor;
-- interactive use and terminal sharing;
+- job control on the terminal;
 - a keeper process inside the library;
 - `sh -c` in-process with no `self`;
 - FIFO opens that a cancel can interrupt;

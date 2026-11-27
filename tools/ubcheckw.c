@@ -1398,6 +1398,7 @@ static int check(int quick)
         {"suspend", "suspend 2>/dev/null; echo s=$?", 0, "s=1"},
         {"title", "printf '\\033]0;x\\007'; echo ok", 0, "ok"},
         {"bad pid", "true", -UB_EINVAL, 0, 0, 0, 0, 0, 0, (int64_t)1<<47},
+        {"UB_TERMINAL refused", "true", -UB_EINVAL, .flags = UB_TERMINAL},
         {"-n: syntax error", "echo ok; if", 2,
          "syntax error: unexpected end of file", .opt = "-n", .notout = "ok\n"},
         {"-n: unexpected token", "case x in esac; echo )", 2,

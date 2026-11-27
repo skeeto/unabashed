@@ -23,7 +23,7 @@
 // fills (ub_config, ub_cmd) zero means the default, or off: a host
 // written for an older version, its structs zeroed, builds and runs as
 // before. Build the host with the header beside the library's source.
-#define UB_VERSION 0x000700
+#define UB_VERSION 0x000800
 
 #ifdef __cplusplus
 extern "C" {
@@ -138,7 +138,7 @@ typedef struct {
                           // 256 MiB on 32-bit; negative: no limit
     int         fds;      // descriptors per run; 0: min(256, RLIMIT_NOFILE/4),
                           // 256 on Windows
-    int         flags;    // UB_SHARECONSOLE, UB_SYSROOT
+    int         flags;    // UB_SHARECONSOLE, UB_SYSROOT, UB_TERMINAL
     // Optional: as the run ends, after its EXIT trap, with the state to
     // start the next run from. Not called if it was aborted (ub_run
     // returning a negated error), as by a cancel or out of memory.
@@ -203,6 +203,23 @@ enum { UB_SIGNALED = 0x100 };   // status: the shell died of signal (s&0xff)-128
 // drive's root (the Windows directory's), not the start directory's, so
 // a run started on another drive means the same by /
 enum { UB_SHARECONSOLE = 1, UB_SYSROOT = 2 };
+// ub_config.flags, POSIX (Windows refuses it with -UB_EINVAL): runs use
+// the terminal interactively, as a shell on it would, but its programs
+// still start sessions of their own, apart from it (notes/library.md).
+// The terminal is std[2]'s, else std[0]'s; with neither a terminal the
+// flag does nothing. With one, ub_run returns -UB_EINVAL unless the
+// host leads that terminal's session, its own group in front, and
+// passes its pid as ub_cmd.pid; and -UB_EBUSY while another run in the
+// process has the terminal (one at a time; runs may follow one
+// another). The host forwards each signal it gets, but SIGCHLD, with
+// ub_signal, plainly (without UB_GROUP), from a signal thread. A run
+// may change the mode of its session's terminal, and no other (the line
+// editor, read -s), and blocks SIGTTIN and SIGTTOU in its thread until
+// it returns. As it ends, however it ends, it gives the terminal back:
+// the host's group in front, and the mode the run began with after a
+// cancel, else the run's own change undone (a program's, as stty's,
+// stays).
+enum { UB_TERMINAL = 4 };
 enum {                          // errors, negated; Linux numbering everywhere
     UB_EPERM = 1, UB_ENOENT = 2, UB_EBADF = 9, UB_ECHILD = 10,
     UB_ENOMEM = 12, UB_EACCES = 13, UB_EBUSY = 16, UB_EEXIST = 17,

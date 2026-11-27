@@ -4,9 +4,12 @@
 // of everything a run could leave changed in its host: mappings,
 // descriptors, threads, signal dispositions and the thread's mask,
 // process group and session, directory, umask, limits, environment,
-// and the programs it started (each must be gone, with its group).
-// A difference fails the case, as does a status, output or time other
-// than the case expects. Included by ubhost.c.
+// the terminal's mode and foreground group, and the programs it started
+// (each must be gone, with its group). A difference fails the case, as
+// does a status, output or time other than the case expects. The
+// terminal cases (UB_TERMINAL) each run in a child that leads a fresh
+// pty's session, as a terminal's host would (termchild). Included by
+// ubhost.c.
 // This is free and unencumbered software released into the public domain.
 #include <dirent.h>
 #include <poll.h>
@@ -14,7 +17,9 @@
 #include <sys/file.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <time.h>
 #if __linux__
 #include <sys/prctl.h>
@@ -172,6 +177,15 @@ static void snapshot(Snap *s)
         if (sigismember(&mask, sig)) snapf(s, "blocked %d\n", sig);
     }
     snapf(s, "pgrp %ld sid %ld\n", (long)getpgrp(), (long)getsid(0));
+    struct termios tio;
+    if (!tcgetattr(0, &tio)) {
+        snapf(s, "termios %lx %lx %lx %lx %lx %lx", (unsigned long)tio.c_iflag,
+              (unsigned long)tio.c_oflag, (unsigned long)tio.c_cflag,
+              (unsigned long)tio.c_lflag, (unsigned long)cfgetispeed(&tio),
+              (unsigned long)cfgetospeed(&tio));
+        for (int i = 0; i < NCCS; i++) snapf(s, " %x", tio.c_cc[i]);
+        snapf(s, "\ntcpgrp %ld\n", (long)tcgetpgrp(0));
+    }
     char cwd[4096];
     snapf(s, "cwd %s\n", getcwd(cwd, sizeof(cwd)) ? cwd : "?");
     mode_t um = umask(022);
@@ -240,6 +254,23 @@ static double nowsec(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec/1e9;
+}
+
+// 1 if the snapshots match, else 0, and why: their first line that differs
+static int snapsame(Snap const *x, Snap const *y, char const *what, char *why, size_t len)
+{
+    if (x->len==y->len && (!x->len || !memcmp(x->buf, y->buf, x->len))) return 1;
+    char const *a = x->len ? x->buf : "", *b = y->len ? y->buf : "";
+    while (*a && *a==*b) {
+        char const *na = strchr(a, '\n'), *nb = strchr(b, '\n');
+        if (!na || !nb || na-a!=nb-b || memcmp(a, b, (size_t)(na-a))) break;
+        a = na+1;
+        b = nb+1;
+    }
+    char const *e = strchr(a, '\n'), *f = strchr(b, '\n');
+    snprintf(why, len, "%s: %.*s, now %.*s", what, e ? (int)(e-a) : 40, a,
+             f ? (int)(f-b) : 40, b);
+    return 0;
 }
 
 enum { ANY = 1<<30 };
@@ -352,7 +383,10 @@ typedef struct Case {
     char const *envx;       // and this entry too, or null
     int         linger;     // ub_config.linger
     int         pty;        // std[0] a fresh pty's slave, and --norc
+    int         flags;      // ub_config.flags
 } Case;
+
+static int extraflags;  // or'd into every case's ub_config.flags
 
 // An access as a log line, "OP flags path", T and TMPDIR shown as $T and
 // $TMP; refused if the case's rule says so
@@ -473,6 +507,7 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
     cfg.memlimit = c->memlimit;
     cfg.fds      = c->fds;
     cfg.linger   = c->linger;
+    cfg.flags    = c->flags | extraflags;
     if (c->hooks & H_EXIT) cfg.exit = onexit;
     if (c->hooks & H_ACCESS) cfg.access = onaccess;
     if (c->hooks & H_SPAWN) cfg.spawn = onspawn;
@@ -615,19 +650,7 @@ static int checkcase(Case const *c, int reps)
     }
     if (ok) {
         snapshot(&after);
-        if (before.len!=after.len || memcmp(before.buf, after.buf, before.len)) {
-            ok = 0;
-            // The first line that differs
-            char *a = before.buf, *b = after.buf;
-            while (*a && *a==*b) {
-                char *na = strchr(a, '\n'), *nb = strchr(b, '\n');
-                if (!na || !nb || na-a!=nb-b || memcmp(a, b, (size_t)(na-a))) break;
-                a = na+1;
-                b = nb+1;
-            }
-            char *e = strchr(a, '\n');
-            snprintf(why, sizeof(why), "host changed at: %.*s", e ? (int)(e-a) : 40, a);
-        }
+        ok = snapsame(&before, &after, "host changed at", why, sizeof(why));
     }
     printf("%s %-28s %.3fs%s%s\n", ok ? "PASS" : "FAIL", c->name, secs,
            ok ? "" : ": ", ok ? "" : why);
@@ -759,6 +782,607 @@ static int checkconcurrent(int threads, int reps)
     return ok;
 }
 
+// The terminal cases. Each runs in a child of the check's that leads a
+// fresh pty's session, its group in front, the pty its descriptors 0-2,
+// as Prospero's terminal tab: "ubhost --term-case N" (re-executed, as
+// the check has threads by then), which blocks every signal and
+// forwards each plainly from a sigwait thread, and runs the case with
+// UB_TERMINAL, std 0-2, and its own pid. The check's side pumps the
+// pty's master: it drains the output, and plays the case's steps
+// against each run: keys once some output shows, resizes, a cancel. A
+// run's output is what the master read between the run's start and a
+// marker the child writes once it returns.
+//
+// Over a pipe (fd 3) the child says "C" as each run is about to start,
+// and waits on the other (fd 4) for "g"; "E status ok secs why" once it
+// returned and the marker is out, after which "x" ends that run's
+// control thread; and at last "D ok why" for the snapshots. Meanwhile
+// "c" on fd 4 cancels the run.
+enum { T_EXPECT = 1, T_WRITE, T_DELAY, T_RESIZE, T_CANCEL };
+
+typedef struct {
+    int         op;     // T_*
+    char const *s;      // T_EXPECT: output to wait for; T_WRITE: keys
+    int         n;      // T_DELAY: ms; T_RESIZE: rows*1000 + cols
+} Step;
+
+typedef struct {
+    char const *name;
+    char const *script;   // bash -c this, or null: interactive (-i), its
+                          // input typed by the steps
+    int         status;   // or ANY
+    char const *out;      // a substring the terminal's output must hold
+    char const *notout;   // and one it must not, or null
+    Step        steps[8];
+    int64_t     pid;      // ub_cmd.pid; 0: the child's own
+    ptrdiff_t   memlimit;
+    int         busy;     // a second run tried meanwhile gets -UB_EBUSY
+    int         nosig;    // the host must not get this signal meanwhile
+    tcflag_t    keep;     // c_lflag bits a program clears and the run keeps
+                          // (restored afterwards by the check)
+    int         other;    // fd 5 in the run: another pty, not the session's,
+                          // "ab" typed on it
+    int         nofg;     // a helper's group holds the terminal meanwhile
+} TermCase;
+
+static char const termmark[] = "@@ubcheck run end@@";  // on a line of its own
+
+static TermCase const termcases[] = {
+    {"terminal: a run", "echo hi; tty", 0, "hi\r\n/dev/"},
+    {"terminal: refused, wrong pid", "true", -UB_EINVAL, .pid = 1},
+    {"terminal: refused, busy", "sleep 0.5", 0, .busy = 1},
+    {"terminal: not in front", "true", -UB_EINVAL, .nofg = 1},
+    // Modes: the terminal's own line editing and echo as read asks
+    {"terminal: read -s", "echo go; read -s x; echo \"got $x\"", 0, "got secret",
+     "go\r\nsecret", {{T_EXPECT, "go"}, {T_DELAY, 0, 200}, {T_WRITE, "secret\r"}}},
+    {"terminal: read -s </dev/tty", "echo go; read -s x </dev/tty; echo \"got $x\"", 0,
+     "got secret", "go\r\nsecret",
+     {{T_EXPECT, "go"}, {T_DELAY, 0, 200}, {T_WRITE, "secret\r"}}},
+    {"terminal: read -n", "echo go; read -n 3 x; echo; echo \"got $x\"", 0, "got abc", 0,
+     {{T_EXPECT, "go"}, {T_DELAY, 0, 200}, {T_WRITE, "abc"}}},
+    // Another terminal is none to the run: its mode stays canonical,
+    // so the "ab" typed there, a line not ended, is never read
+    {"terminal: another tty", "read -t 0.5 -n 1 x <&5; echo \"s=$? x=$x.\"", 0,
+     "s=142 x=.", .other = 1},
+    {"terminal: checkwinsize",
+     "shopt -s checkwinsize; echo go; sleep 0.5; echo \"size $LINES $COLUMNS\"", 0,
+     "size 33 111", 0, {{T_EXPECT, "go"}, {T_RESIZE, 0, 33111}}},
+    // The line editor in raw mode: ^B moves back, ^C is a key, not the
+    // terminal's interrupt
+    {"terminal: editor keys", 0, 130, "aXb", 0,
+     {{T_EXPECT, "P> "}, {T_WRITE, "echo ab\x02X\r"}, {T_EXPECT, "aXb"},
+      {T_EXPECT, "P> "}, {T_WRITE, "echo zz\x03"}, {T_EXPECT, "P> "},
+      {T_WRITE, "exit\r"}}, .nosig = SIGINT},  // 130: $? after the ^C
+    // Given back: the mode the run began with after a cancel, the run's
+    // own change undone otherwise, a program's kept
+    {"terminal: cancel at the prompt", 0, -UB_ECANCELED, 0, 0,
+     {{T_EXPECT, "P> "}, {T_WRITE, "ech"}, {T_DELAY, 0, 100}, {T_CANCEL}}},
+    {"terminal: cancel in read -s", "echo go; read -s x", -UB_ECANCELED, 0, 0,
+     {{T_EXPECT, "go"}, {T_DELAY, 0, 200}, {T_CANCEL}}},
+    {"terminal: cancel undoes stty", "stty -echo; echo go; sleep 100", -UB_ECANCELED, 0, 0,
+     {{T_EXPECT, "go"}, {T_CANCEL}}},
+    {"terminal: out of memory, bind -x", 0, -UB_ENOMEM, 0, 0,
+     {{T_EXPECT, "P> "},
+      {T_WRITE, "bind -x '\"\\C-t\": x=a; while :; do x=$x$x; done'\r"},
+      {T_EXPECT, "P> "}, {T_WRITE, "\x14"}}, .memlimit = 32<<20},
+    {"terminal: exit in bind -x", 0, 5, 0, 0,
+     {{T_EXPECT, "P> "}, {T_WRITE, "bind -x '\"\\C-t\": exit 5'\r"},
+      {T_EXPECT, "P> "}, {T_WRITE, "\x14"}}},
+    {"terminal: stty -echo kept", "stty -echo; exit", 0, .keep = ECHO},
+};
+
+// The child's side
+
+static ub_os *termos;         // the run in progress (atomic)
+static long   termsigs[32];   // the signals the forwarder got (atomic)
+
+static void *termforward(void *arg)
+{
+    (void)arg;
+    sigset_t set;
+    sigemptyset(&set);
+    for (int sig = 1; sig < 32; sig++) {
+        switch (sig) {
+        case SIGKILL: case SIGSTOP:
+            continue;
+        #if !__linux__
+        case SIGILL: case SIGTRAP: case SIGBUS: case SIGFPE: case SIGSEGV:
+        case SIGSYS:
+            continue;
+        #endif
+        }
+        sigaddset(&set, sig);
+    }
+    for (;;) {
+        int sig;
+        if (sigwait(&set, &sig)) continue;
+        __atomic_add_fetch(termsigs+sig, 1, __ATOMIC_RELAXED);
+        ub_os *os = __atomic_load_n(&termos, __ATOMIC_ACQUIRE);
+        if (os && sig!=SIGCHLD) ub_signal(os, sig);
+    }
+    return 0;
+}
+
+// A run's control: the check's requests, until "x"
+static void *termcontrol(void *arg)
+{
+    ub_os *os = arg;
+    for (char c; read(4, &c, 1) == 1 && c != 'x';) {
+        if (c == 'c') ub_cancel(os);
+    }
+    return 0;
+}
+
+static int busyret;
+
+static void *termbusy(void *arg)
+{
+    ub_cmd const *cmd = arg;
+    usleep(100000);
+    ub_config cfg = {0};
+    cfg.spawnlock = spawnlock;
+    cfg.flags     = UB_TERMINAL;
+    ub_os *os = ub_new(&cfg);
+    busyret = os ? ub_run(os, cmd) : -9999;
+    ub_free(os);
+    return 0;
+}
+
+static void termsay(char const *fmt, ...)
+{
+    char line[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (n>0 && write(3, line, (size_t)n<sizeof(line) ? (size_t)n : sizeof(line)-1) < 0) {
+        _exit(98);
+    }
+}
+
+// The same mode, but for c_lflag bits in keep
+static int sametty(struct termios const *a, struct termios const *b, tcflag_t keep)
+{
+    return a->c_iflag==b->c_iflag && a->c_oflag==b->c_oflag &&
+           a->c_cflag==b->c_cflag && (a->c_lflag|keep)==(b->c_lflag|keep) &&
+           cfgetispeed(a)==cfgetispeed(b) && cfgetospeed(a)==cfgetospeed(b) &&
+           !memcmp(a->c_cc, b->c_cc, sizeof(a->c_cc));
+}
+
+// One run of the case, as the check's side plays it: 0 and why if not
+// as the case expects
+static int termrun(TermCase const *c, char const *const *env, char *why, size_t len)
+{
+    ub_config cfg = {0};
+    cfg.spawnlock = spawnlock;
+    cfg.child     = onchild;
+    cfg.memlimit  = c->memlimit;
+    cfg.flags     = UB_TERMINAL;
+    ub_os *os = ub_new(&cfg);
+    if (!os) _exit(97);
+    char const *argv[6] = {"bash", "--norc"};
+    int argc = 2;
+    if (c->script) {
+        argv[argc++] = "-c";
+        argv[argc++] = c->script;
+    } else {
+        argv[argc++] = "-i";
+    }
+    ub_cmd cmd = {0};
+    cmd.argc = argc;
+    cmd.argv = argv;
+    cmd.env  = env;
+    cmd.pid  = c->pid ? c->pid : getpid();
+    cmd.ppid = getppid();
+    static ub_fd const other[] = {{5, 5}};
+    if (c->other) {
+        cmd.nfds = 1;
+        cmd.fds  = other;
+    }
+
+    struct termios start;
+    tcgetattr(0, &start);
+    long sigs = __atomic_load_n(termsigs+c->nosig, __ATOMIC_RELAXED);
+    termsay("C\n");
+    char go;
+    if (read(4, &go, 1)!=1 || go!='g') _exit(96);
+    __atomic_store_n(&termos, os, __ATOMIC_RELEASE);
+    pthread_t ctl, busy;
+    pthread_create(&ctl, 0, termcontrol, os);
+    busyret = 0;
+    if (c->busy) pthread_create(&busy, 0, termbusy, &cmd);
+    pid_t front = 0;
+    if (c->nofg) {
+        // SIGTTOU is blocked, so the terminal may be handed about
+        front = fork();
+        if (!front) {
+            setpgid(0, 0);
+            for (;;) pause();
+        }
+        setpgid(front, front);
+        tcsetpgrp(0, front);
+    }
+    double t0 = nowsec();
+    int r = ub_run(os, &cmd);
+    double secs = nowsec() - t0;
+    if (front > 0) {
+        tcsetpgrp(0, getpgrp());
+        kill(front, SIGKILL);
+        waitpid(front, 0, 0);
+    }
+    __atomic_store_n(&termos, 0, __ATOMIC_RELEASE);
+    if (c->busy) pthread_join(busy, 0);
+    ub_free(os);
+    tcflush(0, TCIFLUSH);  // keys the run left
+    if (dprintf(1, "\n%s\n", termmark) < 0) _exit(95);
+
+    int ok = 1;
+    struct termios now;
+    tcgetattr(0, &now);
+    if (c->status!=ANY && r!=c->status) {
+        snprintf(why, len, "status %d, not %d", r, c->status);
+        ok = 0;
+    } else if (c->busy && busyret!=-UB_EBUSY) {
+        snprintf(why, len, "a second run returned %d", busyret);
+        ok = 0;
+    } else if (c->nosig && __atomic_load_n(termsigs+c->nosig, __ATOMIC_RELAXED)!=sigs) {
+        snprintf(why, len, "the host got signal %d", c->nosig);
+        ok = 0;
+    } else if (c->keep && (now.c_lflag & c->keep)) {
+        snprintf(why, len, "the program's mode was undone");
+        ok = 0;
+    } else if (!sametty(&start, &now, c->keep)) {
+        snprintf(why, len, "mode %lx %lx %lx, not %lx %lx %lx as the run began",
+                 (unsigned long)now.c_iflag, (unsigned long)now.c_oflag,
+                 (unsigned long)now.c_lflag, (unsigned long)start.c_iflag,
+                 (unsigned long)start.c_oflag, (unsigned long)start.c_lflag);
+        ok = 0;
+    }
+    tcsetattr(0, TCSANOW, &start);  // for the next run, whatever this one left
+    termsay("E %d %d %.3f %s\n", r, ok, secs, ok ? "" : why);
+    pthread_join(ctl, 0);
+    return ok;
+}
+
+// The snapshot's signal dispositions and mask alone
+static void snapsigs(Snap const *s, Snap *out)
+{
+    out->len = 0;
+    for (char const *p = s->buf, *e; p && (e = strchr(p, '\n')); p = e+1) {
+        if (!strncmp(p, "sig ", 4) || !strncmp(p, "blocked ", 8)) {
+            snapf(out, "%.*s\n", (int)(e-p), p);
+        }
+    }
+}
+
+// ubhost --term-case N [--quick]: the check's child (above)
+static int termchild(char *argv0, int idx, int quick)
+{
+    if (!realpath(argv0, self)) snprintf(self, sizeof(self), "%s", argv0);
+    if (idx<0 || idx>=(int)(sizeof(termcases)/sizeof(*termcases))) return 2;
+    TermCase const *c = termcases + idx;
+    fcntl(3, F_SETFD, FD_CLOEXEC);
+    fcntl(4, F_SETFD, FD_CLOEXEC);
+    if (c->other) fcntl(5, F_SETFD, FD_CLOEXEC);
+    #if __linux__
+    prctl(PR_SET_CHILD_SUBREAPER, 1);  // as the check, for kidsgone
+    #endif
+    #if __APPLE__
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGXFSZ, SIG_IGN);
+    #endif
+    sigset_t all;
+    sigfillset(&all);
+    pthread_sigmask(SIG_BLOCK, &all, 0);
+    pthread_t t;
+    pthread_create(&t, 0, termforward, 0);
+
+    static char envpath[4200], envt[300], envhome[300];
+    char const *tdirenv = getenv("T") ? getenv("T") : "/tmp";
+    snprintf(envpath, sizeof(envpath), "PATH=%s", getenv("PATH") ? getenv("PATH") : "");
+    snprintf(envt, sizeof(envt), "T=%s", tdirenv);
+    snprintf(envhome, sizeof(envhome), "HOME=%s", tdirenv);
+    char const *env[] = {envpath, envt, envhome, "PS1=P> ", "HISTFILE=", "TERM=xterm", 0};
+
+    // Sized before the warm-up, so that no snapshot sees the heap grow
+    // (ASan's allocator maps its regions). The dispositions and mask
+    // from before the warm-up are kept too, since what the first run
+    // installs and never removes is in both later snapshots; not the
+    // rest, as the first output to the pty changes its descriptors'
+    // flags (macOS).
+    static Snap firstsigs, lastsigs;
+    snapshot(&before);
+    snapshot(&after);
+    snapsigs(&before, &firstsigs);
+
+    char why[256] = "";
+    int  reps = quick ? 1 : 2;
+    termrun(c, env, why, sizeof(why));  // warm-up
+    for (double until = nowsec()+1; !kidsgone(why, sizeof(why)) && nowsec()<until;) {
+        usleep(1000);
+    }
+    why[0] = 0;
+    snapshot(&before);
+    int ok = 1;
+    for (int i = 0; i<reps && ok; i++) {
+        ok = termrun(c, env, why, sizeof(why));
+        if (ok) {
+            // A killed program may take a moment to be reapable
+            double until = nowsec() + 1;
+            while (!(ok = kidsgone(why, sizeof(why))) && nowsec()<until) usleep(1000);
+        }
+    }
+    if (ok) {
+        snapshot(&after);
+        ok = snapsame(&before, &after, "host changed at", why, sizeof(why));
+    }
+    if (ok) {
+        snapsigs(&after, &lastsigs);
+        ok = snapsame(&firstsigs, &lastsigs, "host changed from the start at", why,
+                      sizeof(why));
+    }
+    termsay("D %d %s\n", ok, ok ? "" : why);
+    return !ok;
+}
+
+// The check's side
+
+static int termwrite(int fd, char const *s, size_t len)
+{
+    while (len) {
+        ssize_t n = write(fd, s, len);
+        if (n < 0) {
+            if (errno == EINTR || errno == EAGAIN) {
+                usleep(1000);
+                continue;
+            }
+            return -1;
+        }
+        s   += n;
+        len -= (size_t)n;
+    }
+    return 0;
+}
+
+static int checkterm(int idx, int quick)
+{
+    TermCase const *c = termcases + idx;
+    char why[512] = "";
+    int ptm = posix_openpt(O_RDWR|O_NOCTTY);
+    if (ptm<0 || grantpt(ptm) || unlockpt(ptm)) {
+        printf("FAIL %-28s no pty\n", c->name);
+        return 0;
+    }
+    fcntl(ptm, F_SETFD, FD_CLOEXEC);
+    fcntl(ptm, F_SETFL, fcntl(ptm, F_GETFL)|O_NONBLOCK);
+    char pts[256], arg[16];
+    snprintf(pts, sizeof(pts), "%s", ptsname(ptm));
+    snprintf(arg, sizeof(arg), "%d", idx);
+    int other = -1, otherm = -1;
+    if (c->other) {
+        otherm = posix_openpt(O_RDWR|O_NOCTTY);
+        if (otherm<0 || grantpt(otherm) || unlockpt(otherm) ||
+            (other = open(ptsname(otherm), O_RDWR|O_NOCTTY|O_CLOEXEC))<0) {
+            printf("FAIL %-28s no second pty\n", c->name);
+            if (otherm >= 0) close(otherm);
+            close(ptm);
+            return 0;
+        }
+        fcntl(otherm, F_SETFD, FD_CLOEXEC);
+        termwrite(otherm, "ab", 2);
+    }
+    int up[2], down[2];
+    if (hostpipe(up) || hostpipe(down)) return 0;
+
+    pthread_mutex_lock(&hostlock);
+    pid_t pid = fork();
+    if (!pid) {
+        setsid();
+        int fd = open(pts, O_RDWR);  // the controlling terminal, on Linux
+        if (fd < 0) _exit(90);
+        ioctl(fd, TIOCSCTTY, 0);     // elsewhere
+        struct winsize ws = {24, 80, 0, 0};
+        ioctl(fd, TIOCSWINSZ, &ws);
+        dup2(fd, 0);
+        dup2(fd, 1);
+        dup2(fd, 2);
+        dup2(up[1], 3);
+        dup2(down[0], 4);
+        if (other >= 0) dup2(other, 5);
+        if (fd > 5) close(fd);
+        execl(self, self, "--term-case", arg, quick ? "--quick" : (char *)0, (char *)0);
+        _exit(91);
+    }
+    pthread_mutex_unlock(&hostlock);
+    close(up[1]);
+    close(down[0]);
+    if (other >= 0) close(other);
+
+    static char out[1<<16], shown[1024];
+    shown[0] = 0;
+    size_t olen = 0, match = 0;
+    char   line[600];
+    size_t llen = 0;
+    int    inrun = 0, step = 0, nruns = 0, ok = 1, done = 0, endwait = 0;
+    double stepat = 0, runat = 0, secs = 0;
+    for (;;) {
+        struct pollfd pf[2] = {{ptm, POLLIN, 0}, {up[0], POLLIN, 0}};
+        int busy = inrun && step<8 && c->steps[step].op;
+        poll(pf, 2, busy || endwait ? 10 : 200);
+        for (;;) {
+            char buf[4096];
+            ssize_t n = read(ptm, buf, sizeof(buf));
+            if (n <= 0) break;
+            if (olen+(size_t)n >= sizeof(out)) n = 0;  // enough
+            memcpy(out+olen, buf, (size_t)n);
+            olen += (size_t)n;
+            out[olen] = 0;
+        }
+        double now = nowsec();
+
+        // The steps, in order, each once the one before is done
+        while (inrun && step<8 && c->steps[step].op && !endwait) {
+            Step const *s = c->steps + step;
+            if (!stepat) stepat = now;
+            if (s->op == T_EXPECT) {
+                char *p = strstr(out+match, s->s);
+                if (!p) {
+                    if (now-stepat > 5*FORKSCALE) {
+                        if (ok) snprintf(why, sizeof(why), "no \"%s\" on the terminal", s->s);
+                        ok = 0;
+                        if (write(down[1], "c", 1) < 0) {}
+                        step = 8;
+                    }
+                    break;
+                }
+                match = (size_t)(p - out) + strlen(s->s);
+            } else if (s->op == T_WRITE) {
+                termwrite(ptm, s->s, strlen(s->s));
+            } else if (s->op == T_DELAY) {
+                if ((now-stepat)*1000 < s->n) break;
+            } else if (s->op == T_RESIZE) {
+                struct winsize ws = {(unsigned short)(s->n/1000),
+                                     (unsigned short)(s->n%1000), 0, 0};
+                ioctl(ptm, TIOCSWINSZ, &ws);
+            } else if (s->op == T_CANCEL) {
+                if (write(down[1], "c", 1) < 0) {}
+            }
+            step++;
+            stepat = 0;
+        }
+        if (inrun && now-runat > 30*FORKSCALE) {
+            // cancelled, then killed
+            if (ok) snprintf(why, sizeof(why), "run still going after %ds", 30*FORKSCALE);
+            if (!ok) kill(pid, SIGKILL);
+            ok = 0;
+            if (write(down[1], "c", 1) < 0) {}
+            runat = now;
+        }
+
+        // The run's end: its output up to the marker
+        if (endwait) {
+            char *m = strstr(out, termmark);
+            if (m || now-runat>5*FORKSCALE) {
+                if (m) *m = 0;
+                if (ok && c->out && !strstr(out, c->out)) {
+                    snprintf(why, sizeof(why), "output lacks \"%s\"", c->out);
+                    ok = 0;
+                } else if (ok && c->notout && strstr(out, c->notout)) {
+                    snprintf(why, sizeof(why), "output holds \"%s\"", c->notout);
+                    ok = 0;
+                }
+                // bracketed paste is never left on
+                char *on = 0;
+                for (char *p = out; (p = strstr(p, "\x1b[?2004h")); p++) on = p;
+                if (ok && on && !strstr(on, "\x1b[?2004l")) {
+                    snprintf(why, sizeof(why), "bracketed paste left on");
+                    ok = 0;
+                }
+                if (!ok && !shown[0]) {
+                    // the failing run's output, escaped
+                    size_t k = 0;
+                    for (char *p = out; *p && k<sizeof(shown)-8; p++) {
+                        unsigned char u = (unsigned char)*p;
+                        if (u=='\n') {
+                            k += (size_t)snprintf(shown+k, 8, "\\n");
+                        } else if (u=='\r') {
+                            k += (size_t)snprintf(shown+k, 8, "\\r");
+                        } else if (u<32 || u==127) {
+                            k += (size_t)snprintf(shown+k, 8, "\\x%02x", u);
+                        } else {
+                            shown[k++] = (char)u;
+                        }
+                    }
+                    shown[k] = 0;
+                }
+                if (m) {
+                    // what followed the marker's line is the next run's
+                    char  *nl   = strchr(m+strlen(termmark), '\n');
+                    char  *next = nl ? nl+1 : m+strlen(termmark);
+                    size_t rest = olen - (size_t)(next - out);
+                    memmove(out, next, rest);
+                    olen = rest;
+                    out[olen] = 0;
+                }
+                endwait = 0;
+                if (write(down[1], "x", 1) < 0) {}
+            }
+        }
+
+        // The child's reports
+        if (pf[1].revents) {
+            char buf[512];
+            ssize_t n = read(up[0], buf, sizeof(buf));
+            if (n <= 0) break;
+            for (ssize_t i = 0; i < n; i++) {
+                if (buf[i] != '\n') {
+                    if (llen < sizeof(line)-1) line[llen++] = buf[i];
+                    continue;
+                }
+                line[llen] = 0;
+                llen = 0;
+                if (line[0] == 'C') {
+                    olen = match = 0;
+                    out[0] = 0;
+                    inrun  = 1;
+                    step   = 0;
+                    stepat = 0;
+                    runat  = nowsec();
+                    nruns++;
+                    if (write(down[1], "g", 1) < 0) {}
+                } else if (line[0] == 'E') {
+                    int r = 0, rok = 0, k = 0;
+                    sscanf(line, "E %d %d %lf %n", &r, &rok, &secs, &k);
+                    if (ok && !rok) snprintf(why, sizeof(why), "%s", line+k);
+                    ok &= rok;
+                    inrun   = 0;
+                    endwait = 1;
+                    runat   = nowsec();
+                } else if (line[0] == 'D') {
+                    int dok = 0, k = 0;
+                    sscanf(line, "D %d %n", &dok, &k);
+                    if (ok && !dok) snprintf(why, sizeof(why), "%s", line+k);
+                    ok  &= dok;
+                    done = 1;
+                }
+            }
+        }
+    }
+    close(up[0]);
+    close(down[1]);
+    close(ptm);
+    if (otherm >= 0) close(otherm);
+    int status;
+    waitpid(pid, &status, 0);
+    if (!done) {
+        if (ok) {
+            snprintf(why, sizeof(why), "the child %s %d after %d runs",
+                     WIFSIGNALED(status) ? "died of signal" : "exited",
+                     WIFSIGNALED(status) ? WTERMSIG(status) : WEXITSTATUS(status), nruns);
+        }
+        ok = 0;
+    }
+    printf("%s %-28s %.3fs%s%s\n", ok ? "PASS" : "FAIL", c->name, secs,
+           ok ? "" : ": ", ok ? "" : why);
+    if (!ok && shown[0]) printf("     output: %s\n", shown);
+    fflush(stdout);
+    return ok;
+}
+
+static int checkterms(int quick)
+{
+    // A child's pipe may close before the last word to it
+    struct sigaction old, ign = {0};
+    ign.sa_handler = SIG_IGN;
+    sigaction(SIGPIPE, &ign, &old);
+    int fails = 0;
+    for (int i = 0; i < (int)(sizeof(termcases)/sizeof(*termcases)); i++) {
+        fails += !checkterm(i, quick);
+    }
+    sigaction(SIGPIPE, &old, 0);
+    return fails;
+}
+
 static int check(char *argv0, int quick)
 {
     int reps = quick ? 1 : 3;
@@ -860,8 +1484,8 @@ static int check(char *argv0, int quick)
         // top set -m fails, and a background job's input is /dev/null.
         {"set -m",
          "set -e; set -m; set -o monitor; shopt -so monitor; echo s=$?;"
-         " case $- in *m*) echo m;; esac; sleep 0 & fg; echo ok",
-         0, "s=0\nm\nsleep 0\nok", .notout = "no job control"},
+         " case $- in *m*) echo m;; esac; sleep 0.3 & fg; echo ok",
+         0, "s=0\nm\nsleep 0.3\nok", .notout = "no job control"},
         {"interactive: set -m",
          "unset HISTFILE; case $- in *m*) echo dash m;; esac; set -m; a=$?;"
          " set -o monitor; b=$?; shopt -so monitor; echo s=$a $b $?;"
@@ -877,6 +1501,8 @@ static int check(char *argv0, int quick)
          0, "no job control in this shell\nok\n", .opt = "-im", .notout = "dash m", .pty = 1},
         {"suspend", "suspend 2>/dev/null; echo s=$?", 0, "s=1"},
         {"title and stty", "printf '\\033]0;x\\007'; stty 2>/dev/null; echo ok", 0, "ok"},
+        // UB_TERMINAL with a terminal, but not as its session's leader
+        {"terminal: refused, no leader", "true", -UB_EINVAL, .pty = 1, .flags = UB_TERMINAL},
         {"bad pid", "true", -UB_EINVAL, 0, 0, 0, 0, 0, 0, (int64_t)1<<22},
         {"SIGCHLD ignored", "true", -UB_ECHILD, 0, 0, 0, 0, 0, 0, 0, 1},
         {"-n: syntax error", "echo ok; if", 2,
@@ -1117,6 +1743,15 @@ static int check(char *argv0, int quick)
     for (size_t i = 0; i < sizeof(cases)/sizeof(*cases); i++) {
         Case const *c = cases + i;
         fails += !checkcase(c, c->stopms || c->maxsec>=1 ? 1 : reps);
+        if (c->pty) continue;
+        // UB_TERMINAL with no terminal changes nothing
+        Case t = *c;
+        char name[64];
+        snprintf(name, sizeof(name), "flag: %s", c->name);
+        t.name     = name;
+        extraflags = UB_TERMINAL;
+        fails += !checkcase(&t, 1);
+        extraflags = 0;
         if (c->script==procsub || c->script==tee) {
             // what the procsub wrote must be there whole
             char buf[8192] = "";
@@ -1158,6 +1793,7 @@ static int check(char *argv0, int quick)
     fails += !checkcase(&after, 1);
 
     fails += !checkconcurrent(8, quick ? 10 : 50);
+    fails += checkterms(quick);
 
     // The sentinels
     struct pollfd pf = {sentinel[0], POLLIN, 0};

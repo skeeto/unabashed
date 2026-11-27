@@ -5,7 +5,8 @@
 // descriptors and pid, a signal thread forwards the signals it gets,
 // and it exits as the shell did, dying of the same signal.
 //
-// "ubhost --check [--quick]" checks the host contract (ubcheck.c).
+// "ubhost --check [--quick]" checks the host contract (ubcheck.c);
+// "ubhost --term-case N [--quick]" is its child for a terminal case.
 //
 // "ubhost --wrap PATH ARGV0 [ARG...]" is a spawn hook's wrapper, as the
 // contract has it (notes/library.md): it says "wrapped PATH" on stderr,
@@ -123,6 +124,9 @@ int main(int argc, char **argv)
         signal(SIGXFSZ, SIG_IGN);
         #endif
         return check(argv[0], argc>2 && !strcmp(argv[2], "--quick"));
+    }
+    if (argc>2 && !strcmp(argv[1], "--term-case")) {
+        return termchild(argv[0], atoi(argv[2]), argc>3 && !strcmp(argv[3], "--quick"));
     }
     if (argc>1 && !strcmp(argv[1], "--fds")) {
         return inheritedfds();

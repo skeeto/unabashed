@@ -882,6 +882,14 @@ static void wcatchsigs(Os *os)
     ttycatch(1);
 }
 
+// When a mode change takes effect. The library's applies at once:
+// waiting for output to drain blocks in the kernel while the terminal's
+// output is suspended (^S), beyond ub_cancel's reach.
+static i32 ttydrain()
+{
+    return LIBMODE ? TCSANOW : TCSADRAIN;
+}
+
 static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
 {
     flushw(os);
@@ -904,7 +912,9 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
         os->ttyin  = (i32)in;
         os->ttyout = (i32)out;
         os->ttyraw = how;
-        if (first) ttycatch(1);
+        if constexpr (!LIBMODE) {
+            if (first) ttycatch(1);  // the library's host owns the signals
+        }
         termios m = os->ttysave;
         switch (how) {
         case TTY_RAW:
@@ -934,22 +944,26 @@ static Tty plt_tty(Os *os, Handle in, Handle out, i32 how)
         }
         m.c_cc[VMIN]  = 1;
         m.c_cc[VTIME] = 0;
-        tcsetattr((i32)in, TCSADRAIN, &m);
+        tcsetattr((i32)in, ttydrain(), &m);
         t = os->ttysave;
         // A resize is a signal (SIGWINCH), unless something else
-        // already handles it (a trap)
-        struct sigaction sa = {};
-        if (how==TTY_RAW && !sigaction(SIGWINCH, 0, &sa) && sa.sa_handler==SIG_DFL) {
-            sigemptyset(&sa.sa_mask);
-            sa.sa_flags     = SA_RESTART | SA_SIGINFO;
-            sa.sa_sigaction = onsignal;
-            sigaction(SIGWINCH, &sa, 0);
+        // already handles it (a trap). The library's host forwards it.
+        if constexpr (!LIBMODE) {
+            struct sigaction sa = {};
+            if (how==TTY_RAW && !sigaction(SIGWINCH, 0, &sa) && sa.sa_handler==SIG_DFL) {
+                sigemptyset(&sa.sa_mask);
+                sa.sa_flags     = SA_RESTART | SA_SIGINFO;
+                sa.sa_sigaction = onsignal;
+                sigaction(SIGWINCH, &sa, 0);
+            }
         }
     } else if (how==TTY_RESTORE && os->ttyraw) {
         os->ttyraw   = 0;
         os->ttypaste = 0;
-        tcsetattr((i32)in, TCSADRAIN, &os->ttysave);
-        if (!os->wcatch) ttycatch(0);
+        tcsetattr((i32)in, ttydrain(), &os->ttysave);
+        if constexpr (!LIBMODE) {
+            if (!os->wcatch) ttycatch(0);
+        }
         t = os->ttysave;
     } else if (os->ttyraw) {
         t = os->ttysave;
@@ -1862,10 +1876,10 @@ static i64 plt_tcpgrp(Os *os, Handle tty, i64 pgid)
     sigset_t ttou, old;
     sigemptyset(&ttou);
     sigaddset(&ttou, SIGTTOU);
-    sigprocmask(SIG_BLOCK, &ttou, &old);
+    threadmask(SIG_BLOCK, &ttou, &old);
     i32 r = tcsetpgrp((i32)tty, (pid_t)pgid);
     i32 e = coreerr(errno);
-    sigprocmask(SIG_SETMASK, &old, 0);
+    threadmask(SIG_SETMASK, &old, 0);
     return r ? -e : pgid;
 }
 

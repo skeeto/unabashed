@@ -69,6 +69,12 @@ struct Lib {
     sigset_t   mask;      // the thread's before the run
     b32        masked;
 
+    // Terminal mode (UB_TERMINAL with a terminal found): the host's
+    // descriptor of its session's terminal, and its mode as the run began
+    b32        term;
+    i32        ttyfd;
+    termios    ttystart;
+
     // Memory
     LibRes    *res;
     iz         committed;
@@ -975,8 +981,21 @@ static void libsigmode(Os *os, i32, i32)
     flushw(os);
 }
 
-static Tty libtty(Os *os, Handle, Handle, i32)
+// The terminal of the host's session, which /dev/tty opens too
+static b32 sessiontty(i32 fd)
 {
+    pid_t sid = tcgetsid(fd);
+    return sid>0 && sid==getsid(0);
+}
+
+// In terminal mode, the modes of the host's session's terminal, which
+// teardown gives back; no other terminal's, ever
+static Tty libtty(Os *os, Handle in, Handle out, i32 how)
+{
+    Lib *l = (Lib *)os;
+    if (l->term && sessiontty((i32)in) && sessiontty((i32)out)) {
+        return plt_tty(os, in, out, how);
+    }
     flushw(os);
     Tty r = {};
     r.err = E_NOTTY;
@@ -1204,6 +1223,70 @@ static void lingerkids(Lib *l)
     }
 }
 
+// Terminal mode: one run at a time per process holds the terminal
+static i32 termclaim;
+
+// UB_TERMINAL: the terminal is std[2]'s, else std[0]'s, and with neither
+// the flag does nothing. The host leads that terminal's session with its
+// own group in front, and gives its own pid as $$; else E_INVAL, and
+// E_BUSY while another run of the process holds it. SIGTTIN and SIGTTOU
+// are blocked on the run's thread, so that teardown can take the
+// terminal back from a group that took it.
+static i32 termsetup(Lib *l, ub_cmd const *cmd)
+{
+    if (!(l->cfg.flags & UB_TERMINAL)) return 0;
+    i32 fd = -1;
+    if (cmd->std[2]>=0 && isatty((i32)cmd->std[2])) {
+        fd = (i32)cmd->std[2];
+    } else if (cmd->std[0]>=0 && isatty((i32)cmd->std[0])) {
+        fd = (i32)cmd->std[0];
+    }
+    if (fd < 0) return 0;
+    pid_t self = getpid();
+    if (getsid(0)!=self || tcgetsid(fd)!=self || tcgetpgrp(fd)!=getpgrp() ||
+        cmd->pid!=(i64)self) {
+        return -E_INVAL;
+    }
+    termios start;
+    if (tcgetattr(fd, &start)) return -E_INVAL;
+    i32 idle = 0;
+    if (!__atomic_compare_exchange_n(&termclaim, &idle, 1, 0,
+                                     __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+        return -E_BUSY;
+    }
+    l->term     = 1;
+    l->ttyfd    = fd;
+    l->ttystart = start;
+    sigset_t tty;
+    sigemptyset(&tty);
+    sigaddset(&tty, SIGTTIN);
+    sigaddset(&tty, SIGTTOU);
+    pthread_sigmask(SIG_BLOCK, &tty, l->masked ? 0 : &l->mask);
+    l->masked = 1;
+    return 0;
+}
+
+// The terminal back to the host, however the run ended: its group in
+// front, should a program have taken it, and its mode. After a cancel,
+// the mode the run began with; otherwise the run's own change undone
+// (the line editor's, read's), and a program's (stty) kept. Errors are
+// ignored: a terminal hung up has nothing to give back.
+static void termback(Lib *l)
+{
+    Os   *os = &l->os;
+    i32   fd = l->ttyfd;
+    pid_t pg = tcgetpgrp(fd);
+    if (pg>0 && pg!=getpgrp()) tcsetpgrp(fd, getpgrp());
+    if (os->ttyraw && os->ttypaste && write(fd, "\x1b[?2004l", 8)) {}
+    if (l->why == E_CANCELED) {
+        tcsetattr(fd, TCSANOW, &l->ttystart);
+    } else if (os->ttyraw) {
+        tcsetattr(fd, TCSANOW, &os->ttysave);
+    }
+    os->ttyraw   = 0;
+    os->ttypaste = 0;
+}
+
 // Everything the run took, back: from any state setup or an abort left.
 static void teardown(Lib *l)
 {
@@ -1278,6 +1361,8 @@ static void teardown(Lib *l)
     l->nfds = 0;
     unwatchall(l);  // the descriptors closed with the rest
 
+    if (l->term) termback(l);
+
     os_fibersend(os);  // ASan: the fibers' fake stacks, on their stacks
     for (LibRes *r = l->res, *next; r; r = next) {
         next = r->next;
@@ -1293,6 +1378,10 @@ static void teardown(Lib *l)
         unraise();
         pthread_sigmask(SIG_SETMASK, &l->mask, 0);
         l->masked = 0;
+    }
+    if (l->term) {
+        l->term = 0;
+        __atomic_store_n(&termclaim, 0, __ATOMIC_RELEASE);
     }
     curlib = 0;
     __atomic_and_fetch(&l->req, ~REQ_HARD, __ATOMIC_RELEASE);
@@ -1359,6 +1448,8 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     os->reserve  = l->cfg.reserve;
     os->stack    = l->cfg.stack;
     for (i32 i = 0; i < countof(os->wkind); i++) os->wkind[i] = 0;
+    i32 err = termsetup(l, cmd);
+    if (err) return err;
 
     if (!tryarena(l, &l->arena, l->cfg.reserve)) return -E_NOMEM;
     hooksetup(l);  // within the arena's first commit
