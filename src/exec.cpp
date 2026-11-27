@@ -2920,6 +2920,7 @@ static void shebangoptions(Shell *sh, Str src)
             if (setoptions[k].letter == o[i]) sh->opt[k] = o[0]=='-';
         }
     }
+    if (nojobctl(sh)) sh->opt[O_MONITOR] = 0;  // quietly, as SHELLOPTS
 }
 
 // Is a file the system would not start (no #! line) shell code? As

@@ -13,7 +13,7 @@
 # This is free and unencumbered software released into the public domain.
 
 # Job control and terminals: a run has no terminal, no process groups,
-# and no stopped jobs (set -m and suspend are refused)
+# and no stopped jobs (set -m is inert or refused; suspend is refused)
 t/exec/905-stopped-jobs.sh          stopped jobs (times out: nothing stops)
 t/exec/906-stopped-pipelines.sh     stopped pipelines
 t/exec/909-interactive-jobs.sh      interactive job reports need a terminal

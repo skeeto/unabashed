@@ -351,6 +351,7 @@ typedef struct Case {
                             // UBX_GONE=g, UBX_UNX=u, BASH_ENV=$T/benv
     char const *envx;       // and this entry too, or null
     int         linger;     // ub_config.linger
+    int         pty;        // std[0] a fresh pty's slave, and --norc
 } Case;
 
 // An access as a log line, "OP flags path", T and TMPDIR shown as $T and
@@ -485,16 +486,25 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
     ub_os *os = ub_new(&cfg);
     if (!os) return -9999;
     int fd = open(outpath, O_RDWR|O_CREAT|O_TRUNC|O_CLOEXEC, 0600);
-    char const *argv[] = {"bash", "-c", c->script, 0, 0};
-    if (c->opt) {
-        argv[1] = c->opt;
-        argv[2] = "-c";
-        argv[3] = c->script;
+    char const *argv[6] = {"bash"};
+    int argc = 1;
+    if (c->pty) argv[argc++] = "--norc";  // not this user's ~/.bashrc
+    if (c->opt) argv[argc++] = c->opt;
+    argv[argc++] = "-c";
+    argv[argc++] = c->script;
+    // A terminal that no process takes as its controlling one
+    int ptm = -1, pts = -1;
+    if (c->pty) {
+        ptm = posix_openpt(O_RDWR|O_NOCTTY);
+        if (ptm>=0 && !grantpt(ptm) && !unlockpt(ptm)) {
+            pts = open(ptsname(ptm), O_RDWR|O_NOCTTY|O_CLOEXEC);
+        }
+        fcntl(ptm, F_SETFD, FD_CLOEXEC);
     }
     ub_cmd cmd = {0};
-    cmd.argc   = c->opt ? 4 : 3;
+    cmd.argc   = argc;
     cmd.argv   = argv;
-    cmd.std[0] = -1;
+    cmd.std[0] = c->pty ? pts : -1;
     cmd.std[1] = fd;
     cmd.std[2] = fd;
     cmd.pid    = c->pid ? c->pid : c->hooks & H_TRACE ? TRACEPID : 0;
@@ -537,6 +547,8 @@ static int runcase(Case const *c, char *out, size_t outlen, double *secs)
     }
     if (c->ignchld) sigaction(SIGCHLD, &old, 0);
     if (p[1] >= 0) close(p[1]);
+    if (pts >= 0) close(pts);
+    if (ptm >= 0) close(ptm);
     ub_free(os);
     ssize_t n = pread(fd, out, outlen-1, 0);
     out[n<0 ? 0 : n] = 0;
@@ -843,7 +855,26 @@ static int check(char *argv0, int quick)
          " (umask 0; echo a >$T/m3; echo b >>$T/m1; touch $T/m4);"
          " ls -l $T/m1 $T/m2 $T/m3 $T/m4 | cut -c1-10; rm $T/m[1-4]", 0,
          "0077\n-rw-------\n-rw-------\n-rw-rw-rw-\n-rw-rw-rw-"},
-        {"set -m", "set -m; sleep 0 & wait; echo ok", 0, "ok"},
+        // No process groups, so no job control. A script's set -m is
+        // inert, but fg works, and set -e goes on. At an interactive
+        // top set -m fails, and a background job's input is /dev/null.
+        {"set -m",
+         "set -e; set -m; set -o monitor; shopt -so monitor; echo s=$?;"
+         " case $- in *m*) echo m;; esac; sleep 0 & fg; echo ok",
+         0, "s=0\nm\nsleep 0\nok", .notout = "no job control"},
+        {"interactive: set -m",
+         "unset HISTFILE; case $- in *m*) echo dash m;; esac; set -m; a=$?;"
+         " set -o monitor; b=$?; shopt -so monitor; echo s=$a $b $?;"
+         " case $- in *m*) echo dash m;; esac; shopt -po monitor;"
+         " (set -m; echo sub=$?)",
+         0, "set: no job control\nbash: set: no job control\n"
+            "bash: shopt: no job control\ns=1 1 1\nset +o monitor\nsub=0\n",
+         .opt = "-i", .notout = "dash m", .pty = 1},
+        {"interactive: bg input",
+         "unset HISTFILE; tty -s & wait $!; b=$?; tty -s; echo fg=$? bg=$b", 0,
+         "fg=0 bg=1\n", .opt = "-i", .pty = 1},
+        {"interactive: -m refused", "unset HISTFILE; case $- in *m*) echo dash m;; esac; echo ok",
+         0, "no job control in this shell\nok\n", .opt = "-im", .notout = "dash m", .pty = 1},
         {"suspend", "suspend 2>/dev/null; echo s=$?", 0, "s=1"},
         {"title and stty", "printf '\\033]0;x\\007'; stty 2>/dev/null; echo ok", 0, "ok"},
         {"bad pid", "true", -UB_EINVAL, 0, 0, 0, 0, 0, 0, (int64_t)1<<22},

@@ -1969,10 +1969,24 @@ static void setposix(Shell *sh, b32 on)
 
 static void edmodechanged(Shell *);  // edit.cpp
 
+// Monitor turned on in a POSIX library run (nojobctl), where it would
+// leave background jobs the terminal: refused, said, at an interactive
+// run's top. A script or a subshell turns it on, inert (no groups) but
+// fg and bg act on running jobs, so "set -e; set -m" goes on, as bash.
+static b32 nomonitor(Shell *sh, Arena scratch, Str cmd)
+{
+    if (!nojobctl(sh) || !sh->interactive || sh->subshell) return 0;
+    builtinerror(sh, scratch, cmd, "no job control");
+    return 1;
+}
+
 static i32 setoptionbyname(Shell *sh, Str name, b32 on)
 {
     for (i32 k = 0; k < O_COUNT; k++) {
         if (setoptions[k].name==name && hasoption(sh, k)) {
+            if constexpr (LIBMODE) {
+                if (k==O_MONITOR && on && nojobctl(sh)) return -1;  // callers decide
+            }
             if (k == O_POSIX) {
                 setposix(sh, on);
                 return 1;
@@ -2060,11 +2074,19 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
                     continue;
                 }
                 Str oname = args[++i];
-                if (!setoptionbyname(sh, oname, on)) {
+                i32 r     = setoptionbyname(sh, oname, on);
+                if (!r) {
                     Str msg = concat(&scratch, oname, ": invalid option name");
                     builtinerror(sh, scratch, "set", msg);
                     sh->bifatal = 1;
                     return 2;
+                }
+                if constexpr (LIBMODE) {
+                    if (r < 0) {  // refused at startup, but not here
+                        if (nomonitor(sh, scratch, "set")) return 1;
+                        sh->opt[O_MONITOR] = 1;
+                        histoption(sh, O_MONITOR, 1);
+                    }
                 }
                 continue;
             }
@@ -2072,6 +2094,11 @@ static i32 b_set(Shell *sh, Str *args, iz nargs, Arena scratch)
             if (c=='r' && on) makerestricted(sh);
             for (i32 o = 0; o < O_COUNT; o++) {
                 if (setoptions[o].letter == c) {
+                    if constexpr (LIBMODE) {
+                        if (o==O_MONITOR && on && nomonitor(sh, scratch, "set")) {
+                            return 1;
+                        }
+                    }
                     sh->opt[o] = on;
                     histoption(sh, o, on);
                     found = 1;
@@ -2204,6 +2231,12 @@ static i32 b_shopt(Shell *sh, Str *args, iz nargs, Arena scratch)
         if (hidden && (set || unset)) {
             setpathmode(sh, scratch, set ? PM_MSYS : PM_NATIVE);
         } else if (set || unset) {
+            if constexpr (LIBMODE) {
+                if (oflag && idx==O_MONITOR && set && nomonitor(sh, scratch, "shopt")) {
+                    status = 1;
+                    continue;
+                }
+            }
             if (oflag || (idx!=S_LOGIN_SHELL && idx!=S_RESTRICTED_SHELL)) {
                 *slot = set;  // the others read-only, quietly
             }

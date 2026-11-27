@@ -1629,7 +1629,11 @@ static void startoption(Shell *sh, Arena scratch, u8 c, b32 on, Str *name)
         Str args[] = {"shopt", "-p"};
         b_shopt(sh, args, on ? 1 : 2, scratch);
     } else if (c == 'o') {
-        ok = setoptionbyname(sh, *name, on);
+        i32 r = setoptionbyname(sh, *name, on);
+        ok    = r;
+        if constexpr (LIBMODE) {
+            if (r < 0) sh->opt[O_MONITOR] = 1;  // refused after the setup
+        }
     } else {
         ok = setshoptbyname(sh, scratch, *name, on);
     }
@@ -1928,6 +1932,23 @@ static Slice<Str> exitenv(Shell *sh, Arena *a, b32 *ok)
     return {};
 }
 
+// -m or -o monitor at startup refused in a POSIX library run, as bash
+// finding no terminal for job control: the shell goes on without it.
+// An interactive shell with no terminal said so already. Its own
+// function, so that the executables' sh_main is unchanged.
+static void startnojobctl(Shell *sh, Arena scratch, OsInfo *info, b32 busybox)
+{
+    if (!sh->opt[O_MONITOR] || !nojobctl(sh)) return;
+    sh->opt[O_MONITOR] = 0;
+    Os *os  = sh->os;
+    b32 tty = os_isatty(os, info->std[0]) || os_isatty(os, info->std[2]);
+    if (sh->interactive && !busybox && !tty) return;
+    Buf b(&scratch, 64);
+    print(&b, progbase(sh->shellname));
+    print(&b, ": no job control in this shell\n");
+    fdwrite(sh, 2, finish(&b));
+}
+
 static i32 sh_main(Os *os, OsInfo *osinfo)
 {
     if (osvtable(os)->version != OSVTABLE_VERSION) {
@@ -2199,7 +2220,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
             updatesigmode(sh, 2);
             updatesigmode(sh, 15);
             if (os_isatty(os, info->std[0]) || os_isatty(os, info->std[2])) {
-                sh->opt[O_MONITOR] = 1;  // job control, as bash
+                if (!LIBMODE || !nojobctl(sh)) sh->opt[O_MONITOR] = 1;  // job control, as bash
             }
             sh->shopt[S_EXPAND_ALIASES] = 1;
             if (!st.noediting && !sh->opt[O_VI]) sh->opt[O_EMACS] = 1;
@@ -2231,6 +2252,7 @@ static i32 sh_main(Os *os, OsInfo *osinfo)
         for (iz k = 0; k < shopts.len; k += 2) {
             startoption(sh, scratch, 'O', shopts[k]=="-", &shopts[k+1]);
         }
+        if constexpr (LIBMODE) startnojobctl(sh, scratch, info, st.busybox);
         if (sh->opt[O_MONITOR]) histoption(sh, O_MONITOR, 1);
 
         // $0 and the positional parameters, then the startup files

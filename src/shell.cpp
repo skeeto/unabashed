@@ -1337,6 +1337,14 @@ static void builtinerror(Shell *sh, Arena scratch, Str cmd, Str msg)
     fdwrite(sh, 2, finish(&b));
 }
 
+// A POSIX library run has no process groups (OsInfo.pgid is 0), so no
+// job control: monitor stays off there, and turning it on fails. The
+// Windows library keeps its console job control.
+static b32 nojobctl(Shell *sh)
+{
+    return LIBMODE && !sh->win32 && !sh->startpgid;
+}
+
 static Str concat3(Arena *a, Str x, Str y, Str z)
 {
     Buf b(a, x.len+y.len+z.len);

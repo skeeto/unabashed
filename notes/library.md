@@ -421,8 +421,15 @@ starting the program.
 
 **From the executable and bash, by design.** tools/ubhost.expect lists
 the suite tests that fail through the drop-in, with reasons:
-- No job control or terminal. `set -m` and `suspend` are refused, and
-  nothing stops.
+- No job control or terminal. In a POSIX run monitor never turns on by
+  itself. At an interactive run's top, `set -m`, `set -o monitor` and
+  `shopt -o -s monitor` fail with status 1 ("no job control"), so `$-`
+  has no m and a background job reads /dev/null, as under `bash +m`.
+  `-m` in the arguments is refused at startup ("no job control in this
+  shell"), as bash finding no terminal. A script or a subshell can
+  still turn monitor on: nothing gets a group of its own, but fg and bg
+  act on running jobs, and `set -e; set -m` goes on, as in bash.
+  `suspend` is refused, and nothing stops.
 - A background level is a fiber, not a process, so `$!` is a virtual
   pid, as under `tests --fibers`.
 - `exec` does not replace the host. The program runs while the run
