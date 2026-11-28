@@ -5,6 +5,18 @@
 // descriptors and pid, a signal thread forwards the signals it gets,
 // and it exits as the shell did, dying of the same signal.
 //
+// When ubhost leads its terminal's session with its group in front, as a
+// terminal tab's shell does (std 2's terminal, else std 0's), the run is
+// interactive on it with UB_TERMINAL, and the signals are forwarded
+// plainly, as Prospero does. UBHOST_TERM=1 asks for UB_TERMINAL
+// regardless (with no terminal it does nothing, as in the library), and
+// UBHOST_TERM=0 never; the run does not see the variable. A run the
+// library refuses terminal mode, as it does unless ubhost leads the
+// session (or, detected, by a race), is reported and exits 126, never
+// retried without it. On macOS SIGWINCH, SIGURG and SIGIO are caught
+// (unless ignored on entry), in every drop-in run, so that they reach
+// the forwarder (notes/library.md, Terminal mode).
+//
 // "ubhost --check [--quick]" checks the host contract (ubcheck.c);
 // "ubhost --term-case N [--quick]" is its child for a terminal case, and
 // "--tcgrab" and "--pgsleep" are programs that cases run.
@@ -33,16 +45,24 @@
 #include "ubcheck.c"
 
 static ub_os *runos;
+static int    terminal;  // the run is in terminal mode (UB_TERMINAL)
 
-// The signals the forwarder waits for. On Linux a fault of the host's
-// own kills it even while blocked, so the faults another process sends
-// with kill are forwarded too, as the executable takes them. SIGPIPE
-// and SIGXFSZ the run raises on itself stay pending on its own thread,
-// unseen here; on macOS the host ignores them.
+// The signals the forwarder waits for: every one but KILL, STOP and
+// CHLD, the real-time signals too on Linux, as Prospero blocks them. On
+// Linux a fault of the host's own kills it even while blocked, so the
+// faults another process sends with kill are forwarded too, as the
+// executable takes them. SIGPIPE and SIGXFSZ the run raises on itself
+// stay pending on its own thread, unseen here; on macOS the host
+// ignores them.
 static void waitset(sigset_t *set)
 {
     sigemptyset(set);
-    for (int sig = 1; sig < 32; sig++) {
+    #if __linux__
+    int nsig = SIGRTMAX;  // libc's own, below SIGRTMIN, are refused
+    #else
+    int nsig = 31;
+    #endif
+    for (int sig = 1; sig <= nsig; sig++) {
         switch (sig) {
         case SIGKILL: case SIGSTOP: case SIGCHLD:
             continue;
@@ -56,9 +76,11 @@ static void waitset(sigset_t *set)
     }
 }
 
-// Every signal the process gets, forwarded to the run. The terminal's
-// INT, QUIT and TSTP go to the whole foreground group, so to every
-// level of the run (UB_GROUP), as the executable takes them.
+// Every signal the process gets, forwarded to the run. Outside terminal
+// mode, the terminal's INT, QUIT and TSTP go to the whole foreground
+// group, so to every level of the run (UB_GROUP), as the executable
+// takes them. In terminal mode every signal is forwarded plainly: the
+// run takes the terminal's as the terminal's already.
 static void *forwarder(void *arg)
 {
     (void)arg;
@@ -70,7 +92,8 @@ static void *forwarder(void *arg)
         siginfo_t si;
         int sig = sigwaitinfo(&set, &si);
         if (sig < 0) continue;
-        group = (sig==SIGINT || sig==SIGQUIT || sig==SIGTSTP) &&
+        group = !terminal &&
+                (sig==SIGINT || sig==SIGQUIT || sig==SIGTSTP) &&
                 si.si_code==SI_KERNEL;
         #else
         int sig;
@@ -81,10 +104,22 @@ static void *forwarder(void *arg)
     return 0;
 }
 
+// Whether this process leads its terminal's session, its group in front:
+// the terminal UB_TERMINAL would take, std 2's, else std 0's
+static int leadsterminal(void)
+{
+    int fd = isatty(2) ? 2 : isatty(0) ? 0 : -1;
+    return fd>=0 && getsid(0)==getpid() &&
+           tcgetsid(fd)==getpid() && tcgetpgrp(fd)==getpgrp();
+}
+
 static void exitwith(int status)
 {
     if (status < 0) {
-        if (status != -UB_ENOMEM) {
+        if (status==-UB_EINVAL && terminal) {
+            fprintf(stderr, "ubhost: terminal mode refused: ubhost must "
+                            "lead its terminal's session, its group in front\n");
+        } else if (status != -UB_ENOMEM) {
             fprintf(stderr, "ubhost: run failed: error %d\n", -status);
         }
         _exit(status==-UB_ENOMEM ? 2 : 126);
@@ -146,7 +181,7 @@ int main(int argc, char **argv)
     cmd.ppid = getppid();
 
     // Entry dispositions: ignored signals stay so in the run
-    for (int sig = 1; sig < 64; sig++) {
+    for (int sig = 1; sig <= 64; sig++) {
         struct sigaction sa;
         if (!sigaction(sig, 0, &sa) && sa.sa_handler==SIG_IGN) {
             cmd.sigign |= (uint64_t)1 << (sig-1);
@@ -168,9 +203,38 @@ int main(int argc, char **argv)
     // macOS directs these at the process, so the host ignores them
     signal(SIGPIPE, SIG_IGN);
     signal(SIGXFSZ, SIG_IGN);
+    // macOS discards a signal whose default is to ignore it, blocked or
+    // not, unless it is caught: a resize's SIGWINCH, and URG and IO,
+    // would never reach the forwarder. Those ignored on entry stay so.
+    // Programs start with default dispositions regardless.
+    int sigs[] = {SIGWINCH, SIGURG, SIGIO};
+    for (int i = 0; i < (int)(sizeof(sigs)/sizeof(*sigs)); i++) {
+        if (cmd.sigign>>(sigs[i]-1) & 1) continue;
+        struct sigaction sa = {0};
+        sa.sa_handler = caught;
+        sigaction(sigs[i], &sa, 0);
+    }
     #endif
 
-    runos = ub_new(0);
+    // Terminal mode: when it leads its terminal's session, or as asked.
+    // The request is ubhost's alone, not the run's environment, so that
+    // a nested ubhost decides for itself. With neither std 2 nor std 0 a
+    // terminal the flag does nothing, as the library has it: the run is
+    // isolated, and its programs want the terminal's signals by UB_GROUP.
+    char const *term = getenv("UBHOST_TERM");
+    int ask;
+    if (term && !strcmp(term, "1")) {
+        ask = 1;
+    } else if (term && !strcmp(term, "0")) {
+        ask = 0;
+    } else {
+        ask = leadsterminal();
+    }
+    unsetenv("UBHOST_TERM");
+    terminal = ask && (isatty(2) || isatty(0));
+    ub_config cfg = {0};
+    cfg.flags = ask ? UB_TERMINAL : 0;
+    runos = ub_new(&cfg);
     if (!runos) {
         fprintf(stderr, "ubhost: ub_new failed\n");
         return 126;

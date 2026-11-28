@@ -658,11 +658,21 @@ between and leave a read blocked where a cancel cannot reach it.
 **`ubhost`** (tools/ubhost.c with tools/ubcheck.c, or tools/ubhostw.c
 with tools/ubcheckw.c on Windows) is a drop-in for the shell. It passes
 its own pid, ppid, descriptors and entry dispositions, and forwards its
-signals or console events with `ub_signal`. The suites run through it:
+signals (on Linux the real-time ones too) or console events with
+`ub_signal`. On POSIX, when it leads its terminal's session with its
+group in front (std[2]'s terminal, else std[0]'s), as a terminal tab's
+shell, it sets `UB_TERMINAL` and forwards every signal plainly, as
+Prospero does; elsewhere the terminal's INT, QUIT and TSTP go with
+`UB_GROUP` (Linux, by their SI_KERNEL code). `UBHOST_TERM=1` sets the
+flag regardless (with no terminal it does nothing; a refused run is
+reported, status 126, never retried without it) and `UBHOST_TERM=0`
+never; the run does not see the variable. On macOS it catches SIGWINCH,
+SIGURG and SIGIO (Terminal mode) in every drop-in run, but those
+ignored on entry. The suites run through it:
 - Linux (oracle image):
 
       ls t/exec/*.sh t/posix/*.sh |
-      xargs -P 8 -n 4 env RECORD_SHELL=$PWD/ubhost RECORD_CHECK=1 tools/record
+      xargs -P 8 -n 4 env RECORD_SHELL=$PWD/build-lin/ubhost RECORD_CHECK=1 tools/record
 
 - Windows:
 
@@ -671,9 +681,16 @@ signals or console events with `ub_signal`. The suites run through it:
   `ubhost32.exe` goes beside it; on XP use
   `t/win32/run -s $PWD/ubhost32.exe WORKDIR`.
 
+- The editor sessions, in terminal mode on ptyrun's pty, with a Linux
+  ubhost built for the oracle image (tools/README.md, Editor sessions):
+
+      EDRECORD_SHELL=$PWD/build-lin/ubhost EDRECORD_CHECK=1 tools/edrecord t/edit/*.ed
+
 Anything failing beyond tools/ubhost.expect is a bug. Two tests are
 flaky for the executable too: t/exec/931 under the parallel run's load,
-and t/win32/015 on XP.
+and t/win32/015 on XP; t/edit/097 and 099 are flaky through ubhost
+under load (a resize's WINCH by the signal thread, behind the next
+keys).
 
 **`ubhost --check [--quick]`** snapshots the host, runs each case
 several times after a warm-up, and compares the snapshots by identity:

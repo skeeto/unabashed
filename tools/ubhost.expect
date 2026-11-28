@@ -6,14 +6,20 @@
 #
 # POSIX, on Linux (the oracle image, 8 at a time):
 #   ls t/exec/*.sh t/posix/*.sh |
-#   xargs -P 8 -n 4 env RECORD_SHELL=$PWD/ubhost RECORD_CHECK=1 tools/record
+#   xargs -P 8 -n 4 env RECORD_SHELL=$PWD/build-lin/ubhost RECORD_CHECK=1 tools/record
+# Editor sessions, on Linux (tools/edrecord's container, with a Linux
+# ubhost built for its image): ubhost leads the pty's session there, so
+# the run has UB_TERMINAL, as Prospero's terminal tab:
+#   EDRECORD_SHELL=$PWD/build-lin/ubhost EDRECORD_CHECK=1 tools/edrecord t/edit/*.ed
 # Windows (t/win32/run, WORKDIR outside %TEMP%):
 #   t/win32/run -s $PWD/ubhost.exe -x WORKDIR      (ubhost32.exe beside it)
 #   t/win32/run -s $PWD/ubhost32.exe WORKDIR       (Windows XP)
 # This is free and unencumbered software released into the public domain.
 
-# Job control and terminals: a run has no terminal, no process groups,
-# and no stopped jobs (set -m is inert or refused; suspend is refused)
+# Job control and terminals: a run has no process groups and no stopped
+# jobs (set -m is inert or refused; suspend is refused), and no terminal
+# but under UB_TERMINAL, which ubhost has leading a terminal's session
+# (or with UBHOST_TERM=1)
 t/exec/905-stopped-jobs.sh          stopped jobs (times out: nothing stops)
 t/exec/906-stopped-pipelines.sh     stopped pipelines
 t/exec/909-interactive-jobs.sh      interactive job reports need a terminal
@@ -21,6 +27,35 @@ t/exec/944-stopped-shell-stages.sh  shell code stopped with its job
 t/win32/008-interactive.sh          Ctrl-C to an interactive shell's prompt
 t/win32/019-interactive-jobs.sh     interactive job control on a console
 t/win32/022-fg-job.sh               Ctrl-C to a job fg brought forward
+
+# Terminal mode is bash +m on the terminal (notes/library.md): bash's
+# screens are recorded under job control (-m), where the terminal's ^C
+# reaches only the foreground job and an ended job is reported at the
+# next prompt. Under +m the shell takes the terminal's ^C itself, and
+# drops ended jobs unreported: with "keys set +m" first, 058, 059 and
+# 146 match bash's screens. Under +m bash drops a ^C that comes as a
+# foreground program exits normally, and so does a run, whose wait polls
+# the program's exit where bash's takes SIGCHLD: a rare race in both.
+t/edit/057-jobctl.ed                ^Z stops nothing, no jobs/fg/bg of stopped jobs
+t/edit/058-wait-intr.ed             no "Done" report at the prompt (+m)
+t/edit/059-intr-subshell.ed         the shell's INT trap runs for the job's ^C (+m)
+t/edit/146-pipe-intr.ed             the shell's INT trap runs, the loop goes on (+m)
+# Hangups: leftovers are in the host's group, the terminal's foreground
+# group, so the kernel hangs them up as the host exits; bash's jobs were
+# in groups of their own
+t/edit/150-hangup-disown-h.ed       disown -h changes nothing: the kernel's HUP
+t/edit/153-hangup-source.ed         sleep & gets the kernel's HUP
+# A background level is a fiber of the run ($! is a virtual pid, as for
+# t/exec/877), and a nested ubhost, not its session's leader, has no
+# terminal mode, so its run's leftovers are killed as it ends
+t/edit/149-hangup-nohup.ed          $! is not a process (nohup's sleep does survive)
+t/edit/155-hangup-foreground.ed     the job's report shows a virtual $!
+t/edit/156-hangup-ignored.ed        the nested run kills its leftover, HUP ignored or not
+# Windows native mode, failing on every POSIX build, the executable's too
+t/edit/082-native-drive.ed          native mode is Windows only
+t/edit/086-native-prompt.ed         native mode is Windows only
+t/edit/087-native-busybox.ed        native mode is Windows only
+t/edit/089-native-ctrl-z.ed         native mode is Windows only
 
 # Images: a background level is a fiber of the run, not a process ($!
 # is a virtual pid, as under tests --fibers)
@@ -38,6 +73,14 @@ t/posix/003-signals.sh              QUIT and INT to an exec'd shell's pid
 t/exec/955-trap-stop-self.sh        ( kill -TTOU $$ ) under a parent's trap
 t/win32/017-signals.sh              no signal channel between shells
 t/win32/012-ctrlc-young.sh          no Ctrl-C judging (Windows 7 and later; XP when the Ctrl-C wins the race)
+
+# Flaky under load: a resize's WINCH reaches the run through ubhost's
+# signal thread, after the keys ptyrun writes right behind it at times
+# (the executable takes it on the reading thread), so the trap's
+# history -d has not run when the key reads the history (097), or the
+# key is read before the trap runs (099)
+t/edit/097-history-shrinks.ed       a key handled before the resize's WINCH trap
+t/edit/099-nested-read.ed           a key read before the resize's WINCH trap
 
 # Flaky for the executable too, not the library's
 t/exec/931-setlocale-programs.sh    fails only under the parallel run's load

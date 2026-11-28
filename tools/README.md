@@ -138,6 +138,29 @@ EDRECORD_CHECK=1 tools/edrecord ...` runs our POSIX build instead of
 bash and compares. Only the screens are compared, never the bytes
 that drew them (notes/m6.md).
 
+The library's test host runs the suite too, as a terminal tab's shell
+(notes/library.md, Terminal mode). ptyrun's shell leads the pty's
+session with its group in front, so a Linux `ubhost` there runs with
+`UB_TERMINAL` and forwards its signals plainly, as Prospero does. Build
+it for the image, in its own container (the oracle image has no
+compiler; `unabashed/fakes-build` shares its Debian), into the ignored
+`build-lin/` (the same ubhost serves tools/record, notes/library.md):
+
+    docker run --rm --network none --memory 2g --memory-swap 2g \
+        -v "$PWD":/ub:ro -v "$PWD"/build-lin:/out unabashed/fakes-build sh -c \
+        'cd /ub && g++ -std=c++20 -O2 -fno-exceptions -fno-rtti \
+         -fno-threadsafe-statics -c -o /tmp/lib.o libunabashed_linux.cpp &&
+         gcc -O2 -o /out/ubhost tools/ubhost.c /tmp/lib.o -lpthread'
+    EDRECORD_SHELL=$PWD/build-lin/ubhost EDRECORD_CHECK=1 tools/edrecord t/edit/*.ed
+
+tools/ubhost.expect lists the scripts it fails by design, and why, and
+two flaky under load. `UBHOST_TERM=1` makes ubhost ask for
+`UB_TERMINAL` wherever it runs (with no terminal it does nothing; a run
+the library refuses, as when ubhost does not lead the session, fails
+with status 126), and `UBHOST_TERM=0` never (a script's `env
+UBHOST_TERM=0` line, say). The run itself does not see the variable, so
+a nested ubhost decides anew.
+
 Two directives are for ptyrun alone, and the vos skips a script with
 either ("pty only"). `hangup` takes a last snapshot, closes the pty's
 master (the kernel's HUP to the session), waits up to ten seconds for
