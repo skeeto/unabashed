@@ -120,8 +120,9 @@ typedef struct {
     // never leaks one into its own programs. 0: a library spin lock.
     void      (*spawnlock)(void *user, int lock);
     // Optional: each program the run starts (live 1), and later reaped
-    // (live 0). POSIX hosts may feed a keeper that kills these if the
-    // host dies.
+    // (live 0), or under UB_TERMINAL left running as the run ends (live
+    // 0: no longer the run's, its pid perhaps another's later). POSIX
+    // hosts may feed a keeper that kills these if the host dies.
     void      (*child)(void *user, int64_t pid, int live);
     // Optional, Windows: deliver signal sig to program pid, 0 if done.
     int       (*softsig)(void *user, int64_t pid, int sig);
@@ -174,7 +175,9 @@ typedef struct {
     // ends) get to exit before they are killed: first sent SIGTERM, and
     // SIGCONT, with their groups (POSIX), or SIGTERM through softsig
     // (Windows; without softsig, none). It waits for the programs the
-    // run started, not for what they started. 0: killed at once.
+    // run started, not for what they started. 0: killed at once. Under
+    // UB_TERMINAL only a cancel ends them, each by its pid, and with a
+    // group it made of its own, not what else it started.
     int         linger;
 } ub_config;
 
@@ -204,16 +207,27 @@ enum { UB_SIGNALED = 0x100 };   // status: the shell died of signal (s&0xff)-128
 // a run started on another drive means the same by /
 enum { UB_SHARECONSOLE = 1, UB_SYSROOT = 2 };
 // ub_config.flags, POSIX (Windows refuses it with -UB_EINVAL): runs use
-// the terminal interactively, as a shell on it would, but its programs
-// still start sessions of their own, apart from it (notes/library.md).
+// the terminal interactively, as bash +m on it would (notes/library.md).
 // The terminal is std[2]'s, else std[0]'s; with neither a terminal the
 // flag does nothing. With one, ub_run returns -UB_EINVAL unless the
 // host leads that terminal's session, its own group in front, and
 // passes its pid as ub_cmd.pid; and -UB_EBUSY while another run in the
 // process has the terminal (one at a time; runs may follow one
 // another). The host forwards each signal it gets, but SIGCHLD, with
-// ub_signal, plainly (without UB_GROUP), from a signal thread. A run
-// may change the mode of its session's terminal, and no other (the line
+// ub_signal, plainly (without UB_GROUP), from a signal thread, without
+// delay (a program dead of ^C waits up to 250 ms for the host's INT),
+// and on macOS catches SIGWINCH, SIGURG and SIGIO (else discarded
+// unseen). Programs stay in the host's session and group: the
+// terminal's ^C reaches them from the kernel, so the forwarded INT, QUIT
+// and TSTP reach every level of the run but no program. A hangup seen
+// on the terminal counts as the kernel's SIGHUP to the host, one per
+// hangup, whichever comes first: an interactive shell dies of it,
+// UB_SIGNALED|129, and the programs still in the host's group get
+// SIGHUP. A run that ends but by a cancel leaves its programs running,
+// the host's (they get the kernel's SIGHUP as the host exits: only those
+// that ignore HUP or left the session survive); a cancel ends them, with
+// the linger, but not what they started in the host's group. A run may
+// change the mode of its session's terminal, and no other (the line
 // editor, read -s), and blocks SIGTTIN and SIGTTOU in its thread until
 // it returns. As it ends, however it ends, it gives the terminal back:
 // the host's group in front, and the mode the run began with after a
@@ -237,11 +251,14 @@ int    ub_run(ub_os *, ub_cmd const *);
 
 // From any thread, at any time, even a signal handler: send signal sig
 // (host numbering) to the run, or with UB_GROUP to the run and every
-// program it started, as a terminal would. 0, or -UB_EINVAL.
+// program it started, as a terminal would. Under UB_TERMINAL, UB_GROUP
+// says the terminal sent it, which reached the programs already: every
+// level of the run gets it, and no program. 0, or -UB_EINVAL.
 int    ub_signal(ub_os *, int sig);
 
 // From any thread, at any time: end the run promptly, with every
-// program it started; ub_run returns -UB_ECANCELED.
+// program it started (under UB_TERMINAL, not what those started but in
+// groups of their own); ub_run returns -UB_ECANCELED.
 void   ub_cancel(ub_os *);
 
 void  *ub_user(ub_os *);

@@ -6,7 +6,8 @@
 // and it exits as the shell did, dying of the same signal.
 //
 // "ubhost --check [--quick]" checks the host contract (ubcheck.c);
-// "ubhost --term-case N [--quick]" is its child for a terminal case.
+// "ubhost --term-case N [--quick]" is its child for a terminal case, and
+// "--tcgrab" and "--pgsleep" are programs that cases run.
 //
 // "ubhost --wrap PATH ARGV0 [ARG...]" is a spawn hook's wrapper, as the
 // contract has it (notes/library.md): it says "wrapped PATH" on stderr,
@@ -130,6 +131,12 @@ int main(int argc, char **argv)
     }
     if (argc>1 && !strcmp(argv[1], "--fds")) {
         return inheritedfds();
+    }
+    if (argc>1 && !strcmp(argv[1], "--tcgrab")) {
+        return tcgrab();
+    }
+    if (argc>1 && !strcmp(argv[1], "--pgsleep")) {
+        return pgsleep();
     }
     ub_cmd cmd = {0};
     cmd.argc = argc;

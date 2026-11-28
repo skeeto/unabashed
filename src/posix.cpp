@@ -159,8 +159,9 @@ static u64 bitstake(u64 volatile *p)
 // lib_reaped tracks the run's programs, with each status as
 // os_waitproc gives it, lib_wait4 waits for them without reaping an
 // exit (its zombie keeps its group's id), lib_dir the directory
-// plt_list holds open, and lib_tmpdir is TMPDIR from the run's
-// environment.
+// plt_list holds open, lib_tmpdir is TMPDIR from the run's
+// environment, and lib_ownsession is false in terminal mode, whose
+// programs stay in the host's session and group.
 static byte *lib_fiberstack(Os *, iz size);
 static void  lib_fiberunstack(Os *, byte *, iz size);
 static void  lib_spawnlock(b32 lock);
@@ -168,6 +169,7 @@ static void  lib_reaped(i64 pid, i32 status, struct rusage const *);
 static pid_t lib_wait4(pid_t, i32 *status, i32 flags, struct rusage *);
 static void  lib_dir(Os *, DIR *);
 static char *lib_tmpdir(Os *);
+static b32   lib_ownsession();
 
 // The OS's own (linux.cpp, darwin.cpp), included after this module:
 // what Linux and macOS do differently.
@@ -1129,6 +1131,8 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
         if (sync[1] >= 0) close(sync[1]);
         return EMFILE;
     }
+    b32 own = 1;  // a session of its own, away from the host's terminal
+    if constexpr (LIBMODE) own = lib_ownsession();
     pid_t pid = fork();
     if (!pid) {
         close(sync[0]);
@@ -1139,7 +1143,9 @@ static i32 forkspawn(SpawnPlan *p, pid_t *out)
             if (write(sync[1], &err, sizeof(err))) {}
             _exit(127);
         }
-        if constexpr (LIBMODE) setsid();  // away from the host's terminal
+        if constexpr (LIBMODE) {
+            if (own) setsid();
+        }
         joingroup(0, p->pgid, p->fg, p->tty);
         // Move the pipe and the sources out of the way first, then
         // install the map; one already at its own number stays, as no
@@ -1266,7 +1272,7 @@ static i32 trispawn(SpawnPlan *p, Arena scratch, pid_t *out)
         if constexpr (LIBMODE) {
             sigemptyset(&none);  // not the host thread's
             mask = &none;
-            flags |= POSIX_SPAWN_SETSID;
+            if (lib_ownsession()) flags |= POSIX_SPAWN_SETSID;
         }
         posix_spawnattr_setsigmask(&at, mask);
         sigset_t dfl;
@@ -1351,7 +1357,7 @@ static Spawned plt_spawn(Os *os, Arena scratch, Spawn *s)
     p.tty     = (i32)s->tty;
     if constexpr (LIBMODE) {
         p.dfl  = ~p.ign;  // whatever the host does with them
-        p.pgid = 0;       // a session of its own instead
+        p.pgid = 0;       // a session of its own, or the host's group
     }
 
     sigset_t all;

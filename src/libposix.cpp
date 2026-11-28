@@ -19,6 +19,11 @@ enum : i32 { E_CANCELED = 125 };
 
 enum : u32 { REQ_HARD = 1 };
 
+// A hangup's SIGHUP, one per hangup (hangup, hupdup): the host forwarded
+// one in this run (SEEN), the run made one (MADE), and the host's next
+// is the made one's duplicate (DUP).
+enum : u32 { HUP_SEEN = 1, HUP_MADE = 2, HUP_DUP = 4 };
+
 // A reservation of the run's, after a header that links it.
 struct LibRes {
     LibRes *next;
@@ -39,6 +44,7 @@ struct LibKid {
     b32       owed;    // its CPU time is counted only once it is reaped
     i32       wstatus; // while held: its wait status
     b32       termed;  // its group was sent SIGTERM (a group signal)
+    u32       ttysig[2];  // Lib.ttysig as it started (terminal mode)
 };
 
 // A program reaped and not held is forgotten: its pid, and so its
@@ -70,10 +76,16 @@ struct Lib {
     b32        masked;
 
     // Terminal mode (UB_TERMINAL with a terminal found): the host's
-    // descriptor of its session's terminal, and its mode as the run began
+    // descriptor of its session's terminal, its mode as the run began,
+    // and the devices a hangup is seen on (that terminal's, /dev/tty's)
     b32        term;
     i32        ttyfd;
     termios    ttystart;
+    dev_t      ttydev[2];
+    u32        hup;       // HUP_* (atomic)
+    u64        kgrp;      // group signals of the script's own (kill 0)
+    u32        ttysig[2]; // INTs and QUITs to every level so far (atomic):
+                          // the terminal's, or the script's kill 0
 
     // Memory
     LibRes    *res;
@@ -438,6 +450,15 @@ static char *lib_tmpdir(Os *os)
     return ((Lib *)os)->tmpdir;
 }
 
+// Programs start sessions of their own, apart from the host's terminal,
+// but in terminal mode, where they stay in the host's session and group,
+// as under bash +m: /dev/tty opens, and the terminal's ^C reaches them.
+static b32 lib_ownsession()
+{
+    Lib *l = curlib;
+    return !l || !l->term;
+}
+
 
 // Programs
 
@@ -490,6 +511,8 @@ static void reapgraves()
     lockgraves(0);
 }
 
+// Also terminal mode's leftovers (leavekids), which run on. Past 64 at
+// once, the rest are never reaped here: zombies until the host exits.
 static void bury(i64 pid)
 {
     lockgraves(1);
@@ -508,11 +531,38 @@ static void countcpu(Lib *l, struct rusage const *ru)
     l->cpu.csys  += tvns(ru->ru_stime);
 }
 
+// Terminal mode: a program that died of the terminal's INT or QUIT,
+// which the kernel sent it as it sent the host, whose forwarder has yet
+// to pass it on. The level waiting for the program acts on such a
+// signal only if it has it as the program ends (waitdone), as bash,
+// which the kernel signals at once, always has. So the run waits for it
+// a little (but for a cancel): it comes at once from a host that keeps
+// up, and never if another sent the signal, after which the run goes on
+// without it.
+static void awaittty(Lib *l, LibKid *k, i32 status)
+{
+    i32 i = status==(WSIGNALED|(128+2)) ? 0 : status==(WSIGNALED|(128+3)) ? 1 : -1;
+    if (!l->term || i<0) return;
+    i64 until = monons() + 250000000;
+    while (__atomic_load_n(l->ttysig+i, __ATOMIC_ACQUIRE) == k->ttysig[i]) {
+        i64 left = (until - monons() + 999999) / 1000000;
+        if (left<=0 || (__atomic_load_n(&l->req, __ATOMIC_ACQUIRE) & REQ_HARD)) break;
+        struct pollfd p = {};
+        p.fd     = l->os.wakefd[0];
+        p.events = POLLIN;
+        if (poll(&p, 1, (i32)left) > 0) {
+            u8 buf[64];
+            while (read(l->os.wakefd[0], buf, sizeof(buf)) > 0) {}
+        }
+    }
+}
+
 static void lib_reaped(i64 pid, i32 status, struct rusage const *ru)
 {
     Lib    *l = curlib;
     LibKid *k = findkid(l, pid);
     if (k) {
+        awaittty(l, k, status);
         k->status = status;
         reapedkid(l, k);
         tracereaped(l, k, status);
@@ -725,6 +775,9 @@ static Spawned libspawn(Os *os, Arena scratch, Spawn *s)
         LibKid *k = l->kids + l->nkids++;
         *k        = {};
         k->pid    = r.pid;
+        for (i32 i = 0; i < 2; i++) {
+            k->ttysig[i] = __atomic_load_n(l->ttysig+i, __ATOMIC_ACQUIRE);
+        }
         tracelink(l, t, k);
         watchkid(l, k);
         if (l->cfg.child) l->cfg.child(l->cfg.user, r.pid, 1);
@@ -763,10 +816,14 @@ static i32 libkill(Os *os, i64 pid, i32 sig)
     flushw(os);
     if (!pid || pid==-l->pid) {
         // The run's own group: every level and program, at the next
-        // check point
+        // check point (libsiggroup), not the host's group
         if (sig) {
             if (sig<1 || sig>64) return E_INVAL;
             bitsor(&os->grpbits, (u64)1<<(sig-1));
+            l->kgrp |= (u64)1<<(sig-1);
+            if (sig==2 || sig==3) {
+                __atomic_add_fetch(l->ttysig+(sig-2), 1, __ATOMIC_RELEASE);
+            }
             wakeup(l);
         }
         return 0;
@@ -784,8 +841,35 @@ static i32 libkill(Os *os, i64 pid, i32 sig)
 // writes, and process exits, which come with no SIGCHLD: those are
 // polled, backing off from 1 to 64 ms while any is pending.
 
+// Terminal mode: the run's terminal hung up (its master closed, its
+// line dropped), as a read or write of it sees, submitted (libsubmit)
+// or waited for (libwait): Linux's hung up descriptors poll POLLHUP, as
+// do macOS's (TS_ZOMBIE, EV_EOF). That is taken as the kernel's SIGHUP
+// to the session's leader, the host, so that the shell takes it before
+// the read's end of file, however the host's forwarded one races it.
+// One per hangup: none if the host forwarded one already in this run,
+// and the host's next is this one's duplicate (hupdup). True if made.
+static b32 hangup(Lib *l, i32 fd, i32 revents)
+{
+    struct stat st;
+    if (!(revents & POLLHUP) ||
+        (__atomic_load_n(&l->hup, __ATOMIC_RELAXED) & (HUP_SEEN|HUP_MADE)) ||
+        fstat(fd, &st) || !S_ISCHR(st.st_mode) ||
+        (st.st_rdev!=l->ttydev[0] && st.st_rdev!=l->ttydev[1])) {
+        return 0;
+    }
+    u32 v = __atomic_load_n(&l->hup, __ATOMIC_RELAXED);
+    do {
+        if (v & (HUP_SEEN|HUP_MADE)) return 0;
+    } while (!__atomic_compare_exchange_n(&l->hup, &v, v|HUP_MADE|HUP_DUP, 0,
+                                          __ATOMIC_ACQ_REL, __ATOMIC_RELAXED));
+    bitsor(&l->os.sigbits, corebit(SIGHUP));
+    return 1;
+}
+
 static void libsubmit(Os *os, Io *io)
 {
+    Lib *l = (Lib *)os;
     if (io->op==IO_READ || io->op==IO_WRITE) {
         if (fdkind(os, (i32)io->h) == FK_REG) {
             // A file never blocks: done at once (and coalesced)
@@ -820,6 +904,19 @@ static void libsubmit(Os *os, Io *io)
                 return;
             }
         }
+    }
+    if (l->term && (io->op==IO_READ || io->op==IO_WRITE) &&
+        !(__atomic_load_n(&l->hup, __ATOMIC_RELAXED) & (HUP_SEEN|HUP_MADE)) &&
+        hangup(l, (i32)io->h, pollnow(io, 0))) {
+        // Not tried, its end of file the core's only after the SIGHUP
+        flushw(os);
+        if (io->op == IO_READ) os->readyn = 0;
+        io->done = 0;
+        io->next = 0;
+        Io **tail = &os->pending;
+        while (*tail) tail = &(*tail)->next;
+        *tail = io;
+        return;
     }
     plt_submit(os, io);
 }
@@ -893,6 +990,7 @@ static Io *libwait(Os *os, i64 deadline)
         }
         if (fds[1].revents) drainwatch(l);
         checkhard(l);
+        for (iz i = 2; l->term && r>0 && i<n; i++) hangup(l, fds[i].fd, fds[i].revents);
         if (os->sigbits || os->grpbits) return 0;  // the core first
 
         iz k = 2;
@@ -915,25 +1013,53 @@ static Io *libwait(Os *os, i64 deadline)
 
 // Signals: ub_signal sets the bits, as the executable's handler does
 
+// In terminal mode the INT, QUIT and TSTP the host forwards are the
+// terminal's, which the kernel sent to its foreground group: the host's,
+// as the run never moves the terminal, and so its programs too. They
+// are group signals, which the core takes next (libsiggroup).
 static u64 libsigpending(Os *os)
 {
-    checkhard((Lib *)os);
-    return plt_sigpending(os);
+    Lib *l = (Lib *)os;
+    checkhard(l);
+    u64 bits = plt_sigpending(os);
+    if (l->term) {
+        u64 tty = corebit(SIGINT) | corebit(SIGQUIT) | corebit(SIGTSTP);
+        if (bits & tty) bitsor(&os->grpbits, bits & tty);
+        bits &= ~tty;
+    }
+    return bits;
+}
+
+// The group a program leads, should it have one: every program does, a
+// session's leader, but in terminal mode, where only one that made its
+// own leads one. Never the host's.
+static void killgroup(LibKid *k, i32 sig)
+{
+    pid_t pg = (pid_t)k->pid;
+    if (pg>1 && pg!=getpgrp()) kill(-pg, sig);
 }
 
 // A group signal the core takes goes to every program the run started,
-// each the leader of its own session, then to every level (ossignals).
+// with its group, then to every level (ossignals). In terminal mode the
+// terminal's (and the host's UB_GROUP) reached them already, or never
+// will: only the script's own (kill 0) go to each, by its pid.
 static u64 libsiggroup(Os *os)
 {
-    Lib *l = (Lib *)os;
-    u64 bits = plt_siggroup(os);
-    for (u64 b = bits; b; b &= b-1) {
+    Lib *l    = (Lib *)os;
+    u64  bits = plt_siggroup(os);
+    u64  own  = l->kgrp;
+    l->kgrp = 0;
+    for (u64 b = l->term ? own : bits; b; b &= b-1) {
         i32 hsig = hostsig(__builtin_ctzll(b) + 1);
         if (!hsig) continue;
         for (i32 i = 0; i < l->nkids; i++) {
             LibKid *k = l->kids + i;
             if (!ours(k)) continue;
-            kill(-(pid_t)k->pid, hsig);
+            if (l->term) {
+                kill((pid_t)k->pid, hsig);
+            } else {
+                killgroup(k, hsig);
+            }
             k->termed |= hsig == SIGTERM;
         }
     }
@@ -1190,7 +1316,8 @@ static void runmain(Os *os, void *arg)
 // WNOWAIT, so the zombies keep the groups' ids for that kill. Each
 // group gets one SIGTERM per stop: not another after a group signal
 // sent it one, as a trap that runs once per TERM (dash's) would run
-// twice. A program that left its group is sent its own.
+// twice. A program that left its group is sent its own, as is each in
+// terminal mode, in the host's group: once, as for a group.
 static void lingerkids(Lib *l)
 {
     if (l->cfg.linger <= 0) return;
@@ -1202,10 +1329,10 @@ static void lingerkids(Lib *l)
         if (!ours(k)) continue;
         b32 apart = !k->reaped && getpgid((pid_t)k->pid)>0 &&
                     getpgid((pid_t)k->pid)!=(pid_t)k->pid;
-        if (!k->termed) kill(-(pid_t)k->pid, SIGTERM);
-        if (apart) kill((pid_t)k->pid, SIGTERM);
+        if (!k->termed) killgroup(k, SIGTERM);
+        if (apart && !(l->term && k->termed)) kill((pid_t)k->pid, SIGTERM);
         k->termed = 1;
-        kill(-(pid_t)k->pid, SIGCONT);
+        killgroup(k, SIGCONT);
         if (apart) kill((pid_t)k->pid, SIGCONT);
     }
     i64 until = monons() + (i64)l->cfg.linger*1000000;
@@ -1221,6 +1348,46 @@ static void lingerkids(Lib *l)
         if (!left || monons()>=until) break;
         poll(0, 0, 1);
     }
+}
+
+// Terminal mode, ended other than by a cancel (exit, end of file, out of
+// memory, a deadlock, a signal's death): the programs still running stay,
+// as bash's would on its terminal. Under +m they are in the host's
+// group, the terminal's in front, so the kernel's SIGHUP takes them as
+// the host exits, but for those that ignore it or left. A shell dead of
+// a HUP (a hangup's, say) was the terminal's controlling process, as
+// bash would be, whose exit the kernel follows with SIGHUP and SIGCONT
+// to the foreground group: those still in it get them now. The held
+// zombies are reaped, as are those exited, and the rest buried, so that
+// no later run signals or waits for them, and the child hook told they
+// are no longer the run's (live 0): their pids may later be another's.
+static void leavekids(Lib *l)
+{
+    b32 hup = !l->why && l->status==(WSIGNALED|(128+1));
+    for (i32 i = 0; i < l->nkids; i++) {
+        LibKid *k = l->kids + i;
+        release(l, k);
+        if (k->reaped) continue;
+        i32   status;
+        pid_t r;
+        do {
+            r = waitpid((pid_t)k->pid, &status, WNOHANG);
+        } while (r<0 && errno==EINTR);
+        if (r) {
+            reapedkid(l, k);
+            tracereaped(l, k, r<0 ? 127 : waitstatus(status));
+            continue;
+        }
+        if (hup && getpgid((pid_t)k->pid)==getpgrp()) {
+            kill((pid_t)k->pid, SIGHUP);
+            kill((pid_t)k->pid, SIGCONT);
+        }
+        unwatchkid(l, k);
+        bury(k->pid);
+        k->reaped = 1;
+        if (l->cfg.child) l->cfg.child(l->cfg.user, k->pid, 0);
+    }
+    l->nkids = 0;
 }
 
 // Terminal mode: one run at a time per process holds the terminal
@@ -1247,16 +1414,20 @@ static i32 termsetup(Lib *l, ub_cmd const *cmd)
         cmd->pid!=(i64)self) {
         return -E_INVAL;
     }
-    termios start;
-    if (tcgetattr(fd, &start)) return -E_INVAL;
+    termios     start;
+    struct stat st, cty;
+    if (tcgetattr(fd, &start) || fstat(fd, &st)) return -E_INVAL;
+    if (stat("/dev/tty", &cty)) cty.st_rdev = st.st_rdev;
     i32 idle = 0;
     if (!__atomic_compare_exchange_n(&termclaim, &idle, 1, 0,
                                      __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
         return -E_BUSY;
     }
-    l->term     = 1;
-    l->ttyfd    = fd;
-    l->ttystart = start;
+    l->term      = 1;
+    l->ttyfd     = fd;
+    l->ttystart  = start;
+    l->ttydev[0] = st.st_rdev;
+    l->ttydev[1] = cty.st_rdev;
     sigset_t tty;
     sigemptyset(&tty);
     sigaddset(&tty, SIGTTIN);
@@ -1273,10 +1444,9 @@ static i32 termsetup(Lib *l, ub_cmd const *cmd)
 // ignored: a terminal hung up has nothing to give back.
 static void termback(Lib *l)
 {
-    Os   *os = &l->os;
-    i32   fd = l->ttyfd;
-    pid_t pg = tcgetpgrp(fd);
-    if (pg>0 && pg!=getpgrp()) tcsetpgrp(fd, getpgrp());
+    Os *os = &l->os;
+    i32 fd = l->ttyfd;
+    if (tcgetpgrp(fd) != getpgrp()) tcsetpgrp(fd, getpgrp());
     if (os->ttyraw && os->ttypaste && write(fd, "\x1b[?2004l", 8)) {}
     if (l->why == E_CANCELED) {
         tcsetattr(fd, TCSANOW, &l->ttystart);
@@ -1306,15 +1476,19 @@ static void teardown(Lib *l)
         }
     }
 
-    lingerkids(l);
+    // Terminal mode leaves the programs running, but after a cancel
+    b32 leave = l->term && l->why!=E_CANCELED;
+    if (!leave) lingerkids(l);
     traceleave(l);  // what is open now ends only with its program
+    if (leave) leavekids(l);
 
-    // Every program, with whatever it started in its session, while
-    // the held zombies keep their groups' ids ours; then those reaped
+    // Every program, with whatever it started in its session (or in a
+    // group it made, in terminal mode), while the held zombies keep
+    // their groups' ids ours; then those reaped
     for (i32 i = 0; i < l->nkids; i++) {
         LibKid *k = l->kids + i;
         if (!ours(k)) continue;
-        kill(-(pid_t)k->pid, SIGKILL);
+        killgroup(k, SIGKILL);
         if (!k->reaped) kill((pid_t)k->pid, SIGKILL);
     }
     for (i32 i = 0; i < l->nkids; i++) release(l, l->kids+i);
@@ -1425,6 +1599,7 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
 
     l->cmd      = cmd;
     l->why      = 0;
+    l->kgrp     = 0;
     l->status   = 0;
     l->tmpdir   = 0;
     l->errfd    = -1;
@@ -1448,6 +1623,12 @@ static i32 setup(Lib *l, ub_cmd const *cmd)
     os->reserve  = l->cfg.reserve;
     os->stack    = l->cfg.stack;
     for (i32 i = 0; i < countof(os->wkind); i++) os->wkind[i] = 0;
+    // A HUP the host forwarded before the run is this run's (hupdup),
+    // while a hangup's duplicate is still owed
+    __atomic_and_fetch(&l->hup, HUP_DUP, __ATOMIC_ACQ_REL);
+    if (os->sigbits & corebit(SIGHUP)) {
+        __atomic_or_fetch(&l->hup, HUP_SEEN, __ATOMIC_ACQ_REL);
+    }
     i32 err = termsetup(l, cmd);
     if (err) return err;
 
@@ -1558,12 +1739,28 @@ static void libfree(Lib *l)
     munmap(l, sizeof(Lib));
 }
 
+// A HUP the host forwards: dropped as the duplicate of one the run made
+// of a hangup (hangup), else noted, so that the run makes none.
+static b32 hupdup(Lib *l)
+{
+    u32 v = __atomic_load_n(&l->hup, __ATOMIC_RELAXED);
+    for (;;) {
+        u32 w = v&HUP_DUP ? v&~HUP_DUP : v|HUP_SEEN;
+        if (__atomic_compare_exchange_n(&l->hup, &v, w, 0, __ATOMIC_ACQ_REL,
+                                        __ATOMIC_RELAXED)) {
+            return (v & HUP_DUP) != 0;
+        }
+    }
+}
+
 static i32 libsignal(Lib *l, i32 sig)
 {
     i32 c = coresig(sig & 0xff);
     if (c<1 || c>64 || (sig & ~(0xff|UB_GROUP))) return -E_INVAL;
+    if (sig==SIGHUP && hupdup(l)) return 0;
     u64 volatile *bits = sig&UB_GROUP ? &l->os.grpbits : &l->os.sigbits;
     bitsor(bits, (u64)1<<(c-1));
+    if (c==2 || c==3) __atomic_add_fetch(l->ttysig+(c-2), 1, __ATOMIC_RELEASE);
     wakeup(l);
     return 0;
 }

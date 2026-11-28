@@ -5,11 +5,11 @@
 // descriptors, threads, signal dispositions and the thread's mask,
 // process group and session, directory, umask, limits, environment,
 // the terminal's mode and foreground group, and the programs it started
-// (each must be gone, with its group). A difference fails the case, as
-// does a status, output or time other than the case expects. The
-// terminal cases (UB_TERMINAL) each run in a child that leads a fresh
-// pty's session, as a terminal's host would (termchild). Included by
-// ubhost.c.
+// (each must be gone, with its group, but those a terminal case leaves
+// running on purpose). A difference fails the case, as does a status,
+// output or time other than the case expects. The terminal cases
+// (UB_TERMINAL) each run in a child that leads a fresh pty's session, as
+// a terminal's host would (termchild). Included by ubhost.c.
 // This is free and unencumbered software released into the public domain.
 #include <dirent.h>
 #include <poll.h>
@@ -98,10 +98,26 @@ static void spawnlock(void *user, int lock)
 static int  nkids;
 static long kids[1<<14];
 
+// The programs the child hook said are no longer the run's (live 0),
+// the latest last
+enum { NENDED = 64 };
+static long ended[NENDED];
+static int  nended;
+
 static void onchild(void *user, int64_t pid, int live)
 {
     (void)user;
     if (live && nkids < (int)(sizeof(kids)/sizeof(*kids))) kids[nkids++] = (long)pid;
+    if (!live) ended[nended++ % NENDED] = (long)pid;
+}
+
+static int hasended(long pid)
+{
+    int n = nended<NENDED ? nended : NENDED;
+    for (int i = 0; i < n; i++) {
+        if (ended[i] == pid) return 1;
+    }
+    return 0;
 }
 
 static void snapshot(Snap *s)
@@ -206,6 +222,15 @@ static void snapshot(Snap *s)
     snapf(s, "environ %llx\n", h);
 }
 
+// Terminal mode leaves programs the shell killed (kill 0, a hangup) to
+// end on their own, buried for any later call of the library to reap:
+// the terminal cases reap them here.
+static int reapkids;
+
+// Programs a terminal case leaves running on purpose (leftover)
+static long leftpids[8];
+static int  nleft;
+
 // Every program a run started is gone, and its group with it.
 static int kidsgone(char *why, size_t len)
 {
@@ -226,6 +251,9 @@ static int kidsgone(char *why, size_t len)
         long ppid = 0;
         char state;
         if (p && sscanf(p+1, " %c %ld", &state, &ppid)==2 && ppid==getpid()) {
+            int left = 0;
+            for (int i = 0; i < nleft; i++) left |= leftpids[i] == atol(e->d_name);
+            if (left) continue;
             if (state == 'Z') {
                 waitpid(atoi(e->d_name), 0, 0);
                 continue;
@@ -238,6 +266,7 @@ static int kidsgone(char *why, size_t len)
     if (d) closedir(d);
     #endif
     for (int i = 0; i < nkids; i++) {
+        if (reapkids) waitpid((pid_t)kids[i], 0, WNOHANG);
         int alive = !kill((pid_t)kids[i], 0) || errno!=ESRCH;
         int group = !kill(-(pid_t)kids[i], 0) || errno!=ESRCH;
         if (alive || group) {
@@ -797,8 +826,16 @@ static int checkconcurrent(int threads, int reps)
 // and waits on the other (fd 4) for "g"; "E status ok secs why" once it
 // returned and the marker is out, after which "x" ends that run's
 // control thread; and at last "D ok why" for the snapshots. Meanwhile
-// "c" on fd 4 cancels the run.
-enum { T_EXPECT = 1, T_WRITE, T_DELAY, T_RESIZE, T_CANCEL };
+// "c" on fd 4 cancels the run, "i" sends it SIGINT|UB_GROUP, the
+// terminal's as the host would say it, and "z" a plain SIGTSTP, as the
+// host forwards the terminal's.
+//
+// A case that hangs up (T_HANGUP: the master closed) has the pty for one
+// run alone: no warm-up, no marker, and its end is the child's "E". The
+// child then checks only what a dead terminal leaves to check: the
+// status, the files, the programs, the dispositions and mask.
+enum { T_EXPECT = 1, T_WRITE, T_DELAY, T_RESIZE, T_CANCEL, T_GROUPINT, T_HANGUP, T_TSTP };
+enum { NSTEPS = 10 };
 
 typedef struct {
     int         op;     // T_*
@@ -813,7 +850,7 @@ typedef struct {
     int         status;   // or ANY
     char const *out;      // a substring the terminal's output must hold
     char const *notout;   // and one it must not, or null
-    Step        steps[8];
+    Step        steps[NSTEPS];
     int64_t     pid;      // ub_cmd.pid; 0: the child's own
     ptrdiff_t   memlimit;
     int         busy;     // a second run tried meanwhile gets -UB_EBUSY
@@ -823,6 +860,19 @@ typedef struct {
     int         other;    // fd 5 in the run: another pty, not the session's,
                           // "ab" typed on it
     int         nofg;     // a helper's group holds the terminal meanwhile
+    int         hangup;   // one run, which T_HANGUP hangs up
+    int         alive;    // bit i: the run's program i outlives it (the case
+                          // checks, then kills it); the rest must be gone
+    int         left;     // and the next run neither signals nor waits for it
+    double      maxsec;   // or 0
+    char const *ubf;      // the file $UBF must then hold this
+    int         ubfonce;  // only once
+    char const *ubfnot;   // and not this
+    int         hupdelay; // ms the host waits to forward a SIGHUP
+    int         intdelay; // and a SIGINT or SIGQUIT
+    int         linger;   // ub_config.linger
+    char const *again;    // bash -c this next, on the same handle, with
+                          // no terminal (std the null device), status 0
 } TermCase;
 
 static char const termmark[] = "@@ubcheck run end@@";  // on a line of its own
@@ -869,12 +919,121 @@ static TermCase const termcases[] = {
      {{T_EXPECT, "P> "}, {T_WRITE, "bind -x '\"\\C-t\": exit 5'\r"},
       {T_EXPECT, "P> "}, {T_WRITE, "\x14"}}},
     {"terminal: stty -echo kept", "stty -echo; exit", 0, .keep = ECHO},
+    // Programs in the host's session and group: the terminal's signals
+    // reach them from the kernel, and the shell, waiting, acts on one
+    // only if the program died of it
+    {"terminal: ^C to a program", 0, 0, "s=130", "INT\r\nINT",
+     {{T_EXPECT, "P> "},
+      {T_WRITE, "sh -c 'trap \"echo INT\" INT; echo st\"\"arted; sleep 2'\r"},
+      {T_EXPECT, "started"}, {T_DELAY, 0, 100}, {T_WRITE, "\x03"}, {T_EXPECT, "INT"},
+      {T_EXPECT, "P> "}, {T_WRITE, "echo s=$?; exit\r"}}, .maxsec = 1.8},
+    // and to every level, as to every process of bash's foreground job
+    {"terminal: ^C to a subshell", "( sh -c 'echo go; sleep 2'; echo sub ); echo top",
+     UB_SIGNALED|130, 0, "sub", {{T_EXPECT, "go"}, {T_DELAY, 0, 100}, {T_WRITE, "\x03"}}},
+    {"terminal: kill 0","sleep 9 & kill 0; sleep 1; echo no", UB_SIGNALED|143, 0, "no",
+     .nosig = SIGTERM},
+    {"terminal: WINCH trap",
+     "trap 'echo winch' WINCH; shopt -s checkwinsize; echo go; sleep 0.5; echo \"cols $COLUMNS\"",
+     0, "winch\r\ncols 111", 0, {{T_EXPECT, "go"}, {T_RESIZE, 0, 33111}}},
+    // The host's group is orphaned: its parent is in another session
+    {"terminal: ^Z does nothing", "echo go; sleep 1; echo \"after $?\"", 0, "after 0", 0,
+     {{T_EXPECT, "go"}, {T_DELAY, 0, 200}, {T_WRITE, "\x1a"}}},
+    {"terminal: /dev/tty in a program",
+     "sh -c 'echo via\"\"tty >/dev/tty'; t=$(tty); sh -c \"true <$t\"; tty; echo end", 0,
+     "viatty", "not a tty"},
+    // and the shell ignores the terminal's QUIT, as bash does
+    {"terminal: ^\\ to a program", "sh -c 'echo go; sleep 1'; echo \"s=$?\"", 0, "s=131", 0,
+     {{T_EXPECT, "go"}, {T_DELAY, 0, 200}, {T_WRITE, "\x1c"}}},
+    // The host's SIGINT|UB_GROUP is the terminal's: no program gets it
+    // from the run, but the shell does
+    {"terminal: UB_GROUP INT",
+     "trap 'echo shellint' INT; sh -c 'trap \"echo progint\" INT; echo go; sleep 0.5';"
+     " read -t 2 x; echo \"r=$?\"", 0, "go\r\nshellint\r\nr=142", "progint",
+     {{T_EXPECT, "go"}, {T_DELAY, 0, 200}, {T_GROUPINT}, {T_DELAY, 0, 1000}, {T_GROUPINT}},
+     .nosig = SIGINT},
+    // A program that did job control, dead with the terminal in its group
+    {"terminal: taken and given back", "\"$UBCHECK\" --tcgrab; echo \"after $?\"", 0,
+     "after 137"},
+    {"terminal: cancel, a group made", "\"$UBCHECK\" --pgsleep", -UB_ECANCELED, 0, 0,
+     {{T_EXPECT, "pg"}, {T_CANCEL}}},
+    // Leftovers: the run neither kills nor waits for them, nor does the
+    // next, and they stay the host's
+    {"terminal: left running", "sleep 9 & exit 3", 3, .alive = 1, .left = 1, .maxsec = 3},
+    // A hangup at the prompt: the shell dies of SIGHUP, its history
+    // saved, its jobs hung up, but a program that ignores it
+    {"terminal: hangup", 0, UB_SIGNALED|129, 0, 0,
+     {{T_EXPECT, "P> "}, {T_WRITE, "HISTFILE=$UBF; nohup sleep 9 >/dev/null 2>&1 &\r"},
+      {T_EXPECT, "P> "}, {T_WRITE, "sleep 9 &\r"}, {T_EXPECT, "P> "},
+      {T_WRITE, "echo hist\"\"mark\r"}, {T_EXPECT, "histmark"}, {T_EXPECT, "P> "},
+      {T_HANGUP}}, .hangup = 1, .alive = 1, .ubf = "echo hist\"\"mark\n"},
+    // The shell takes the hangup's SIGHUP however the host's races the
+    // read's end of file: here the host's comes late
+    {"terminal: hangup, HUP late", 0, UB_SIGNALED|129, 0, 0,
+     {{T_EXPECT, "P> "}, {T_WRITE, "HISTFILE=$UBF; echo hist\"\"mark\r"}, {T_EXPECT, "histmark"},
+      {T_EXPECT, "P> "}, {T_HANGUP}}, .hangup = 1, .ubf = "echo hist\"\"mark\n",
+     .hupdelay = 300},
+    // and in a read of the script's, then writing nothing to the terminal
+    {"terminal: hangup in read, HUP late", "echo go; read x; echo \"r=$?\" >$UBF",
+     UB_SIGNALED|129, 0, 0, {{T_EXPECT, "go"}, {T_DELAY, 0, 100}, {T_HANGUP}}, .hangup = 1,
+     .hupdelay = 300},
+    // and takes one, the hangup's or the host's, whichever comes first:
+    // as they come at once, the host's well after (during the trap), and
+    // the host's well before (during a program, the read after it seeing
+    // the hangup)
+    {"terminal: one HUP", 0, ANY, 0, 0,
+     {{T_EXPECT, "P> "}, {T_WRITE, "trap 'echo HUP >>$UBF' HUP\r"}, {T_EXPECT, "P> "},
+      {T_DELAY, 0, 100}, {T_HANGUP}}, .hangup = 1, .ubf = "HUP\n", .ubfonce = 1},
+    {"terminal: one HUP, the host's late", 0, ANY, 0, 0,
+     {{T_EXPECT, "P> "}, {T_WRITE, "trap 'echo HUP >>$UBF; sleep 0.6' HUP\r"},
+      {T_EXPECT, "P> "}, {T_DELAY, 0, 100}, {T_HANGUP}}, .hangup = 1, .ubf = "HUP\n",
+     .ubfonce = 1, .hupdelay = 300},
+    {"terminal: one HUP, the host's first", 0, ANY, 0, 0,
+     {{T_EXPECT, "P> "}, {T_WRITE, "trap 'echo HUP >>$UBF' HUP\r"}, {T_EXPECT, "P> "},
+      {T_WRITE, "sleep 0.5\r"}, {T_DELAY, 0, 200}, {T_HANGUP}}, .hangup = 1,
+     .ubf = "HUP\n", .ubfonce = 1},
+    // A hangup's duplicate still owed as the run ends is the next run's
+    // on the handle to drop: the host's HUP comes during that one
+    {"terminal: one HUP, the next run", 0, UB_SIGNALED|129, 0, 0,
+     {{T_EXPECT, "P> "}, {T_HANGUP}}, .hangup = 1, .hupdelay = 500,
+     .again = "trap 'echo HUP >>\"$UBF\"' HUP; sleep 1.5; echo done >>\"$UBF\"",
+     .ubf = "done\n", .ubfnot = "HUP"},
+    // A program in a comsub when the shell dies of a hangup is hung up
+    // as the session's leader's death would
+    {"terminal: hangup in a comsub", 0, UB_SIGNALED|129, 0, 0,
+     {{T_EXPECT, "P> "}, {T_WRITE, "x=$(sleep 5)\r"}, {T_DELAY, 0, 200}, {T_HANGUP}},
+     .hangup = 1},
+    // The kernel's ^C and ^\ reach the program before the host forwards
+    // them to the run: the shell, waiting, acts on one all the same, if
+    // the program died of it
+    {"terminal: ^C, the host's INT late", "sh -c 'echo go; sleep 2'; echo next",
+     UB_SIGNALED|130, 0, "next", {{T_EXPECT, "go"}, {T_DELAY, 0, 100}, {T_WRITE, "\x03"}},
+     .intdelay = 30, .maxsec = 1.5},
+    // and to every level: a subshell's QUIT trap
+    {"terminal: ^\\ to a subshell, late",
+     "( trap 'echo subq' QUIT; sh -c 'echo go; sleep 1'; echo after ); echo top", 0,
+     "subq", 0, {{T_EXPECT, "go"}, {T_DELAY, 0, 200}, {T_WRITE, "\x1c"}}, .intdelay = 30},
+    // ^Z reaches no level from the orphaned group, but a host's TSTP does
+    {"terminal: TSTP to a subshell",
+     "( trap 'echo tstp' TSTP; echo go; read -t 1 x; echo after ); echo top", 0, "tstp", 0,
+     {{T_EXPECT, "go"}, {T_DELAY, 0, 200}, {T_TSTP}}},
+    // A cancel's SIGTERM, with a linger, by pid: once, even after kill 0
+    {"terminal: cancel, a linger",
+     "sh -c 'trap \"echo te\"\"rm; exit\" TERM; echo go; while :; do sleep 0.1; done'",
+     -UB_ECANCELED, "term", 0, {{T_EXPECT, "go"}, {T_DELAY, 0, 100}, {T_CANCEL}},
+     .linger = 3000, .maxsec = 2},
+    {"terminal: cancel, a linger after kill 0", 0, -UB_ECANCELED, 0, 0,
+     {{T_EXPECT, "P> "},
+      {T_WRITE, "sh -c 'trap \"echo term >>$UBF\" TERM; while :; do sleep 0.1; done' &\r"},
+      {T_EXPECT, "P> "}, {T_DELAY, 0, 200}, {T_WRITE, "kill 0\r"}, {T_EXPECT, "P> "},
+      {T_DELAY, 0, 300}, {T_CANCEL}}, .linger = 400, .ubf = "term\n", .ubfonce = 1},
 };
 
 // The child's side
 
 static ub_os *termos;         // the run in progress (atomic)
 static long   termsigs[32];   // the signals the forwarder got (atomic)
+static int    termhupdelay;   // the case's hupdelay
+static int    termintdelay;   // and intdelay
 
 static void *termforward(void *arg)
 {
@@ -897,6 +1056,10 @@ static void *termforward(void *arg)
         int sig;
         if (sigwait(&set, &sig)) continue;
         __atomic_add_fetch(termsigs+sig, 1, __ATOMIC_RELAXED);
+        if (sig==SIGHUP && termhupdelay) usleep((useconds_t)termhupdelay*1000);
+        if ((sig==SIGINT || sig==SIGQUIT) && termintdelay) {
+            usleep((useconds_t)termintdelay*1000);
+        }
         ub_os *os = __atomic_load_n(&termos, __ATOMIC_ACQUIRE);
         if (os && sig!=SIGCHLD) ub_signal(os, sig);
     }
@@ -909,6 +1072,8 @@ static void *termcontrol(void *arg)
     ub_os *os = arg;
     for (char c; read(4, &c, 1) == 1 && c != 'x';) {
         if (c == 'c') ub_cancel(os);
+        if (c == 'i') ub_signal(os, SIGINT|UB_GROUP);
+        if (c == 'z') ub_signal(os, SIGTSTP);
     }
     return 0;
 }
@@ -949,6 +1114,79 @@ static int sametty(struct termios const *a, struct termios const *b, tcflag_t ke
            !memcmp(a->c_cc, b->c_cc, sizeof(a->c_cc));
 }
 
+// A program, the host's child, still running: not reaped, even if it
+// ended (a library's grave may hold it)
+static int running(long pid)
+{
+    siginfo_t si = {0};
+    return !waitid(P_PID, (id_t)pid, &si, WEXITED|WNOHANG|WNOWAIT) && si.si_pid!=pid;
+}
+
+static void endkid(long pid)
+{
+    kill((pid_t)pid, SIGKILL);
+    while (waitpid((pid_t)pid, 0, 0)<0 && errno==EINTR) {}
+}
+
+static char ubfpath[300];  // $UBF, a file of the case's
+
+// The programs the run left running, as the case says (alive, left):
+// the run before's must have outlived this run too. Each is then ended,
+// or kept for the next run to leave alone, and none is in kids, for
+// kidsgone.
+static int leftover(TermCase const *c, int base, char *why, size_t len)
+{
+    int ok = 1;
+    for (int i = 0; i < nleft; i++) {
+        if (ok && !running(leftpids[i])) {
+            snprintf(why, len, "the run ended pid %ld, left by the one before", leftpids[i]);
+            ok = 0;
+        }
+        endkid(leftpids[i]);
+    }
+    nleft = 0;
+    int n = base;
+    for (int i = base; i < nkids; i++) {
+        if (!(c->alive>>(i-base) & 1)) {
+            kids[n++] = kids[i];
+            continue;
+        }
+        if (ok && !running(kids[i])) {
+            snprintf(why, len, "program %d (pid %ld) did not outlive the run", i-base, kids[i]);
+            ok = 0;
+        }
+        if (ok && !hasended(kids[i])) {
+            snprintf(why, len, "program %d (pid %ld) left, no live 0", i-base, kids[i]);
+            ok = 0;
+        }
+        if (ok && c->left && nleft<(int)(sizeof(leftpids)/sizeof(*leftpids))) {
+            leftpids[nleft++] = kids[i];
+        } else {
+            endkid(kids[i]);
+        }
+    }
+    nkids = n;
+    return ok;
+}
+
+//  holds what the case says, once if it says so
+static int ubfholds(TermCase const *c, char const *path, char *why, size_t len)
+{
+    char buf[4096];
+    int  fd = open(path, O_RDONLY|O_CLOEXEC);
+    ssize_t n = fd<0 ? 0 : read(fd, buf, sizeof(buf)-1);
+    if (fd >= 0) close(fd);
+    buf[n<0 ? 0 : n] = 0;
+    unlink(path);
+    char *p = strstr(buf, c->ubf);
+    if (!p || (c->ubfonce && strstr(p+1, c->ubf)) ||
+        (c->ubfnot && strstr(buf, c->ubfnot))) {
+        snprintf(why, len, " holds \"%.200s\"", buf);
+        return 0;
+    }
+    return 1;
+}
+
 // One run of the case, as the check's side plays it: 0 and why if not
 // as the case expects
 static int termrun(TermCase const *c, char const *const *env, char *why, size_t len)
@@ -957,6 +1195,7 @@ static int termrun(TermCase const *c, char const *const *env, char *why, size_t 
     cfg.spawnlock = spawnlock;
     cfg.child     = onchild;
     cfg.memlimit  = c->memlimit;
+    cfg.linger    = c->linger;
     cfg.flags     = UB_TERMINAL;
     ub_os *os = ub_new(&cfg);
     if (!os) _exit(97);
@@ -980,6 +1219,10 @@ static int termrun(TermCase const *c, char const *const *env, char *why, size_t 
         cmd.fds  = other;
     }
 
+    if (c->ubf) unlink(ubfpath);
+    int base = nkids;
+    struct winsize ws = {24, 80, 0, 0};
+    ioctl(0, TIOCSWINSZ, &ws);  // as the check made it: a resize to come is one
     struct termios start;
     tcgetattr(0, &start);
     long sigs = __atomic_load_n(termsigs+c->nosig, __ATOMIC_RELAXED);
@@ -1010,17 +1253,37 @@ static int termrun(TermCase const *c, char const *const *env, char *why, size_t 
         kill(front, SIGKILL);
         waitpid(front, 0, 0);
     }
+    int again = 0;
+    if (c->again) {
+        char const *aargv[] = {"bash", "--norc", "-c", c->again, 0};
+        ub_cmd acmd = {0};
+        acmd.argc   = 4;
+        acmd.argv   = aargv;
+        acmd.env    = env;
+        acmd.pid    = getpid();
+        acmd.ppid   = getppid();
+        acmd.std[0] = acmd.std[1] = acmd.std[2] = -1;
+        again = ub_run(os, &acmd);
+    }
     __atomic_store_n(&termos, 0, __ATOMIC_RELEASE);
     if (c->busy) pthread_join(busy, 0);
     ub_free(os);
-    tcflush(0, TCIFLUSH);  // keys the run left
-    if (dprintf(1, "\n%s\n", termmark) < 0) _exit(95);
+    if (!c->hangup) {
+        tcflush(0, TCIFLUSH);  // keys the run left
+        if (dprintf(1, "\n%s\n", termmark) < 0) _exit(95);
+    }
 
+    char lwhy[512] = "";
+    int  lok = leftover(c, base, lwhy, sizeof(lwhy));
+    lok = lok && (!c->ubf || ubfholds(c, ubfpath, lwhy, sizeof(lwhy)));
     int ok = 1;
-    struct termios now;
+    struct termios now = start;
     tcgetattr(0, &now);
     if (c->status!=ANY && r!=c->status) {
         snprintf(why, len, "status %d, not %d", r, c->status);
+        ok = 0;
+    } else if (again) {
+        snprintf(why, len, "the next run's status %d", again);
         ok = 0;
     } else if (c->busy && busyret!=-UB_EBUSY) {
         snprintf(why, len, "a second run returned %d", busyret);
@@ -1031,29 +1294,125 @@ static int termrun(TermCase const *c, char const *const *env, char *why, size_t 
     } else if (c->keep && (now.c_lflag & c->keep)) {
         snprintf(why, len, "the program's mode was undone");
         ok = 0;
-    } else if (!sametty(&start, &now, c->keep)) {
+    } else if (!c->hangup && !c->nofg && tcgetpgrp(0)!=getpgrp()) {
+        snprintf(why, len, "the terminal left to group %ld", (long)tcgetpgrp(0));
+        ok = 0;
+    } else if (c->maxsec && secs>c->maxsec*FORKSCALE) {
+        snprintf(why, len, "took %.3fs", secs);
+        ok = 0;
+    } else if (!lok) {
+        snprintf(why, len, "%s", lwhy);
+        ok = 0;
+    } else if (!c->hangup && !sametty(&start, &now, c->keep)) {
         snprintf(why, len, "mode %lx %lx %lx, not %lx %lx %lx as the run began",
                  (unsigned long)now.c_iflag, (unsigned long)now.c_oflag,
                  (unsigned long)now.c_lflag, (unsigned long)start.c_iflag,
                  (unsigned long)start.c_oflag, (unsigned long)start.c_lflag);
         ok = 0;
     }
-    tcsetattr(0, TCSANOW, &start);  // for the next run, whatever this one left
+    if (!c->hangup) tcsetattr(0, TCSANOW, &start);  // for the next run, whatever this one left
     termsay("E %d %d %.3f %s\n", r, ok, secs, ok ? "" : why);
     pthread_join(ctl, 0);
     return ok;
 }
 
-// The snapshot's signal dispositions and mask alone
-static void snapsigs(Snap const *s, Snap *out)
+// The snapshot's signal dispositions and mask alone; with all, also
+// what a run's dead terminal does not change: but the mappings (no
+// warm-up sized them), the terminal's mode and group, and the flags of
+// descriptors.
+static void snapsigs(Snap const *s, Snap *out, int all)
 {
+    static char const *const keep[] = {
+        "sig ", "blocked ", "threads ", "pgrp ", "cwd ", "umask ", "rlimit ", "environ ",
+    };
     out->len = 0;
     for (char const *p = s->buf, *e; p && (e = strchr(p, '\n')); p = e+1) {
-        if (!strncmp(p, "sig ", 4) || !strncmp(p, "blocked ", 8)) {
-            snapf(out, "%.*s\n", (int)(e-p), p);
+        int fd, n = 0;
+        long long dev, ino;
+        if (all && sscanf(p, "fd %d %lld %lld %n", &fd, &dev, &ino, &n)==3 && n) {
+            snapf(out, "fd %d %lld %lld\n", fd, dev, ino);
+            continue;
+        }
+        for (int i = 0; i < (all ? 8 : 2); i++) {
+            if (!strncmp(p, keep[i], strlen(keep[i]))) {
+                snapf(out, "%.*s\n", (int)(e-p), p);
+                break;
+            }
         }
     }
 }
+
+// Every program of the case's still running, and its group but the
+// host's, killed and reaped: whatever the case left, failed or not
+static void killkids(void)
+{
+    for (int i = 0; i < nkids; i++) {
+        kill((pid_t)kids[i], SIGKILL);
+        if ((pid_t)kids[i] != getpgrp()) kill(-(pid_t)kids[i], SIGKILL);  // one it made
+        waitpid((pid_t)kids[i], 0, WNOHANG);
+    }
+    for (int i = 0; i < nleft; i++) endkid(leftpids[i]);
+    nkids = nleft = 0;
+}
+
+// The programs left running, ended now: reaped by the library (bury),
+// at its next call, not here
+static int leftreaped(char *why, size_t len)
+{
+    int ok = 1;
+    for (int i = 0; i < nleft; i++) {
+        kill((pid_t)leftpids[i], SIGKILL);
+        for (double until = nowsec()+1; running(leftpids[i]) && nowsec()<until;) {
+            usleep(1000);
+        }
+    }
+    ub_config cfg = {0};
+    ub_free(ub_new(&cfg));  // the library's graves reaped
+    for (int i = 0; i < nleft; i++) {
+        siginfo_t si = {0};
+        if (!waitid(P_PID, (id_t)leftpids[i], &si, WEXITED|WNOHANG|WNOWAIT)) {
+            if (ok) snprintf(why, len, "pid %ld left unreaped", leftpids[i]);
+            ok = 0;
+            waitpid((pid_t)leftpids[i], 0, 0);
+        }
+    }
+    nleft = 0;
+    return ok;
+}
+
+// ubhost --tcgrab: a program that does job control, in the case "taken
+// and given back": its own group in front, then dead
+static int tcgrab(void)
+{
+    signal(SIGTTOU, SIG_IGN);
+    setpgid(0, 0);
+    if (tcsetpgrp(0, getpgrp())) return 1;
+    raise(SIGKILL);
+    return 2;
+}
+
+// ubhost --pgsleep: a program in a group it made, with a child there,
+// both sleeping until killed
+static int pgsleep(void)
+{
+    alarm(30);  // should a failed case leave it, out of the run's reach
+    setpgid(0, 0);
+    if (!fork()) {
+        alarm(30);
+        for (;;) pause();
+    }
+    printf("pg\n");
+    fflush(stdout);
+    for (;;) pause();
+    return 0;
+}
+
+#if __APPLE__
+static void caught(int sig)
+{
+    (void)sig;  // never runs: blocked in every thread
+}
+#endif
 
 // ubhost --term-case N [--quick]: the check's child (above)
 static int termchild(char *argv0, int idx, int quick)
@@ -1061,6 +1420,9 @@ static int termchild(char *argv0, int idx, int quick)
     if (!realpath(argv0, self)) snprintf(self, sizeof(self), "%s", argv0);
     if (idx<0 || idx>=(int)(sizeof(termcases)/sizeof(*termcases))) return 2;
     TermCase const *c = termcases + idx;
+    reapkids = 1;
+    termhupdelay = c->hupdelay;
+    termintdelay = c->intdelay;
     fcntl(3, F_SETFD, FD_CLOEXEC);
     fcntl(4, F_SETFD, FD_CLOEXEC);
     if (c->other) fcntl(5, F_SETFD, FD_CLOEXEC);
@@ -1070,6 +1432,14 @@ static int termchild(char *argv0, int idx, int quick)
     #if __APPLE__
     signal(SIGPIPE, SIG_IGN);
     signal(SIGXFSZ, SIG_IGN);
+    // macOS discards a signal whose default is to ignore it, blocked or
+    // not, unless it is caught: so a resize's SIGWINCH, which the
+    // forwarder would never see, and URG and IO
+    struct sigaction sa = {0};
+    sa.sa_handler = caught;
+    sigaction(SIGWINCH, &sa, 0);
+    sigaction(SIGURG, &sa, 0);
+    sigaction(SIGIO, &sa, 0);
     #endif
     sigset_t all;
     sigfillset(&all);
@@ -1077,12 +1447,16 @@ static int termchild(char *argv0, int idx, int quick)
     pthread_t t;
     pthread_create(&t, 0, termforward, 0);
 
-    static char envpath[4200], envt[300], envhome[300];
+    static char envpath[4200], envt[300], envhome[300], envubf[320], envself[4200];
     char const *tdirenv = getenv("T") ? getenv("T") : "/tmp";
     snprintf(envpath, sizeof(envpath), "PATH=%s", getenv("PATH") ? getenv("PATH") : "");
     snprintf(envt, sizeof(envt), "T=%s", tdirenv);
     snprintf(envhome, sizeof(envhome), "HOME=%s", tdirenv);
-    char const *env[] = {envpath, envt, envhome, "PS1=P> ", "HISTFILE=", "TERM=xterm", 0};
+    snprintf(ubfpath, sizeof(ubfpath), "%s/ubterm.%ld", tdirenv, (long)getpid());
+    snprintf(envubf, sizeof(envubf), "UBF=%s", ubfpath);
+    snprintf(envself, sizeof(envself), "UBCHECK=%s", self);
+    char const *env[] = {envpath, envt, envhome, "PS1=P> ", "HISTFILE=", "TERM=xterm",
+                         envubf, envself, 0};
 
     // Sized before the warm-up, so that no snapshot sees the heap grow
     // (ASan's allocator maps its regions). The dispositions and mask
@@ -1093,9 +1467,28 @@ static int termchild(char *argv0, int idx, int quick)
     static Snap firstsigs, lastsigs;
     snapshot(&before);
     snapshot(&after);
-    snapsigs(&before, &firstsigs);
+    snapsigs(&before, &firstsigs, c->hangup);
 
     char why[256] = "";
+    if (c->hangup) {
+        // The run's terminal dies with it: that run alone, and only what
+        // the dead terminal leaves to compare
+        int ok = termrun(c, env, why, sizeof(why));
+        double until = nowsec() + 1;
+        char gwhy[256] = "";
+        int  gone      = 0;
+        while (!(gone = kidsgone(gwhy, sizeof(gwhy))) && nowsec()<until) usleep(1000);
+        if (ok && !gone) snprintf(why, sizeof(why), "%s", gwhy);
+        ok = ok && gone;
+        killkids();
+        if (ok) {
+            snapshot(&after);
+            snapsigs(&after, &lastsigs, 1);
+            ok = snapsame(&firstsigs, &lastsigs, "host changed at", why, sizeof(why));
+        }
+        termsay("D %d %s\n", ok, ok ? "" : why);
+        return !ok;
+    }
     int  reps = quick ? 1 : 2;
     termrun(c, env, why, sizeof(why));  // warm-up
     for (double until = nowsec()+1; !kidsgone(why, sizeof(why)) && nowsec()<until;) {
@@ -1117,10 +1510,14 @@ static int termchild(char *argv0, int idx, int quick)
         ok = snapsame(&before, &after, "host changed at", why, sizeof(why));
     }
     if (ok) {
-        snapsigs(&after, &lastsigs);
+        snapsigs(&after, &lastsigs, 0);
         ok = snapsame(&firstsigs, &lastsigs, "host changed from the start at", why,
                       sizeof(why));
     }
+    if (ok) {
+        ok = leftreaped(why, sizeof(why));
+    }
+    killkids();
     termsay("D %d %s\n", ok, ok ? "" : why);
     return !ok;
 }
@@ -1207,9 +1604,9 @@ static int checkterm(int idx, int quick)
     double stepat = 0, runat = 0, secs = 0;
     for (;;) {
         struct pollfd pf[2] = {{ptm, POLLIN, 0}, {up[0], POLLIN, 0}};
-        int busy = inrun && step<8 && c->steps[step].op;
+        int busy = inrun && step<NSTEPS && c->steps[step].op;
         poll(pf, 2, busy || endwait ? 10 : 200);
-        for (;;) {
+        for (; ptm >= 0;) {
             char buf[4096];
             ssize_t n = read(ptm, buf, sizeof(buf));
             if (n <= 0) break;
@@ -1221,7 +1618,7 @@ static int checkterm(int idx, int quick)
         double now = nowsec();
 
         // The steps, in order, each once the one before is done
-        while (inrun && step<8 && c->steps[step].op && !endwait) {
+        while (inrun && step<NSTEPS && c->steps[step].op && !endwait) {
             Step const *s = c->steps + step;
             if (!stepat) stepat = now;
             if (s->op == T_EXPECT) {
@@ -1231,7 +1628,7 @@ static int checkterm(int idx, int quick)
                         if (ok) snprintf(why, sizeof(why), "no \"%s\" on the terminal", s->s);
                         ok = 0;
                         if (write(down[1], "c", 1) < 0) {}
-                        step = 8;
+                        step = NSTEPS;
                     }
                     break;
                 }
@@ -1246,6 +1643,13 @@ static int checkterm(int idx, int quick)
                 ioctl(ptm, TIOCSWINSZ, &ws);
             } else if (s->op == T_CANCEL) {
                 if (write(down[1], "c", 1) < 0) {}
+            } else if (s->op == T_GROUPINT) {
+                if (write(down[1], "i", 1) < 0) {}
+            } else if (s->op == T_TSTP) {
+                if (write(down[1], "z", 1) < 0) {}
+            } else if (s->op == T_HANGUP) {
+                close(ptm);  // the child's run ends with its "E"
+                ptm = -1;
             }
             step++;
             stepat = 0;
@@ -1261,8 +1665,8 @@ static int checkterm(int idx, int quick)
 
         // The run's end: its output up to the marker
         if (endwait) {
-            char *m = strstr(out, termmark);
-            if (m || now-runat>5*FORKSCALE) {
+            char *m = ptm<0 ? 0 : strstr(out, termmark);
+            if (m || ptm<0 || now-runat>5*FORKSCALE) {
                 if (m) *m = 0;
                 if (ok && c->out && !strstr(out, c->out)) {
                     snprintf(why, sizeof(why), "output lacks \"%s\"", c->out);
@@ -1271,10 +1675,10 @@ static int checkterm(int idx, int quick)
                     snprintf(why, sizeof(why), "output holds \"%s\"", c->notout);
                     ok = 0;
                 }
-                // bracketed paste is never left on
+                // bracketed paste is never left on, while the terminal lives
                 char *on = 0;
                 for (char *p = out; (p = strstr(p, "\x1b[?2004h")); p++) on = p;
-                if (ok && on && !strstr(on, "\x1b[?2004l")) {
+                if (ok && on && ptm>=0 && !strstr(on, "\x1b[?2004l")) {
                     snprintf(why, sizeof(why), "bracketed paste left on");
                     ok = 0;
                 }
@@ -1350,7 +1754,7 @@ static int checkterm(int idx, int quick)
     }
     close(up[0]);
     close(down[1]);
-    close(ptm);
+    if (ptm >= 0) close(ptm);
     if (otherm >= 0) close(otherm);
     int status;
     waitpid(pid, &status, 0);

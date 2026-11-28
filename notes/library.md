@@ -108,7 +108,11 @@ the records list, without calling the core.
    SIGCONT, to their groups on POSIX; through `softsig` on Windows,
    else not at all) and wait up to that many ms for them.
 3. Kill the run's programs: their sessions on POSIX, the job on
-   Windows. Then wait up to 1 s for them.
+   Windows. Then wait up to 1 s for them. In terminal mode, but after a
+   cancel, steps 2 and 3 instead reap those exited and leave the rest
+   running; after a cancel they reach each program by its pid and a
+   group it made, but not what it started in the host's group (see
+   Terminal mode).
 4. Windows: unregister the pool waits.
 5. Close the recorded descriptors and handles.
 6. Terminal mode (POSIX): give the terminal back (see Terminal mode).
@@ -121,8 +125,9 @@ the records list, without calling the core.
 
 ## Decisions
 
-- **Leftovers are killed when a run ends.** Top-level procsubs first get
-  up to 1 s to finish, so that `cmd > >(sort > out)` and
+- **Leftovers are killed when a run ends**, but in terminal mode, where
+  only a cancel kills them (see Terminal mode). Top-level procsubs first
+  get up to 1 s to finish, so that `cmd > >(sort > out)` and
   `exec > >(tee log)` complete.
   A host that sets `linger` gives the programs left a SIGTERM and that
   long to act on it first, however the run ends (a cancel too). It
@@ -134,7 +139,9 @@ the records list, without calling the core.
   never collide on `/tmp/x.$$`. `$PPID` is the host's pid. `ub_cmd.pid`
   and `.ppid` override both; the drop-in hosts pass their own.
 - **Programs are isolated from the host's terminal, console and group.**
-  - POSIX: each program starts a session.
+  - POSIX: each program starts a session, but under `UB_TERMINAL`,
+    where it stays in the host's session and group (see Terminal
+    mode).
   - Windows: each program gets a console process group and a hidden
     console of its own (CREATE_NEW_PROCESS_GROUP|CREATE_NO_WINDOW),
     unless it is handed a console handle.
@@ -148,6 +155,10 @@ the records list, without calling the core.
     program, as a terminal's signal would. For a non-terminal signal it
     follows bash: a level waiting on a program takes the signal once
     the program ends.
+  - Under `UB_TERMINAL` a `UB_GROUP` signal means the terminal sent it:
+    the kernel gave it to the programs already, or never will, so it
+    reaches every level and no program. To end programs, cancel, with a
+    linger to let them exit first.
   - On Windows a program gets a forwarded signal through, in order:
     - the signal channel, if it is an unabashed shell;
     - the host's `softsig` hook;
@@ -212,10 +223,16 @@ the records list, without calling the core.
   inside the run, and nothing of the host's is made inheritable outside
   `spawnlock`.
 - **Nothing is left behind.** After `ub_run` returns, no thread,
-  mapping, descriptor, handle, child or zombie remains. Two exceptions:
+  mapping, descriptor, handle, child or zombie remains. Three
+  exceptions:
   - a killed straggler that was not yet reapable after 1 s, which a
     later call reaps;
+  - in terminal mode, the programs a run leaves running, which a later
+    call reaps once they end (see Terminal mode);
   - the Windows helper orphans described under Known deviations.
+
+  Both kinds of POSIX leftover wait in the process's 64 graves: past 64
+  at once, the rest stay zombies until the host exits.
 - **Signals reach only its own programs (POSIX).** Each program leads
   a process group, which may outlive it, and the run signals that
   group (a group signal, teardown's kill). So that its id is never
@@ -225,7 +242,9 @@ the records list, without calling the core.
   Linux's raw `waitid` gives the program's resource usage at once.
   macOS's gives none, so there a program alone in its group is reaped
   at once, its group forgotten, and a held one's time is counted only
-  when it is reaped.
+  when it is reaped. In terminal mode programs stay in the host's
+  group, which the run never signals: it signals each by its pid, and
+  a group it made (see Terminal mode).
 
 **The host must:**
 - **Not reap children it did not spawn.** A SIGCHLD of SIG_IGN, or
@@ -247,12 +266,16 @@ the records list, without calling the core.
   library fibers, and only an ASan build tells ASan about them (POSIX
   only: the Windows fibers are not annotated).
 - **On POSIX, feed the `child` hook to a keeper** if programs must not
-  outlive a crashed host. On Windows the job ends them.
+  outlive a crashed host. On Windows the job ends them. In terminal
+  mode a program the run leaves running gets its `live 0` as the run
+  ends: it is no longer the run's, and its pid may later be another's.
 - **Not call the library from a hook, nor unwind out of one.** A hook
   must be brief (see Hooks).
 - **Under `UB_TERMINAL`, lead the terminal's session** with its own
   group in front, pass its own pid as `ub_cmd.pid`, and forward each
-  signal it gets but SIGCHLD, plainly (see Terminal mode).
+  signal it gets but SIGCHLD, plainly and without delay (see Terminal
+  mode). On macOS, catch SIGWINCH, SIGURG and SIGIO, so that they reach
+  its forwarder.
 
 **Threading:**
 - **`ub_run`** blocks its thread until the run ends. Each handle runs
@@ -280,7 +303,14 @@ terminal the flag does nothing, and the run is isolated as without it.
 - forwards each signal it gets with `ub_signal`, plainly (without
   `UB_GROUP`), from a signal thread, as ubcheck's terminal child does
   (termforward, tools/ubcheck.c), but SIGCHLD: that one is about the
-  host's own children, and the run has no use for it.
+  host's own children, and the run has no use for it. A HUP too, though
+  the run makes its own of a hangup (below). It forwards without delay:
+  the kernel sends the terminal's ^C to the programs at the same moment
+  (Signals, below).
+- on macOS, catches SIGWINCH, SIGURG and SIGIO with a handler of its
+  own (one that never runs, the signal blocked in every thread). There
+  a signal whose default is to ignore it is discarded when sent,
+  blocked or not, so a resize, say, would never reach the forwarder.
 
 `ub_run` returns `-UB_EINVAL` if any of that fails, and `-UB_EBUSY`
 while another run in the process holds the terminal: one at a time, by
@@ -309,16 +339,75 @@ restored and the claim released:
 The calls are TCSANOW, and their errors ignored: a terminal hung up has
 nothing to give back.
 
-**Still as without the flag:** programs start sessions of their own, so
-they have no controlling terminal, and the run kills them as it ends.
-None of the terminal's signals reach them: the kernel sends ^C, ^\ and
-^Z to the host's group, and the host's plain forwarding gives them to
-the shell alone. Waiting for a program, the shell acts on such a signal
-only if the program died of it too, as bash does, so a foreground
-`sleep 100` runs on through ^C.
+**Programs** stay in the host's session and group, as under `bash +m`:
+the terminal is their controlling terminal (`/dev/tty` opens), and the
+kernel sends the terminal's ^C, ^\ and ^Z to them as to the host. They
+start with an empty mask and default dispositions, but for what the run
+ignores (on entry, `trap ''`, and INT and QUIT for a background job).
+
+**Signals.** The INT, QUIT and TSTP the host forwards are the terminal's:
+in this stage the run never moves the terminal, so its foreground group
+is the host's. They go to every level of the run, as to every process
+of bash's foreground job, and to no program, which the kernel signalled
+already. A level waiting for a program acts on such a signal only if
+the program died of it too, as bash does. The kernel signals the host
+and the program at once, but the run hears of it only through the
+host's forwarder, while bash has it at once: so a program reaped dead
+of INT or QUIT, with no such signal forwarded since it started, holds
+the run up to 250 ms for the host's, which a host that keeps up sends
+at once (for another's `kill -INT` none comes, and the run goes on
+without it). The shell ignores QUIT, as bash does, and nothing
+stops: the host's group is orphaned (its parent is in another session),
+so the kernel discards ^Z's default stop, and TSTP does nothing to the
+shell. The script's `kill 0` and `kill -$$` reach every level and each
+of the run's programs by its pid, never the host's group, and so not
+what those programs started. `ub_signal` with `UB_GROUP` is the
+terminal's too.
+
+**Hangup.** A read or write of the run's terminal (std's, or
+`/dev/tty`) that finds it hung up, its master closed (POLLHUP: Linux's
+hung up descriptors, macOS's TS_ZOMBIE), is taken as the kernel's SIGHUP
+to the session's leader, the host: the shell takes a HUP before the
+read's end of file. Each hangup is one HUP, however the host's
+forwarded one races it: none is made if the host forwarded one already
+in the run, and the host's next after one made is its duplicate, and
+dropped. An interactive shell then dies of it as bash does: its history
+saved, its jobs sent HUP (but those `disown -h` marked), its EXIT trap
+run, and `ub_run` returns `UB_SIGNALED|129`. As bash, the terminal's
+controlling process, would then have exited, and the kernel sent
+SIGHUP and SIGCONT to the foreground group, a run that dies of a HUP
+sends them to each of its programs still running in the host's group
+(a comsub's, those `disown -h` marked) before it leaves them.
+
+**Leftovers.** A run that ends otherwise than by a cancel (`exit`, end
+of file, a death by a signal, out of memory, a deadlock) leaves its
+programs running, as bash leaves its jobs. Those exited are reaped, the
+rest handed to the process's graves (as `ub_free` leaves programs
+stuck in the kernel), which any later call of the library reaps once
+they end: no later run signals or waits for them. The `child` hook gets
+each one's `live 0` then, as it is no longer the run's. Past 64 at once
+in the graves, the rest are left unreaped, zombies until the host
+exits. A cancel ends them as in any run: SIGTERM and the linger, then
+SIGKILL, to each by its pid and to a group it made of its own (never
+the host's). What a program started in the host's group is beyond a
+cancel's reach: it lives on until the host's exit hangs it up.
 
 **Deviations from bash on a terminal:**
 - `+m` only: there is no job control (Known deviations).
+- Leftovers are in the host's group, the terminal's foreground group,
+  so the kernel sends them SIGHUP as the host, the terminal's
+  controlling process, exits (Linux: disassociate_ctty; macOS: exit1),
+  whether by a Close, `exit` or end of file. Only programs that ignore
+  HUP (`nohup`) or left the session (`setsid`) outlive it, so `disown
+  -h` changes nothing here, as under `bash +m` leading a session.
+- `kill 0`, `kill -$$` and a cancel reach the run's programs, by pid,
+  and groups they made, but not what they started in the host's group,
+  which bash's `kill(0)` reaches.
+- A level waiting for a program drops the terminal's INT, QUIT and TSTP
+  that came meanwhile unless the program died of it, even when the
+  level traps it, where bash runs the trap after the program (QUIT and
+  TSTP always, INT in a non-interactive shell). The rule is the core's,
+  as in the executable (waitdone), which terminal mode now reaches.
 - A background job that is shell code is a level of the run, and ends
   with it.
 
@@ -425,8 +514,8 @@ and a wait here) are all asked.
   spawn is refused with `UB_EINVAL`. On POSIX its argv is `wrap[0]`,
   `wrap[1...]`, the path, then the program's argv, from `argv[0]`;
   everything else (descriptors, environment, directory, ignored
-  signals, limits, its own session, an empty mask) is as the program's
-  would be. A wrapper must:
+  signals, limits, its own session or the host's, an empty mask) is
+  as the program's would be. A wrapper must:
   - inherit all of that and exec the program, so that `$!`, `kill` and
     the run's kill of its programs reach it;
   - otherwise stay in its session and exit as the program did,
@@ -617,24 +706,48 @@ The cases cover:
   does not lead its terminal's session, and the terminal cases below.
 
 **The terminal cases** (POSIX) each run in a child of the check that
-leads a fresh pty's session, its group in front, the pty its
-descriptors 0-2, as a terminal tab's host: `ubhost --term-case N`,
-executed anew since the check has threads by then. It blocks every
-signal and forwards each plainly from a sigwait thread, runs the case
-with `UB_TERMINAL`, and reports over a pipe. Its snapshots add the
-terminal's mode (every flag and `c_cc`) and foreground group, and each
-run must leave the mode as it found it, but for what the case lets a
-program keep. Its dispositions and mask are also compared with those
-before the warm-up run, so that a handler the first run installs for
-good is caught. The check's side pumps the pty's master: it drains the
-output, and plays each run the case's steps (keys once some output
-shows, delays, a resize, a cancel), then checks the output. The cases
-cover the refusals (a wrong pid, a second run, another group in
-front), `read -s` and `-n` (on `/dev/tty` too), another terminal left
-alone (`read -n` there stays canonical), the line editor's keys in raw
-mode, a resize picked up by checkwinsize, and the handback after a
-cancel at the prompt, in `read -s` and after a program's `stty`, out of
-memory inside a `bind -x` key, and `stty -echo; exit`.
+leads a fresh pty's session, its group in front, the pty its descriptors
+0-2, as a terminal tab's host: `ubhost --term-case N`, executed anew
+since the check has threads by then. It blocks every signal and forwards
+each plainly from a sigwait thread, runs the case with `UB_TERMINAL`,
+and reports over a pipe. Its snapshots add the terminal's mode (every
+flag and `c_cc`) and foreground group, and each run must leave the mode
+as it found it, but for what the case lets a program keep, and its group
+in front. Its dispositions and mask are also compared with those before
+the warm-up run, so that a handler the first run installs for good is
+caught. The check's side pumps the pty's master: it drains the output,
+and plays each run the case's steps (keys once some output shows,
+delays, a resize, a cancel, a SIGINT|UB_GROUP, a plain SIGTSTP, a
+hangup), then checks the output, and what the case left: programs that
+must outlive the run, with their `live 0` from the `child` hook (then
+killed, the last left for the library to reap), a file $UBF. A case
+that hangs up has its pty to one run, with no warm-up, and compares
+what the dead terminal leaves alone: the dispositions and mask, the
+threads, the descriptors' files, and the rest but the mappings. The
+forwarder can hold a HUP back (300 ms), so that the hangup's comes
+first, and an INT or QUIT (30 ms), so that the program's death comes
+first. Whatever a case leaves, failed or not, the child kills as it
+ends. The cases cover the refusals (a wrong pid, a second run, another
+group in front), `read -s` and `-n` (on `/dev/tty` too), another
+terminal left alone (`read -n` there stays canonical), the line editor's
+keys in raw mode, a resize picked up by checkwinsize, and the handback
+after a cancel at the prompt, in `read -s` and after a program's `stty`,
+out of memory inside a `bind -x` key, and `stty -echo; exit`. Then
+terminal mode's programs and signals: ^C to a program with an INT trap
+($? 130, a new prompt) and to a subshell (every level), ^C and a
+subshell's QUIT trap with the host's signal late, ^\ to a program, ^Z
+doing nothing, a host's TSTP reaching a subshell's trap, a WINCH trap,
+`/dev/tty` in a program, `kill 0` sparing the host, a SIGINT|UB_GROUP no
+program gets, the terminal taken back from a program that took it and
+died (`ubhost --tcgrab`), a cancel reaching a group a program made
+(`ubhost --pgsleep`), and a cancel's linger (a TERM trap runs, once even
+after `kill 0`); and its leftovers and hangups: `sleep 9 & exit` leaving
+sleep running past the next run, a hangup at the prompt
+(UB_SIGNALED|129, history written, `nohup sleep` alive, `sleep &` hung
+up), in a comsub (its program hung up), with the host's HUP late, in a
+script's read, and the one-HUP rule four ways (HUP trap lines: at once,
+the host's late, the host's first, the host's during the handle's next
+run).
 
 On Windows, a watcher thread samples descendants while each case runs,
 so leftovers are caught before `ub_free` closes the job.
