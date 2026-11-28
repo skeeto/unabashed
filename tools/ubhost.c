@@ -173,10 +173,19 @@ int main(int argc, char **argv)
     if (argc>1 && !strcmp(argv[1], "--pgsleep")) {
         return pgsleep();
     }
+    // A closed std descriptor is the null device, the nearest the
+    // contract has (-1); /dev/null holds its number, so that what
+    // ub_new and the forwarder open never takes it for the run's std
     ub_cmd cmd = {0};
     cmd.argc = argc;
     cmd.argv = (char const *const *)argv;
-    for (int i = 0; i < 3; i++) cmd.std[i] = i;
+    for (int i = 0; i < 3; i++) {
+        cmd.std[i] = i;
+        if (fcntl(i, F_GETFD) < 0) {
+            cmd.std[i] = -1;
+            open("/dev/null", O_RDWR|O_CLOEXEC);
+        }
+    }
     cmd.pid  = getpid();
     cmd.ppid = getppid();
 

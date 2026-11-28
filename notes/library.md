@@ -595,6 +595,15 @@ the suite tests that fail through the drop-in, with reasons:
   Under bash the parent process would run its trap.
 - Windows: no Ctrl-C judging, and no signal channel between separate
   shells.
+- The working directory is held by name: no directory is pinned
+  (plt_cwd), so programs cannot start in a removed one, and a moved one
+  is lost to relative names, `pwd -P` and `cd`.
+- `ulimit` keeps a table for the run's programs, as a subshell's; the
+  run's own writes, descriptors and stack are not limited by it.
+- `ub_cmd.std` has no closed descriptor: ubhost passes the null device
+  (-1) for one closed on entry.
+- A background level's open of a FIFO with no peer blocks the whole
+  run, its own other levels too.
 
 **Under a group TERM.** bash's top level dies at once, even while an
 in-process subshell traps the signal; the library waits for the nested
@@ -686,9 +695,11 @@ ignored on entry. The suites run through it:
 
       EDRECORD_SHELL=$PWD/build-lin/ubhost EDRECORD_CHECK=1 tools/edrecord t/edit/*.ed
 
-Anything failing beyond tools/ubhost.expect is a bug. Two tests are
+Anything failing beyond tools/ubhost.expect is a bug. Three tests are
 flaky for the executable too: t/exec/931 under the parallel run's load,
-and t/win32/015 on XP; t/edit/097 and 099 are flaky through ubhost
+t/exec/1113's merged order, and t/win32/015 on XP; t/exec/892 fails for
+it too where the container's soft core limit is 0 (recorded unlimited);
+t/edit/097 and 099 are flaky through ubhost
 under load (a resize's WINCH by the signal thread, behind the next
 keys).
 

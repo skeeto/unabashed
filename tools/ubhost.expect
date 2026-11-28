@@ -82,6 +82,38 @@ t/win32/012-ctrlc-young.sh          no Ctrl-C judging (Windows 7 and later; XP w
 t/edit/097-history-shrinks.ed       a key handled before the resize's WINCH trap
 t/edit/099-nested-read.ed           a key read before the resize's WINCH trap
 
+# A closed std descriptor: the contract has none (ub_cmd.std -1 is the
+# null device, and one not open is the host's error), so ubhost passes
+# the null device for it, where bash finds it closed (EBADF)
+t/exec/1056-start-no-stdin.sh       fd 0 closed: reads see end of file, dups work
+t/exec/1057-start-no-stdout.sh      fd 1 or 2 closed: writes and dups succeed
+t/exec/1058-start-no-input.sh       commands read from a closed fd 0 are none (0, not 126)
+t/posix/013-closed-std-in-job.sh    a job's dup of a closed fd 1 or 2 succeeds
+
+# The working directory is held by name: the library never moves the
+# host's cwd and pins no directory (plt_cwd), so a removed one is lost
+# to programs, and a moved one to the run's relative names and pwd -P
+t/posix/004-gone-cwd.sh             programs refused in a removed directory
+t/posix/005-background-children.sh  likewise, from a background job
+t/posix/009-unnamed-start-dir.sh    a nested shell refused in a removed directory, and by name in the linked one (ELOOP)
+t/posix/018-lost-directory.sh       moved, removed or relinked: pwd -P and cd fail
+
+# Limits: the run never sets the process's (ulimit keeps a table, as a
+# subshell's, for its programs), and its descriptor budget is the
+# host's process's, beside the host's own and the run's copies of std
+t/exec/1031-glob-deep-pattern.sh    ulimit -s 2048 does not shrink the run's stack: no 139
+t/posix/007-few-descriptors.sh      under ulimit -n 12 the nested host has no room for a pipe
+t/posix/010-write-errors.sh         ulimit -f 1 does not limit the run's own writes
+
+# A background level is a fiber of the run's one thread, and programs'
+# exits are held as zombies until the run ends (their groups never
+# another's)
+t/exec/629-kill-blocked.sh          kill -0 finds the nested shell's held zombie: gone 0
+t/exec/1111-signal-comsub-wait.sh   a job's trapped kill of $$ lands after the job ends: wait gives 0, not 138 (tests --fibers too)
+t/posix/012-job-fifo-writes.sh      the job's open of a FIFO with no reader blocks the run (times out)
+
 # Flaky for the executable too, not the library's
 t/exec/931-setlocale-programs.sh    fails only under the parallel run's load
+t/exec/1113-subshell-start-line.sh  a stage's stderr against cat's output of its stdout, merged
+t/exec/892-ulimit.sh                the oracle container's soft core limit is now 0 (recorded unlimited)
 t/win32/015-fds.sh                  XP: busybox diff's stat of a procsub bridge

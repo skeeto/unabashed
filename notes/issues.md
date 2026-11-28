@@ -183,6 +183,11 @@ limits) and tools/ubhost.expect. Not yet fixed:
   waiting on lives on, where every member of a POSIX process group gets
   the signal. Found with t/win32/023 on a w64devkit whose sh is
   unabashed (2026-11-10); the test leads its groups with cmd instead.
+- A background level's trapped signal to `$$` reaches the waiting
+  level only after the job ends, so `trap : USR1; f() { kill -USR1 $$;
+  }; f & wait` gives 0 where bash's wait gives 138: in the core's
+  fiber levels, so under `tests --fibers` too (t/exec/1111, listed in
+  tools/ubhost.expect). (2026-11-28)
 
 ## Test infrastructure
 
